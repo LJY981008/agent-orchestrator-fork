@@ -1,7 +1,7 @@
 # LADO 6. Work items are issues on the connected repository
 
 Date: 2026-10-19
-Status: Accepted. Decided by the owner on 2026-10-19. Replaces the local proposal step of the first version of these docs.
+Status: Accepted. Decided by the owner on 2026-10-19. Replaces the local proposal step of the first version of these docs. Amended by the owner on 2026-10-20 for workspace projects.
 
 ## Context
 
@@ -21,6 +21,8 @@ Facts at `55b02b848`:
 - **Connection.** A project connects with an access token for its host and the repository's SSH URL, optionally with an SSH key file. LADO checks both, then links the registered project with the same `origin`, or clones through AO's clone flow. The github.com token goes into AO's existing store; GitLab tokens go into a LADO file with the same permissions. Stored tokens also join AO's token chains, after the `AO_*` overrides.
 - **The plan is approved, not the issue.** At plan request LADO pins a snapshot of the issue: canonical id, title and body. The plan revision records the snapshot's hash, and approval binds to the plan's sha256. If the issue changed since its snapshot, dispatch sends the work back to review. The worker gets the pinned plan and snapshot, never a live fetch.
 - **Execution state stays local.** Task states are derived from LADO and AO records plus the last observed issue state. The tracker never holds execution state; comments written back to the issue (TASK-006) are copies.
+
+- **Workspace projects** (amended 2026-10-20). A project can be an AO workspace whose repositories, such as `back/` and `front/`, each have their own git and tracker. Issues can live in any of them, since no single one is sure to hold them all. The developer chooses the repository for each new task, and import lists every repository's issues. A clone can be a project of its own, start a new workspace, or join a registered one.
 
 TDD §5.1 and §5.3 have the details.
 
