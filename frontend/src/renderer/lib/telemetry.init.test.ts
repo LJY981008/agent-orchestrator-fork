@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // initTelemetry memoizes its result in a module-scoped promise, so each test
 // resets the module registry and re-mocks the heavy boundaries (posthog, the
@@ -23,6 +23,13 @@ describe("initTelemetry recovery", () => {
 	beforeEach(() => {
 		vi.resetModules();
 		vi.clearAllMocks();
+		// The LADO fork ships no default PostHog key, so supply one; init returns
+		// early without a key and these tests exercise what happens after it.
+		vi.stubEnv("VITE_AO_POSTHOG_KEY", "phc_test_key");
+	});
+
+	afterEach(() => {
+		vi.unstubAllEnvs();
 	});
 
 	it("retries init after a transient thrown failure instead of caching it", async () => {

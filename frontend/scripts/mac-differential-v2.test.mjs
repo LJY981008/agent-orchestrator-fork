@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { macV2Fixture } from "./test-fixtures/mac-differential-v2.mjs";
 import { generateMacV2Assets, verifyMacV2Assets } from "./mac-differential-v2.mjs";
 import { generateFeeds } from "./feed.mjs";
-import { MAC_V2_METADATA, macV2Canonical, verifyMacV2Envelope, validateMacV2Payload } from "../src/main/mac-differential-v2-protocol";
+import { MAC_V2_METADATA, MAC_V2_REPOSITORY, macV2Canonical, verifyMacV2Envelope, validateMacV2Payload } from "../src/main/mac-differential-v2-protocol";
 const dirs = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 async function fixture() { const f = await macV2Fixture(); dirs.push(f.dir); return f; }
@@ -52,7 +52,7 @@ describe("isolated macOS differential v2 release contract", () => {
     if (fault === "alias") a.zip.url = a.zip.url.replace("-2.0.0.zip", ".zip");
     if (fault === "legacy-map") a.blockmap.url = a.blockmap.url.replace(".aoblockmap", ".blockmap");
     if (fault === "other-release") a.blockmap.url = a.blockmap.url.replace("/v2.0.0/", "/v1.0.0/");
-    if (fault === "other-repo") a.blockmap.url = a.blockmap.url.replace("Untrivial-ai", "attacker");
+    if (fault === "other-repo") a.blockmap.url = a.blockmap.url.replace(`/${MAC_V2_REPOSITORY.split("/")[0]}/`, "/attacker/");
     if (fault === "duplicate-arch") payload.artifacts[1].arch = a.arch;
     if (fault === "bad-commit") payload.candidate.commit = "unknown";
     if (fault === "unknown-field") payload.allow = true;

@@ -28,7 +28,9 @@ import (
 // AgentWrapper URLs still resolve only through GitHub's rename redirect, which
 // is not a contract: the same staleness that stranded the baked update feed
 // (#3523) would strand every `ao start` download the day that redirect stops.
-var releaseRepo = "Untrivial-ai/agent-orchestrator"
+//
+// LADO fork: `ao start` downloads the fork's desktop build (docs/LJY-PRD/TDD.md §11).
+var releaseRepo = "LJY981008/agent-orchestrator-fork"
 
 // appBundleName is the macOS bundle directory name produced by electron-forge
 // (spaced, per frontend/forge.config.ts).
