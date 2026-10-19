@@ -46,7 +46,6 @@ This is the complete list of upstream files LADO edits. Each edit stays a few li
 | `httpd/controllers/conversations.go` | Clamp turn settings on `PATCH .../conversation/settings` (:135); in LADO execution sessions, require the `app://renderer` origin and record the actor on approval resolve (:912-939) |
 | `service/pr/action_service.go` | Integration approval check before merge (:95-155) |
 | `adapters/agentaccount/share.go` | Read shared entries from the LADO managed home after adoption (:35-38, :62-76) |
-| `backend/pkg/agentruntime/command.go`, `adapters/chatdriver/codexappserver/driver.go`, `service/project/service.go`, `frontend/src/renderer/components/ProjectSettingsEditor.tsx` | Codex "default" mapping (§6.6) |
 | `frontend/src/renderer/components/settings/settingsCatalog.tsx`, `frontend/src/renderer/stores/ui-store.ts` | Rules section entry (:63+) and section id (:27-43) |
 | `frontend/src/renderer/lib/event-transport.ts` | Route `payload.kind` values starting with `lado_` (next to :330-336) |
 | `frontend/src/renderer/routes/_shell.projects.$projectId.tsx` | Render LADO lanes before the session board |
@@ -318,15 +317,27 @@ The same check runs in chat `Service.Send`, `SendForOwner` and `SendSideQuestion
 
 LADO executions always get an explicit permission mode from the snapshot. An empty mode becomes `auto` (`session_manager/manager.go:2330-2332`), and Claude's `default` passes no flag, which lets `~/.claude/settings.json` decide (`adapters/agent/claudecode/claudecode.go:160-162`).
 
-### 6.6 Codex "default" mapping
+### 6.6 Codex permission modes
 
 Today Codex `default` behaves like `bypass`:
 
 - TUI: `--dangerously-bypass-approvals-and-sandbox` (`backend/pkg/agentruntime/command.go:198-208`).
 - App-server: approval `never` with sandbox `danger-full-access` (`adapters/chatdriver/codexappserver/driver.go:602-654`).
 - Projects store Codex `default` as bypass (`service/project/service.go:1087-1092`), and the editor shows it that way (`frontend/src/renderer/components/ProjectSettingsEditor.tsx:237-239`).
+- AO's `accept-edits` and `auto` use `on-request` with `workspace-write` and no network (`adapters/chatdriver/codexappserver/driver.go:609-646`).
 
-LADO maps `default` to `on-request` with `workspace-write`, with network access on and the repository's common git directory (`git rev-parse --git-common-dir`) writable, so commits and pushes from a linked worktree still work. This needs verification on Windows. It is an upstream PR candidate.
+The first plan mapped `default` to `workspace-write` with network on and the common git directory writable. Measured on 2026-10-19 with `codex-cli 0.163.0` on Linux (`codex sandbox`, no model call), in both a plain repository and a linked worktree:
+
+| Sandbox | `git add` / `git commit` | Network |
+|---|---|---|
+| `workspace-write` | Fails: `.git` is read-only | Blocked |
+| `workspace-write`, `writable_roots` = the common git directory | Fails: `.git` stays read-only | Blocked |
+| `workspace-write`, `network_access = true` | Fails | Works |
+| `danger-full-access` (AO `default` and `bypass`) | Works | Works |
+
+Codex keeps `.git` read-only under `workspace-write` whatever the writable roots, and the sandbox settings have no field to change that (`adapters/chatdriver/codexappserver/codexproto/protocol.gen.go:3979-3984`). In that sandbox a commit or push only runs after an approval escalates it.
+
+**Decision (2026-10-19): the global mapping stays upstream's.** Sessions outside LADO projects keep AO's behavior, as §6.1 requires. LADO executions get an explicit mode from the snapshot (§6.5). The Codex ceiling for LADO projects, and whether it grants network access or relies on escalation for git, is decided with the rules core (§15 step 5). Windows needs its own measurement.
 
 ## 7. Integration (D5)
 
@@ -406,7 +417,7 @@ HARNESS.md has the semantics. The code touch points are:
 | Feature-build list when no `app-update.yml` is bundled | `frontend/src/main/feature-builds.ts:10` | Fork |
 | Linux package homepage | `frontend/forge.config.ts:342,354` | Fork |
 | Report-a-problem issue URL | `frontend/src/renderer/lib/report-problem.ts:26` | Fork |
-| Report-a-problem support email and Discord | `frontend/src/renderer/lib/report-problem.ts:25,27-28` (upstream's maintainers) | Owner to decide |
+| Report-a-problem support email and Discord | `frontend/src/renderer/lib/report-problem.ts:25,27-28` (upstream's maintainers) | Email goes to the fork owner with no CC; the Discord destination is removed |
 | Repository link on Home | `frontend/src/renderer/components/HomePage.tsx:47` | Fork |
 | PostHog key | `frontend/src/shared/posthog-config.ts:1` | Removed; telemetry off by default |
 | Remote telemetry export | `frontend/src/main.ts:1279` (`posthog` in packaged builds) | Off in every build; explicit env still opts in |
@@ -421,7 +432,7 @@ Before public distribution: check file-level notices under the root Apache-2.0 l
 
 ## 12. Upstream PR candidates (D10)
 
-1. Codex `default` mapping (§6.6).
+1. Codex `accept-edits` and `auto` cannot commit: Codex keeps `.git` read-only under `workspace-write`, and AO grants that sandbox no network (§6.6). Report it with the measurement.
 2. Approval resolve: record who resolved, and optionally refuse resolves without a browser `Origin` (`httpd/controllers/conversations.go:912-939`).
 3. Optional spawn/send policy hook in `Manager` with a nil default (§6.1).
 4. `ao pr merge` sends an empty body (`cli/pr.go:49`) while the route requires `prUrl` and `expectedHeadSha` (`httpd/controllers/prs.go:45-47`). Reproduce before reporting.
@@ -471,9 +482,9 @@ The CLI gets read-only commands at most. There is no approval command, by design
 
 Each item is its own branch and PR in the fork (`AGENTS.md`: one issue per PR). The `upstream` remote was added on 2026-10-19.
 
-1. Fork defaults, in three PRs:
+1. Fork defaults, in two PRs:
    - 1a `chore/lado-fork-defaults`: §11, and keep-daemon on by default (§10).
-   - 1b `fix/codex-default-sandbox`: the Codex mapping (§6.6). Separate because it is an upstream PR candidate (§12).
+   - 1b was the global Codex `default` mapping. Dropped on 2026-10-19 after measuring it (§6.6); LADO executions set Codex modes through the snapshot instead.
    - 1c `feat/lado-login-start`: login start with a settings toggle (§10).
 2. LADO migration track, link tables and audit log (§4).
 3. Worker gate with LADO project settings and the mode switch (§6). The switch stays behind a dev flag until step 6: without the dispatcher a LADO project cannot start workers.

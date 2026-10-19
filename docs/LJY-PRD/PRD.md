@@ -212,14 +212,14 @@ These replace v1's M0 gates. "W" marks gates that must also pass on a real Windo
 | D2 | These docs are an AO extension spec | This rewrite |
 | D3 | Defend against T1 now; T2 needs OS isolation and comes later | [adr/0001](adr/0001-threat-model-t1-first.md) |
 | D4 | The loopback API stays unauthenticated; approvals go through a separate human-presence channel: a native confirmation in Electron main and an HMAC proof whose key is derived in memory from the app's per-launch token. Mechanism settled 2026-10-19 | [adr/0002](adr/0002-human-presence-approval-channel.md) |
-| D5 | Enforcement points: GitHub rulesets for remote merge, detection for the local base ref, Spawn/send gate for workers; LADO projects keep tracker intake and automations off; Codex "default" stops mapping to bypass | [adr/0003](adr/0003-enforcement-points.md) |
+| D5 | Enforcement points: GitHub rulesets for remote merge, detection for the local base ref, Spawn/send gate for workers; LADO projects keep tracker intake and automations off; Codex modes in LADO executions come from the snapshot, and the global Codex `default` stays upstream's. Amended 2026-10-19: Codex keeps `.git` read-only under `workspace-write` (TDD §6.6) | [adr/0003](adr/0003-enforcement-points.md) |
 | D6 | Same SQLite DB; LADO migrations on a separate track (own directory and goose version table, after upstream); `lado_` tables only; no columns or triggers on upstream tables; separate audit table. Amended 2026-10-19 from "9000-range numbers" | [adr/0004](adr/0004-data-same-db-separate-migration-track.md) |
 | D7 | Execution = AO session + link table; derived state; plan approved by hash; queue uses claim/lease; evidence links to AO records; VER-001 uses GitHub required checks first; AI-002 uses existing API-key adapters; commit validator checks `base..head` | TDD §3, §5, §8 |
 | D8 | Windows: Chat mode first, TUI later; keep-daemon on by default plus login start | TDD §10 |
 | D9 | Releases from the fork; PostHog key removed and telemetry off by default | TDD §11 |
 | D10 | Fixes that help upstream become upstream PR candidates | TDD §12 |
 | D11 | Local harness is adopted into one LADO-managed location (back up, copy, remove original); CRUD after approval; repo-tracked files change through git | [adr/0005](adr/0005-local-harness-adoption.md), HARNESS §9 |
-| D12 | Build in 8 steps by dependency, one branch and PR each; fork defaults split into three PRs; the rules core comes before the queue. Agreed 2026-10-19 | TDD §15 |
+| D12 | Build in 8 steps by dependency, one branch and PR each; fork defaults split into PRs (1a, 1c; 1b dropped after measurement); the rules core comes before the queue. Agreed 2026-10-19 | TDD §15 |
 
 ## 10. Traceability
 
