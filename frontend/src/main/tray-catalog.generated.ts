@@ -58,7 +58,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator 표시",
 		"tray.quit": "AO 완전히 종료",
 		"zone.merge": "병합 준비 완료",
-		"zone.action": "조치 필요"
+		"zone.action": "확인 필요"
 	},
 	"es": {
 		"tray.untitledSession": "Sesión sin título",
