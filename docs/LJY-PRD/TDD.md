@@ -26,7 +26,7 @@ LADO keeps merging upstream. Every LADO change is either a new file inside one o
 | API spec | `httpd/apispec/specgen/lado_operations.go` returning `[]operation`; its `init` adds LADO's schema names to `schemaNames` | `cueOperations` in `httpd/apispec/specgen/build.go:1619` |
 | Daemon | `daemon/lado_wiring.go`; `daemon/lado_tokens.go` (stored tokens in AO's chains); `daemon/lado_repo_clients.go` (LADO's per-host tracker clients) | `daemon/awake_wiring.go`, `daemon/automation_wiring.go` |
 | Renderer | `frontend/src/renderer/components/lado/`, `frontend/src/renderer/lib/lado.ts`, `frontend/src/renderer/lib/lado-errors.ts` (LADO errors in the app's language), `frontend/src/renderer/hooks/useLado.ts`, `frontend/src/renderer/components/settings/RulesSection.tsx`, new route files in `frontend/src/renderer/routes/` | `frontend/src/renderer/routes/_shell.automations.tsx`, `frontend/src/renderer/components/settings/*Section.tsx` |
-| Electron main | `frontend/src/main/lado-presence.ts`, `frontend/src/main/lado-autostart.ts` (login item), `frontend/src/main/lado-desktop.ts` (Background settings and IPC), `frontend/src/shared/lado-desktop.ts` (types) | `frontend/src/main/daemon-owner.ts`, `frontend/src/main/update-settings.ts` |
+| Electron main | `frontend/src/main/lado-presence.ts`, `frontend/src/main/lado-autostart.ts` (login item), `frontend/src/main/lado-desktop.ts` (Background settings and IPC), `frontend/src/shared/lado-desktop.ts` (types), `frontend/src/main/lado-ui-locale.ts` (the desktop's Korean default, §11) | `frontend/src/main/daemon-owner.ts`, `frontend/src/main/update-settings.ts` |
 
 Names start with `lado` (packages, files, tables, routes, i18n keys). LADO code never uses the word "harness" for its own concepts, because `sessions.harness` and `domain.AgentHarness` already mean "agent adapter". It says `rule`, `policy` or `setup`.
 
@@ -61,7 +61,8 @@ This is the complete list of upstream files LADO edits. Each edit stays a few li
 | `frontend/src/preload.ts` | Expose `lado.desktop` and the presence confirmation call to the renderer |
 | `frontend/src/renderer/lib/bridge.ts`, `frontend/src/renderer/test/setup.ts`, `frontend/e2e/support/fake-bridge.ts` | `lado` stubs, because each one satisfies the full `AoBridge` type |
 | `frontend/src/renderer/components/settings/GeneralSettingsSection.tsx` | Render the LADO Background group after Sessions |
-| `frontend/src/renderer/i18n/*.json` | LADO keys appended at the end of each of the 8 locale files |
+| `frontend/src/renderer/i18n/*.json` | LADO keys appended at the end of each of the 8 locale files; `ko.json`'s existing values reviewed and completed for the Korean default (§11) |
+| `frontend/src/main/ui-settings.ts`, `frontend/src/main.ts` | The desktop's UI settings defaults and coercion come from `lado-ui-locale.ts` (§11) |
 | `CLAUDE.md`, `AGENTS.md` | The Start at login exception to the `~/.ao`-only rule (§10) |
 | `frontend/forge.config.ts`, `frontend/src/shared/posthog-config.ts` and the files in §11 | Fork distribution defaults |
 
@@ -522,6 +523,7 @@ HARNESS.md has the semantics. The code touch points are:
 | Remote telemetry export | `frontend/src/main.ts:1279` (`posthog` in packaged builds) | Off in every build; explicit env still opts in |
 | Sentry DSN for daemon crash reports | `frontend/src/shared/sentry-config.ts:12-13`, stamped on the daemon at `frontend/src/main.ts:1286` | Removed |
 | Keep the daemon after quit | `frontend/src/main/daemon-owner.ts:12-15` | On in packaged builds (§10); dev builds keep upstream's default |
+| UI language | `frontend/src/shared/ui-locale.ts:6,27-31` (`DEFAULT_LOCALE` and `DEFAULT_UI_SETTINGS`, English) | Korean in the desktop app: a missing or unknown stored language becomes `ko`, and a stored choice is kept. English stays i18n's fallback and source catalog and the language of the browser build and the tests. The Korean catalog was reviewed for tone and completed on 2026-10-20 |
 | Pricing manifest | `pricing/fetch.go:16` (upstream raw URL) | Keep; data only |
 | Release guard workflow | `.github/workflows/release-latest-guard.yml:17,67` | Already skipped outside upstream |
 
