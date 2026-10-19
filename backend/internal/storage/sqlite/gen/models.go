@@ -416,6 +416,17 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type LadoAuditEvent struct {
+	ID          int64
+	At          time.Time
+	Actor       string
+	Action      string
+	SubjectKind string
+	SubjectID   string
+	PayloadJson string
+	PrevSha256  string
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
