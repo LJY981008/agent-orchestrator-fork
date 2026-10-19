@@ -36,7 +36,7 @@ Facts at `55b02b848`:
 - **References to upstream rows by id, without foreign keys.** Foreign keys connect LADO tables only. Reads handle a missing upstream row.
 - **Change events.** They come from triggers on LADO tables and reuse `session_updated` with a payload `kind`, the way `0151_global_agent_model_catalog_cdc.sql:6-28` does.
 - **Audit.** `lado_audit_events` is append-only (its own triggers refuse UPDATE and DELETE), never pruned, and hash-chained.
-- **Pinned content.** Plans, proposals, knowledge snapshots and setup versions are stored in LADO's blob store under `<state>/lado/blobs/`.
+- **Pinned content.** Plans, issue snapshots, knowledge snapshots and setup versions are stored in LADO's blob store under `<state>/lado/blobs/`.
 - **Project settings** go in `lado_project_settings`, not in `projects.config`.
 
 ## Consequences

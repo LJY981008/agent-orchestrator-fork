@@ -12,7 +12,7 @@ Paths: Go code under `backend/internal/` is cited without that prefix (for examp
 
 LADO (Local AI Development Orchestrator) is this AO fork with three additions:
 
-1. **Approved work before AO sessions.** Task memo → proposal → versioned plan → human approval → execution as an AO session → verification → human-approved integration.
+1. **Approved work before AO sessions.** Issue → versioned plan → human approval → execution as an AO session → verification → human-approved integration. Work items are issues on the project's connected GitHub or GitLab repository: LADO creates one from the developer's request ("I'll build X") or imports an existing one.
 2. **Rules (the "LADO harness").** Global / Project / Task rules resolved into an immutable snapshot per execution. The developer's existing local agent setup (CLAUDE.md, AGENTS.md, hooks, skills, plugins, MCP servers) is adopted into one LADO-managed location and managed there.
 3. **Windows-first operation and fork-owned distribution defaults.**
 
@@ -27,16 +27,18 @@ AO already uses several of LADO's words with other meanings. These docs use the 
 | Term | AO meaning (upstream code) | LADO meaning (these docs) |
 |---|---|---|
 | harness | Agent adapter id: `sessions.harness`, `domain.AgentHarness` (`claude-code`, `codex`, ...) | Rules plus adopted local agent setup that govern an agent. Code and UI say **rules**; `DESIGN.md:287` bans "Harness" as a settings label |
-| task | The New Task dialog, which spawns a session immediately | A pre-session work item (`lado_tasks`) |
+| task | The New Task dialog, which spawns a session immediately | LADO's record of one issue it works on (`lado_tasks`), created before any session |
+| issue | Read-only tracker data: `sessions.issue_id`, and tracker intake, which spawns a worker for each open issue (`observe/trackerintake/observer.go:183-217`) | The work item itself, on the project's connected repository. LADO creates, imports and tracks it (TDD §5.1) |
 | plan | The agent's own in-turn steps (`domain.ConversationPlan`, `domain/conversation.go:465-493`) | A plan artifact revision, approved by its sha256 |
 | review | AO code review of a PR (`review/`) | Same thing; VER-002 uses it |
 | approval | A Chat tool-permission request (`conversation_activities`, kind approval) | Human approval of a plan revision or an integration, through the human-presence channel |
 | execution | — | One AO session linked to a task, a plan revision and a rule snapshot (`lado_executions`) |
-| orchestrator | Project coordinator session that spawns workers with `ao spawn` (`session_manager/prompt.go:197-267`) | Same session. In LADO projects it only writes proposals and plans |
+| orchestrator | Project coordinator session that spawns workers with `ao spawn` (`session_manager/prompt.go:197-267`) | Same session. In LADO projects it only writes plans and the knowledge snapshot |
 
 ### 1.2 Goals
 
 - Run AI coding work in the background without keeping many IDE windows open.
+- Keep work items where the code lives: as issues on the project's GitHub or GitLab repository.
 - Keep the human in control of plans, merges and rule changes.
 - Make every outcome traceable: plan hash, rule snapshot, base SHA, head SHA, checks, review.
 - Manage all agent rules and local agent setup from one place, with toggles, history and restore.
@@ -68,16 +70,15 @@ Every UI and doc surface labels a control with its real strength: prevents, dete
 
 | # | Step | AO today | LADO change |
 |---|---|---|---|
-| 1 | Register repo and base branch | Add Project flow (`frontend/src/renderer/components/CreateProjectFlow.tsx`); `ProjectConfig.DefaultBranch` (`domain/projectconfig.go:24-26`) | Keep. Add a per-project LADO mode switch |
+| 1 | Connect the repository and pick the base branch | Add Project and Clone flows (`frontend/src/renderer/components/CreateProjectFlow.tsx`; `POST /api/v1/projects/clone`, `httpd/controllers/projects.go:29-31`); `ProjectConfig.DefaultBranch` (`domain/projectconfig.go:24-26`); tokens only from env and the `gh`/`glab` CLIs | Connect with an access token and SSH, cloning when no local checkout exists (PRJ-006). Add a per-project LADO mode switch |
 | 2 | Project knowledge | None | Add a pinned knowledge snapshot (P0, PRJ-002) |
-| 3 | Task memo, optional GitHub issue | New Task spawns at once; tracker port is read-only (`ports/tracker.go:9,21-25`) | Add tasks and a Plan lane; creating issues needs a tracker write port (P1) |
-| 4 | Proposal | Orchestrator session (`session_manager/prompt.go:197-267`) | Orchestrator writes a proposal artifact only |
-| 5 | Plan revision and approval | Artifact versions with sha256 (`storage/sqlite/migrations/0196_session_artifact_versions.sql`) | Plan revision = pinned artifact version; approval bound to its sha256 |
-| 6 | Preview rules, permissions and base | None | Add an effective-rules preview |
-| 7 | Execute | `Manager.Spawn` (`session_manager/manager.go:945`) in worktree branch `ao/<session>/root` | Keep. Only the LADO dispatcher may start workers in LADO projects |
-| 8 | Checks and review | PR checks (`pr_checks`), AO review (`review/review.go`) | Add required-check gate, local runner, commit validator, review policy |
-| 9 | Integration | Merge route `POST /api/v1/prs/{id}/merge` (`httpd/controllers/prs.go:26-55`) | Add integration approval, `lado/integration` status, GitHub ruleset check |
-| 10 | Record and clean up | Archive, worktree cleanup, worker reports (`storage/sqlite/migrations/0153_reports.sql`) | Add audit log and evidence links |
+| 3 | Issue | New Task spawns at once; the tracker port is read-only (`ports/tracker.go:9,21-25`) and nothing writes issues | Create an issue from the developer's request, or import open issues; each becomes a task in the Plan lane (TASK-001, TASK-002) |
+| 4 | Plan revision and approval | Orchestrator session (`session_manager/prompt.go:197-267`); artifact versions with sha256 (`storage/sqlite/migrations/0196_session_artifact_versions.sql`) | The orchestrator writes a plan from a pinned copy of the issue; plan revision = pinned artifact version; approval bound to its sha256 |
+| 5 | Preview rules, permissions and base | None | Add an effective-rules preview |
+| 6 | Execute | `Manager.Spawn` (`session_manager/manager.go:945`) in worktree branch `ao/<session>/root` | Keep. Only the LADO dispatcher may start workers in LADO projects |
+| 7 | Checks and review | PR checks (`pr_checks`), AO review (`review/review.go`) | Add required-check gate, local runner, commit validator, review policy |
+| 8 | Integration | Merge route `POST /api/v1/prs/{id}/merge` (`httpd/controllers/prs.go:26-55`) | Add integration approval, `lado/integration` status, GitHub ruleset check |
+| 9 | Record and clean up | Archive, worktree cleanup, worker reports (`storage/sqlite/migrations/0153_reports.sql`) | Add audit log and evidence links |
 
 ## 4. Requirements and AO status
 
@@ -92,17 +93,18 @@ Status: **HAVE** = AO has it and LADO uses it as is. **EXTEND** = AO has the bas
 | PRJ-003 | P1 | Incremental sync, staleness, conventions, build/test command discovery | ADD | Setup and cleanup scripts `PostCreate`/`PreRemove` (`domain/projectconfig.go:35-38`); run configurations in `.ao/launch.json` (`previewserver/manager.go:31-32`); no build/test command field | LADO project settings hold build/test/lint commands (feeds VER-001); staleness = snapshot SHA vs base head |
 | PRJ-004 | P1 | Per-project specialist profiles from approved knowledge | EXTEND | Role overrides `Worker`/`Orchestrator` (`domain/projectconfig.go:49-53,160-163`), `Reviewers` (:58) | Profile = role + agent config + rule set, stored by LADO |
 | PRJ-005 | P2 | Cross-project dependencies, CI/ops signals | ADD | — | Later |
+| PRJ-006 | P0 | Connect a project to its GitHub or GitLab repository with an access token and SSH; clone it when no local checkout exists | EXTEND | Clone flow that takes SSH URLs and uses the machine's git credentials with prompts off (`service/project/clone.go:21-29,165-166`); repository identity from `origin` (`service/project/service.go:800-810`, `domain/repository_identity.go:24,36`). Tokens come from env and the `gh`/`glab` CLIs (`daemon/scm_wiring.go:47-63`, `daemon/tracker_wiring.go:21-87`); AO stores a GitHub token that nothing reads (`service/githubpat/githubpat.go:62-64,384`); self-managed GitLab hosts come from env only (`config/config.go:95-106,366-384`). No SSH key handling | Connect flow: one token per host, checked and stored; the SSH URL checked with `git ls-remote`, with an optional key file; link the registered project with the same `origin`, or clone through AO (TDD §5.1, [adr/0006](adr/0006-issues-as-work-items.md)) |
 
-### 4.2 Tasks, proposals and plans
+### 4.2 Tasks (issues) and plans
 
 | ID | P | Requirement | Status | AO today | LADO change |
 |---|---|---|---|---|---|
-| TASK-001 | P0 | Task memo, tags, status, priority, optional GitHub issue link | ADD | No task table or route (searched migrations, `domain/`, `frontend/src/renderer/routes/`). Issue ids exist: `sessions.issue_id` (`0001_init.sql:25`), canonical form `github:owner/repo#N` (`observe/trackerintake/observer.go:260-274`) | `lado_tasks` with `issue_ref` in AO's canonical form; status is derived (§5) |
-| TASK-002 | P0 | Structured proposal: rationale, evidence, assumptions, risks, alternatives | EXTEND | Orchestrator session; per-session artifact directory named in the prompt (`session_manager/manager.go:5895-5918`) | LADO prompt section tells the orchestrator to write `proposal.md` in a fixed schema; LADO pins the version |
-| TASK-003 | P0 | Versioned plan: steps, acceptance criteria, affected paths, test commands | EXTEND | `session_artifact_versions` (sha256, version per path); at most 50 versions per path, older ones pruned (`artifactversions/capture.go:27-37`); deleted with the session on kill with `deleteArtifacts` (`artifactversions/delete.go:33-60`) | `lado_plan_revisions` points at (session, path, version, sha256). LADO copies the bytes into its own content store so pruning cannot remove an approved plan |
-| TASK-004 | P0 | Human approval of one exact plan revision before code runs | ADD | None; AO approvals are tool-permission requests | `lado_plan_approvals` bound to sha256, through the human-presence channel ([adr/0002](adr/0002-human-presence-approval-channel.md)) |
+| TASK-001 | P0 | Each task is one issue on the project's connected repository, with tags, priority and agent preferences; the task shows the issue's current title and state | EXTEND | No task table or route (searched migrations, `domain/`, `frontend/src/renderer/routes/`). Issue facts: `domain.Issue` (`domain/tracker.go:49-57`); canonical ids `github:owner/repo#N` and `gitlab:group/project#N`, plus `@host` for self-managed GitLab (`observe/trackerintake/observer.go:255-274`); `sessions.issue_id` (`0001_init.sql:25`). No issue table, and nothing observes an issue after spawn | `lado_tasks` with a required `issue_ref` in AO's canonical form, one task per issue unless that task was cancelled; LADO refreshes the issue's title and state; status is derived (§5) |
+| TASK-002 | P0 | Create an issue from the developer's request ("I'll build X"), or import existing open issues | EXTEND | Read-only tracker port `Get`, `List`, `Preflight` (`ports/tracker.go:21-25`) over GitHub REST (`adapters/tracker/github/tracker.go:160,250`) and GitLab REST v4 (`adapters/tracker/gitlab/tracker.go`). No issue write anywhere; upstream defers it to its issue #40 (`adapters/tracker/github/tracker.go:26-29`). Tracker intake spawns a worker for each open issue, with no human choice (`observe/trackerintake/observer.go:183-217`) | New issue write port with GitHub and GitLab adapters; import uses `Tracker.List`. Intake stays off in LADO projects ([adr/0003](adr/0003-enforcement-points.md)); import replaces it ([adr/0006](adr/0006-issues-as-work-items.md)) |
+| TASK-003 | P0 | Versioned plan: steps, acceptance criteria, affected paths, test commands | EXTEND | `session_artifact_versions` (sha256, version per path); at most 50 versions per path, older ones pruned (`artifactversions/capture.go:27-37`); deleted with the session on kill with `deleteArtifacts` (`artifactversions/delete.go:33-60`) | `lado_plan_revisions` points at (session, path, version, sha256) and at the issue snapshot it was planned from. LADO copies the bytes into its own content store so pruning cannot remove an approved plan |
+| TASK-004 | P0 | Human approval of one exact plan revision before code runs; later edits to the issue never change what was approved | ADD | None; AO approvals are tool-permission requests | `lado_plan_approvals` bound to sha256, through the human-presence channel ([adr/0002](adr/0002-human-presence-approval-channel.md)). An issue edit after approval sends the queue entry to Review required (TDD §5.3) |
 | TASK-005 | P1 | Dependency graph, conflict warnings, plan revalidation against changed code | ADD | — | Task dependency table; dispatcher checks base drift and overlapping paths |
-| TASK-006 | P1 | Issue status sync without making GitHub the source of execution state | EXTEND | Tracker reads (`adapters/tracker/github/tracker.go`); `lifecycle/reactions.go:645` `ApplyTrackerFacts` exists but is not wired | Show issue state on the task; write back through a new tracker write port |
+| TASK-006 | P1 | Write progress back to the issue (plan link, status comments) without making the tracker the source of execution state | EXTEND | Tracker reads (`adapters/tracker/github/tracker.go`); `lifecycle/reactions.go:645` `ApplyTrackerFacts` exists but is not wired | Comments through the issue write port. A plan copied into a comment is never read back |
 
 ### 4.3 Agents and providers
 
@@ -159,15 +161,18 @@ Status: **HAVE** = AO has it and LADO uses it as is. **EXTEND** = AO has the bas
 
 States are derived and never stored, as `AGENTS.md:111` requires for sessions. TDD §3.2 has the derivation rules.
 
-- **Before a session exists**, from LADO records: Draft, Proposed, Planned, Review required, Blocked, Approved, Queued, Dispatching, Cancelled.
-- **After the session exists**, from AO facts plus LADO verification records: Running, Validating, Integration pending, Integrating, Completed, Closed unmerged, Failed.
+- **Before a session exists**, from LADO records and the linked issue: Draft, Planned, Review required, Blocked, Approved, Queued, Dispatching, Cancelled.
+- **After the session exists**, from AO facts plus LADO verification records: Running, Validating, Integration pending, Integrating, Completed, Failed.
+- **In either phase**: Closed unmerged, when the task ends without an approved merge: its issue or PR is closed, or it gets a closing disposition.
 
 ## 6. UX surfaces
 
 | LADO surface | AO surface it extends | Notes |
 |---|---|---|
 | Task board | Project board (`frontend/src/renderer/components/SessionsBoard.tsx`, `packages/product-ui/src/SessionsBoardView.tsx`) | Two lanes before AO's Building lane: **Plan** (the human's turn) and **Queued** (the machine's turn). Cards in them are tasks, not sessions: record that in the DESIGN.md decisions log before UI work |
-| Task detail: proposal and plan history, approval | Session view patterns; artifact viewer | Approve opens a native confirmation ([adr/0002](adr/0002-human-presence-approval-channel.md)) |
+| Repository connection | Add Project and Clone dialogs (`frontend/src/renderer/components/CreateProjectFlow.tsx`, `frontend/src/renderer/components/CloneRepositoryDialog.tsx`) | Token and SSH entry with the check results, then link or clone |
+| New task | New Task composer (`frontend/src/renderer/components/TaskComposer.tsx`) | In LADO projects it creates an issue, and offers Import issues |
+| Task detail: issue, plan history, approval | Session view patterns; artifact viewer | Approve opens a native confirmation ([adr/0002](adr/0002-human-presence-approval-channel.md)) |
 | Execution monitor | Session view and inspector (`frontend/src/renderer/components/SessionInspector.tsx`) | Inspector shows task, plan revision, rule snapshot, base SHA |
 | Review and evidence | PR, checks and review panes in the inspector | Evidence links and integration approval |
 | Rules manager | Settings dialog (`frontend/src/renderer/components/SettingsDialog.tsx`, section registry `frontend/src/renderer/components/settings/settingsCatalog.tsx`) | Section name **Rules**. Includes adopted local items and the adoption flow |
@@ -177,9 +182,10 @@ States are derived and never stored, as `AGENTS.md:111` requires for sessions. T
 ## 7. Safety rules
 
 - In a LADO project, no worker session starts without an approved, unchanged plan revision.
-- Credentials never appear in rules, prompts, logs or exports. Adoption never moves credentials, login state or session history.
+- Credentials never appear in rules, prompts, logs or exports. Adoption never moves credentials, login state or session history. Repository tokens stay in the daemon; they never reach an agent's environment, prompt or worktree.
 - A worktree is not a sandbox. The UI says that same-user agents (T2) are out of scope.
 - Repository text, tool output and issue bodies are untrusted input. AO already wraps issue context in trust-boundary text (`session_manager/prompt.go:191-195`).
+- Anyone with access can edit an issue at any time, so approval never depends on the issue body. A worker gets the issue as it was pinned when its plan was requested, never a live copy.
 - A rule that exists only in a prompt is advisory, and the UI says so.
 - AI-drafted rule changes stay drafts until approved. Protected gates and local-harness adoption or restore need human-presence approval.
 - Rule changes apply to future executions; an admitted snapshot never changes. Emergency revocation cancels affected runs and writes an audit event.
@@ -203,6 +209,9 @@ These replace v1's M0 gates. "W" marks gates that must also pass on a real Windo
 13. A daemon restart during dispatch creates no duplicate session, and the queue lease recovers.
 14. Adoption writes the backup and its manifest before removing any original; restore returns byte-identical files; credentials are untouched.
 15. An unsupported mandatory enforcement blocks dispatch with a diagnostic.
+16. Creating a task creates exactly one issue, also when the daemon restarts mid-request; importing an issue writes nothing to the tracker.
+17. Editing the issue's title or body after plan approval sends the queue entry to Review required; a worker's prompt carries the pinned plan and issue snapshot, not the live issue.
+18. A stored repository token never appears in an agent's environment, prompt or worktree, or in LADO logs.
 
 ## 9. Decisions
 
@@ -220,6 +229,7 @@ These replace v1's M0 gates. "W" marks gates that must also pass on a real Windo
 | D10 | Fixes that help upstream become upstream PR candidates | TDD §12 |
 | D11 | Local harness is adopted into one LADO-managed location (back up, copy, remove original); CRUD after approval; repo-tracked files change through git | [adr/0005](adr/0005-local-harness-adoption.md), HARNESS §9 |
 | D12 | Build in 8 steps by dependency, one branch and PR each; fork defaults split into PRs (1a, 1c; 1b dropped after measurement); the rules core comes before the queue. Agreed 2026-10-19 | TDD §15 |
+| D13 | Work items are issues on the project's connected GitHub or GitLab repository: LADO creates one from the developer's request or imports existing ones. The proposal step and `lado_proposals` are removed. A project connects with a per-host access token and SSH, and is cloned through AO's clone flow when no local checkout exists. Decided 2026-10-19 | [adr/0006](adr/0006-issues-as-work-items.md), TDD §5.1 |
 
 ## 10. Traceability
 

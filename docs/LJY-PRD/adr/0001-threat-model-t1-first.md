@@ -43,5 +43,5 @@ The acceptance gates in PRD §8 are T1 tests.
 - Remote merge protection is the strongest control because GitHub enforces it, not the local machine.
 - Work needed before T2 is in scope:
   - Run agents under a separate OS identity, so they cannot read `~/.ao/lado/` (managed setup, backups) or the memory of the app and daemon (presence key).
-  - Give agents a GitHub token that cannot post the `lado/integration` status or merge, with LADO holding the only token that can.
+  - Give agents a GitHub token that cannot post the `lado/integration` status or merge, with LADO holding the only token that can. The repository connection ([0006](0006-issues-as-work-items.md)) already gives LADO a stored token; agents still use the machine's credentials.
   - Make the audit hash chain verifiable outside the machine.

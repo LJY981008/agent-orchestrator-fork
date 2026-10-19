@@ -27,7 +27,7 @@ Facts at `55b02b848`:
    - Messages are judged by origin: human, daemon nudges about the session's own PR, and report relays are allowed; sends from other sessions and automations are refused.
    - Per-turn approval changes are capped at the snapshot's ceiling.
    - Every LADO execution gets an explicit permission mode.
-5. **LADO mode defaults.** Tracker intake and automations stay off for LADO projects: the gate rejects their spawns, and LADO settings refuse to turn intake on. The orchestrator only writes proposals and plans; its prompt says so and the gate enforces it.
+5. **LADO mode defaults.** Tracker intake and automations stay off for LADO projects: the gate rejects their spawns, and LADO settings refuse to turn intake on. Issues come in through import instead ([0006](0006-issues-as-work-items.md)). The orchestrator only writes plans; its prompt says so and the gate enforces it.
 6. **Codex modes.** The global Codex `default` keeps upstream's mapping, so sessions outside LADO projects are unchanged. LADO executions get an explicit Codex mode from the snapshot. Amended 2026-10-19: the first version mapped `default` to `workspace-write` with network on and the common git directory writable, but Codex keeps `.git` read-only in that sandbox whatever the writable roots, so commits fail there (TDD §6.6).
 7. **Commit and path rules.** These are checked over `base..head` in VALIDATING. Git hooks are advisory only.
 
@@ -35,6 +35,6 @@ Facts at `55b02b848`:
 
 - **Why a status check.** A solo developer cannot use GitHub's "required approvals": the PR author cannot approve their own PR. The `lado/integration` status gives the same effect.
 - **Agents still push.** Branch pushes and PR creation keep working. Only merging into the base needs the approval.
-- **Cost.** LADO makes GitHub API calls for rulesets and statuses, using AO's existing GitHub credentials.
-- **GitLab later.** AO reads GitLab `approvals_required` today (`adapters/scm/gitlab/observer_provider.go:739,762-779`). LADO's GitLab support would use protected branches and external status checks.
+- **Cost.** LADO makes GitHub API calls for rulesets and statuses with the host token from the repository connection ([0006](0006-issues-as-work-items.md)), which AO's own GitHub calls then use too.
+- **GitLab later.** AO reads GitLab `approvals_required` today (`adapters/scm/gitlab/observer_provider.go:739,762-779`). LADO's GitLab support would use protected branches and external status checks. Until then, GitLab LADO projects get issues and tasks but are "unprotected: detection only" (TDD §7.1).
 - **Upstream PR candidates.** Codex `accept-edits` and `auto` cannot commit (TDD §6.6, §12), and an optional spawn/send policy hook in `Manager` with a nil default.
