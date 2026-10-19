@@ -3164,5 +3164,10 @@
 	"settings.agentAccounts.stopAndMove": "Stop and move",
 	"settings.agentAccounts.switching": "Switching to {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Switching account",
-	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account."
+	"settings.agentAccounts.switchFailed": "The switch failed. The agent stays on its previous account.",
+	"lado.settings.background": "Background",
+	"lado.settings.startAtLogin": "Start at login",
+	"lado.settings.keepRunning": "Keep agents running after quit",
+	"lado.settings.keepRunningSetByEnv": "Set by AO_KEEP_DAEMON",
+	"lado.settings.saveFailed": "Could not save this setting."
 }
