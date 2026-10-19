@@ -46,6 +46,7 @@ export function GlobalNewTaskDialog() {
 			hostId={hostId}
 			onProjectChange={setProjectId}
 			onCreated={(sessionId) => void handleCreated(sessionId)}
+			onIssueTasksCreated={(createdIn) => void navigate({ to: "/projects/$projectId", params: { projectId: createdIn } })}
 			onOpenChange={setOpen}
 		/>
 	);

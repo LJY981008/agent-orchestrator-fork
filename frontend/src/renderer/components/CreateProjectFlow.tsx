@@ -14,6 +14,7 @@ import {
 	GitBranch,
 	GitFork,
 	Globe,
+	KeyRound,
 	LoaderCircle,
 	Lock,
 	MessageSquarePlus,
@@ -38,6 +39,7 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { useCloudOrg } from "../hooks/useCloudOrg";
 import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { usePreparedClone } from "../hooks/usePreparedClone";
+import { LadoConnectDialog } from "./lado/LadoConnectDialog";
 import { clientForSessionHost } from "../lib/host-clients";
 import { useProviderConnections } from "../hooks/useProviderConnections";
 import { cloudProjectsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -94,7 +96,7 @@ const GIT_ACTION_LABELS: Record<string, string> = {
 type ImportValidationResult = components["schemas"]["ImportValidationResult"];
 type GitPreparationEvent = components["schemas"]["GitPreparationEvent"];
 type ProjectImportStep = "blocked" | "prepare_git";
-type CreateProjectView = "source" | "clone" | "folder" | ProjectImportStep | null;
+type CreateProjectView = "source" | "clone" | "folder" | "lado-connect" | ProjectImportStep | null;
 type CreateProjectViewAction =
 	| { type: "open"; view: Exclude<CreateProjectView, null> }
 	| { type: "close"; view: Exclude<CreateProjectView, null> }
@@ -119,7 +121,8 @@ function GitHubIcon({ className }: { className?: string }) {
 }
 
 type CreateProjectFlowMode = ProjectKind | "choose";
-type ProjectSource = "clone" | "local" | "workspace";
+// LADO fork: "lado-connect" connects a repository with a token and SSH.
+type ProjectSource = "clone" | "local" | "workspace" | "lado-connect";
 
 /** Where the new project should live: on this machine or in AO Cloud. */
 type ProjectOffering = "local" | "cloud";
@@ -200,6 +203,7 @@ export function CreateProjectFlow({
 	const [activeView, dispatchView] = useReducer(createProjectViewReducer, initialOpen ? "source" : null);
 	const modePickerOpen = activeView === "source";
 	const cloneDialogOpen = activeView === "clone";
+	const ladoConnectOpen = activeView === "lado-connect";
 	const [cloneDetails, setCloneDetails] = useState<CloneRepositoryDetails>(() => initialCloneDetails(hostId));
 	const [cloneSelection, setCloneSelection] = useState<CloneRepositorySelection | null>(null);
 	const preparedClone = usePreparedClone(hostId);
@@ -296,6 +300,10 @@ export function CreateProjectFlow({
 			setCloneDetails(initialCloneDetails(hostId));
 			setCloneSelection(null);
 			transitionToChild(() => setCloneDialogOpen(true));
+			return;
+		}
+		if (source === "lado-connect") {
+			transitionToChild(() => dispatchView({ type: "open", view: "lado-connect" }));
 			return;
 		}
 		setCloneSelection(null);
@@ -750,7 +758,7 @@ export function CreateProjectFlow({
 					error,
 					label,
 				})}
-			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null} /> : null}
+			{!isCreating && !isInitializing ? <CreateProjectFlowBackdrop open={modePickerOpen || cloneDialogOpen || ladoConnectOpen || folderDialogOpen || selectedPath !== null || childTransitioning || projectImportOpen || remoteBrowse !== null} /> : null}
 			{hasModePicker && embedded && !modePickerOpen && !cloneDialogOpen && selectedPath === null && (
 				<div className="flex w-full flex-col items-center gap-3">
 					{cloudEnabled && offering === "cloud" ? (
@@ -772,7 +780,7 @@ export function CreateProjectFlow({
 			{hasModePicker && (
 				<>
 					<CreateProjectSourceDialog
-						childOpen={childTransitioning || cloneDialogOpen || folderDialogOpen || projectImportOpen || selectedPath !== null || remoteBrowse !== null}
+						childOpen={childTransitioning || cloneDialogOpen || ladoConnectOpen || folderDialogOpen || projectImportOpen || selectedPath !== null || remoteBrowse !== null}
 						cloudAvailable={cloudAvailable}
 						cloudEnabled={!hostId && cloudEnabled}
 						closeDisabled={isBusy}
@@ -827,6 +835,19 @@ export function CreateProjectFlow({
 							open={cloneDialogOpen}
 							shake={projectImportShake}
 							value={cloneDetails}
+						/>
+					) : null}
+					{ladoConnectOpen ? (
+						<LadoConnectDialog
+							open={ladoConnectOpen}
+							onBack={() => {
+								dispatchView({ type: "close", view: "lado-connect" });
+								setModePickerOpen(true);
+							}}
+							onClose={() => {
+								dispatchView({ type: "close", view: "lado-connect" });
+								onDismiss?.();
+							}}
 						/>
 					) : null}
 					<CreateProjectFolderDialog
@@ -2044,6 +2065,13 @@ function ImportSourcePicker({
 			label: t("createProject.addWorkspace"),
 			description: t("createProject.workspaceDesc"),
 		},
+		// LADO fork: LADO connects repositories of this computer only.
+		...(hostId ? [] : [{
+			source: "lado-connect" as const,
+			icon: <KeyRound className="size-5" aria-hidden="true" strokeWidth={1.8} />,
+			label: t("lado.connect.source"),
+			description: t("lado.connect.sourceDescription"),
+		}]),
 	];
 	return (
 		<div className={onboardingPanelClass}>

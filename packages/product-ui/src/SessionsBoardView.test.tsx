@@ -177,6 +177,24 @@ describe("SessionsBoardView", () => {
 		}
 	});
 
+	// LADO fork: the Plan lane sits before the session columns.
+	it("renders a leading lane before the session columns", () => {
+		render(
+			<SessionsBoardGridView
+				columns={boardKanbanColumnOrder.map((column) => getKanbanColumnView(column))}
+				labels={columnLabels}
+				leadingColumn={<section aria-label="Plan lane">plan</section>}
+				renderSessionCard={(session) => <div data-testid={`card-${session.id}`}>{session.title}</div>}
+				sessions={[] as BoardSessionPresentation[]}
+			/>,
+		);
+
+		const lanes = screen.getAllByRole("region");
+		expect(lanes[0]).toHaveAccessibleName("Plan lane");
+		expect(lanes).toHaveLength(boardKanbanColumnOrder.length + 1);
+		expect(lanes[0].parentElement).toHaveClass("grid-cols-5");
+	});
+
 	it("pins display-status attention cards first inside the lane", () => {
 		render(
 			<SessionsBoardGridView

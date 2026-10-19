@@ -19,6 +19,7 @@ import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
+import { ladoProjectIssuesQueryKey, ladoQueryRoot, ladoTasksQueryKey } from "./lado";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -67,6 +68,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
+			// LADO fork: projects whose issue-backed tasks changed.
+			const pendingLadoTaskProjects = new Set<string>();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -241,6 +244,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(["session-reviews"]);
 					invalidate(["session-interface-transition"]);
 					invalidate(["agent-models"]);
+					invalidate(ladoQueryRoot);
 					allEventScopedCachesInvalidationPending = false;
 				}
 				if (allEditorHandoffsInvalidationPending) {
@@ -277,11 +281,17 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						: ["agent-models", scope.agentId]);
 				}
 				pendingModelCatalogScopes.clear();
+				for (const projectId of pendingLadoTaskProjects) {
+					invalidate(ladoTasksQueryKey(projectId));
+					invalidate(ladoProjectIssuesQueryKey(projectId));
+				}
+				pendingLadoTaskProjects.clear();
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
+				let ladoTaskOnly = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -334,6 +344,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							});
 							modelCatalogOnly = true;
 						}
+						// LADO fork: a task row has no session; refresh that project's
+						// Plan lane and importable issues only.
+						if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
+							pendingLadoTaskProjects.add(payload.projectId);
+							ladoTaskOnly = true;
+						}
 						if (
 							typeof payload?.reviewId === "string" &&
 							payload.reviewId &&
@@ -377,7 +393,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (!conversationOnly && !modelCatalogOnly) workspaceInvalidationPending = true;
+				if (!conversationOnly && !modelCatalogOnly && !ladoTaskOnly) workspaceInvalidationPending = true;
 				// A busy stream must not postpone visible updates until traffic
 				// stops, and the first event after a quiet period must not wait out
 				// a full window either. Flush on the leading edge when the last

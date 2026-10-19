@@ -68,6 +68,7 @@ vi.mock("../lib/api-client", () => ({
 		POST: h.post,
 	},
 	apiErrorCode: (error: { code?: string }) => error?.code,
+	apiErrorDetails: (error: { details?: Record<string, unknown> }) => error?.details,
 	apiErrorMessage: (error: { message?: string }, fallback = "err") => error?.message ?? fallback,
 }));
 
@@ -2356,5 +2357,106 @@ describe("TaskComposer", () => {
 			act(() => { window.dispatchEvent(new Event("focus")); });
 			await waitFor(() => expect(screen.queryByTestId("model-catalog-notice")).not.toBeInTheDocument());
 		});
+	});
+});
+
+// LADO fork: in a LADO project the composer creates an issue-backed task.
+describe("TaskComposer in a LADO project", () => {
+	const ladoTask = {
+		id: "lado-task-1",
+		projectId: "project-a",
+		repository: "github:acme/demo",
+		state: "draft",
+		issue: { ref: "github:acme/demo#12", number: 12, title: "Add login", state: "open", url: "https://github.com/acme/demo/issues/12", observedAt: "2026-10-19T09:00:00Z" },
+		createdAt: "2026-10-19T09:00:00Z",
+	};
+
+	const repository = (name: string) => ({ ref: `github:acme/${name}`, name, provider: "github", host: "github.com", path: `acme/${name}` });
+	let repositories = [repository("demo")];
+
+	beforeEach(() => {
+		repositories = [repository("demo")];
+		window.localStorage.removeItem("lado.issueRepository.project-a");
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex")] };
+		h.get.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/lado/projects/{projectId}/settings") return { data: { projectId: "project-a", ladoMode: true } };
+			if (path === "/api/v1/lado/projects/{projectId}/issues") return { data: { issues: [], failures: [] } };
+			if (path === "/api/v1/lado/projects/{projectId}/repositories") return { data: { repositories } };
+			if (path.includes("/models")) return { data: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } };
+			return { data: { status: "ok", project: { id: "project-a", config: { worker: { agent: "codex" } } } } };
+		});
+	});
+
+	const createIssue = () => screen.getByRole("button", { name: "Create issue" });
+
+	it("creates an issue-backed task instead of starting a session", async () => {
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/lado/tasks" ? { data: ladoTask } : { data: {} });
+		const onCreated = vi.fn();
+		const onIssueTasksCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="project-a" onCreated={onCreated} onIssueTasksCreated={onIssueTasksCreated} /></Wrap>);
+
+		await waitFor(() => expect(createIssue()).toBeEnabled());
+		expect(await screen.findByText("Creates an issue in acme/demo")).toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Add login\nUse the session store" } });
+		fireEvent.click(createIssue());
+
+		await waitFor(() => expect(onIssueTasksCreated).toHaveBeenCalledWith("project-a"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/lado/tasks", {
+			body: expect.objectContaining({ projectId: "project-a", repository: "github:acme/demo", text: "Add login\nUse the session store", agent: "codex" }),
+		});
+		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate" || path === "/api/v1/projects/{id}/tasks/prepare")).toBe(false);
+		expect(onCreated).not.toHaveBeenCalled();
+	});
+
+	it("keeps the text and shows why the tracker refused the issue", async () => {
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/lado/tasks"
+			? { error: {
+				code: "LADO_ISSUE_NOT_CREATED",
+				message: "The tracker did not create the issue: github tracker: 410 Issues are disabled for this repo",
+				details: { reason: "github tracker: 410 Issues are disabled for this repo" },
+			} }
+			: { data: {} });
+		const onIssueTasksCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} onIssueTasksCreated={onIssueTasksCreated} /></Wrap>);
+
+		await waitFor(() => expect(createIssue()).toBeEnabled());
+		fireEvent.change(task(), { target: { value: "Add login" } });
+		fireEvent.click(createIssue());
+
+		expect(await screen.findByText("The tracker did not create the issue: github tracker: 410 Issues are disabled for this repo")).toBeInTheDocument();
+		expect(task()).toHaveValue("Add login");
+		expect(onIssueTasksCreated).not.toHaveBeenCalled();
+	});
+
+	it("asks which repository the issue goes to in a workspace, then remembers it", async () => {
+		repositories = [repository("back"), repository("front")];
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/lado/tasks" ? { data: ladoTask } : { data: {} });
+		const onIssueTasksCreated = vi.fn();
+		render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} onIssueTasksCreated={onIssueTasksCreated} /></Wrap>);
+
+		await waitFor(() => expect(createIssue()).toBeEnabled());
+		const picker = await screen.findByRole("combobox", { name: "Create the issue in" });
+		fireEvent.change(task(), { target: { value: "Fix the login form" } });
+		fireEvent.click(createIssue());
+		expect(await screen.findByText("Choose the repository to create the issue in.")).toBeInTheDocument();
+		expect(h.post.mock.calls.some(([path]) => path === "/api/v1/lado/tasks")).toBe(false);
+
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("option", { name: "front" }));
+		fireEvent.click(createIssue());
+
+		await waitFor(() => expect(onIssueTasksCreated).toHaveBeenCalledWith("project-a"));
+		expect(h.post).toHaveBeenCalledWith("/api/v1/lado/tasks", {
+			body: expect.objectContaining({ projectId: "project-a", repository: "github:acme/front", text: "Fix the login form" }),
+		});
+		expect(window.localStorage.getItem("lado.issueRepository.project-a")).toBe("github:acme/front");
+	});
+
+	it("opens the issue picker", async () => {
+		render(<Wrap><TaskComposer projectId="project-a" onCreated={vi.fn()} /></Wrap>);
+
+		await waitFor(() => expect(createIssue()).toBeEnabled());
+		fireEvent.click(screen.getByRole("button", { name: "Import issues" }));
+		expect(await screen.findByText("Every open issue already has a task.")).toBeInTheDocument();
 	});
 });
