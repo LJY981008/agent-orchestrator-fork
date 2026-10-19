@@ -62,12 +62,13 @@ import {
 	installedBundlePath,
 } from "./main/relocation";
 import {
-	coerceUiSettings,
 	DEFAULT_UI_SETTINGS,
 	readUiSettings,
 	writeUiSettings,
 	type UiSettings,
 } from "./main/ui-settings";
+// LADO fork: the desktop starts in Korean (docs/LJY-PRD/TDD.md §11).
+import { coerceLadoDesktopUiSettings, LADO_DESKTOP_UI_SETTINGS } from "./main/lado-ui-locale";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -2836,12 +2837,12 @@ ipcMain.handle("updateSettings:setMacDifferentialUpdates", async (_event, enable
 
 ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 	const runFile = runFilePath();
-	if (!runFile) return { ...DEFAULT_UI_SETTINGS };
+	if (!runFile) return { ...LADO_DESKTOP_UI_SETTINGS };
 	return readUiSettings(path.dirname(runFile));
 });
 	ipcMain.handle("uiSettings:set", async (_event, settings: Partial<UiSettings>): Promise<UiSettings> => {
 		const runFile = runFilePath();
-	const result = !runFile ? coerceUiSettings(settings) : await writeUiSettings(path.dirname(runFile), settings);
+	const result = !runFile ? coerceLadoDesktopUiSettings(settings) : await writeUiSettings(path.dirname(runFile), settings);
 	trayController?.setLocale(result.locale);
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
@@ -3382,7 +3383,7 @@ app.whenReady().then(async () => {
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
-		: { ...DEFAULT_UI_SETTINGS };
+		: { ...LADO_DESKTOP_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;

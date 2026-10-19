@@ -1,6 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { DEFAULT_UI_SETTINGS, coerceUiSettings, type UiSettings } from "../shared/ui-locale";
+import { type UiSettings } from "../shared/ui-locale";
+// LADO fork: the desktop's defaults start in Korean (lado-ui-locale.ts).
+import { coerceLadoDesktopUiSettings, LADO_DESKTOP_UI_SETTINGS } from "./lado-ui-locale";
 
 export { DEFAULT_UI_SETTINGS, coerceUiSettings } from "../shared/ui-locale";
 export type { AppLocale, UiSettings } from "../shared/ui-locale";
@@ -15,12 +17,12 @@ async function readUiSettingsUnlocked(stateDir: string): Promise<UiSettings> {
 	try {
 		raw = await readFile(path.join(stateDir, UI_SETTINGS_FILE_NAME), "utf8");
 	} catch {
-		return { ...DEFAULT_UI_SETTINGS };
+		return { ...LADO_DESKTOP_UI_SETTINGS };
 	}
 	try {
-		return coerceUiSettings(JSON.parse(raw));
+		return coerceLadoDesktopUiSettings(JSON.parse(raw));
 	} catch {
-		return { ...DEFAULT_UI_SETTINGS };
+		return { ...LADO_DESKTOP_UI_SETTINGS };
 	}
 }
 
@@ -29,7 +31,7 @@ async function writeUiSettingsUnlocked(stateDir: string, patch: Partial<UiSettin
 	// `soundNotificationsEnabled`); merge onto the persisted settings so one
 	// setting's write never resets the other back to its default.
 	const current = await readUiSettingsUnlocked(stateDir);
-	const next = coerceUiSettings({ ...current, ...patch });
+	const next = coerceLadoDesktopUiSettings({ ...current, ...patch });
 	await mkdir(stateDir, { recursive: true, mode: 0o750 });
 	const file = path.join(stateDir, UI_SETTINGS_FILE_NAME);
 	const data = `${JSON.stringify(next, null, 2)}\n`;
