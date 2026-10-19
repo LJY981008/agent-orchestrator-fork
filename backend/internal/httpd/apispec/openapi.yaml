@@ -3020,6 +3020,101 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/lado/projects/{projectId}/settings:
+    get:
+      operationId: getLadoProjectSettings
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectSettingsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a project's LADO settings
+      tags:
+      - lado
+    put:
+      operationId: updateLadoProjectSettings
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoProjectSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectSettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change a project's LADO settings
+      tags:
+      - lado
   /api/v1/link-preview:
     get:
       operationId: getLinkPreview
@@ -16336,6 +16431,17 @@ components:
       - ok
       - sessionId
       type: object
+    LadoProjectSettingsResponse:
+      properties:
+        ladoMode:
+          description: Whether the project's workers are under LADO's worker gate.
+          type: boolean
+        projectId:
+          type: string
+      required:
+      - projectId
+      - ladoMode
+      type: object
     LinkPreviewResponse:
       properties:
         description:
@@ -20089,6 +20195,17 @@ components:
           - array
       required:
       - disabledModels
+      type: object
+    UpdateLadoProjectSettingsRequest:
+      properties:
+        ladoMode:
+          description: Put the project's workers under LADO's worker gate. Changing
+            it needs AO_LADO_DEV=on until LADO's dispatcher exists.
+          type:
+          - "null"
+          - boolean
+      required:
+      - ladoMode
       type: object
     UpdateProjectSettingsInput:
       properties:

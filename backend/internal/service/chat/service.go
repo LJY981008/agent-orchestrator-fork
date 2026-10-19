@@ -53,6 +53,8 @@ type SessionReader interface {
 
 // Service owns the live Chat controllers.
 type Service struct {
+	// LADO fork: see lado_gate.go.
+	workGate               ports.WorkGate
 	store                  Store
 	reader                 SnapshotReader
 	pageReader             SnapshotPageReader
@@ -1215,6 +1217,10 @@ func (s *Service) Send(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (domain.ConversationTurn, error) {
+	// LADO fork: the worker gate decides first (docs/LJY-PRD/TDD.md §6.3).
+	if err := s.authorizeLadoMessage(ctx, id, msg); err != nil {
+		return domain.ConversationTurn{}, err
+	}
 	record, err := s.requireChatSession(ctx, id)
 	if err != nil {
 		return domain.ConversationTurn{}, err

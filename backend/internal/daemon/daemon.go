@@ -609,6 +609,9 @@ func Run() error {
 		},
 	})
 	sessMgr = wiredSessMgr
+	// LADO fork: the worker gate goes in before anything can spawn or send
+	// (docs/LJY-PRD/TDD.md §6).
+	ladoProjects := wireLado(store, wiredSessMgr, chatSvc, log)
 	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -1006,6 +1009,7 @@ func Run() error {
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
+		LadoProjects:       ladoProjects,
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,

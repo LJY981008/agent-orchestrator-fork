@@ -117,6 +117,10 @@ func (s *Service) Steer(
 	id domain.SessionID,
 	msg ports.ChatUserMessage,
 ) (SteerResult, error) {
+	// LADO fork: the worker gate decides first (docs/LJY-PRD/TDD.md §6.3).
+	if err := s.authorizeLadoMessage(ctx, id, msg); err != nil {
+		return SteerResult{}, err
+	}
 	if strings.TrimSpace(msg.Text) == "" {
 		return SteerResult{}, ErrSteerTextRequired
 	}
@@ -160,6 +164,13 @@ func (s *Service) SteerOrSend(
 	msg ports.ChatUserMessage,
 	recoverOnly bool,
 ) (SteerOrSendResult, error) {
+	// LADO fork: the worker gate decides first; recovery delivers nothing
+	// (docs/LJY-PRD/TDD.md §6.3).
+	if !recoverOnly {
+		if err := s.authorizeLadoMessage(ctx, id, msg); err != nil {
+			return SteerOrSendResult{}, err
+		}
+	}
 	if strings.TrimSpace(msg.Text) == "" && !recoverOnly {
 		return SteerOrSendResult{}, ErrSteerTextRequired
 	}

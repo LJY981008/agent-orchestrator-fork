@@ -728,6 +728,8 @@ func operations() []operation {
 	ops = append(ops, identityOperations()...)
 	ops = append(ops, endpointsOperations()...)
 	ops = append(ops, linkPreviewOperations()...)
+	// LADO fork: LADO's routes (docs/LJY-PRD/TDD.md §13).
+	ops = append(ops, ladoOperations()...)
 	return ops
 }
 
