@@ -29,8 +29,8 @@ describe("report problem drafts", () => {
 		window.location.hash = "";
 	});
 
-	it("formats GitHub, Discord, and email drafts with user text plus safe diagnostics", () => {
-		const outputs: ReportProblemOutput[] = ["github", "discord", "email"];
+	it("formats GitHub and email drafts with user text plus safe diagnostics", () => {
+		const outputs: ReportProblemOutput[] = ["github", "email"];
 
 		for (const output of outputs) {
 			const draft = formatReportProblemDraft(completeInput, diagnostics, output);
@@ -99,15 +99,15 @@ describe("report problem drafts", () => {
 		const draft = formatReportProblemDraft({ summary: "", details: "" }, diagnostics, "email");
 
 		expect(draft).toContain("AO feedback");
-		expect(draft).toContain("To: prasad@untrivial.ai");
-		expect(draft).toContain("Cc: prateek@untrivial.ai");
+		expect(draft).toContain("To: tera199810@gmail.com");
+		expect(draft).not.toContain("Cc:");
 		expect(draft).toContain("Not provided");
 		expect(draft).toContain("Safe diagnostics");
 		expect(draft).toContain("AO version: 1.2.3-test");
 	});
 
 	it("omits report type and footer copy from generated drafts", () => {
-		const outputs: ReportProblemOutput[] = ["github", "discord", "email"];
+		const outputs: ReportProblemOutput[] = ["github", "email"];
 
 		for (const output of outputs) {
 			const draft = formatReportProblemDraft(completeInput, diagnostics, output);
@@ -121,21 +121,17 @@ describe("report problem drafts", () => {
 		}
 	});
 
-	it("builds copy handoff destinations for GitHub, Discord, and support email", () => {
+	it("builds copy handoff destinations for GitHub and support email", () => {
 		const github = new URL(reportProblemDestinationUrl(completeInput, diagnostics, "github")!);
-		expect(`${github.origin}${github.pathname}`).toBe("https://github.com/Untrivial-ai/agent-orchestrator/issues/new");
+		expect(`${github.origin}${github.pathname}`).toBe("https://github.com/LJY981008/agent-orchestrator-fork/issues/new");
 		expect(github.searchParams.get("title")).toBe("Terminal keeps reconnecting after daemon restart");
 		expect(github.searchParams.get("body")).toContain("[redacted-local-path]");
 		expect(github.searchParams.get("body")).toContain("[redacted-local-url]");
 
-		expect(reportProblemDestinationUrl(completeInput, diagnostics, "discord")).toBe(
-			"https://discord.gg/WjKNa7EbB8",
-		);
-
 		const email = new URL(reportProblemDestinationUrl(completeInput, diagnostics, "email")!);
 		expect(email.protocol).toBe("mailto:");
-		expect(email.pathname).toBe("prasad@untrivial.ai");
-		expect(email.searchParams.get("cc")).toBe("prateek@untrivial.ai");
+		expect(email.pathname).toBe("tera199810@gmail.com");
+		expect(email.searchParams.get("cc")).toBeNull();
 		expect(email.searchParams.get("subject")).toBe("AO feedback: Terminal keeps reconnecting after daemon restart");
 		expect(email.searchParams.get("body")).toContain("AO feedback");
 		expect(email.searchParams.get("body")).toContain("AO version: 1.2.3-test");
@@ -146,16 +142,16 @@ describe("report problem drafts", () => {
 		expect(gmail.origin).toBe("https://mail.google.com");
 		expect(gmail.pathname).toBe("/mail/");
 		expect(gmail.searchParams.get("view")).toBe("cm");
-		expect(gmail.searchParams.get("to")).toBe("prasad@untrivial.ai");
-		expect(gmail.searchParams.get("cc")).toBe("prateek@untrivial.ai");
+		expect(gmail.searchParams.get("to")).toBe("tera199810@gmail.com");
+		expect(gmail.searchParams.get("cc")).toBeNull();
 		expect(gmail.searchParams.get("su")).toContain("Terminal keeps reconnecting");
 		expect(gmail.searchParams.get("body")).toContain("AO version: 1.2.3-test");
 
 		const outlook = new URL(reportProblemDestinationUrl(completeInput, diagnostics, "email", "outlook")!);
 		expect(outlook.origin).toBe("https://outlook.office.com");
 		expect(outlook.pathname).toBe("/mail/deeplink/compose");
-		expect(outlook.searchParams.get("to")).toBe("prasad@untrivial.ai");
-		expect(outlook.searchParams.get("cc")).toBe("prateek@untrivial.ai");
+		expect(outlook.searchParams.get("to")).toBe("tera199810@gmail.com");
+		expect(outlook.searchParams.get("cc")).toBeNull();
 		expect(outlook.searchParams.get("subject")).toContain("Terminal keeps reconnecting");
 		expect(outlook.searchParams.get("body")).toContain("AO version: 1.2.3-test");
 	});
@@ -170,7 +166,7 @@ describe("report problem drafts", () => {
 			"email",
 		)!;
 
-		expect(email.startsWith("mailto:prasad@untrivial.ai?")).toBe(true);
+		expect(email.startsWith("mailto:tera199810@gmail.com?")).toBe(true);
 		expect(email).toContain("subject=AO%20feedback%3A%20Switch%20Codex%20accounts%20bug");
 		expect(email).toContain("body=AO%20feedback%0A%0ASummary%3A%20Switch%20Codex%20accounts%20bug");
 		expect(email).toContain("Keep%20literal%20%2B%20signs%20safe.");

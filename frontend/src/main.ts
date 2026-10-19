@@ -407,6 +407,10 @@ function playNotificationSound(): void {
 }
 
 const isDev = !app.isPackaged;
+// LADO fork: packaged builds keep the daemon after the app quits unless
+// AO_KEEP_DAEMON turns it off (docs/LJY-PRD/TDD.md §10). Dev builds keep the
+// upstream default so a dev loop does not leave daemons running.
+const keepDaemonByDefault = !isDev;
 
 // Dev mode uses a separate port and state subdirectory so it never collides with
 // a concurrently running installed-app daemon. The subdir also isolates supervise.sock
@@ -1273,10 +1277,15 @@ const configuredLoginShell = process.platform === "darwin" ? (os.userInfo().shel
 // dev loop or a CI job driving the real app would otherwise bill production
 // events and inflate install/DAU counts. Set AO_TELEMETRY_REMOTE explicitly to
 // exercise the export path from a dev build.
+//
+// LADO fork: remote export is off in every build, and the fork ships no PostHog
+// key or Sentry DSN (shared/posthog-config.ts, shared/sentry-config.ts). Set
+// AO_TELEMETRY_REMOTE, AO_TELEMETRY_POSTHOG_KEY and AO_SENTRY_DSN to opt in with
+// your own projects.
 function telemetryOverrides(): Record<string, string> {
 	return {
 		AO_TELEMETRY_EVENTS: process.env.AO_TELEMETRY_EVENTS ?? "on",
-		AO_TELEMETRY_REMOTE: process.env.AO_TELEMETRY_REMOTE ?? (isDev ? "off" : "posthog"),
+		AO_TELEMETRY_REMOTE: process.env.AO_TELEMETRY_REMOTE ?? "off",
 		AO_TELEMETRY_POSTHOG_KEY: process.env.AO_TELEMETRY_POSTHOG_KEY ?? DEFAULT_POSTHOG_PROJECT_KEY,
 		AO_TELEMETRY_POSTHOG_HOST: process.env.AO_TELEMETRY_POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST,
 		// Daemon-side Sentry (5xx + panics with Go stacks). Stamped on the daemon
@@ -1426,7 +1435,7 @@ async function ensureBundledTmuxStaged(): Promise<void> {
 	stagedBundledTmuxBinary = destination;
 }
 
-function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv {
+function daemonEnv(forceKeep = keepDaemonAlive(process.env, keepDaemonByDefault)): NodeJS.ProcessEnv {
 	// AO_OWNER is the daemon's durable spawn-mode record: the daemon writes it
 	// into running.json and the attach path reads it to decide the supervisor
 	// link from the daemon's own state (not this Electron process's env, which
@@ -2055,7 +2064,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
-	const keep = replacementKeepAlive ?? keepDaemonAlive(process.env);
+	const keep = replacementKeepAlive ?? keepDaemonAlive(process.env, keepDaemonByDefault);
 	let keepDaemonLogFd: number | undefined;
 	let stdio: "pipe" | "ignore" | ["pipe", number | "ignore", number | "ignore"] = "pipe";
 	if (keep) {
@@ -3513,7 +3522,7 @@ app.on("before-quit", (event) => {
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
-	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
+	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env, keepDaemonByDefault)) {
 		killDaemon(daemonProcess);
 	}
 });

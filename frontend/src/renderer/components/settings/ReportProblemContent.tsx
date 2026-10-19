@@ -27,14 +27,6 @@ function GithubIcon({ className }: DestinationIconProps) {
 	);
 }
 
-function DiscordIcon({ className }: DestinationIconProps) {
-	return (
-		<svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-			<path d="M20.32 4.37A19.8 19.8 0 0 0 15.36 2.8a13.7 13.7 0 0 0-.64 1.32 18.4 18.4 0 0 0-5.44 0 13.7 13.7 0 0 0-.64-1.32 19.7 19.7 0 0 0-4.96 1.57C.54 9.04-.32 13.6.1 18.1a19.9 19.9 0 0 0 6.08 3.08c.49-.67.93-1.38 1.3-2.12-.72-.27-1.4-.6-2.05-.98.17-.12.34-.25.5-.38a14.2 14.2 0 0 0 12.14 0c.16.13.33.26.5.38-.65.39-1.34.72-2.06.99.38.74.81 1.45 1.31 2.12a19.9 19.9 0 0 0 6.08-3.08c.5-5.22-.86-9.74-3.58-13.73ZM8.02 15.33c-1.18 0-2.15-1.08-2.15-2.41 0-1.34.95-2.42 2.15-2.42 1.2 0 2.17 1.09 2.15 2.42 0 1.33-.96 2.41-2.15 2.41Zm7.96 0c-1.18 0-2.15-1.08-2.15-2.41 0-1.34.95-2.42 2.15-2.42 1.2 0 2.17 1.09 2.15 2.42 0 1.33-.95 2.41-2.15 2.41Z" />
-		</svg>
-	);
-}
-
 function EmailIcon({ className }: DestinationIconProps) {
 	return (
 		<svg className={className} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
@@ -63,7 +55,6 @@ export function ReportProblemContent({ active }: { active: boolean }) {
 	const { t } = useTranslation();
 	const destinations: DestinationOption[] = [
 		{ value: "github", label: t("report.github"), action: t("report.githubAction"), icon: GithubIcon },
-		{ value: "discord", label: t("report.discord"), action: t("report.discordAction"), icon: DiscordIcon },
 		{ value: "email", label: t("report.email"), action: t("report.emailAction"), icon: EmailIcon },
 	];
 	const titleId = useId();

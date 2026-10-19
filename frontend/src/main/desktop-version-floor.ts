@@ -1,8 +1,9 @@
 import { app, dialog, shell } from "electron";
 import semver from "semver";
 
+// LADO fork: the floor and its fallback download page come from the fork.
 const FLOOR_URL =
-  "https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/desktop-version-floor.json";
+  "https://raw.githubusercontent.com/LJY981008/agent-orchestrator-fork/main/desktop-version-floor.json";
 
 const FETCH_TIMEOUT_MS = 10_000;
 
@@ -13,7 +14,7 @@ type Floor = {
 };
 
 const DEFAULT_DOWNLOAD_URL =
-  "https://github.com/Untrivial-ai/agent-orchestrator/releases/latest";
+  "https://github.com/LJY981008/agent-orchestrator-fork/releases/latest";
 
 function usableVersion(v: string | null | undefined): string | null {
   const trimmed = v?.trim();

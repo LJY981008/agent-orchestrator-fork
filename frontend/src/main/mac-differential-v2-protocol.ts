@@ -2,7 +2,8 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import semver from "semver";
 
 export const MAC_V2_METADATA = "ao-diff-v2-mac.json";
-export const MAC_V2_REPOSITORY = "Untrivial-ai/agent-orchestrator";
+// LADO fork: accept differential metadata only from the fork, never upstream's.
+export const MAC_V2_REPOSITORY = "LJY981008/agent-orchestrator-fork";
 export const MAC_V2_MAX_METADATA = 256 * 1024;
 export const MAC_V2_MAX_MAP = 8 * 1024 * 1024;
 export type MacV2Arch = "arm64" | "x64";
