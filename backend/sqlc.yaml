@@ -1,7 +1,10 @@
 version: "2"
 sql:
   - engine: "sqlite"
-    schema: "internal/storage/sqlite/migrations"
+    # LADO fork: upstream first, then the LADO track (docs/LJY-PRD/TDD.md §4.1).
+    schema:
+      - "internal/storage/sqlite/migrations"
+      - "internal/storage/sqlite/migrations_lado"
     queries: "internal/storage/sqlite/queries"
     gen:
       go:

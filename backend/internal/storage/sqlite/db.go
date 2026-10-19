@@ -297,6 +297,11 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	// LADO fork: no upstream migration or repair may meet a LADO change trigger
+	// (docs/LJY-PRD/TDD.md §4.1).
+	if err := dropLadoCDCTriggers(db); err != nil {
+		return fmt.Errorf("drop LADO change triggers: %w", err)
+	}
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
@@ -361,7 +366,11 @@ func migrate(db *sql.DB) error {
 	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
 	}
-	return reconcileSchema(db)
+	if err := reconcileSchema(db); err != nil {
+		return err
+	}
+	// LADO fork: the LADO migration track runs after upstream on every open.
+	return migrateLado(db)
 }
 
 // repairRenumberedCueMigrationHistory preserves preview Cue databases that
