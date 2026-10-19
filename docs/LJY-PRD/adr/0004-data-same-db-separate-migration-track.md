@@ -1,7 +1,7 @@
 # LADO 4. Same database, separate migration track
 
 Date: 2026-10-19
-Status: Accepted. Amends the first version of this decision, from the same day, which numbered LADO migrations 9000 and up in upstream's sequence.
+Status: Accepted. Amends the first version of this decision, from the same day, which numbered LADO migrations 9000 and up in upstream's sequence. Hook placement and the fallback consequence were corrected after building step 2.
 
 ## Context
 
@@ -26,11 +26,11 @@ Facts at `55b02b848`:
 - **Separate migration track:**
   - Directory `storage/sqlite/migrations_lado/`, numbered from 0001 inside the track.
   - Applied by a goose v3.27.1 provider with its own version table, `lado_goose_db_version`.
-  - On every open, `storage/sqlite/db.go` does four things in order:
-    1. drop the LADO CDC triggers;
-    2. run upstream migrations;
+  - On every open, `migrate` in `storage/sqlite/db.go` does four things in order:
+    1. drop the LADO CDC triggers, before upstream's first history repair;
+    2. run upstream's repairs, migrations and schema reconcile, all of which can rebuild or change upstream tables;
     3. run the LADO track;
-    4. recreate the LADO CDC triggers.
+    4. recreate the LADO CDC triggers from the list kept in code; migrations never create them (TDD §4.3).
   - sqlc reads both directories, upstream first.
 - **Upstream tables are left alone.** LADO uses `lado_*` tables only: no added columns, triggers or CHECK values on upstream tables.
 - **References to upstream rows by id, without foreign keys.** Foreign keys connect LADO tables only. Reads handle a missing upstream row.
@@ -43,6 +43,6 @@ Facts at `55b02b848`:
 
 - Every database applies migrations in the same order, upstream first.
 - No upstream migration test needs an edit, and upstream can rebuild any table without meeting a LADO trigger or foreign key.
-- Shared files get small hooks: `storage/sqlite/db.go` (around `goose.Up`) and `backend/sqlc.yaml` (`schema` list).
-- An upstream AO binary opening this database ignores the extra tables and the second version table, so falling back to upstream does not break.
+- Shared files get small hooks: `storage/sqlite/db.go` (before upstream's repairs and after its schema reconcile) and `backend/sqlc.yaml` (`schema` list).
+- An upstream AO binary opening this database ignores the extra tables and the second version table. It does not know the `lado_cdc_*` triggers, though: a pending upstream migration or repair that rebuilds `change_log` by copy and rename, as `0103_review_run_cdc.sql:5-60` does, fails while one exists (TDD §4.3). Before running an upstream binary on a LADO database, drop the `lado_cdc_*` triggers; the fork recreates them on its next open. Step 2 created none, so this applies from the first step whose tables publish change events.
 - Backups of `~/.ao` must include `<state>/lado/` together with the database.

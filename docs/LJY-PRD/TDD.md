@@ -39,7 +39,7 @@ This is the complete list of upstream files LADO edits. Each edit stays a few li
 | `httpd/apispec/specgen/build.go` | Append `ladoOperations()` in `operations()` (:706-732) |
 | `httpd/lan_listener.go` | Add `/api/v1/lado/` to `lanControlBlockedPrefixes` (:72-85) |
 | `daemon/daemon.go` | `APIDeps` literal (:982-1036), including the desktop token and its origin for presence proofs (:199-213, [adr/0002](adr/0002-human-presence-approval-channel.md)); start and stop of the dispatcher |
-| `storage/sqlite/db.go` | Run the LADO migration track around upstream `goose.Up` (:357-361) |
+| `storage/sqlite/db.go` | Drop LADO change triggers before upstream's first repair (:300); run the LADO track after `reconcileSchema` (:364) (§4.1) |
 | `backend/sqlc.yaml` | Add `internal/storage/sqlite/migrations_lado` to `schema` |
 | `session_manager/manager.go` | Gate call at the top of `Spawn` (:945) and `send` (:4899); LADO section in `buildSystemPrompt` (:5692), which spawn, restore (:3458), Chat start and agent switching all call; launch-home hook next to account env (:6036-6058) |
 | `service/chat/service.go`, `service/chat/side.go` | Gate call in `Send` (:1213), `SendForOwner` (:1304), `SendSideQuestion` (`side.go:1610`) |
@@ -190,8 +190,12 @@ Recorded in [adr/0004](adr/0004-data-same-db-separate-migration-track.md).
 ### 4.1 Separate migration track
 
 - Directory `storage/sqlite/migrations_lado/`, embedded like `migrations/` (`storage/sqlite/db.go:32-33`), files `NNNN_lado_<name>.sql` numbered from 0001 within the track.
-- A goose v3.27.1 provider (`backend/go.mod:18`) with its own version table `lado_goose_db_version`. Upstream keeps the package-level goose state and `goose_db_version`.
-- `storage/sqlite/db.go` runs: LADO pre-step (drop LADO CDC triggers) → upstream `goose.Up` with `WithAllowMissing` (:357-361) → LADO track → LADO post-step (recreate LADO CDC triggers). Every database applies upstream first and LADO second, whether fresh or upgraded.
+- A goose v3.27.1 provider (`backend/go.mod:18`) in `storage/sqlite/lado_migrate.go`: `goose.NewProvider` with `WithTableName("lado_goose_db_version")` and `WithDisableGlobalRegistry(true)`. Upstream keeps the package-level goose state and `goose_db_version`.
+- `migrate` in `storage/sqlite/db.go` (:292-365) gets two hook calls:
+  1. Before upstream's first history repair (:300), drop every `lado_cdc_*` trigger. Upstream's repairs before `goose.Up` also rebuild tables by copy and rename, for example `conversation_turns` (:696) and `review` (:1138), so the drop cannot wait until `goose.Up` (:357-361).
+  2. After `reconcileSchema` (:364), run the LADO track and then recreate the LADO change triggers (§4.3). `reconcileSchema` (:2026) still changes upstream tables: it adds missing columns, replays the effects of skipped migrations, and rewrites the `sessions` CHECK through `writable_schema` (:2093).
+
+  Every database applies all of upstream (repairs, migrations, reconcile) first and LADO second, whether fresh or upgraded. Building step 2 showed this: the first design put both hooks around `goose.Up` alone.
 - sqlc reads both directories in that order (`backend/sqlc.yaml` `schema` list).
 
 Why not 9000-range numbers in the shared table: `migrate_snapshot_test.go:60-68` walks every integer version up to the highest, so 9001 would mean about 8,800 extra steps and 9,001 database images held in memory; `migrate_burned_versions_test.go:266-274` requires each number in a ledger that upstream appends to in every migration; and `WithAllowMissing` applies upstream's later migrations after LADO's only on upgraded databases.
@@ -201,6 +205,7 @@ Why not 9000-range numbers in the shared table: `migrate_snapshot_test.go:60-68`
 - Table names start with `lado_`. No LADO migration adds a column, trigger or CHECK value to an upstream table.
 - LADO rows refer to upstream rows by id (`sessions.id`, `projects.id`, PR URL) **without** a `FOREIGN KEY`. Foreign keys are on (`storage/sqlite/db.go:40`) and upstream rebuilds tables by copy and rename (`0103_review_run_cdc.sql:5-60`) and deletes session rows; a constraint from LADO would block or break those migrations. Foreign keys are used only between LADO tables. Reads handle a missing upstream row ("session missing").
 - LADO project settings live in `lado_project_settings` (`project_id`, LADO mode, build/test/lint commands, integration policy), not in `projects.config`, because AO replaces that JSON as a whole (`service/project/service.go:754`).
+- Query files (`storage/sqlite/queries/lado_*.sql`) stay ASCII-only. sqlc v1.31.1 (`storage/sqlite/gen/*.sql.go` headers) miscounts byte offsets after a non-ASCII character, and the generated SQL compiles but is cut in the wrong places. Diff `gen/` after every `npm run sqlc`. Found in step 2: a `§` in a header comment cut `LIMIT 1;` short and truncated the column name `prev_sha256` in the generated code.
 
 ### 4.3 Change events
 
@@ -211,11 +216,23 @@ AO's rule applies: change events come from DB triggers into `change_log` (`AGENT
 - `change_log.project_id` must reference an existing project (`0103_review_run_cdc.sql:32`).
 - The renderer routes `lado_*` kinds in `frontend/src/renderer/lib/event-transport.ts`, next to the `model_catalog` branch (:330-336).
 
-LADO triggers are recreated on every open (§4.1), so an upstream `change_log` rebuild never sees a LADO trigger.
+LADO change triggers follow one rule, because an upstream rebuild of `change_log` by copy and rename fails while a trigger it does not know writes to that table:
+
+- A LADO trigger whose body names an upstream table, in practice every `change_log` writer, is named `lado_cdc_*` and exists only as a statement in `ladoCDCTriggers` (`storage/sqlite/lado_migrate.go`). LADO migrations never create one.
+- On every open, LADO drops every trigger matching `lado_cdc_*` before upstream runs and creates exactly the statements in `ladoCDCTriggers` after the LADO track (§4.1). Editing or removing a statement takes effect on the next open, with no migration.
+- Triggers that touch only LADO tables, such as the audit log's append-only guards (§4.4), stay in migrations.
+- `TestMigrateDropsLadoChangeTriggersBeforeUpstreamRebuilds` keeps a control: upstream `0103` fails with an unknown trigger on `change_log`. If upstream ever stops failing, the control says the drop step can go.
 
 ### 4.4 Audit log
 
-`lado_audit_events` (`id`, `at`, `actor`, `action`, `subject_kind`, `subject_id`, `payload_json`, `prev_sha256`) is append-only: BEFORE UPDATE and BEFORE DELETE triggers on this LADO table raise an error. It is never pruned. `change_log` cannot serve as the audit log because it is pruned after 7 days or 100,000 rows (`cdc/retention.go:12,22`). `prev_sha256` chains events so tampering is detectable later.
+`lado_audit_events` (`id`, `at`, `actor`, `action`, `subject_kind`, `subject_id`, `payload_json`, `prev_sha256`) is append-only: BEFORE UPDATE and BEFORE DELETE triggers on this LADO table raise an error. It is never pruned. `change_log` cannot serve as the audit log because it is pruned after 7 days or 100,000 rows (`cdc/retention.go:12,22`).
+
+`prev_sha256` chains the entries:
+
+- The first entry's `prev_sha256` is 64 zeros. Every later entry holds the sha256 of the entry before it.
+- An entry is hashed in a canonical form: each field as a netstring (`<byte length>:<bytes>,`), in the order `id`, `at` (UTC, RFC 3339 with nanoseconds), `actor`, `action`, `subject_kind`, `subject_id`, `payload_json` (as stored; an empty payload is stored as `{}`), `prev_sha256`. The length prefixes make the encoding unambiguous, so no choice of field values gives two entries the same bytes. Changing the form breaks every stored chain.
+- Appending reads the latest entry and inserts the next one in one transaction under the store's write lock.
+- Verification reads the log in `id` order and reports the first entry whose `prev_sha256` does not match. The chain has no key: it detects an edit to any entry that has a successor, but not an edit to the newest entry, or a writer that rewrites every later entry too. Anchoring it outside the machine is T2 work ([adr/0001](adr/0001-threat-model-t1-first.md)).
 
 ### 4.5 Files
 
@@ -483,6 +500,8 @@ The CLI gets read-only commands at most. There is no approval command, by design
 | 14 Adoption | `service/ladosetup` with a fake home: backup and manifest before removal; restore is byte-identical; credential files untouched |
 | 15 Unsupported enforcement | Dispatcher test with an agent lacking a required capability → Blocked |
 
+Storage tests seed from `migratedDatabaseSnapshot(t, version)` (`storage/sqlite/migrate_snapshot_test.go:34`) and run `Open` or `migrate` on the copy. One fresh `Open` replays every upstream migration, about 12 to 17 s under `-race`. Measured in step 2: the whole `storage/sqlite` package takes about 16 minutes under `-race` on the owner's machine (977 s on `main`); CI splits it into 4 shards with a 20-minute timeout each (`.github/workflows/go.yml:119-141`).
+
 ## 15. Build order (agreed 2026-10-19, by dependency)
 
 Each item is its own branch and PR in the fork (`AGENTS.md`: one issue per PR). The `upstream` remote was added on 2026-10-19.
@@ -491,7 +510,7 @@ Each item is its own branch and PR in the fork (`AGENTS.md`: one issue per PR). 
    - 1a `chore/lado-fork-defaults`: §11, and keep-daemon on by default (§10).
    - 1b was the global Codex `default` mapping. Dropped on 2026-10-19 after measuring it (§6.6); LADO executions set Codex modes through the snapshot instead.
    - 1c `feat/lado-login-start`: login start with a settings toggle (§10).
-2. LADO migration track, link tables and audit log (§4).
+2. `feat/lado-storage-track`: the LADO migration track and the audit log (§4.1, §4.3, §4.4). It adds no other table; each later step adds the tables it uses.
 3. Worker gate with LADO project settings and the mode switch (§6). The switch stays behind a dev flag until step 6: without the dispatcher a LADO project cannot start workers.
 4. Tasks, proposals, plans, approvals, the presence channel, and the Plan and Queued lanes (§3, §5.1, §5.2). The approval records the approval and its audit event; step 6 adds the snapshot and the queue entry to that transaction.
 5. Rules core: scopes, toggles, protected gates, resolution and snapshots (HARNESS §3-§8, HAR-001 to HAR-005). It comes before the queue because admission (§5.2) and dispatch (§5.3) need the snapshot's hash, permission ceiling and agent config.
