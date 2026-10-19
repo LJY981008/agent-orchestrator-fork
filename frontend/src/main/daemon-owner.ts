@@ -8,9 +8,14 @@
  * the default desktop behavior holds: the daemon self-stops shortly after the
  * app quits. An allowlist (rather than "anything but 0/false") keeps "off"/"no"
  * from unexpectedly retaining the daemon.
+ *
+ * LADO fork: `defaultKeep` is the answer when AO_KEEP_DAEMON is unset or blank.
+ * Packaged LADO builds pass true (docs/LJY-PRD/TDD.md §10); any explicit value
+ * outside the truthy allowlist still turns the daemon's keep-alive off.
  */
-export function keepDaemonAlive(env: { AO_KEEP_DAEMON?: string }): boolean {
+export function keepDaemonAlive(env: { AO_KEEP_DAEMON?: string }, defaultKeep = false): boolean {
 	const raw = env.AO_KEEP_DAEMON?.trim().toLowerCase();
+	if (!raw) return defaultKeep;
 	return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 

@@ -11,6 +11,12 @@ Never write AO state to `~/Library/Application Support` or any other OS-default
 app-data location. The sole read exception is an explicit user-initiated import
 from a validated Chrome, Firefox, or Safari profile: read known source files
 without modifying them and keep snapshots and results under `~/.ao`.
+The sole write exception (LADO fork) is the opt-in Start at login setting. It
+registers the OS login item: Electron's login item API on Windows and macOS,
+and one `agent-orchestrator.desktop` entry in the XDG autostart directory on
+Linux (`~/.config/autostart` unless `XDG_CONFIG_HOME` is set). Turning it off
+removes the item. That is OS login integration, not app state; the setting's
+own value stays under `~/.ao`.
 `frontend/src/main.ts` pins Electron's `userData` to
 `~/.ao/electron`; do not remove that override. See the hard rule in `AGENTS.md`.
 

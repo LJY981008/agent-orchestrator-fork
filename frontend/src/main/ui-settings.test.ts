@@ -10,6 +10,8 @@ import {
 	UI_SETTINGS_FILE_NAME,
 	DEFAULT_UI_SETTINGS,
 } from "./ui-settings";
+// LADO fork: the desktop store's defaults start in Korean.
+import { LADO_DESKTOP_UI_SETTINGS } from "./lado-ui-locale";
 
 describe("ui-settings", () => {
 	let dir: string;
@@ -21,7 +23,7 @@ describe("ui-settings", () => {
 	});
 
 	it("returns safe defaults when no file exists", async () => {
-		expect(await readUiSettings(dir)).toEqual(DEFAULT_UI_SETTINGS);
+		expect(await readUiSettings(dir)).toEqual(LADO_DESKTOP_UI_SETTINGS);
 	});
 
 	it("round-trips written locale", async () => {
@@ -29,6 +31,7 @@ describe("ui-settings", () => {
 		expect(await readUiSettings(dir)).toEqual({ ...DEFAULT_UI_SETTINGS, locale: "zh-CN" });
 		await writeUiSettings(dir, { locale: "en" });
 		expect(await readUiSettings(dir)).toEqual(DEFAULT_UI_SETTINGS);
+		expect((await readUiSettings(dir)).locale).toBe("en");
 	});
 
 	it("merges a partial write with previously persisted settings instead of replacing them", async () => {
@@ -42,7 +45,7 @@ describe("ui-settings", () => {
 
 	it("falls back to defaults on garbage", async () => {
 		await writeFile(path.join(dir, UI_SETTINGS_FILE_NAME), "{not json", "utf8");
-		expect(await readUiSettings(dir)).toEqual(DEFAULT_UI_SETTINGS);
+		expect(await readUiSettings(dir)).toEqual(LADO_DESKTOP_UI_SETTINGS);
 	});
 
 	it("coerces unknown locale to en and accepts supported locales", () => {

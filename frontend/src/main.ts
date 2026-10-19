@@ -62,12 +62,13 @@ import {
 	installedBundlePath,
 } from "./main/relocation";
 import {
-	coerceUiSettings,
 	DEFAULT_UI_SETTINGS,
 	readUiSettings,
 	writeUiSettings,
 	type UiSettings,
 } from "./main/ui-settings";
+// LADO fork: the desktop starts in Korean (docs/LJY-PRD/TDD.md §11).
+import { coerceLadoDesktopUiSettings, LADO_DESKTOP_UI_SETTINGS } from "./main/lado-ui-locale";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -179,6 +180,7 @@ import {
 } from "./main/browser-runtime-link";
 import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
+import { createLadoDesktop, registerLadoDesktopIpc } from "./main/lado-desktop";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -407,6 +409,23 @@ function playNotificationSound(): void {
 }
 
 const isDev = !app.isPackaged;
+// LADO fork: Settings > General > Background (docs/LJY-PRD/TDD.md §10).
+// Packaged builds keep the daemon after the app quits unless that setting or
+// AO_KEEP_DAEMON turns it off. Dev builds keep the upstream default so a dev
+// loop does not leave daemons running.
+const ladoDesktop = createLadoDesktop({
+	app,
+	platform: process.platform,
+	packaged: app.isPackaged,
+	env: process.env,
+	homedir: os.homedir(),
+	execPath: process.execPath,
+	stateDir: () => {
+		const runFile = runFilePath();
+		return runFile ? path.dirname(runFile) : null;
+	},
+	fallbackKeep: !isDev,
+});
 
 // Dev mode uses a separate port and state subdirectory so it never collides with
 // a concurrently running installed-app daemon. The subdir also isolates supervise.sock
@@ -1273,10 +1292,15 @@ const configuredLoginShell = process.platform === "darwin" ? (os.userInfo().shel
 // dev loop or a CI job driving the real app would otherwise bill production
 // events and inflate install/DAU counts. Set AO_TELEMETRY_REMOTE explicitly to
 // exercise the export path from a dev build.
+//
+// LADO fork: remote export is off in every build, and the fork ships no PostHog
+// key or Sentry DSN (shared/posthog-config.ts, shared/sentry-config.ts). Set
+// AO_TELEMETRY_REMOTE, AO_TELEMETRY_POSTHOG_KEY and AO_SENTRY_DSN to opt in with
+// your own projects.
 function telemetryOverrides(): Record<string, string> {
 	return {
 		AO_TELEMETRY_EVENTS: process.env.AO_TELEMETRY_EVENTS ?? "on",
-		AO_TELEMETRY_REMOTE: process.env.AO_TELEMETRY_REMOTE ?? (isDev ? "off" : "posthog"),
+		AO_TELEMETRY_REMOTE: process.env.AO_TELEMETRY_REMOTE ?? "off",
 		AO_TELEMETRY_POSTHOG_KEY: process.env.AO_TELEMETRY_POSTHOG_KEY ?? DEFAULT_POSTHOG_PROJECT_KEY,
 		AO_TELEMETRY_POSTHOG_HOST: process.env.AO_TELEMETRY_POSTHOG_HOST ?? DEFAULT_POSTHOG_HOST,
 		// Daemon-side Sentry (5xx + panics with Go stacks). Stamped on the daemon
@@ -1426,7 +1450,7 @@ async function ensureBundledTmuxStaged(): Promise<void> {
 	stagedBundledTmuxBinary = destination;
 }
 
-function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv {
+function daemonEnv(forceKeep = keepDaemonAlive(process.env, ladoDesktop.keepDaemonDefault())): NodeJS.ProcessEnv {
 	// AO_OWNER is the daemon's durable spawn-mode record: the daemon writes it
 	// into running.json and the attach path reads it to decide the supervisor
 	// link from the daemon's own state (not this Electron process's env, which
@@ -2055,7 +2079,7 @@ async function startDaemonInner(startEpoch: number): Promise<DaemonStatus> {
 	// defeating the keep-alive. Redirect stdio to ~/.ao/daemon.log and unref the
 	// child so the parent does not wait on it. Port discovery then relies on the
 	// running.json handshake (the log pipe scan is skipped).
-	const keep = replacementKeepAlive ?? keepDaemonAlive(process.env);
+	const keep = replacementKeepAlive ?? keepDaemonAlive(process.env, ladoDesktop.keepDaemonDefault());
 	let keepDaemonLogFd: number | undefined;
 	let stdio: "pipe" | "ignore" | ["pipe", number | "ignore", number | "ignore"] = "pipe";
 	if (keep) {
@@ -2817,6 +2841,7 @@ ipcMain.handle("appState:setMigration", async (_event, migration: MigrationState
 	await updateMigration({ stateDir: path.dirname(runFile), migration, now: () => new Date() });
 });
 
+registerLadoDesktopIpc(ipcMain, ladoDesktop);
 ipcMain.handle("updateSettings:get", async (): Promise<UpdateSettings> => {
 	const runFile = runFilePath();
 	if (!runFile) return { enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false };
@@ -2836,12 +2861,12 @@ ipcMain.handle("updateSettings:setMacDifferentialUpdates", async (_event, enable
 
 ipcMain.handle("uiSettings:get", async (): Promise<UiSettings> => {
 	const runFile = runFilePath();
-	if (!runFile) return { ...DEFAULT_UI_SETTINGS };
+	if (!runFile) return { ...LADO_DESKTOP_UI_SETTINGS };
 	return readUiSettings(path.dirname(runFile));
 });
 	ipcMain.handle("uiSettings:set", async (_event, settings: Partial<UiSettings>): Promise<UiSettings> => {
 		const runFile = runFilePath();
-	const result = !runFile ? coerceUiSettings(settings) : await writeUiSettings(path.dirname(runFile), settings);
+	const result = !runFile ? coerceLadoDesktopUiSettings(settings) : await writeUiSettings(path.dirname(runFile), settings);
 	trayController?.setLocale(result.locale);
 	soundNotificationsEnabled = result.soundNotificationsEnabled;
 	terminalShellPreference = result.terminalShell;
@@ -3382,7 +3407,7 @@ app.whenReady().then(async () => {
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
 		? await readUiSettings(path.dirname(keybindingRunFile))
-		: { ...DEFAULT_UI_SETTINGS };
+		: { ...LADO_DESKTOP_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
 	if (browserQuitRequested) return;
@@ -3513,7 +3538,7 @@ app.on("before-quit", (event) => {
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
 process.on("exit", () => {
-	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
+	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env, ladoDesktop.keepDaemonDefault())) {
 		killDaemon(daemonProcess);
 	}
 });

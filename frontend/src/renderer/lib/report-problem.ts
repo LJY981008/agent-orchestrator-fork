@@ -1,7 +1,8 @@
 import { aoBridge } from "./bridge";
 import { routeSurface } from "./telemetry";
 
-export type ReportProblemOutput = "github" | "discord" | "email";
+// LADO fork: no Discord destination (owner's choice, docs/LJY-PRD/TDD.md §11).
+export type ReportProblemOutput = "github" | "email";
 export type ReportProblemEmailProvider = "system" | "gmail" | "outlook";
 
 export type ReportProblemInput = {
@@ -22,10 +23,10 @@ export type ReportProblemDiagnostics = {
 const REDACTED_LOCAL_PATH = "[redacted-local-path]";
 const REDACTED_LOCAL_URL = "[redacted-local-url]";
 const REDACTED_SECRET = "[redacted-secret]";
-const DISCORD_SUPPORT_URL = "https://discord.gg/WjKNa7EbB8";
-const GITHUB_NEW_ISSUE_URL = "https://github.com/Untrivial-ai/agent-orchestrator/issues/new";
-const SUPPORT_EMAIL = "prasad@untrivial.ai";
-const SUPPORT_CC_EMAIL = "prateek@untrivial.ai";
+// LADO fork: issues go to the fork's tracker, and email to the fork's owner
+// with no CC.
+const GITHUB_NEW_ISSUE_URL = "https://github.com/LJY981008/agent-orchestrator-fork/issues/new";
+const SUPPORT_EMAIL = "tera199810@gmail.com";
 
 const LOCAL_URL_PATTERN =
 	/(?:\bfile:\/\/\/\S+|\bapp:\/\/renderer\/\S+|\bhttps?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\S*)/gi;
@@ -81,21 +82,9 @@ export function formatReportProblemDraft(
 	const fields = normalizeInput(input);
 	const diagnosticsBlock = formatDiagnostics(diagnostics);
 
-	if (output === "discord") {
-		return [
-			"**AO feedback**",
-			`Summary: ${fields.summary}`,
-			`Details: ${fields.details}`,
-			"",
-			"Safe diagnostics:",
-			diagnosticsBlock,
-		].join("\n");
-	}
-
 	if (output === "email") {
 		return [
 			`To: ${SUPPORT_EMAIL}`,
-			`Cc: ${SUPPORT_CC_EMAIL}`,
 			`Subject: AO feedback: ${fields.summary}`,
 			"",
 			formatEmailBody(fields, diagnosticsBlock),
@@ -122,7 +111,6 @@ export function reportProblemDestinationUrl(
 	output: ReportProblemOutput,
 	emailProvider: ReportProblemEmailProvider = "system",
 ): string | null {
-	if (output === "discord") return DISCORD_SUPPORT_URL;
 	if (output === "email") {
 		const subject = `AO feedback: ${reportTitle(input)}`;
 		const body = formatEmailBody(normalizeInput(input), formatDiagnostics(diagnostics));
@@ -131,7 +119,6 @@ export function reportProblemDestinationUrl(
 			url.searchParams.set("view", "cm");
 			url.searchParams.set("fs", "1");
 			url.searchParams.set("to", SUPPORT_EMAIL);
-			url.searchParams.set("cc", SUPPORT_CC_EMAIL);
 			url.searchParams.set("su", subject);
 			url.searchParams.set("body", body);
 			return url.toString();
@@ -139,13 +126,11 @@ export function reportProblemDestinationUrl(
 		if (emailProvider === "outlook") {
 			const url = new URL("https://outlook.office.com/mail/deeplink/compose");
 			url.searchParams.set("to", SUPPORT_EMAIL);
-			url.searchParams.set("cc", SUPPORT_CC_EMAIL);
 			url.searchParams.set("subject", subject);
 			url.searchParams.set("body", body);
 			return url.toString();
 		}
 		const url = new URL(`mailto:${SUPPORT_EMAIL}`);
-		url.searchParams.set("cc", SUPPORT_CC_EMAIL);
 		url.searchParams.set("subject", subject);
 		url.searchParams.set("body", body);
 		// Mail clients treat "+" literally, so encode spaces in the query only; the
