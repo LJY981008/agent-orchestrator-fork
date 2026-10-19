@@ -1,7 +1,7 @@
 # LADO 3. Where LADO enforces approval
 
 Date: 2026-10-19
-Status: Accepted. Item 6 amended 2026-10-19 after measurement.
+Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3.
 
 ## Context
 
@@ -27,7 +27,7 @@ Facts at `55b02b848`:
    - Messages are judged by origin: human, daemon nudges about the session's own PR, and report relays are allowed; sends from other sessions and automations are refused.
    - Per-turn approval changes are capped at the snapshot's ceiling.
    - Every LADO execution gets an explicit permission mode.
-5. **LADO mode defaults.** Tracker intake and automations stay off for LADO projects: the gate rejects their spawns, and LADO settings refuse to turn intake on. Issues come in through import instead ([0006](0006-issues-as-work-items.md)). The orchestrator only writes plans; its prompt says so and the gate enforces it.
+5. **LADO mode defaults.** Tracker intake and automations stay off for LADO projects: the gate rejects their spawns, and LADO mode cannot be turned on while the project's intake is on. Issues come in through import instead ([0006](0006-issues-as-work-items.md)). The orchestrator only writes plans; its prompt says so and the gate enforces it.
 6. **Codex modes.** The global Codex `default` keeps upstream's mapping, so sessions outside LADO projects are unchanged. LADO executions get an explicit Codex mode from the snapshot. Amended 2026-10-19: the first version mapped `default` to `workspace-write` with network on and the common git directory writable, but Codex keeps `.git` read-only in that sandbox whatever the writable roots, so commits fail there (TDD §6.6).
 7. **Commit and path rules.** These are checked over `base..head` in VALIDATING. Git hooks are advisory only.
 

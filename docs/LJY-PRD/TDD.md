@@ -18,12 +18,12 @@ LADO keeps merging upstream. Every LADO change is either a new file inside one o
 |---|---|---|
 | Domain | `domain/lado_*.go` | `domain/automation.go` |
 | Ports | `ports/lado_gate.go` (worker gate interface), `ports/lado_issues.go` (issue write port) | `ports/agent_accounts.go`, `ports/tracker.go` |
-| Services | `service/ladoconnect/` (repository connection: host tokens, SSH check, link or clone), `service/ladotask/` (issue-backed tasks, plans, approvals), `service/ladoqueue/` (queue, dispatcher), `service/ladopolicy/` (rules, resolution, snapshots), `service/ladosetup/` (local setup inventory, adoption, restore), `service/ladoverify/` (checks, validators, evidence) | `service/automation/` |
+| Services | `service/ladogate/` (worker gate), `service/ladoproject/` (project settings), `service/ladoconnect/` (repository connection: host tokens, SSH check, link or clone), `service/ladotask/` (issue-backed tasks, plans, approvals), `service/ladoqueue/` (queue, dispatcher), `service/ladopolicy/` (rules, resolution, snapshots), `service/ladosetup/` (local setup inventory, adoption, restore), `service/ladoverify/` (checks, validators, evidence); the gate checks for chat sends in `service/chat/lado_gate.go` | `service/automation/` |
 | Adapters | `adapters/tracker/github/lado_issues.go`, `adapters/tracker/gitlab/lado_issues.go` (issue writes); a commit status file in `adapters/scm/github/` (§7.1) | AO's existing writes: `adapters/scm/github/merge_action.go`, `adapters/scm/gitlab/merge_action.go` |
-| Session manager | `session_manager/lado_gate.go` holds the optional gate field and its checks | — |
+| Session manager | `session_manager/lado_gate.go` holds the gate setter and its checks; the field is one hook line in `manager.go` | — |
 | Storage | `storage/sqlite/migrations_lado/*.sql`, `storage/sqlite/queries/lado_*.sql`, `storage/sqlite/store/lado_*_store.go` | `storage/sqlite/store/awake_store.go`; narrow store interfaces as in `daemon/awake_wiring.go:13` |
 | HTTP | `httpd/controllers/lado_*.go` with DTOs in `lado_*_dto.go` (not in `httpd/controllers/dto.go`) | `httpd/controllers/cues.go:23-65`, `httpd/controllers/artifact_versions_dto.go` |
-| API spec | `httpd/apispec/specgen/lado_operations.go` returning `[]operation` | `cueOperations` in `httpd/apispec/specgen/build.go:1619` |
+| API spec | `httpd/apispec/specgen/lado_operations.go` returning `[]operation`; its `init` adds LADO's schema names to `schemaNames` | `cueOperations` in `httpd/apispec/specgen/build.go:1619` |
 | Daemon | `daemon/lado_wiring.go` | `daemon/awake_wiring.go`, `daemon/automation_wiring.go` |
 | Renderer | `frontend/src/renderer/components/lado/`, `frontend/src/renderer/components/settings/RulesSection.tsx`, new route files in `frontend/src/renderer/routes/` | `frontend/src/renderer/routes/_shell.automations.tsx`, `frontend/src/renderer/components/settings/*Section.tsx` |
 | Electron main | `frontend/src/main/lado-presence.ts`, `frontend/src/main/lado-autostart.ts` (login item), `frontend/src/main/lado-desktop.ts` (Background settings and IPC), `frontend/src/shared/lado-desktop.ts` (types) | `frontend/src/main/daemon-owner.ts`, `frontend/src/main/update-settings.ts` |
@@ -38,13 +38,14 @@ This is the complete list of upstream files LADO edits. Each edit stays a few li
 |---|---|
 | `httpd/api.go` | `APIDeps` field (:26-90), `API` field (:119-153), constructor entry (:164-216), `Register` call (:255-283) |
 | `httpd/apispec/specgen/build.go` | Append `ladoOperations()` in `operations()` (:706-732) |
-| `httpd/lan_listener.go` | Add `/api/v1/lado/` to `lanControlBlockedPrefixes` (:72-85) |
-| `daemon/daemon.go` | `APIDeps` literal (:982-1036), including the desktop token and its origin for presence proofs (:199-213, [adr/0002](adr/0002-human-presence-approval-channel.md)); start and stop of the dispatcher |
+| `httpd/lan_listener.go` | Add `/api/v1/lado` to `lanControlBlockedPrefixes` (:72-85) |
+| `daemon/daemon.go` | The worker gate, installed right after the session manager is built (:611), before tracker intake (:698) and automations (:871) start; `APIDeps` literal (:982-1036), including the desktop token and its origin for presence proofs (:199-213, [adr/0002](adr/0002-human-presence-approval-channel.md)); start and stop of the dispatcher |
+| `daemon/lifecycle_wiring.go` | `SetWorkGate` in the `sessionLifecycle` interface (:201-235) |
 | `daemon/scm_wiring.go`, `daemon/tracker_wiring.go` | Add the stored host tokens to the GitHub and GitLab token chains, after the `AO_GITHUB_TOKEN` and `AO_GITLAB_TOKEN` overrides (`scm_wiring.go:47-63`, `tracker_wiring.go:21-87`), and the stored self-managed GitLab hosts to the allowlist (§5.1) |
 | `storage/sqlite/db.go` | Drop LADO change triggers before upstream's first repair (:300); run the LADO track after `reconcileSchema` (:364) (§4.1) |
 | `backend/sqlc.yaml` | Add `internal/storage/sqlite/migrations_lado` to `schema` |
-| `session_manager/manager.go` | Gate call at the top of `Spawn` (:945) and `send` (:4899); LADO section in `buildSystemPrompt` (:5692), which spawn, restore (:3458), Chat start and agent switching all call; launch-home hook next to account env (:6036-6058) |
-| `service/chat/service.go`, `service/chat/side.go` | Gate call in `Send` (:1213), `SendForOwner` (:1304), `SendSideQuestion` (`side.go:1610`) |
+| `session_manager/manager.go` | Gate field; gate call at the top of `Spawn` (:945) and `SendWithOptions` (:4788), before an attachment is staged in the target's workspace; LADO section in `buildSystemPrompt` (:5692), which spawn, restore (:3458), Chat start and agent switching all call; launch-home hook next to account env (:6036-6058) |
+| `service/chat/service.go`, `service/chat/steer.go` | Gate field; gate call at the top of `Send` (:1213), `Steer` (`steer.go:115`) and `SteerOrSend` (`steer.go:157`, skipped for recovery, which delivers nothing) |
 | `httpd/controllers/conversations.go` | Clamp turn settings on `PATCH .../conversation/settings` (:135); in LADO execution sessions, require the `app://renderer` origin and record the actor on approval resolve (:912-939) |
 | `service/pr/action_service.go` | Integration approval check before merge (:95-155) |
 | `service/project/clone.go` | Pass `core.sshCommand` to `git clone` when the connection names an SSH key file (:165-166) |
@@ -216,7 +217,7 @@ Why not 9000-range numbers in the shared table: `migrate_snapshot_test.go:60-68`
 
 - Table names start with `lado_`. No LADO migration adds a column, trigger or CHECK value to an upstream table.
 - LADO rows refer to upstream rows by id (`sessions.id`, `projects.id`, PR URL) **without** a `FOREIGN KEY`. Foreign keys are on (`storage/sqlite/db.go:40`) and upstream rebuilds tables by copy and rename (`0103_review_run_cdc.sql:5-60`) and deletes session rows; a constraint from LADO would block or break those migrations. Foreign keys are used only between LADO tables. Reads handle a missing upstream row ("session missing").
-- LADO project settings live in `lado_project_settings` (`project_id`, LADO mode, build/test/lint commands, integration policy), not in `projects.config`, because AO replaces that JSON as a whole (`service/project/service.go:754`).
+- LADO project settings live in `lado_project_settings` (`project_id`, LADO mode, build/test/lint commands, integration policy), not in `projects.config`, because AO replaces that JSON as a whole (`service/project/service.go:754`). Step 3 created the table with `project_id`, `lado_mode` and `updated_at`; a project without a row has LADO mode off. The command and integration-policy columns come with the steps that use them.
 - Query files (`storage/sqlite/queries/lado_*.sql`) stay ASCII-only. sqlc v1.31.1 (`storage/sqlite/gen/*.sql.go` headers) miscounts byte offsets after a non-ASCII character, and the generated SQL compiles but is cut in the wrong places. Diff `gen/` after every `npm run sqlc`. Found in step 2: a `§` in a header comment cut `LIMIT 1;` short and truncated the column name `prev_sha256` in the generated code.
 
 ### 4.3 Change events
@@ -349,11 +350,12 @@ Recorded in [adr/0003](adr/0003-enforcement-points.md).
 type WorkGate interface {
 	AuthorizeSpawn(ctx context.Context, cfg SpawnConfig) error
 	AuthorizeSend(ctx context.Context, target domain.SessionID, origin SendOrigin) error
-	ClampTurnSettings(ctx context.Context, target domain.SessionID, s ChatTurnSettings) (ChatTurnSettings, error)
 }
 ```
 
-`Manager` holds an optional `WorkGate`. Projects with LADO mode off are never affected.
+`SendOrigin` is human, session, coordination, daemon or automation (§6.3). Step 6 adds `ClampTurnSettings(ctx, target, s ChatTurnSettings) (ChatTurnSettings, error)`, together with the executions and rule snapshots it reads (§6.4).
+
+`service/ladogate` implements the gate over `lado_project_settings` and AO's sessions; a read error refuses the work. `Manager` and the chat service each hold the optional gate, and the daemon installs one gate on both right after the session manager is built, before anything can spawn or send. Projects with LADO mode off are never affected.
 
 ### 6.2 Spawn
 
@@ -361,15 +363,17 @@ In a LADO project a new worker session needs a dispatch grant: a `ClientRequestI
 
 | Spawn path (how recognized) | LADO project |
 |---|---|
-| LADO dispatcher (grant) | Allow |
+| LADO dispatcher (grant) | Allow, from step 6. Until then no grant exists, and every worker spawn in a LADO project is refused |
 | Orchestrator start (`Kind` orchestrator) | Allow |
 | `ao spawn` from an orchestrator, `/orchestrators/delegate` (`ParentSessionID` set, `ports/session.go:27-30`; `service/session/delegation.go:66-123`) | Reject |
-| Automation run (`AutomationRunID` set; `service/automation/scheduler.go`) | Reject |
-| Tracker intake (`observe/trackerintake/observer.go:206-211`) | Reject. LADO settings also refuse turning intake on |
+| Automation run (`AutomationRunID` set; `service/automation/scheduler.go`) | Reject, also when it would start an orchestrator |
+| Tracker intake (`observe/trackerintake/observer.go:206-211`) | Reject. LADO mode cannot be turned on while the project's intake is on; AO's own settings can still turn intake on later, and the gate then refuses its spawns |
 | Cue invocation (`service/cue/invoke.go`) | Reject |
 | Sessions route, `ao spawn` by a person | Reject with "create a task" |
 | Restore of an existing session | Not a spawn; allowed |
 | Review launch (own launcher, `review/review.go:674`) | Not a spawn; review policy applies (§8.5) |
+
+A refusal is a 409 API error: `LADO_TASK_REQUIRED`, or `LADO_AUTOMATION_REFUSED` for an automation.
 
 ### 6.3 Send
 
@@ -383,15 +387,22 @@ The gate classifies a message with fields AO already has: `MessageDeliveryOption
 | Another session (`SenderSessionID` set, for example `ao send` from the orchestrator) | Reject |
 | Automation | Reject |
 
-The same check runs in chat `Service.Send`, `SendForOwner` and `SendSideQuestion`. Review conversations stay AO's.
+How the hooks read the origin, in this order:
+
+- **`Manager.SendWithOptions`**, which `Send` and the `/send` route use. A `SenderSessionID` makes it another session; `ao send` sets it whenever it runs inside a session (`cli/send.go:94`). Otherwise `AuthoredByUser` makes it human, and a coordination delivery id (`domain.CoordinationDeliveryID`) makes it AO's coordination, such as a report relay. A message with none of these facts counts as the daemon's: lifecycle nudges arrive that way (`daemon/lifecycle_wiring.go:246-248`), and so do cue prompts (`service/cue/invoke.go:83`). Reading the sender session first means a message from a session cannot pass as a person's or as a relay by its text.
+- **Chat service.** The conversation routes mark every request human and pass the CLI's sender separately (`httpd/controllers/conversation_steer.go:56-57,124-125`), so a sender session again wins. Then human and daemon origins map directly, and anything else counts as automation.
+
+The gate refuses session and automation origins when the target is a session of a LADO project that is not its orchestrator. Workers there start only from the dispatcher; workers from before the mode was turned on are treated the same. A refusal is a 409 `LADO_SEND_REFUSED`.
+
+The chat hooks are `Service.Send`, `Steer` and `SteerOrSend` (not for recovery, which delivers nothing). `SendForOwner` serves review conversations, which stay AO's; the side-question route only takes people's messages (`httpd/controllers/side_chats.go:176-177`); `RelaySessionChatTurn` is reached from `Manager.send` (`session_manager/chat_spawn.go:418`). Only AO's report relay (`SendSemantic`) and the interface-transition outbox, which replays messages that already passed the gate, call `send` without `SendWithOptions`.
 
 ### 6.4 Turn settings
 
-`PATCH .../conversation/settings` (`httpd/controllers/conversations.go:135`) can change the approval mode per turn (`ports.ChatTurnSettings.Approval`, `ports/chat.go:497-505`). For a LADO execution the gate caps it at the snapshot's permission ceiling.
+`PATCH .../conversation/settings` (`httpd/controllers/conversations.go:135`) can change the approval mode per turn (`ports.ChatTurnSettings.Approval`, `ports/chat.go:497-505`). For a LADO execution the gate caps it at the snapshot's permission ceiling. Built in step 6, which brings executions and rule snapshots.
 
 ### 6.5 Explicit permission mode
 
-LADO executions always get an explicit permission mode from the snapshot. An empty mode becomes `auto` (`session_manager/manager.go:2330-2332`), and Claude's `default` passes no flag, which lets `~/.claude/settings.json` decide (`adapters/agent/claudecode/claudecode.go:160-162`).
+LADO executions always get an explicit permission mode from the snapshot. An empty mode becomes `auto` (`session_manager/manager.go:2330-2332`), and Claude's `default` passes no flag, which lets `~/.claude/settings.json` decide (`adapters/agent/claudecode/claudecode.go:160-162`). Built in step 6, where the dispatcher sets it.
 
 ### 6.6 Codex permission modes
 
@@ -538,7 +549,7 @@ All under `/api/v1/lado/`, blocked on the LAN listener. Routes marked P need a h
 | `GET, POST /lado/rules`; `PATCH /lado/rules/{id}`; `PUT /lado/bindings`; `GET /lado/effective` | Rules |
 | `GET /lado/setup/inventory`, `POST /lado/setup/scan`, `GET /lado/setup/conflicts` | Local setup |
 | `POST /lado/setup/adoptions` (P), `POST /lado/setup/adoptions/{id}/restore` (P) | Adopt and restore |
-| `GET, PUT /lado/projects/{id}/settings` (PUT is P when it turns LADO mode off) | Project settings |
+| `GET, PUT /lado/projects/{projectId}/settings` (PUT is P when it turns LADO mode off, from step 4b; until step 6 any change of the mode needs `AO_LADO_DEV=on`) | Project settings; step 3 has LADO mode only |
 
 The CLI gets read-only commands at most. There is no approval command, by design.
 
@@ -546,11 +557,11 @@ The CLI gets read-only commands at most. There is no approval command, by design
 
 | PRD §8 gate | Test |
 |---|---|
-| 1 Spawn paths | `session_manager` gate tests per spawn path (§6.2), plus `service/ladoqueue` integration test |
+| 1 Spawn paths | `service/ladogate` tests per spawn path (§6.2) and `session_manager` hook tests, plus a `service/ladoqueue` integration test once grants exist |
 | 2 Plan hash | `service/ladotask` tests: edit after approval → new revision, old approval invalid |
 | 3 Resolution | `service/ladopolicy` table tests (HARNESS §15) |
 | 4 Snapshot stability | `service/ladoqueue`: rule edit after admission → Review required, snapshot row unchanged |
-| 5 Send origins | Gate tests over `Manager.send` and chat `Send` with each origin (§6.3) |
+| 5 Send origins | `service/ladogate` tests per origin, and hook tests over `Manager.SendWithOptions` and chat `Send`, `Steer` and `SteerOrSend` (§6.3) |
 | 6 Agent claims | `service/ladoverify`: report `done` with a failing required check stays Validating |
 | 7 Merge | AO merge route test with and without integration approval; manual check against a sandbox GitHub repo with the ruleset |
 | 8 Local base | `service/ladoverify` with a temp repo: `git update-ref` from a worktree → blocked |
@@ -575,12 +586,12 @@ Each item is its own branch and PR in the fork (`AGENTS.md`: one issue per PR). 
    - 1b was the global Codex `default` mapping. Dropped on 2026-10-19 after measuring it (§6.6); LADO executions set Codex modes through the snapshot instead.
    - 1c `feat/lado-login-start`: login start with a settings toggle (§10).
 2. `feat/lado-storage-track`: the LADO migration track and the audit log (§4.1, §4.3, §4.4). It adds no other table; each later step adds the tables it uses.
-3. Worker gate with LADO project settings and the mode switch (§6). The switch stays behind a dev flag until step 6: without the dispatcher a LADO project cannot start workers.
+3. `feat/lado-worker-gate`: the worker gate's spawn and send checks (§6.1-§6.3), `lado_project_settings` with LADO mode (§4.2) and its settings routes (§13). The mode switch stays behind `AO_LADO_DEV` until step 6: without the dispatcher a LADO project cannot start workers. Turn-setting clamps (§6.4) and explicit modes (§6.5) need executions and the rule snapshot, so they moved to step 6.
 4. Issue-backed tasks, plans and approvals, in two PRs:
    - 4a: repository connection (host tokens, SSH check, link or clone), the issue write port for GitHub and GitLab, task creation and import, and issue tracking (§5.1, [adr/0006](adr/0006-issues-as-work-items.md)).
    - 4b: plan requests and revisions, approvals, the presence channel, and the Plan and Queued lanes (§3, §5.1, §5.2). The approval records the approval and its audit event; step 6 adds the rule snapshot and the queue entry to that transaction.
 5. Rules core: scopes, toggles, protected gates, resolution and snapshots (HARNESS §3-§8, HAR-001 to HAR-005). It comes before the queue because admission (§5.2) and dispatch (§5.3) need the snapshot's hash, permission ceiling and agent config.
-6. Approved queue and dispatcher (§5.3).
+6. Approved queue and dispatcher (§5.3), with dispatch grants in the gate, turn-setting clamps (§6.4) and explicit permission modes (§6.5).
 7. Local setup adoption (HARNESS §9, HAR-010 to HAR-015).
 8. Verification, evidence and integration approval (§7, §8). Steps 7 and 8 do not depend on each other.
 
