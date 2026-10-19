@@ -23,7 +23,9 @@ type LadoProjectService interface {
 // LadoController owns the /api/v1/lado routes. A nil service answers 501, so
 // the routes stay mounted for the route/spec parity test.
 type LadoController struct {
-	Projects LadoProjectService
+	Projects    LadoProjectService
+	Connections LadoConnectionService
+	Tasks       LadoTaskService
 }
 
 const (
@@ -35,6 +37,19 @@ const (
 func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/projects/{projectId}/settings", c.getProjectSettings)
 	r.Put("/lado/projects/{projectId}/settings", c.putProjectSettings)
+	r.Get("/lado/projects/{projectId}/issues", c.listProjectIssues)
+	r.Get("/lado/projects/{projectId}/repositories", c.listProjectRepositories)
+	r.Post("/lado/connections/check", c.checkConnection)
+	r.Post("/lado/connections", c.createConnection)
+	r.Get("/lado/credentials", c.listCredentials)
+	r.Put("/lado/credentials/{host}", c.storeCredential)
+	r.Delete("/lado/credentials/{host}", c.deleteCredential)
+	r.Get("/lado/tasks", c.listTasks)
+	r.Post("/lado/tasks", c.createTask)
+	r.Post("/lado/tasks/imports", c.importTasks)
+	r.Get("/lado/tasks/{taskId}", c.getTask)
+	r.Patch("/lado/tasks/{taskId}", c.updateTask)
+	r.Post("/lado/tasks/{taskId}/cancel", c.cancelTask)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {

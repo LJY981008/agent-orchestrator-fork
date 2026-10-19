@@ -28,6 +28,10 @@ type CloneInput struct {
 	ProjectID         *string               `json:"projectId,omitempty"`
 	Name              *string               `json:"name,omitempty"`
 	Config            *domain.ProjectConfig `json:"config,omitempty"`
+	// LADO fork: key=value pairs for the new repository's local config, set
+	// before its first fetch, such as a LADO connection's core.sshCommand
+	// (docs/LJY-PRD/TDD.md §5.1). HTTP callers cannot set them.
+	GitConfig []string `json:"-"`
 }
 
 // ClonePreparationResult is the checkout returned before project registration.

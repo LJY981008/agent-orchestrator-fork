@@ -28,9 +28,45 @@ const ladoVersionTable = "lado_goose_db_version"
 // change_log and other tables by copy and rename, dropping only the triggers it
 // knows, and a trigger it does not know fails that rename. So these are dropped
 // before upstream runs and recreated after the LADO track on every open, and
-// LADO migrations never create lado_cdc_* triggers themselves. Empty until a
-// LADO table publishes change events.
-var ladoCDCTriggers []string
+// LADO migrations never create lado_cdc_* triggers themselves.
+var ladoCDCTriggers = []string{
+	// A task becomes visible once it has an issue. Rows without a session use
+	// session_updated with a NULL session id, one row per project, and a
+	// project that is not registered gets no row (TDD §4.3).
+	`CREATE TRIGGER lado_cdc_tasks_insert
+AFTER INSERT ON lado_tasks
+WHEN NEW.issue_ref IS NOT NULL
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_task', 'taskId', NEW.id, 'projectId', projects.id),
+        datetime('now')
+    FROM projects
+    WHERE projects.id = NEW.project_id;
+END`,
+	// Refreshing an issue that did not change touches only issue_observed_at
+	// and updated_at, and publishes nothing.
+	`CREATE TRIGGER lado_cdc_tasks_update
+AFTER UPDATE ON lado_tasks
+WHEN NEW.issue_ref IS NOT NULL AND (
+    OLD.issue_ref IS NOT NEW.issue_ref OR
+    OLD.agent IS NOT NEW.agent OR
+    OLD.model IS NOT NEW.model OR
+    OLD.issue_title IS NOT NEW.issue_title OR
+    OLD.issue_state IS NOT NEW.issue_state OR
+    OLD.issue_url IS NOT NEW.issue_url OR
+    OLD.issue_snapshot_sha256 IS NOT NEW.issue_snapshot_sha256 OR
+    OLD.cancelled_at IS NOT NEW.cancelled_at
+)
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_task', 'taskId', NEW.id, 'projectId', projects.id),
+        datetime('now')
+    FROM projects
+    WHERE projects.id = NEW.project_id;
+END`,
+}
 
 // dropLadoCDCTriggers removes every lado_cdc_* trigger ahead of upstream.
 func dropLadoCDCTriggers(db *sql.DB) error {

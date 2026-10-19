@@ -1220,6 +1220,109 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/connections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Store the host token, then link or clone the project */
+        post: operations["createLadoConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/connections/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check a repository token, repository access and SSH; writes nothing */
+        post: operations["checkLadoConnection"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the hosts with a stored token; no response carries a token */
+        get: operations["listLadoCredentials"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/credentials/{host}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Check a host token with the host, then store it */
+        put: operations["storeLadoCredential"];
+        post?: never;
+        /** Delete a host's stored token */
+        delete: operations["deleteLadoCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/issues": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the open issues without a task in each of a project's repositories */
+        get: operations["listLadoProjectIssues"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/repositories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the repositories a project's issues can live in */
+        get: operations["listLadoProjectRepositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/projects/{projectId}/settings": {
         parameters: {
             query?: never;
@@ -1232,6 +1335,76 @@ export interface paths {
         /** Change a project's LADO settings */
         put: operations["updateLadoProjectSettings"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/tasks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's tasks */
+        get: operations["listLadoTasks"];
+        put?: never;
+        /** Create an issue on the project's repository, then its task */
+        post: operations["createLadoTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/tasks/{taskId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a task after reading its issue again */
+        get: operations["getLadoTask"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Change a task's agent or model */
+        patch: operations["updateLadoTask"];
+        trace?: never;
+    };
+    "/api/v1/lado/tasks/{taskId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel a task; the issue is never closed or edited */
+        post: operations["cancelLadoTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/tasks/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import open issues as tasks; writes nothing to the tracker */
+        post: operations["importLadoTasks"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4685,6 +4858,14 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        CheckLadoConnectionRequest: {
+            /** @description Optional private key file for the repository. LADO stores the path, never the key. */
+            sshKeyPath?: string;
+            /** @description A new access token for the repository's host. Empty checks the host's existing token. */
+            token?: string;
+            /** @description The repository's SSH URL, such as git@github.com:owner/repo.git. */
+            url: string;
+        };
         ClaimPRRequest: {
             allowTakeover?: null | boolean;
             pr: string;
@@ -5372,6 +5553,34 @@ export interface components {
         CreateConversationSideChatResponse: {
             side: components["schemas"]["SideConversation"];
         };
+        CreateLadoConnectionRequest: {
+            /** @description Directory to clone into, or for new_workspace the directory to create the workspace folder in. */
+            destinationParent?: string;
+            /**
+             * @description Where to clone when no registered project has the repository: a project of its own (the default), the first repository of a new workspace, or one more repository of a registered workspace.
+             * @enum {string}
+             */
+            placement?: "standalone" | "new_workspace" | "workspace";
+            /** @description Optional private key file. The repository's core.sshCommand then uses that key. */
+            sshKeyPath?: string;
+            /** @description A new access token for the repository's host. LADO stores it for the host. Empty keeps the host's existing token. */
+            token?: string;
+            /** @description The repository's SSH URL, such as git@github.com:owner/repo.git. */
+            url: string;
+            /** @description Registered workspace project to clone into. */
+            workspaceId?: string;
+            /** @description Folder and project name of a new workspace. */
+            workspaceName?: string;
+        };
+        CreateLadoTaskRequest: {
+            agent?: string;
+            model?: string;
+            projectId: string;
+            /** @description Canonical id of the repository to create the issue in. Optional when the project has one repository. */
+            repository?: string;
+            /** @description New Task text: the first line becomes the issue title and the rest its body. */
+            text: string;
+        };
         CreateReportRequest: {
             message?: string;
             note?: string;
@@ -5615,6 +5824,16 @@ export interface components {
             apiVersion: number;
             hostId: string;
         };
+        ImportLadoTasksRequest: {
+            /** @description Canonical ids of the issues to import. */
+            issueRefs: string[];
+            projectId: string;
+        };
+        ImportLadoTasksResponse: {
+            /** @description Issues left out because they already have a task. */
+            skipped: string[];
+            tasks: components["schemas"]["LadoTaskResponse"][];
+        };
         ImportReport: {
             dryRun: boolean;
             notes?: string[];
@@ -5712,10 +5931,154 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        LadoConnectionCheckResponse: {
+            /** @description Host the token belongs to. */
+            host: string;
+            /** @description Registered project with the same repository. Connecting links it; without one, connecting clones the repository. */
+            project?: components["schemas"]["LadoLinkedProjectResponse"];
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+            /** @description Whether connecting can go ahead. */
+            ready: boolean;
+            /** @description Repository path on the host. */
+            repository: string;
+            ssh: components["schemas"]["LadoSSHCheckResponse"];
+            token: components["schemas"]["LadoTokenCheckResponse"];
+        };
+        LadoConnectionResponse: {
+            /** @enum {string} */
+            outcome: "linked" | "cloned";
+            projectId: string;
+        };
+        LadoCredentialListResponse: {
+            credentials: components["schemas"]["LadoCredentialResponse"][];
+        };
+        LadoCredentialResponse: {
+            host: string;
+            /** @description Account the token belongs to, returned right after storing it. */
+            login?: string;
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+        };
+        LadoIssueResponse: {
+            labels: string[];
+            number: number;
+            ref: string;
+            repository: components["schemas"]["LadoRepositoryResponse"];
+            title: string;
+            url: string;
+        };
+        LadoLinkedProjectResponse: {
+            id: string;
+            name: string;
+            path: string;
+            /** @description The workspace repository that has the connection's repository. Empty for a single-repo project. */
+            repository?: string;
+        };
+        LadoPermissionResponse: {
+            /** @description What is missing, or why it cannot be verified. */
+            detail?: string;
+            /** @enum {string} */
+            name: "repository" | "issues" | "pull_requests" | "branch_rules" | "commit_statuses";
+            /**
+             * @description Unverified means the host cannot tell without trying the write.
+             * @enum {string}
+             */
+            status: "ok" | "missing" | "unverified";
+        };
+        LadoProjectIssuesResponse: {
+            failures: components["schemas"]["LadoRepositoryFailureResponse"][];
+            issues: components["schemas"]["LadoIssueResponse"][];
+        };
+        LadoProjectRepositoriesResponse: {
+            repositories: components["schemas"]["LadoRepositoryResponse"][];
+        };
         LadoProjectSettingsResponse: {
             /** @description Whether the project's workers are under LADO's worker gate. */
             ladoMode: boolean;
             projectId: string;
+        };
+        LadoRepositoryFailureResponse: {
+            problem: string;
+            repository: components["schemas"]["LadoRepositoryResponse"];
+        };
+        LadoRepositoryResponse: {
+            host: string;
+            /** @description The workspace child's folder name, or the project's name. */
+            name: string;
+            /** @description Repository path on the host. */
+            path: string;
+            /** @enum {string} */
+            provider: "github" | "gitlab";
+            /** @description Canonical repository id, such as github:owner/repo. */
+            ref: string;
+        };
+        LadoSSHCheckResponse: {
+            ok: boolean;
+            /** @description Why SSH failed, in English with the details. */
+            problem?: string;
+            /**
+             * @description Why SSH failed, for the app to translate.
+             * @enum {string}
+             */
+            problemCode?: "key_home_unknown" | "key_path_relative" | "key_missing" | "key_not_a_file" | "host_key_untrusted" | "key_refused" | "ssh_failed";
+            /** @description What git or ssh printed, when there is one to show. */
+            problemDetail?: string;
+        };
+        LadoTaskIssueResponse: {
+            number: number;
+            /** Format: date-time */
+            observedAt: string;
+            /** @description Canonical issue id, in the form AO stores in sessions.issue_id. */
+            ref: string;
+            /**
+             * @description Normalized issue state. GitHub reports a not-planned close as cancelled.
+             * @enum {string}
+             */
+            state: "open" | "in_progress" | "review" | "done" | "cancelled";
+            title: string;
+            url: string;
+        };
+        LadoTaskListResponse: {
+            tasks: components["schemas"]["LadoTaskResponse"][];
+        };
+        LadoTaskResponse: {
+            /** @description Agent chosen for the task's execution. */
+            agent?: string;
+            /** Format: date-time */
+            cancelledAt?: null | string;
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            issue: components["schemas"]["LadoTaskIssueResponse"];
+            /** @description Model chosen for the task's execution. */
+            model?: string;
+            projectId: string;
+            /** @description Canonical id of the repository that holds the issue, such as github:owner/repo. */
+            repository: string;
+            /**
+             * @description Derived task state.
+             * @enum {string}
+             */
+            state: "draft" | "cancelled" | "closed_unmerged";
+        };
+        LadoTokenCheckResponse: {
+            /** @description Whether the check used a newly entered token. */
+            entered: boolean;
+            /** @description Account the token belongs to. */
+            login?: string;
+            permissions: components["schemas"]["LadoPermissionResponse"][];
+            /** @description Why the token cannot be used, in English with the details. */
+            problem?: string;
+            /**
+             * @description Why the token cannot be used, for the app to translate.
+             * @enum {string}
+             */
+            problemCode?: "token_missing" | "token_unusable" | "token_rejected" | "token_check_failed";
+            /** @description The underlying error, when there is one to show. */
+            problemDetail?: string;
+            /** @description Whether LADO already keeps a token for the host. */
+            stored: boolean;
         };
         LinkPreviewResponse: {
             description?: string;
@@ -7038,6 +7401,10 @@ export interface components {
             state?: "queued" | "running" | "completed" | "recovered" | "interrupted" | "failed";
             turnId?: string;
         };
+        StoreLadoCredentialRequest: {
+            /** @description Access token for the host. LADO checks it with the host before storing it. */
+            token: string;
+        };
         SubmitAgentHandoffRequest: {
             /** @description Structured, source-agent-authored handoff enrichment. */
             handoff: unknown;
@@ -7194,6 +7561,10 @@ export interface components {
         UpdateLadoProjectSettingsRequest: {
             /** @description Put the project's workers under LADO's worker gate. Changing it needs AO_LADO_DEV=on until LADO's dispatcher exists. */
             ladoMode: null | boolean;
+        };
+        UpdateLadoTaskRequest: {
+            agent?: null | string;
+            model?: null | string;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -11399,6 +11770,393 @@ export interface operations {
             };
         };
     };
+    createLadoConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLadoConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoConnectionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkLadoConnection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckLadoConnectionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoConnectionCheckResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoCredentialListResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    storeLadoCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Repository host, such as github.com, gitlab.com or a self-managed GitLab host. */
+                host: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StoreLadoCredentialRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoCredentialResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteLadoCredential: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Repository host, such as github.com, gitlab.com or a self-managed GitLab host. */
+                host: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoProjectIssues: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoProjectIssuesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoProjectRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoProjectRepositoriesResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getLadoProjectSettings: {
         parameters: {
             query?: never;
@@ -11512,6 +12270,386 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoTasks: {
+        parameters: {
+            query: {
+                /** @description Project whose tasks are listed. */
+                projectId: string;
+                /** @description When true, cancelled tasks are listed too. */
+                includeCancelled?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createLadoTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLadoTaskRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoTaskRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    cancelLadoTask: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importLadoTasks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportLadoTasksRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImportLadoTasksResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

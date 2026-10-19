@@ -433,6 +433,23 @@ type LadoProjectSetting struct {
 	UpdatedAt time.Time
 }
 
+type LadoTask struct {
+	ID                  string
+	ProjectID           string
+	IssueRepo           string
+	IssueRef            sql.NullString
+	Agent               string
+	Model               string
+	IssueTitle          string
+	IssueState          string
+	IssueURL            string
+	IssueSnapshotSha256 string
+	IssueObservedAt     sql.NullTime
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+	CancelledAt         sql.NullTime
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64

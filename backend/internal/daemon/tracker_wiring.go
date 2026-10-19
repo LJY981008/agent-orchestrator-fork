@@ -44,6 +44,10 @@ func (s *ghTokenSource) Token(ctx context.Context) (string, error) {
 	} else if !errors.Is(err, trackergithub.ErrNoToken) {
 		return "", err
 	}
+	// LADO fork: the stored github.com token comes after the env overrides.
+	if tok, err := (ladoTrackerGitHubToken{}).Token(ctx); err == nil {
+		return tok, nil
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -79,7 +83,7 @@ func newGitLabTracker(gitlabCfg config.GitLabConfig) (ports.Tracker, error) {
 		}
 	}
 	return trackergitlab.New(trackergitlab.Options{
-		Token:        trackergitlab.DefaultTokenSource(),
+		Token:        ladoGitLabDefaultTokens(), // LADO fork: DefaultTokenSource plus the stored gitlab.com token
 		AllowedHosts: gitlabCfg.AllowedHosts,
 		HostTokens:   hostTokens,
 	})
