@@ -82,6 +82,8 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/agents/codex/accounts",
 	"/api/v1/agents/codex/account-switches",
 	"/api/v1/agents/accounts",
+	// LADO fork: LADO's routes stay on loopback (docs/LJY-PRD/TDD.md §13).
+	"/api/v1/lado",
 }
 
 // lanControlBlock returns 404 for any request whose path is, or is nested

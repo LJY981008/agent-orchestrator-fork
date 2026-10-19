@@ -469,6 +469,8 @@ type Manager struct {
 	// back without advertising the provider path.
 	openTranscriptFile func(string) (*os.File, error)
 	harnessUseGate     HarnessUseGate
+	// LADO fork: see lado_gate.go.
+	workGate ports.WorkGate
 	// lookPath is exec.LookPath in production; tests substitute a stub so
 	// they don't need real binaries on PATH. Returns ports.ErrAgentBinaryNotFound
 	// when the binary is missing so the sentinel propagates through toAPIError.
@@ -943,6 +945,10 @@ func New(d Deps) *Manager {
 // materialization fails the still-seed row is deleted outright; a later failure
 // parks the row as terminated and rolls back what was built.
 func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.SessionRecord, int, int, error) {
+	// LADO fork: the worker gate decides first (docs/LJY-PRD/TDD.md §6.2).
+	if err := m.authorizeLadoSpawn(ctx, cfg); err != nil {
+		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)
+	}
 	if cfg.RequestedOutput == domain.RequestedOutputArtifact && m.artifactDir("") == "" {
 		return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", ErrArtifactOutputUnavailable)
 	}
@@ -4786,6 +4792,11 @@ func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string,
 // SendWithOptions delivers a message with caller-supplied authorship facts that
 // are independent of the mechanism AO uses to carry it.
 func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
+	// LADO fork: the worker gate decides before anything reaches the target,
+	// attachments included (docs/LJY-PRD/TDD.md §6.3).
+	if err := m.authorizeLadoSend(ctx, id, message, options); err != nil {
+		return fmt.Errorf("send %s: %w", id, err)
+	}
 	if attachment != nil {
 		// Reuses StageAttachments rather than a bespoke writer: it already owns the
 		// empty-workspace guard (refusing beats writing under the daemon's cwd),

@@ -427,6 +427,12 @@ type LadoAuditEvent struct {
 	PrevSha256  string
 }
 
+type LadoProjectSetting struct {
+	ProjectID string
+	LadoMode  int64
+	UpdatedAt time.Time
+}
+
 type ModelUsageEvent struct {
 	ID                    int64
 	BindingID             int64
