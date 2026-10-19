@@ -25,7 +25,7 @@ LADO keeps merging upstream. Every LADO change is either a new file inside one o
 | API spec | `httpd/apispec/specgen/lado_operations.go` returning `[]operation` | `cueOperations` in `httpd/apispec/specgen/build.go:1619` |
 | Daemon | `daemon/lado_wiring.go` | `daemon/awake_wiring.go`, `daemon/automation_wiring.go` |
 | Renderer | `frontend/src/renderer/components/lado/`, `frontend/src/renderer/components/settings/RulesSection.tsx`, new route files in `frontend/src/renderer/routes/` | `frontend/src/renderer/routes/_shell.automations.tsx`, `frontend/src/renderer/components/settings/*Section.tsx` |
-| Electron main | `frontend/src/main/lado-presence.ts`, `frontend/src/main/lado-autostart.ts` | `frontend/src/main/daemon-owner.ts` |
+| Electron main | `frontend/src/main/lado-presence.ts`, `frontend/src/main/lado-autostart.ts` (login item), `frontend/src/main/lado-desktop.ts` (Background settings and IPC), `frontend/src/shared/lado-desktop.ts` (types) | `frontend/src/main/daemon-owner.ts`, `frontend/src/main/update-settings.ts` |
 
 Names start with `lado` (packages, files, tables, routes, i18n keys). LADO code never uses the word "harness" for its own concepts, because `sessions.harness` and `domain.AgentHarness` already mean "agent adapter". It says `rule`, `policy` or `setup`.
 
@@ -49,8 +49,12 @@ This is the complete list of upstream files LADO edits. Each edit stays a few li
 | `frontend/src/renderer/components/settings/settingsCatalog.tsx`, `frontend/src/renderer/stores/ui-store.ts` | Rules section entry (:63+) and section id (:27-43) |
 | `frontend/src/renderer/lib/event-transport.ts` | Route `payload.kind` values starting with `lado_` (next to :330-336) |
 | `frontend/src/renderer/routes/_shell.projects.$projectId.tsx` | Render LADO lanes before the session board |
-| `frontend/src/main.ts` | Presence IPC with the per-launch desktop token (:1397), login start, keep-daemon default |
-| `frontend/src/preload.ts` | Expose the presence confirmation call to the renderer |
+| `frontend/src/main.ts` | Presence IPC with the per-launch desktop token (:1397); the Background settings object, its IPC registration, and its keep-daemon default at the three `keepDaemonAlive` calls |
+| `frontend/src/preload.ts` | Expose `lado.desktop` and the presence confirmation call to the renderer |
+| `frontend/src/renderer/lib/bridge.ts`, `frontend/src/renderer/test/setup.ts`, `frontend/e2e/support/fake-bridge.ts` | `lado` stubs, because each one satisfies the full `AoBridge` type |
+| `frontend/src/renderer/components/settings/GeneralSettingsSection.tsx` | Render the LADO Background group after Sessions |
+| `frontend/src/renderer/i18n/*.json` | LADO keys appended at the end of each of the 8 locale files |
+| `CLAUDE.md`, `AGENTS.md` | The Start at login exception to the `~/.ao`-only rule (§10) |
 | `frontend/forge.config.ts`, `frontend/src/shared/posthog-config.ts` and the files in §11 | Fork distribution defaults |
 
 The separate migration track (§4.1) means no upstream migration test needs an edit.
@@ -222,6 +226,7 @@ All under AO's state directory (`~/.ao`, or `AO_DATA_DIR`; `config/config.go:138
 | `<state>/lado/blobs/<sha[0:2]>/<sha>` | Pinned proposals, plans, knowledge snapshots, check logs (same layout as `artifactversions/blobs.go:24-33`) |
 | `<state>/lado/harness/` | Managed local setup (HARNESS §9.3) |
 | `<state>/lado/backups/<adoption-id>/` | Originals and manifest from adoption |
+| `<state>/lado/desktop.json` | Desktop Background settings: keep agents running after quit (§10) |
 
 The human-presence key has no file: it is derived in memory from the desktop app's per-launch token ([adr/0002](adr/0002-human-presence-approval-channel.md)).
 
@@ -401,7 +406,7 @@ HARNESS.md has the semantics. The code touch points are:
 
 - **Chat mode first.** Codex app-server and Claude ACP run in detached per-session hosts (`docs/architecture.md:10-14`). TUI comes later because the ConPTY host kills only its direct child (`adapters/runtime/conpty/host_conpty_windows.go:103-105`).
 - **Keep the daemon.** `AO_KEEP_DAEMON` is off unless set (`frontend/src/main/daemon-owner.ts:12-15`). On Windows, closing the last window quits the app (`frontend/src/main.ts:3521-3525`) and the daemon stops 5 s later (`daemon/daemon.go:1083-1097`). Packaged LADO builds treat keep-daemon as on unless `AO_KEEP_DAEMON` turns it off; dev builds keep upstream's default so a dev loop leaves no daemon behind. The owner becomes `persistent` (`frontend/src/main.ts:1429,1439`). Reopening the app does not reattach to that daemon: a new launch replaces a daemon from another launch gracefully and keeps its persistence mode (`frontend/src/shared/daemon-takeover.ts:44-57`), while Chat hosts keep in-flight turns (`docs/architecture.md:10-14`). The dispatcher therefore has to survive a daemon restart on every app launch (PRD gate 13).
-- **Login start.** Not present (searched `setLoginItemSettings`, `openAtLogin`, `autostart`). Add `frontend/src/main/lado-autostart.ts` with `app.setLoginItemSettings` and a settings toggle.
+- **Login start.** AO had none (searched `setLoginItemSettings`, `openAtLogin`, `autostart`). Settings > General > Background adds **Start at login** (off by default, packaged builds only) and **Keep agents running after quit** (on by default; `AO_KEEP_DAEMON` wins when set). Windows and macOS use `app.setLoginItemSettings`; Linux writes one `agent-orchestrator.desktop` entry in the XDG autostart directory, an exception to the `~/.ao`-only rule that the owner approved on 2026-10-19 and that `CLAUDE.md` and `AGENTS.md` record. The app opens its window normally at login; AO's tray is macOS-only (`frontend/src/main/tray-lifecycle.ts:5-7`). The keep-running choice is stored in `<state>/lado/desktop.json`.
 - **CI.** Only part of the Go suite runs on Windows (`.github/workflows/go.yml:174-178`). Add the LADO packages to that job.
 - **Local setup paths.** `%USERPROFILE%\.claude`, `%USERPROFILE%\.claude.json`, `%USERPROFILE%\.codex`. Adoption refuses to run while Claude or Codex processes hold those files.
 
