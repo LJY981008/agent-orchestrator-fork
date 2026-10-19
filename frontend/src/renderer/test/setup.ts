@@ -436,5 +436,12 @@ if (typeof window !== "undefined") {
 			onStreamEvent: () => () => undefined,
 			agentBrowserUrl: async () => "",
 		},
+		// LADO fork: tests see no desktop Background settings unless they mock them.
+		lado: {
+			desktop: {
+				get: async () => null,
+				set: async () => null,
+			},
+		},
 	};
 } // end if (typeof window !== "undefined")

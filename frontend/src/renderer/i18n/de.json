@@ -3183,5 +3183,10 @@
 	"settings.agentAccounts.stopAndMove": "Beenden und verschieben",
 	"settings.agentAccounts.switching": "Wechsel zu {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Konto wird gewechselt",
-	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto."
+	"settings.agentAccounts.switchFailed": "Der Wechsel ist fehlgeschlagen. Der Agent bleibt beim bisherigen Konto.",
+	"lado.settings.background": "Hintergrund",
+	"lado.settings.startAtLogin": "Bei der Anmeldung starten",
+	"lado.settings.keepRunning": "Agents nach dem Beenden weiterlaufen lassen",
+	"lado.settings.keepRunningSetByEnv": "Durch AO_KEEP_DAEMON festgelegt",
+	"lado.settings.saveFailed": "Diese Einstellung konnte nicht gespeichert werden."
 }

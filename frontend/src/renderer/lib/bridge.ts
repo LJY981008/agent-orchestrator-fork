@@ -371,4 +371,11 @@ export const aoBridge: AoBridge =
 			onStreamEvent: () => () => undefined,
 			agentBrowserUrl: async () => "",
 		},
+		// LADO fork: no desktop Background settings outside Electron.
+		lado: {
+			desktop: {
+				get: async () => null,
+				set: async () => null,
+			},
+		},
 	} satisfies AoBridge);

@@ -3165,5 +3165,10 @@
 	"settings.agentAccounts.stopAndMove": "停止并移动",
 	"settings.agentAccounts.switching": "正在切换到 {{email}}…",
 	"settings.agentAccounts.switchingAccount": "正在切换账号",
-	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。"
+	"settings.agentAccounts.switchFailed": "切换失败。代理仍使用之前的账户。",
+	"lado.settings.background": "后台",
+	"lado.settings.startAtLogin": "登录时启动",
+	"lado.settings.keepRunning": "退出后保持代理运行",
+	"lado.settings.keepRunningSetByEnv": "由 AO_KEEP_DAEMON 设置",
+	"lado.settings.saveFailed": "无法保存此设置。"
 }

@@ -3230,5 +3230,10 @@
 	"settings.agentAccounts.stopAndMove": "Parar e mover",
 	"settings.agentAccounts.switching": "Trocando para {{email}}…",
 	"settings.agentAccounts.switchingAccount": "Trocando de conta",
-	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior."
+	"settings.agentAccounts.switchFailed": "A troca falhou. O agente continua na conta anterior.",
+	"lado.settings.background": "Segundo plano",
+	"lado.settings.startAtLogin": "Iniciar ao fazer login",
+	"lado.settings.keepRunning": "Manter os agentes em execução após sair",
+	"lado.settings.keepRunningSetByEnv": "Definido por AO_KEEP_DAEMON",
+	"lado.settings.saveFailed": "Não foi possível salvar esta configuração."
 }

@@ -380,6 +380,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onStreamEvent: unsubscribe,
 					agentBrowserUrl: async () => "",
 				},
+				// LADO fork: the renderer hides Background settings without a desktop API.
+				lado: { desktop: { get: async () => null, set: async () => null } },
 			} satisfies AoBridge;
 			(window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
 				setStatus: emitUpdateStatus,
@@ -1245,6 +1247,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onStreamEvent: unsubscribe,
 					agentBrowserUrl: async () => "",
 				},
+				// LADO fork: the renderer hides Background settings without a desktop API.
+				lado: { desktop: { get: async () => null, set: async () => null } },
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},
