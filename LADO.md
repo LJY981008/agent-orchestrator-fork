@@ -23,7 +23,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 3 | The worker gate (no worker starts or receives work without LADO's grant) and LADO project settings | Merged |
 | 4a | Repository connections (access token and SSH, link or clone, workspaces with several repositories) and issue-backed tasks | Merged |
 | — | Korean as the desktop app's default language, with a reviewed Korean catalog | Merged |
-| 4b | Plan requests and revisions, plans written in issue comments, approvals confirmed in the desktop app, the Plan and Queued lanes, the task view | In review |
+| 4b | Plan requests and revisions, plans written in issue comments, approvals confirmed in the desktop app, the Plan and Queued lanes, the task view | Merged |
 | 5 | Rules: scopes, toggles, protected gates, snapshots | Planned |
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Planned |
 | 7 | Adopting your local agent setup (CLAUDE.md, hooks, skills, MCP) into one managed place | Planned |
