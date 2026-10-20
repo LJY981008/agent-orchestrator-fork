@@ -42,6 +42,8 @@ import { useUiStore } from "../stores/ui-store";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
+import { useLadoMode } from "../hooks/useLado";
+import { LadoPlanLane } from "./lado/LadoPlanLane";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
@@ -143,9 +145,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	});
 	const showStartup = !hostId && presentation.showStartup;
 	const showWelcome = !hostId && presentation.showWelcome;
-	const showProjectEmpty = hostId
+	// LADO fork: a LADO project shows its Plan lane before the session columns,
+	// also while it has no sessions (docs/LJY-PRD/TDD.md §3.3).
+	const ladoMode = useLadoMode(projectId && !hostId && workspace?.kind !== CLOUD_PROJECT_KIND ? projectId : undefined);
+	const showProjectEmpty = !ladoMode && (hostId
 		? connected && remoteProjectQuery.isSuccess && Boolean(workspace) && liveSessions.length === 0
-		: presentation.showProjectEmpty;
+		: presentation.showProjectEmpty);
 	// Memory and CPU monitoring is a developer tool: the light, the card chips
 	// and the window behind them only exist with Diagnostics on in Developer mode.
 	// They read this machine, so another machine's board shows none of them.
@@ -315,6 +320,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						columns={columns}
 						key={scopeKey}
 						labels={boardLabels}
+						leadingColumn={ladoMode && projectId ? <LadoPlanLane projectId={projectId} /> : undefined}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
 								memory={memoryBySession?.get(session.id)}

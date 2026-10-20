@@ -3020,6 +3020,296 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/lado/connections:
+    post:
+      operationId: createLadoConnection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLadoConnectionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoConnectionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Store the host token, then link or clone the project
+      tags:
+      - lado
+  /api/v1/lado/connections/check:
+    post:
+      operationId: checkLadoConnection
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckLadoConnectionRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoConnectionCheckResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Check a repository token, repository access and SSH; writes nothing
+      tags:
+      - lado
+  /api/v1/lado/credentials:
+    get:
+      operationId: listLadoCredentials
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoCredentialListResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the hosts with a stored token; no response carries a token
+      tags:
+      - lado
+  /api/v1/lado/credentials/{host}:
+    delete:
+      operationId: deleteLadoCredential
+      parameters:
+      - description: Repository host, such as github.com, gitlab.com or a self-managed
+          GitLab host.
+        in: path
+        name: host
+        required: true
+        schema:
+          description: Repository host, such as github.com, gitlab.com or a self-managed
+            GitLab host.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete a host's stored token
+      tags:
+      - lado
+    put:
+      operationId: storeLadoCredential
+      parameters:
+      - description: Repository host, such as github.com, gitlab.com or a self-managed
+          GitLab host.
+        in: path
+        name: host
+        required: true
+        schema:
+          description: Repository host, such as github.com, gitlab.com or a self-managed
+            GitLab host.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/StoreLadoCredentialRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoCredentialResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Check a host token with the host, then store it
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/issues:
+    get:
+      operationId: listLadoProjectIssues
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectIssuesResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: List the open issues without a task in each of a project's repositories
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/repositories:
+    get:
+      operationId: listLadoProjectRepositories
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectRepositoriesResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the repositories a project's issues can live in
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/settings:
     get:
       operationId: getLadoProjectSettings
@@ -3113,6 +3403,294 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Change a project's LADO settings
+      tags:
+      - lado
+  /api/v1/lado/tasks:
+    get:
+      operationId: listLadoTasks
+      parameters:
+      - description: Project whose tasks are listed.
+        in: query
+        name: projectId
+        required: true
+        schema:
+          description: Project whose tasks are listed.
+          type: string
+      - description: When true, cancelled tasks are listed too.
+        in: query
+        name: includeCancelled
+        schema:
+          description: When true, cancelled tasks are listed too.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a project's tasks
+      tags:
+      - lado
+    post:
+      operationId: createLadoTask
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLadoTaskRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Create an issue on the project's repository, then its task
+      tags:
+      - lado
+  /api/v1/lado/tasks/{taskId}:
+    get:
+      operationId: getLadoTask
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a task after reading its issue again
+      tags:
+      - lado
+    patch:
+      operationId: updateLadoTask
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoTaskRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Change a task's agent or model
+      tags:
+      - lado
+  /api/v1/lado/tasks/{taskId}/cancel:
+    post:
+      operationId: cancelLadoTask
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Cancel a task; the issue is never closed or edited
+      tags:
+      - lado
+  /api/v1/lado/tasks/imports:
+    post:
+      operationId: importLadoTasks
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportLadoTasksRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportLadoTasksResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Import open issues as tasks; writes nothing to the tracker
       tags:
       - lado
   /api/v1/link-preview:
@@ -13626,6 +14204,22 @@ components:
       - ok
       - sessionId
       type: object
+    CheckLadoConnectionRequest:
+      properties:
+        sshKeyPath:
+          description: Optional private key file for the repository. LADO stores the
+            path, never the key.
+          type: string
+        token:
+          description: A new access token for the repository's host. Empty checks
+            the host's existing token.
+          type: string
+        url:
+          description: The repository's SSH URL, such as git@github.com:owner/repo.git.
+          type: string
+      required:
+      - url
+      type: object
     ClaimPRRequest:
       properties:
         allowTakeover:
@@ -15501,6 +16095,61 @@ components:
       required:
       - side
       type: object
+    CreateLadoConnectionRequest:
+      properties:
+        destinationParent:
+          description: Directory to clone into, or for new_workspace the directory
+            to create the workspace folder in.
+          type: string
+        placement:
+          description: 'Where to clone when no registered project has the repository:
+            a project of its own (the default), the first repository of a new workspace,
+            or one more repository of a registered workspace.'
+          enum:
+          - standalone
+          - new_workspace
+          - workspace
+          type: string
+        sshKeyPath:
+          description: Optional private key file. The repository's core.sshCommand
+            then uses that key.
+          type: string
+        token:
+          description: A new access token for the repository's host. LADO stores it
+            for the host. Empty keeps the host's existing token.
+          type: string
+        url:
+          description: The repository's SSH URL, such as git@github.com:owner/repo.git.
+          type: string
+        workspaceId:
+          description: Registered workspace project to clone into.
+          type: string
+        workspaceName:
+          description: Folder and project name of a new workspace.
+          type: string
+      required:
+      - url
+      type: object
+    CreateLadoTaskRequest:
+      properties:
+        agent:
+          type: string
+        model:
+          type: string
+        projectId:
+          type: string
+        repository:
+          description: Canonical id of the repository to create the issue in. Optional
+            when the project has one repository.
+          type: string
+        text:
+          description: 'New Task text: the first line becomes the issue title and
+            the rest its body.'
+          type: string
+      required:
+      - projectId
+      - text
+      type: object
     CreateReportRequest:
       properties:
         message:
@@ -16168,6 +16817,34 @@ components:
       - hostId
       - apiVersion
       type: object
+    ImportLadoTasksRequest:
+      properties:
+        issueRefs:
+          description: Canonical ids of the issues to import.
+          items:
+            type: string
+          type: array
+        projectId:
+          type: string
+      required:
+      - projectId
+      - issueRefs
+      type: object
+    ImportLadoTasksResponse:
+      properties:
+        skipped:
+          description: Issues left out because they already have a task.
+          items:
+            type: string
+          type: array
+        tasks:
+          items:
+            $ref: '#/components/schemas/LadoTaskResponse'
+          type: array
+      required:
+      - tasks
+      - skipped
+      type: object
     ImportReport:
       properties:
         dryRun:
@@ -16431,6 +17108,165 @@ components:
       - ok
       - sessionId
       type: object
+    LadoConnectionCheckResponse:
+      properties:
+        host:
+          description: Host the token belongs to.
+          type: string
+        project:
+          $ref: '#/components/schemas/LadoLinkedProjectResponse'
+          description: Registered project with the same repository. Connecting links
+            it; without one, connecting clones the repository.
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+        ready:
+          description: Whether connecting can go ahead.
+          type: boolean
+        repository:
+          description: Repository path on the host.
+          type: string
+        ssh:
+          $ref: '#/components/schemas/LadoSSHCheckResponse'
+        token:
+          $ref: '#/components/schemas/LadoTokenCheckResponse'
+      required:
+      - provider
+      - host
+      - repository
+      - token
+      - ssh
+      - ready
+      type: object
+    LadoConnectionResponse:
+      properties:
+        outcome:
+          enum:
+          - linked
+          - cloned
+          type: string
+        projectId:
+          type: string
+      required:
+      - projectId
+      - outcome
+      type: object
+    LadoCredentialListResponse:
+      properties:
+        credentials:
+          items:
+            $ref: '#/components/schemas/LadoCredentialResponse'
+          type: array
+      required:
+      - credentials
+      type: object
+    LadoCredentialResponse:
+      properties:
+        host:
+          type: string
+        login:
+          description: Account the token belongs to, returned right after storing
+            it.
+          type: string
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+      required:
+      - host
+      - provider
+      type: object
+    LadoIssueResponse:
+      properties:
+        labels:
+          items:
+            type: string
+          type: array
+        number:
+          type: integer
+        ref:
+          type: string
+        repository:
+          $ref: '#/components/schemas/LadoRepositoryResponse'
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - repository
+      - ref
+      - number
+      - title
+      - url
+      - labels
+      type: object
+    LadoLinkedProjectResponse:
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+        repository:
+          description: The workspace repository that has the connection's repository.
+            Empty for a single-repo project.
+          type: string
+      required:
+      - id
+      - name
+      - path
+      type: object
+    LadoPermissionResponse:
+      properties:
+        detail:
+          description: What is missing, or why it cannot be verified.
+          type: string
+        name:
+          enum:
+          - repository
+          - issues
+          - pull_requests
+          - branch_rules
+          - commit_statuses
+          type: string
+        status:
+          description: Unverified means the host cannot tell without trying the write.
+          enum:
+          - ok
+          - missing
+          - unverified
+          type: string
+      required:
+      - name
+      - status
+      type: object
+    LadoProjectIssuesResponse:
+      properties:
+        failures:
+          items:
+            $ref: '#/components/schemas/LadoRepositoryFailureResponse'
+          type: array
+        issues:
+          items:
+            $ref: '#/components/schemas/LadoIssueResponse'
+          type: array
+      required:
+      - issues
+      - failures
+      type: object
+    LadoProjectRepositoriesResponse:
+      properties:
+        repositories:
+          items:
+            $ref: '#/components/schemas/LadoRepositoryResponse'
+          type: array
+      required:
+      - repositories
+      type: object
     LadoProjectSettingsResponse:
       properties:
         ladoMode:
@@ -16441,6 +17277,181 @@ components:
       required:
       - projectId
       - ladoMode
+      type: object
+    LadoRepositoryFailureResponse:
+      properties:
+        problem:
+          type: string
+        repository:
+          $ref: '#/components/schemas/LadoRepositoryResponse'
+      required:
+      - repository
+      - problem
+      type: object
+    LadoRepositoryResponse:
+      properties:
+        host:
+          type: string
+        name:
+          description: The workspace child's folder name, or the project's name.
+          type: string
+        path:
+          description: Repository path on the host.
+          type: string
+        provider:
+          enum:
+          - github
+          - gitlab
+          type: string
+        ref:
+          description: Canonical repository id, such as github:owner/repo.
+          type: string
+      required:
+      - ref
+      - name
+      - provider
+      - host
+      - path
+      type: object
+    LadoSSHCheckResponse:
+      properties:
+        ok:
+          type: boolean
+        problem:
+          description: Why SSH failed, in English with the details.
+          type: string
+        problemCode:
+          description: Why SSH failed, for the app to translate.
+          enum:
+          - key_home_unknown
+          - key_path_relative
+          - key_missing
+          - key_not_a_file
+          - host_key_untrusted
+          - key_refused
+          - ssh_failed
+          type: string
+        problemDetail:
+          description: What git or ssh printed, when there is one to show.
+          type: string
+      required:
+      - ok
+      type: object
+    LadoTaskIssueResponse:
+      properties:
+        number:
+          type: integer
+        observedAt:
+          format: date-time
+          type: string
+        ref:
+          description: Canonical issue id, in the form AO stores in sessions.issue_id.
+          type: string
+        state:
+          description: Normalized issue state. GitHub reports a not-planned close
+            as cancelled.
+          enum:
+          - open
+          - in_progress
+          - review
+          - done
+          - cancelled
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - ref
+      - number
+      - title
+      - state
+      - url
+      - observedAt
+      type: object
+    LadoTaskListResponse:
+      properties:
+        tasks:
+          items:
+            $ref: '#/components/schemas/LadoTaskResponse'
+          type: array
+      required:
+      - tasks
+      type: object
+    LadoTaskResponse:
+      properties:
+        agent:
+          description: Agent chosen for the task's execution.
+          type: string
+        cancelledAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        issue:
+          $ref: '#/components/schemas/LadoTaskIssueResponse'
+        model:
+          description: Model chosen for the task's execution.
+          type: string
+        projectId:
+          type: string
+        repository:
+          description: Canonical id of the repository that holds the issue, such as
+            github:owner/repo.
+          type: string
+        state:
+          description: Derived task state.
+          enum:
+          - draft
+          - cancelled
+          - closed_unmerged
+          type: string
+      required:
+      - id
+      - projectId
+      - repository
+      - state
+      - issue
+      - createdAt
+      type: object
+    LadoTokenCheckResponse:
+      properties:
+        entered:
+          description: Whether the check used a newly entered token.
+          type: boolean
+        login:
+          description: Account the token belongs to.
+          type: string
+        permissions:
+          items:
+            $ref: '#/components/schemas/LadoPermissionResponse'
+          type: array
+        problem:
+          description: Why the token cannot be used, in English with the details.
+          type: string
+        problemCode:
+          description: Why the token cannot be used, for the app to translate.
+          enum:
+          - token_missing
+          - token_unusable
+          - token_rejected
+          - token_check_failed
+          type: string
+        problemDetail:
+          description: The underlying error, when there is one to show.
+          type: string
+        stored:
+          description: Whether LADO already keeps a token for the host.
+          type: boolean
+      required:
+      - entered
+      - stored
+      - permissions
       type: object
     LinkPreviewResponse:
       properties:
@@ -19817,6 +20828,15 @@ components:
       - outcome
       - duplicate
       type: object
+    StoreLadoCredentialRequest:
+      properties:
+        token:
+          description: Access token for the host. LADO checks it with the host before
+            storing it.
+          type: string
+      required:
+      - token
+      type: object
     SubmitAgentHandoffRequest:
       properties:
         handoff:
@@ -20206,6 +21226,17 @@ components:
           - boolean
       required:
       - ladoMode
+      type: object
+    UpdateLadoTaskRequest:
+      properties:
+        agent:
+          type:
+          - "null"
+          - string
+        model:
+          type:
+          - "null"
+          - string
       type: object
     UpdateProjectSettingsInput:
       properties:

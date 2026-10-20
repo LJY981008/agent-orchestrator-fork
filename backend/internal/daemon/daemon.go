@@ -539,6 +539,9 @@ func Run() error {
 			return claudecodeagent.ProviderCatalogFingerprint(fingerprintCtx, request.Binary, request.WorkingDir, request.Env)
 		},
 	}
+	// LADO fork: stored host tokens join every token chain built from here on
+	// (docs/LJY-PRD/TDD.md §5.1).
+	cfg.GitLab = installLadoCredentials(cfg, log)
 	// Build the multi-tracker dispatching to both GitHub and GitLab once,
 	// shared between the session service and the intake observer below.
 	// Env-configured tokens are validated eagerly here; CLI credential probing
@@ -678,6 +681,10 @@ func Run() error {
 	lcStack.LCM.SetSessionOperationGate(sessMgr)
 	termMgr.SetSessionInputLease(sessMgr)
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
+	// LADO fork: repository connections clone through the project service;
+	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
+	ladoConnections, ladoTasks := wireLadoWork(cfg, store, projectSvc, log)
+	ladoTasksDone := ladoTasks.Start(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -1010,6 +1017,8 @@ func Run() error {
 		ShellTerminals:     shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		LadoProjects:       ladoProjects,
+		LadoConnections:    ladoConnections,
+		LadoTasks:          ladoTasks,
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,
@@ -1206,6 +1215,7 @@ func Run() error {
 	codexSwitchCancel()
 	managedPreview.Close()
 	<-previewDone
+	<-ladoTasksDone // LADO fork
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight
 	// turns; the replacement daemon reconnects to the same initialized stream and

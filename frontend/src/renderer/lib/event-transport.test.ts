@@ -575,6 +575,28 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// LADO fork: a task change refreshes that project's Plan lane, not the sidebar.
+	it("invalidates only the changed project's LADO tasks for task CDC", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 45,
+				projectId: "proj-1",
+				type: "session_updated",
+				payload: { kind: "lado_task", taskId: "lado-task-1", projectId: "proj-1" },
+				createdAt: "2026-10-19T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "tasks", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "issues", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
 		vi.useFakeTimers();
 		const queryClient = new QueryClient();

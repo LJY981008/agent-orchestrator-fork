@@ -162,7 +162,12 @@ func (m *Service) prepareClone(ctx context.Context, in CloneInput, resume bool) 
 		}
 	}()
 
-	cmd := aoprocess.CommandContext(ctx, "git", "clone", "--origin", "origin", "--", remoteURL, temporaryPath)
+	cloneArgs := []string{"clone", "--origin", "origin"}
+	// LADO fork: git clone --config sets each pair before the first fetch.
+	for _, pair := range in.GitConfig {
+		cloneArgs = append(cloneArgs, "--config", pair)
+	}
+	cmd := aoprocess.CommandContext(ctx, "git", append(cloneArgs, "--", remoteURL, temporaryPath)...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	if err := cmd.Run(); err != nil {
 		var executableError *exec.Error

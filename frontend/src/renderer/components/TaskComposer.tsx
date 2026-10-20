@@ -46,6 +46,10 @@ import {
 import { useModelCatalogAuthRecovery } from "../hooks/useModelCatalogAuthRecovery";
 import { useUiStore } from "../stores/ui-store";
 import { ModelCatalogNotice } from "./ModelCatalogNotice";
+import { useCreateLadoTask, useLadoModeState } from "../hooks/useLado";
+import { LadoComposerContext, useLadoIssueRepository } from "./lado/LadoComposerContext";
+import { LadoImportIssuesDialog } from "./lado/LadoImportIssuesDialog";
+import { ladoErrorText } from "../lib/lado-errors";
 import { NativeModePicker } from "./NativeModePicker";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
@@ -115,6 +119,8 @@ export type TaskComposerProps = {
 	projectId?: string;
 	hostId?: string;
 	onCreated: (sessionId: string) => void;
+	/** LADO fork: called after a LADO project's composer created or imported issue-backed tasks. */
+	onIssueTasksCreated?: (projectId: string) => void;
 	onDirtyChange?: (dirty: boolean) => void;
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
@@ -125,6 +131,7 @@ export function TaskComposer({
 	projectId,
 	hostId,
 	onCreated,
+	onIssueTasksCreated,
 	onDirtyChange,
 	onSubmittingChange,
 	autoFocusTitle,
@@ -170,6 +177,12 @@ export function TaskComposer({
 	const cloudProject = (cloudProjects.data ?? []).find((project) => project.id === projectId);
 	const isCloudProject = !hostId && Boolean(cloudProject);
 	const isStandalone = projectId === STANDALONE_WORKSPACE_ID;
+	// LADO fork: in a LADO project the composer creates an issue on the
+	// project's repository instead of starting a session (docs/LJY-PRD/TDD.md §5.1).
+	const { ladoMode, known: ladoModeKnown } = useLadoModeState(!hostId && !isCloudProject && !isStandalone ? projectId : undefined);
+	const createIssueTask = useCreateLadoTask(projectId ?? "");
+	const issueRepository = useLadoIssueRepository(projectId ?? "", ladoMode);
+	const [importOpen, setImportOpen] = useState(false);
 	const preferenceContext = hostId ? `${hostId}:${projectId ?? ""}` : projectId ?? "";
 	const persistedPreferences = useMemo(
 		() => readTaskComposerPreferences(preferenceContext),
@@ -308,7 +321,9 @@ export function TaskComposer({
 	});
 	useEffect(() => {
 		const id = projectQuery.data?.id;
-		if (!id) return;
+		// A LADO task starts no session here, so no worktree is prepared, and
+		// none is until the project's LADO mode is known.
+		if (!id || !ladoModeKnown || ladoMode) return;
 		let client;
 		try {
 			client = hostId ? clientForHost(hostId) : apiClient;
@@ -337,7 +352,7 @@ export function TaskComposer({
 			taskPreparationRef.current = "";
 			cancelTaskPreparation(token, hostId);
 		};
-	}, [hostId, projectQuery.data?.id]);
+	}, [hostId, ladoMode, ladoModeKnown, projectQuery.data?.id]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
 	// The composer preselects the agent and model a spawn would actually use
@@ -638,11 +653,43 @@ export function TaskComposer({
 	useEffect(() => () => onSubmittingChange?.(false), [onSubmittingChange]);
 	useEffect(() => () => clearAttachments(), [clearAttachments]);
 
+	const submitIssueTask = async (text: string) => {
+		if (!projectId || isSubmitting) return;
+		if (attachments.length > 0) {
+			setError(t("lado.task.attachmentsUnsupported"));
+			return;
+		}
+		if (issueRepository.needsChoice) {
+			setError(t("lado.error.repositoryRequired"));
+			return;
+		}
+		setIsSubmitting(true);
+		setError(undefined);
+		setFallbackAction(undefined);
+		try {
+			await createIssueTask.mutateAsync({
+				repository: issueRepository.selected || undefined,
+				text,
+				agent: selectedAgent || undefined,
+				model: requestedModel,
+			});
+			onIssueTasksCreated?.(projectId);
+		} catch (err) {
+			setError(ladoErrorText(t, err));
+		} finally {
+			setIsSubmitting(false);
+		}
+	};
+
 	const submitTask = async (
 		brief: string,
 		interfaceMode?: "chat" | "tui",
 		approvalMode?: "bypass-permissions",
 	) => {
+		if (ladoMode) {
+			await submitIssueTask(brief);
+			return;
+		}
 		if (!projectId || !canSubmit || isSubmitting) return;
 
 		setIsSubmitting(true);
@@ -716,9 +763,13 @@ export function TaskComposer({
 	};
 
 	return (
+		<>
 		<TaskComposerView
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
+			context={ladoMode ? (
+				<LadoComposerContext issueRepository={issueRepository} disabled={isSubmitting} onImport={() => setImportOpen(true)} />
+			) : undefined}
 			onPromptChange={handlePromptChange}
 			labels={{
 				addFile: t("newTask.addFile"),
@@ -728,8 +779,8 @@ export function TaskComposer({
 					: t("newTask.createAsTui"),
 				removeFile: (name) => t("newTask.removeFile", { name }),
 				runsWith: t("newTask.runsWith"),
-				start: createLabel ?? t("newTask.start"),
-				starting: t("newTask.starting"),
+				start: ladoMode ? t("lado.task.createIssue") : createLabel ?? t("newTask.start"),
+				starting: ladoMode ? t("lado.task.creatingIssue") : t("newTask.starting"),
 				task: t("newTask.task"),
 				taskPlaceholder,
 			}}
@@ -819,8 +870,17 @@ export function TaskComposer({
 			renderEffortControl={(control) => <TaskEffortPicker {...control} value={control.value || cloudDefaultEffort} defaultEffort={inheritedEffort || effortModel?.defaultEffort} availability={effortAvailability} />}
 			renderModelControl={(control) => <TaskModelPicker {...control} onRefresh={refreshSelectedModels}
 				showFollowAgentAction={Boolean(catalogDefaultOption || !isConcreteModelID(projectModelOrMode))} />}
-			showEffort={!requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
+			showEffort={!ladoMode && !requiresTuiFallback && (effortOptions.length > 0 || Boolean(effort && effort !== "default"))}
 		/>
+		{ladoMode && projectId ? (
+			<LadoImportIssuesDialog
+				open={importOpen}
+				projectId={projectId}
+				onOpenChange={setImportOpen}
+				onImported={() => onIssueTasksCreated?.(projectId)}
+			/>
+		) : null}
+		</>
 	);
 }
 

@@ -49,8 +49,11 @@ type APIDeps struct {
 	Directories        controllers.DirectoryBrowserService
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
-	// LADO fork: LADO's project settings (docs/LJY-PRD/TDD.md §13).
-	LadoProjects controllers.LadoProjectService
+	// LADO fork: LADO's project settings, repository connections and tasks
+	// (docs/LJY-PRD/TDD.md §13).
+	LadoProjects    controllers.LadoProjectService
+	LadoConnections controllers.LadoConnectionService
+	LadoTasks       controllers.LadoTaskService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -203,7 +206,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		lado:          &controllers.LadoController{Projects: deps.LadoProjects},
+		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},

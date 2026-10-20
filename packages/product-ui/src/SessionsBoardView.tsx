@@ -128,6 +128,8 @@ export type SessionsBoardGridViewProps<
 > = {
 	columns: KanbanColumnView[];
 	labels: BoardColumnLabels;
+	/** LADO fork: a lane rendered before the session columns (the Plan lane). */
+	leadingColumn?: ReactNode;
 	renderSessionCard: (session: TSession) => ReactNode;
 	sessions: TSession[];
 };
@@ -135,6 +137,7 @@ export type SessionsBoardGridViewProps<
 export function SessionsBoardGridView<TSession extends BoardSessionPresentation>({
 	columns,
 	labels,
+	leadingColumn,
 	renderSessionCard,
 	sessions,
 }: SessionsBoardGridViewProps<TSession>) {
@@ -151,11 +154,17 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 			className="board-horizontal-scrollbar h-full overflow-x-auto overflow-y-hidden"
 			data-testid="board-horizontal-scroll"
 		>
-			<div className="relative grid h-full min-w-[64rem] grid-cols-4 divide-x divide-border-strong xl:min-w-0">
+			<div
+				className={cn(
+					"relative grid h-full divide-x divide-border-strong",
+					leadingColumn ? "min-w-[80rem] grid-cols-5 2xl:min-w-0" : "min-w-[64rem] grid-cols-4 xl:min-w-0",
+				)}
+			>
 				<div
 					aria-hidden="true"
 					className="pointer-events-none absolute inset-x-0 top-12 z-10 border-t border-border-strong"
 				/>
+				{leadingColumn}
 				{columns.map((column) => (
 					<BoardColumnView
 						column={column}

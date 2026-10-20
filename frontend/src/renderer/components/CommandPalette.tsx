@@ -767,6 +767,10 @@ export function CommandPalette() {
 							onDirtyChange={onComposerDirtyChange}
 							onSubmittingChange={onComposerSubmittingChange}
 							onCreated={(sessionId) => void handleTaskCreated(view.projectId, sessionId)}
+							onIssueTasksCreated={(createdIn) => {
+								closePalette();
+								navigateToTarget({ to: "/projects/$projectId", params: { projectId: createdIn } });
+							}}
 						/>
 					</div>
 				) : (
