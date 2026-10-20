@@ -3,6 +3,7 @@ package ladotask
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -21,13 +22,17 @@ const (
 )
 
 // Start resolves tasks left without an issue by a stopped daemon, then reads
-// the issue of every task on a timer. The returned channel closes once ctx is
-// done and the loop has stopped.
+// the issue of every task on a timer. A second loop delivers plan requests
+// and pins plan versions on a shorter timer, so a slow tracker never holds up
+// plans. The returned channel closes once ctx is done and both loops have
+// stopped.
 func (s *Service) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	started := s.deps.Clock()
+	var loops sync.WaitGroup
+	loops.Add(1)
 	go func() {
-		defer close(done)
+		defer loops.Done()
 		s.ResolvePending(ctx, started)
 		s.RefreshAll(ctx)
 		ticker := time.NewTicker(s.deps.RefreshInterval)
@@ -41,6 +46,26 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 				s.RefreshAll(ctx)
 			}
 		}
+	}()
+	if s.deps.Orchestrators != nil && s.deps.Artifacts != nil && s.deps.Blobs != nil {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			ticker := time.NewTicker(s.deps.PlanInterval)
+			defer ticker.Stop()
+			for {
+				s.WatchPlans(ctx)
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+	}
+	go func() {
+		loops.Wait()
+		close(done)
 	}()
 	return done
 }

@@ -683,7 +683,7 @@ func Run() error {
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
-	ladoConnections, ladoTasks := wireLadoWork(cfg, store, projectSvc, log)
+	ladoConnections, ladoTasks := wireLadoWork(cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions}, log)
 	ladoTasksDone := ladoTasks.Start(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -1019,6 +1019,7 @@ func Run() error {
 		LadoProjects:       ladoProjects,
 		LadoConnections:    ladoConnections,
 		LadoTasks:          ladoTasks,
+		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
 		Conversations:      chatSvc,

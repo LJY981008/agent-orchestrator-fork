@@ -26,12 +26,12 @@ type LadoController struct {
 	Projects    LadoProjectService
 	Connections LadoConnectionService
 	Tasks       LadoTaskService
+	// Presence checks the human-presence proofs approval routes need. Nil
+	// refuses every such route.
+	Presence LadoPresence
 }
 
-const (
-	ladoProjectSettingsPath  = "/api/v1/lado/projects/{projectId}/settings"
-	maxLadoSettingsBodyBytes = 4 << 10
-)
+const ladoProjectSettingsPath = "/api/v1/lado/projects/{projectId}/settings"
 
 // Register mounts the LADO routes.
 func (c *LadoController) Register(r chi.Router) {
@@ -50,6 +50,10 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/tasks/{taskId}", c.getTask)
 	r.Patch("/lado/tasks/{taskId}", c.updateTask)
 	r.Post("/lado/tasks/{taskId}/cancel", c.cancelTask)
+	r.Post("/lado/tasks/{taskId}/plan-requests", c.requestPlan)
+	r.Get("/lado/tasks/{taskId}/plans", c.listPlans)
+	r.Get("/lado/plans/{revisionId}", c.getPlan)
+	r.Post("/lado/plans/{revisionId}/approve", c.approvePlan)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {
@@ -70,13 +74,19 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 		apispec.NotImplemented(w, r, "PUT", ladoProjectSettingsPath)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxLadoSettingsBodyBytes)
-	var req UpdateLadoProjectSettingsRequest
-	if err := decodeJSONStrict(r, &req); err != nil {
-		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)
+	// Turning LADO mode off needs a presence proof over these exact bytes.
+	body, ok := readLadoPresenceBody(w, r)
+	if !ok {
 		return
 	}
-	settings, err := c.Projects.UpdateSettings(r.Context(), ladoProjectID(r), ladoproject.UpdateInput{LadoMode: req.LadoMode})
+	var req UpdateLadoProjectSettingsRequest
+	if !decodeLadoBytes(w, r, body, &req) {
+		return
+	}
+	settings, err := c.Projects.UpdateSettings(r.Context(), ladoProjectID(r), ladoproject.UpdateInput{
+		LadoMode: req.LadoMode,
+		Presence: c.presenceCheck(r, body),
+	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

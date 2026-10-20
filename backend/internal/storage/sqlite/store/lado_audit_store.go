@@ -30,6 +30,26 @@ ORDER BY id`
 // AppendLadoAuditEvent appends ev and returns it with ID and PrevSHA256 set.
 // An empty payload is stored as {}.
 func (s *Store) AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.LadoAuditEvent{}, err
+	}
+	defer s.writeMu.Unlock()
+	var appended domain.LadoAuditEvent
+	err := s.inTx(ctx, "append LADO audit event", func(q *gen.Queries) error {
+		var err error
+		appended, err = appendLadoAuditEventTx(ctx, q, ev)
+		return err
+	})
+	if err != nil {
+		return domain.LadoAuditEvent{}, err
+	}
+	return appended, nil
+}
+
+// appendLadoAuditEventTx appends ev inside the caller's transaction, so an
+// action and its audit event commit together. The caller holds writeMu, which
+// keeps the read of the latest entry and the insert in order.
+func appendLadoAuditEventTx(ctx context.Context, q *gen.Queries, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error) {
 	if ev.At.IsZero() {
 		return domain.LadoAuditEvent{}, errors.New("append LADO audit event: time is required")
 	}
@@ -37,40 +57,28 @@ func (s *Store) AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEve
 	if payload == "" {
 		payload = "{}"
 	}
-	if err := s.writeMu.LockContext(ctx); err != nil {
-		return domain.LadoAuditEvent{}, err
+	prev := ladoAuditGenesisSHA256
+	latest, err := q.GetLatestLadoAuditEvent(ctx)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return domain.LadoAuditEvent{}, fmt.Errorf("read latest entry: %w", err)
+	default:
+		prev = ladoAuditSHA256(ladoAuditEventFromGen(latest))
 	}
-	defer s.writeMu.Unlock()
-	var appended domain.LadoAuditEvent
-	err := s.inTx(ctx, "append LADO audit event", func(q *gen.Queries) error {
-		prev := ladoAuditGenesisSHA256
-		latest, err := q.GetLatestLadoAuditEvent(ctx)
-		switch {
-		case errors.Is(err, sql.ErrNoRows):
-		case err != nil:
-			return fmt.Errorf("read latest entry: %w", err)
-		default:
-			prev = ladoAuditSHA256(ladoAuditEventFromGen(latest))
-		}
-		row, err := q.InsertLadoAuditEvent(ctx, gen.InsertLadoAuditEventParams{
-			At:          ev.At.UTC(),
-			Actor:       ev.Actor,
-			Action:      ev.Action,
-			SubjectKind: ev.SubjectKind,
-			SubjectID:   ev.SubjectID,
-			PayloadJson: payload,
-			PrevSha256:  prev,
-		})
-		if err != nil {
-			return err
-		}
-		appended = ladoAuditEventFromGen(row)
-		return nil
+	row, err := q.InsertLadoAuditEvent(ctx, gen.InsertLadoAuditEventParams{
+		At:          ev.At.UTC(),
+		Actor:       ev.Actor,
+		Action:      ev.Action,
+		SubjectKind: ev.SubjectKind,
+		SubjectID:   ev.SubjectID,
+		PayloadJson: payload,
+		PrevSha256:  prev,
 	})
 	if err != nil {
 		return domain.LadoAuditEvent{}, err
 	}
-	return appended, nil
+	return ladoAuditEventFromGen(row), nil
 }
 
 // VerifyLadoAuditChain returns the ID of the first entry whose prev_sha256 does

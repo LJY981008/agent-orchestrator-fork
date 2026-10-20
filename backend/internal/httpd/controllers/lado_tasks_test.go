@@ -47,6 +47,50 @@ type fakeLadoTaskService struct {
 	gotAgent        *string
 	gotModel        *string
 	calls           int
+	// Plan routes.
+	view        ladotask.TaskView
+	planView    ladotask.PlanView
+	history     ladotask.PlanHistory
+	request     domain.LadoPlanRequest
+	approval    domain.LadoPlanApproval
+	gotPlanReq  ladotask.PlanRequestInput
+	gotRevision domain.LadoPlanRevisionID
+	gotSHA      string
+	gotProof    domain.LadoPresenceProof
+}
+
+func (f *fakeLadoTaskService) View(_ context.Context, id domain.LadoTaskID) (ladotask.TaskView, error) {
+	f.calls++
+	f.gotID = id
+	view := f.view
+	if view.Task.ID == "" {
+		view.Task = f.task
+	}
+	return view, f.err
+}
+
+func (f *fakeLadoTaskService) RequestPlan(_ context.Context, in ladotask.PlanRequestInput) (domain.LadoPlanRequest, error) {
+	f.calls++
+	f.gotPlanReq = in
+	return f.request, f.err
+}
+
+func (f *fakeLadoTaskService) Plans(_ context.Context, id domain.LadoTaskID) (ladotask.PlanHistory, error) {
+	f.calls++
+	f.gotID = id
+	return f.history, f.err
+}
+
+func (f *fakeLadoTaskService) Plan(_ context.Context, id domain.LadoPlanRevisionID) (ladotask.PlanView, error) {
+	f.calls++
+	f.gotRevision = id
+	return f.planView, f.err
+}
+
+func (f *fakeLadoTaskService) ApprovePlan(_ context.Context, id domain.LadoPlanRevisionID, sha256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error) {
+	f.calls++
+	f.gotRevision, f.gotSHA, f.gotProof = id, sha256, proof
+	return f.approval, f.err
 }
 
 func (f *fakeLadoTaskService) List(_ context.Context, projectID domain.ProjectID, includeCancelled bool) ([]domain.LadoTask, error) {
@@ -291,6 +335,10 @@ func TestLadoAPI_TaskRoutesWithoutAServiceAnswerNotImplemented(t *testing.T) {
 		{"POST", "/api/v1/lado/tasks/t1/cancel", ""},
 		{"GET", "/api/v1/lado/projects/mer/issues", ""},
 		{"GET", "/api/v1/lado/projects/mer/repositories", ""},
+		{"POST", "/api/v1/lado/tasks/t1/plan-requests", `{}`},
+		{"GET", "/api/v1/lado/tasks/t1/plans", ""},
+		{"GET", "/api/v1/lado/plans/p1", ""},
+		{"POST", "/api/v1/lado/plans/p1/approve", `{"sha256":"x"}`},
 	} {
 		if body, status, _ := doRequest(t, srv, route.method, route.path, route.body); status != http.StatusNotImplemented {
 			t.Fatalf("%s %s status = %d, body %s", route.method, route.path, status, body)

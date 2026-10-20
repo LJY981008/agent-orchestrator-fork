@@ -1,8 +1,8 @@
 // Package ladotask owns LADO's issue-backed tasks: creating an issue from the
-// developer's request, importing open issues, and tracking the issue of every
-// task (docs/LJY-PRD/TDD.md §5.1 and
-// docs/LJY-PRD/adr/0006-issues-as-work-items.md). Later build steps add plans
-// and approvals here.
+// developer's request, importing open issues, tracking the issue of every
+// task, and the plans and approvals that come before any work starts
+// (docs/LJY-PRD/TDD.md §5.1 and §5.2, and
+// docs/LJY-PRD/adr/0006-issues-as-work-items.md).
 package ladotask
 
 import (
@@ -48,6 +48,20 @@ type Store interface {
 	CancelLadoTask(ctx context.Context, id domain.LadoTaskID, at time.Time) (domain.LadoTask, bool, error)
 	DeletePendingLadoTask(ctx context.Context, id domain.LadoTaskID) error
 	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
+
+	CreateLadoPlanRequest(ctx context.Context, req domain.LadoPlanRequest) (domain.LadoPlanRequest, error)
+	LadoPlanRequest(ctx context.Context, id domain.LadoPlanRequestID) (domain.LadoPlanRequest, bool, error)
+	ListLadoPlanRequests(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanRequest, error)
+	ListLadoPlanRequestsForLiveTasks(ctx context.Context) ([]domain.LadoPlanRequest, error)
+	MarkLadoPlanRequestDelivered(ctx context.Context, id domain.LadoPlanRequestID, at time.Time) error
+	RecordLadoPlanRequestAttempt(ctx context.Context, id domain.LadoPlanRequestID, problem string) error
+	FailLadoPlanRequest(ctx context.Context, id domain.LadoPlanRequestID, at time.Time, problem string) error
+	LadoArtifactVersionPinned(ctx context.Context, sessionID domain.SessionID, path string, version int, sha256 string) (bool, error)
+	PinLadoPlanRevision(ctx context.Context, rev domain.LadoPlanRevision) (domain.LadoPlanRevision, bool, error)
+	LadoPlanRevision(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevision, bool, error)
+	ListLadoPlanRevisions(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanRevision, error)
+	ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanApproval, error)
+	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
 }
 
 // Projects reads AO's project registry.
@@ -78,6 +92,22 @@ type Deps struct {
 	// RefreshInterval is how often the issue of every task is read again;
 	// zero uses five minutes.
 	RefreshInterval time.Duration
+
+	// Blobs pins plans and issue snapshots.
+	Blobs Blobs
+	// Orchestrators finds a project's orchestrator and delivers plan
+	// requests to it.
+	Orchestrators Orchestrators
+	// Artifacts reads the versions AO records of the plan files.
+	Artifacts Artifacts
+	// Git resolves a plan's base ref; nil uses the system git.
+	Git Git
+	// PlanInterval is how often new plan versions are pinned and waiting
+	// requests delivered; zero uses ten seconds.
+	PlanInterval time.Duration
+	// DeliveryTimeout is how long a request is retried; zero uses ten
+	// minutes.
+	DeliveryTimeout time.Duration
 }
 
 // Service creates, imports and tracks tasks.
@@ -98,6 +128,15 @@ func New(deps Deps) *Service {
 	}
 	if deps.RefreshInterval <= 0 {
 		deps.RefreshInterval = defaultRefreshInterval
+	}
+	if deps.Git == nil {
+		deps.Git = execGit{}
+	}
+	if deps.PlanInterval <= 0 {
+		deps.PlanInterval = defaultPlanInterval
+	}
+	if deps.DeliveryTimeout <= 0 {
+		deps.DeliveryTimeout = defaultDeliveryTimeout
 	}
 	return &Service{deps: deps}
 }

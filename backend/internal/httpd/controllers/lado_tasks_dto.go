@@ -32,10 +32,11 @@ type LadoTaskResponse struct {
 	ProjectID string `json:"projectId"`
 	// Repository is the canonical id of the repository that holds the issue.
 	Repository  string                `json:"repository" description:"Canonical id of the repository that holds the issue, such as github:owner/repo."`
-	State       string                `json:"state" enum:"draft,cancelled,closed_unmerged" description:"Derived task state."`
+	State       string                `json:"state" enum:"draft,planned,approved,cancelled,closed_unmerged" description:"Derived task state."`
 	Issue       LadoTaskIssueResponse `json:"issue"`
 	Agent       string                `json:"agent,omitempty" description:"Agent chosen for the task's execution."`
 	Model       string                `json:"model,omitempty" description:"Model chosen for the task's execution."`
+	Plan        LadoTaskPlanResponse  `json:"plan"`
 	CreatedAt   time.Time             `json:"createdAt"`
 	CancelledAt *time.Time            `json:"cancelledAt,omitempty"`
 }

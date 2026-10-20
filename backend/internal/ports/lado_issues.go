@@ -24,6 +24,12 @@ type LadoRepoClient interface {
 	// CheckAccess reports whose token this is and what it can do on repo. An
 	// error wrapping ErrLadoTokenRejected means the host refused the token.
 	CheckAccess(ctx context.Context, repo domain.TrackerRepo) (LadoRepoAccess, error)
+	// IssueComments lists the people's comments on an issue, oldest first,
+	// with whether each author can work on the repository. GitLab's system
+	// notes are not comments and are left out. A plan request pins the
+	// trusted ones, since an issue may hold its plan in a comment
+	// (docs/LJY-PRD/TDD.md §5.1).
+	IssueComments(ctx context.Context, id domain.TrackerID) ([]domain.LadoIssueComment, error)
 }
 
 // LadoRepoClients hands out repository clients by host.

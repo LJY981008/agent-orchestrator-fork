@@ -37,6 +37,10 @@ func (c *fakeRepoClient) CheckAccess(context.Context, domain.TrackerRepo) (ports
 	return c.access, c.accessErr
 }
 
+func (c *fakeRepoClient) IssueComments(context.Context, domain.TrackerID) ([]domain.LadoIssueComment, error) {
+	return nil, nil
+}
+
 // fakeClients records which token each client was built with.
 type fakeClients struct {
 	client *fakeRepoClient

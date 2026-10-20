@@ -16,6 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -29,14 +31,23 @@ type ladoGateTarget interface {
 	SetWorkGate(ports.WorkGate)
 }
 
+// ladoSessionTarget is the session manager: it also builds orchestrators'
+// standing instructions.
+type ladoSessionTarget interface {
+	ladoGateTarget
+	SetLadoPrompt(sessionmanager.LadoPromptSection)
+}
+
 // wireLado installs one worker gate on the session manager and the chat
-// service, and returns LADO's project settings service for the API. The daemon
-// calls it right after the session manager is built, before automations,
-// tracker intake or the API can spawn or send.
-func wireLado(store *sqlite.Store, sessions, chat ladoGateTarget, log *slog.Logger) *ladoproject.Service {
+// service, and LADO's section of an orchestrator's standing instructions, and
+// returns LADO's project settings service for the API. The daemon calls it
+// right after the session manager is built, before automations, tracker
+// intake or the API can spawn or send, and before sessions restore.
+func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget, log *slog.Logger) *ladoproject.Service {
 	gate := ladogate.New(store, store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store}.OrchestratorSection)
 	devMode := ladoDevMode(os.Getenv(ladoDevEnv))
 	if devMode {
 		log.Warn("LADO dev mode: project LADO mode can be changed", "env", ladoDevEnv)
@@ -44,10 +55,10 @@ func wireLado(store *sqlite.Store, sessions, chat ladoGateTarget, log *slog.Logg
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store, ModeSwitch: devMode})
 }
 
-// wireLadoWork builds LADO's repository connections and issue-backed tasks.
-// The daemon calls it once AO's project service exists, after
-// installLadoCredentials opened the token store.
-func wireLadoWork(cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service) {
+// wireLadoWork builds LADO's repository connections and issue-backed tasks
+// with their plans. The daemon calls it once AO's project service exists,
+// after installLadoCredentials opened the token store.
+func wireLadoWork(cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service) {
 	if ladoStoredTokens == nil {
 		installLadoCredentials(cfg, log)
 	}
@@ -59,7 +70,14 @@ func wireLadoWork(cfg config.Config, store *sqlite.Store, projects ladoProjectCl
 		Cloner:      ladoCloner{projects: projects},
 		Log:         log,
 	})
-	tasks := ladotask.New(ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log})
+	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: ladoblob.New(cfg.StateDir)}
+	if work.orchestrators != nil && work.sender != nil {
+		deps.Orchestrators = ladoOrchestrators{spawner: work.orchestrators, sender: work.sender, store: store, dataDir: cfg.DataDir}
+	}
+	if work.artifacts != nil {
+		deps.Artifacts = ladoArtifacts{capturer: work.artifacts, store: store}
+	}
+	tasks := ladotask.New(deps)
 	return connections, tasks
 }
 

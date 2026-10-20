@@ -4,16 +4,20 @@ package ladoproject
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
 )
 
 // Store reads and writes LADO's project settings.
 type Store interface {
 	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 	SetLadoMode(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time) (domain.LadoProjectSettings, error)
+	SetLadoModeWithProof(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoProjectSettings, error)
 }
 
 // Projects reads AO's project registry.
@@ -49,6 +53,11 @@ func New(deps Deps) *Service {
 // UpdateInput is a settings change. LadoMode is required.
 type UpdateInput struct {
 	LadoMode *bool
+	// Presence checks the request's human-presence proof for an action. The
+	// service calls it only when the change turns LADO mode off, the one
+	// settings change that needs presence from step 4b
+	// (docs/LJY-PRD/TDD.md §13).
+	Presence func(action, subject string) (domain.LadoPresenceProof, error)
 }
 
 // Settings returns the project's LADO settings.
@@ -84,7 +93,44 @@ func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID
 		return domain.LadoProjectSettings{}, apierr.Conflict("LADO_TRACKER_INTAKE_ENABLED",
 			"Turn off tracker intake for this project first: LADO projects take issues by import.", nil)
 	}
-	updated, err := s.deps.Store.SetLadoMode(ctx, projectID, *in.LadoMode, s.deps.Clock())
+	if !*in.LadoMode {
+		return s.turnOff(ctx, projectID, in)
+	}
+	updated, err := s.deps.Store.SetLadoMode(ctx, projectID, true, s.deps.Clock())
+	if err != nil {
+		return domain.LadoProjectSettings{}, apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
+	}
+	return updated, nil
+}
+
+// turnOff turns LADO mode off with a human-presence proof, recorded with its
+// audit event. Turning it off would let workers start without approved
+// plans, so an agent must not be able to do it.
+func (s *Service) turnOff(ctx context.Context, projectID domain.ProjectID, in UpdateInput) (domain.LadoProjectSettings, error) {
+	if in.Presence == nil {
+		return domain.LadoProjectSettings{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED", "Turn LADO mode off in the AO desktop app. It asks you to confirm.")
+	}
+	proof, err := in.Presence(domain.LadoPresenceModeOff, string(projectID))
+	if err != nil {
+		return domain.LadoProjectSettings{}, err
+	}
+	now := s.deps.Clock().UTC()
+	actor := "human"
+	if proof.Dev {
+		actor = "human:dev-presence"
+	}
+	payload, _ := json.Marshal(map[string]any{"proof": proof.Nonce, "dev": proof.Dev})
+	updated, err := s.deps.Store.SetLadoModeWithProof(ctx, projectID, false, now, proof, domain.LadoAuditEvent{
+		At:          now,
+		Actor:       actor,
+		Action:      "project.lado_mode_off",
+		SubjectKind: "project",
+		SubjectID:   string(projectID),
+		Payload:     payload,
+	})
+	if errors.Is(err, domain.ErrLadoPresenceReplayed) {
+		return domain.LadoProjectSettings{}, ladopresence.Replayed()
+	}
 	if err != nil {
 		return domain.LadoProjectSettings{}, apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
 	}

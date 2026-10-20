@@ -427,6 +427,56 @@ type LadoAuditEvent struct {
 	PrevSha256  string
 }
 
+type LadoPlanApproval struct {
+	ID         string
+	RevisionID string
+	TaskID     string
+	Sha256     string
+	ProofNonce string
+	ApprovedAt time.Time
+}
+
+type LadoPlanRequest struct {
+	ID                  string
+	TaskID              string
+	SessionID           string
+	IssueSnapshotSha256 string
+	SourceCommentID     string
+	Note                string
+	BasedOnRevisionID   string
+	RequestedAt         time.Time
+	DeliveredAt         sql.NullTime
+	DeliveryAttempts    int64
+	DeliveryError       string
+	FailedAt            sql.NullTime
+}
+
+type LadoPlanRevision struct {
+	ID                  string
+	TaskID              string
+	RequestID           string
+	Number              int64
+	SessionID           string
+	Path                string
+	ArtifactVersion     int64
+	Source              string
+	Sha256              string
+	BaseRef             string
+	BaseSha             string
+	IssueSnapshotSha256 string
+	ProblemsJson        string
+	CreatedAt           time.Time
+}
+
+type LadoPresenceProof struct {
+	Nonce     string
+	Action    string
+	SubjectID string
+	Dev       int64
+	ExpiresAt time.Time
+	UsedAt    time.Time
+}
+
 type LadoProjectSetting struct {
 	ProjectID string
 	LadoMode  int64

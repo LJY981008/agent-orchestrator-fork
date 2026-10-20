@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,17 +12,23 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
+	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 type ladoGateSink struct {
-	gate ports.WorkGate
+	gate   ports.WorkGate
+	prompt sessionmanager.LadoPromptSection
 }
 
 func (s *ladoGateSink) SetWorkGate(gate ports.WorkGate) { s.gate = gate }
 
-// SetWorkGate keeps wiring_test.go's fake a sessionLifecycle.
+func (s *ladoGateSink) SetLadoPrompt(section sessionmanager.LadoPromptSection) { s.prompt = section }
+
+// SetWorkGate and SetLadoPrompt keep wiring_test.go's fake a sessionLifecycle.
 func (f *fakeSessionLifecycle) SetWorkGate(ports.WorkGate) {}
+
+func (f *fakeSessionLifecycle) SetLadoPrompt(sessionmanager.LadoPromptSection) {}
 
 func TestLadoDevModeReadsAOToggleValues(t *testing.T) {
 	cases := map[string]bool{
@@ -57,6 +64,12 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	var apiErr *apierr.Error
 	if !errors.As(err, &apiErr) || apiErr.Code != "LADO_TASK_REQUIRED" {
 		t.Fatalf("worker spawn after LADO mode on = %v, want LADO_TASK_REQUIRED", err)
+	}
+	if sessions.prompt == nil {
+		t.Fatal("wireLado installed no LADO prompt section")
+	}
+	if section, err := sessions.prompt(ctx, "mer"); err != nil || !strings.Contains(section, "## LADO project") {
+		t.Fatalf("LADO prompt section for a LADO project = %q, %v", section, err)
 	}
 }
 

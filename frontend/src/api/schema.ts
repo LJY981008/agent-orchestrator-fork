@@ -1289,6 +1289,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/plans/{revisionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a plan revision with its pinned content */
+        get: operations["getLadoPlan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/plans/{revisionId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve one exact plan revision; needs a human-presence proof from the AO desktop app */
+        post: operations["approveLadoPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/projects/{projectId}/issues": {
         parameters: {
             query?: never;
@@ -1332,7 +1366,7 @@ export interface paths {
         };
         /** Get a project's LADO settings */
         get: operations["getLadoProjectSettings"];
-        /** Change a project's LADO settings */
+        /** Change a project's LADO settings; turning LADO mode off needs a human-presence proof */
         put: operations["updateLadoProjectSettings"];
         post?: never;
         delete?: never;
@@ -1366,7 +1400,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Get a task after reading its issue again */
+        /** Get the task view: the task, its issue and comments read again, and its plan history */
         get: operations["getLadoTask"];
         put?: never;
         post?: never;
@@ -1388,6 +1422,40 @@ export interface paths {
         put?: never;
         /** Cancel a task; the issue is never closed or edited */
         post: operations["cancelLadoTask"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/tasks/{taskId}/plan-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pin the issue with its trusted comments and ask the project's orchestrator for a plan or a changed plan */
+        post: operations["requestLadoPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/tasks/{taskId}/plans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a task's plan requests, revisions and approvals */
+        get: operations["listLadoPlans"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -4599,6 +4667,10 @@ export interface components {
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
         };
+        ApproveLadoPlanRequest: {
+            /** @description The revision's sha256 the developer reviewed. */
+            sha256: string;
+        };
         ArtifactFileResponse: {
             /** @description Hex SHA-256 of the file's content. */
             fileFingerprint: string;
@@ -5572,6 +5644,12 @@ export interface components {
             /** @description Folder and project name of a new workspace. */
             workspaceName?: string;
         };
+        CreateLadoPlanRequestRequest: {
+            /** @description What to change in the latest revision; makes this a change request. */
+            note?: string;
+            /** @description An issue comment that holds the plan; the orchestrator converts it faithfully. */
+            sourceCommentId?: string;
+        };
         CreateLadoTaskRequest: {
             agent?: string;
             model?: string;
@@ -5960,11 +6038,32 @@ export interface components {
             /** @enum {string} */
             provider: "github" | "gitlab";
         };
+        LadoIssueCommentResponse: {
+            author: string;
+            /** @description The author can work on the repository. */
+            authorTrusted: boolean;
+            body: string;
+            /** @description LADO wrote this comment; it is never read back into a plan. */
+            byLado: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            /** @description A plan request pins this comment for the orchestrator. */
+            included: boolean;
+            url?: string;
+        };
         LadoIssueResponse: {
             labels: string[];
             number: number;
             ref: string;
             repository: components["schemas"]["LadoRepositoryResponse"];
+            title: string;
+            url: string;
+        };
+        LadoIssueTextResponse: {
+            body: string;
+            /** @enum {string} */
+            state: "open" | "in_progress" | "review" | "done" | "cancelled";
             title: string;
             url: string;
         };
@@ -5985,6 +6084,113 @@ export interface components {
              * @enum {string}
              */
             status: "ok" | "missing" | "unverified";
+        };
+        LadoPlanApprovalResponse: {
+            /** Format: date-time */
+            approvedAt: string;
+            id: string;
+            revisionId: string;
+            sha256: string;
+            taskId: string;
+        };
+        LadoPlanContentResponse: {
+            acceptanceCriteria: string[];
+            affectedPaths: string[];
+            baseRef?: string;
+            /** @description The Markdown after the front matter. */
+            body: string;
+            permissionCeiling?: string;
+            /** @description issue, or comment:<id> for a plan converted from an issue comment. */
+            planSource?: string;
+            reviewRequired: boolean;
+            reviewer?: string;
+            risk?: string;
+            steps: string[];
+            testCommands: string[];
+        };
+        LadoPlanHistoryResponse: {
+            approvals: components["schemas"]["LadoPlanApprovalResponse"][];
+            requests: components["schemas"]["LadoPlanRequestResponse"][];
+            revisions: components["schemas"]["LadoPlanRevisionResponse"][];
+        };
+        LadoPlanProblemResponse: {
+            /**
+             * @description Stable problem code the app translates.
+             * @enum {string}
+             */
+            code: "too_large" | "not_text" | "missing_front_matter" | "invalid_front_matter" | "missing_field" | "invalid_field" | "wrong_task" | "wrong_issue" | "unknown_source_comment" | "wrong_source" | "unknown_base_ref";
+            /** @description The offending value, or the parser's message. */
+            detail?: string;
+            /** @description The front matter key the problem is about. */
+            field?: string;
+        };
+        LadoPlanRequestResponse: {
+            /** @description The revision a change request starts from. */
+            basedOn?: string;
+            /** Format: date-time */
+            deliveredAt?: null | string;
+            deliveryAttempts: number;
+            deliveryError?: string;
+            /**
+             * Format: date-time
+             * @description When LADO stopped trying to deliver the request.
+             */
+            failedAt?: null | string;
+            id: string;
+            /** @description What the developer asked to change. */
+            note?: string;
+            /** Format: date-time */
+            requestedAt: string;
+            /** @description The orchestrator session asked for the plan. */
+            sessionId: string;
+            /** @description The issue comment the developer named as the plan. */
+            sourceCommentId?: string;
+            taskId: string;
+        };
+        LadoPlanResponse: {
+            /** @description A valid approval covers this revision. */
+            approved: boolean;
+            /** @description The pinned plan file; empty when the pin is missing. */
+            content: string;
+            /** @description This is the task's newest revision. */
+            latest: boolean;
+            plan: components["schemas"]["LadoPlanContentResponse"];
+            revision: components["schemas"]["LadoPlanRevisionResponse"];
+            task: components["schemas"]["LadoTaskResponse"];
+        };
+        LadoPlanRevisionResponse: {
+            baseRef?: string;
+            /** @description The commit base_ref named when LADO pinned the revision. */
+            baseSha?: string;
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            /** @description The pinned issue snapshot the plan was made from. */
+            issueSnapshotSha256: string;
+            number: number;
+            problems: components["schemas"]["LadoPlanProblemResponse"][];
+            requestId: string;
+            sha256: string;
+            /** @enum {string} */
+            source: "agent" | "user";
+            taskId: string;
+            valid: boolean;
+        };
+        LadoPlanRevisionSummaryResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            /** @description The task's revisions count from 1. */
+            number: number;
+            /** @description Hash of the pinned plan file. An approval binds to it. */
+            sha256: string;
+            /**
+             * @description Who wrote the version: the orchestrator, or a person editing it in the artifact viewer.
+             * @enum {string}
+             */
+            source: "agent" | "user";
+            /** @description False when the plan has problems; such a plan cannot be approved. */
+            valid: boolean;
         };
         LadoProjectIssuesResponse: {
             failures: components["schemas"]["LadoRepositoryFailureResponse"][];
@@ -6042,6 +6248,20 @@ export interface components {
         LadoTaskListResponse: {
             tasks: components["schemas"]["LadoTaskResponse"][];
         };
+        LadoTaskPlanResponse: {
+            /** @description The latest revision's id while a valid approval covers it. */
+            approvedRevisionId?: string;
+            latest?: components["schemas"]["LadoPlanRevisionSummaryResponse"];
+            /** @description Why LADO stopped delivering the newest request, when it did. */
+            requestError?: string;
+            /** @description A plan request waits for the orchestrator's plan. */
+            requestPending: boolean;
+            /**
+             * Format: date-time
+             * @description When the newest plan request was made.
+             */
+            requestedAt?: null | string;
+        };
         LadoTaskResponse: {
             /** @description Agent chosen for the task's execution. */
             agent?: string;
@@ -6053,6 +6273,7 @@ export interface components {
             issue: components["schemas"]["LadoTaskIssueResponse"];
             /** @description Model chosen for the task's execution. */
             model?: string;
+            plan: components["schemas"]["LadoTaskPlanResponse"];
             projectId: string;
             /** @description Canonical id of the repository that holds the issue, such as github:owner/repo. */
             repository: string;
@@ -6060,7 +6281,17 @@ export interface components {
              * @description Derived task state.
              * @enum {string}
              */
-            state: "draft" | "cancelled" | "closed_unmerged";
+            state: "draft" | "planned" | "approved" | "cancelled" | "closed_unmerged";
+        };
+        LadoTaskViewResponse: {
+            comments: components["schemas"]["LadoIssueCommentResponse"][];
+            history: components["schemas"]["LadoPlanHistoryResponse"];
+            /** @description Missing when the tracker could not be read. */
+            issue?: components["schemas"]["LadoIssueTextResponse"];
+            /** @description The issue or a comment a plan may use changed since the latest revision was planned. */
+            issueChangedSincePlan: boolean;
+            issueReadError?: string;
+            task: components["schemas"]["LadoTaskResponse"];
         };
         LadoTokenCheckResponse: {
             /** @description Whether the check used a newly entered token. */
@@ -12030,6 +12261,140 @@ export interface operations {
             };
         };
     };
+    getLadoPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO plan revision id. */
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoPlanResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    approveLadoPlan: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description LADO plan revision id. */
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveLadoPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoPlanApprovalResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listLadoProjectIssues: {
         parameters: {
             query?: never;
@@ -12210,7 +12575,10 @@ export interface operations {
     updateLadoProjectSettings: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
             path: {
                 /** @description Project whose LADO settings are read or changed. */
                 projectId: string;
@@ -12234,6 +12602,15 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12436,7 +12813,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["LadoTaskResponse"];
+                    "application/json": components["schemas"]["LadoTaskViewResponse"];
                 };
             };
             /** @description Not Found */
@@ -12550,6 +12927,137 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LadoTaskResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    requestLadoPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLadoPlanRequestRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoPlanRequestResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoPlans: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoPlanHistoryResponse"];
                 };
             };
             /** @description Not Found */

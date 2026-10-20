@@ -6,6 +6,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -25,6 +26,11 @@ type LadoTaskService interface {
 	Import(ctx context.Context, in ladotask.ImportInput) (ladotask.ImportResult, error)
 	ImportableIssues(ctx context.Context, projectID domain.ProjectID) ([]ladotask.ImportableIssue, []ladotask.RepoFailure, error)
 	Repositories(ctx context.Context, projectID domain.ProjectID) ([]ladotask.ProjectRepo, error)
+	View(ctx context.Context, id domain.LadoTaskID) (ladotask.TaskView, error)
+	RequestPlan(ctx context.Context, in ladotask.PlanRequestInput) (domain.LadoPlanRequest, error)
+	Plans(ctx context.Context, id domain.LadoTaskID) (ladotask.PlanHistory, error)
+	Plan(ctx context.Context, revisionID domain.LadoPlanRevisionID) (ladotask.PlanView, error)
+	ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRevisionID, sha256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error)
 }
 
 const (
@@ -120,12 +126,12 @@ func (c *LadoController) getTask(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "GET", ladoTaskPath)
 		return
 	}
-	task, err := c.Tasks.Get(r.Context(), ladoTaskID(r))
+	view, err := c.getTaskView(r.Context(), ladoTaskID(r))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ladoTaskResponse(task))
+	envelope.WriteJSON(w, http.StatusOK, view)
 }
 
 func (c *LadoController) updateTask(w http.ResponseWriter, r *http.Request) {
@@ -253,14 +259,19 @@ func ladoTaskResponse(task domain.LadoTask) LadoTaskResponse {
 		},
 		Agent:     task.Agent,
 		Model:     task.Model,
+		Plan:      ladoTaskPlanResponse(task.Plan),
 		CreatedAt: task.CreatedAt,
 	}
 	if id, err := domain.ParseLadoIssueRef(task.IssueRef); err == nil {
 		resp.Issue.Number = domain.LadoIssueNumber(id)
 	}
-	if !task.CancelledAt.IsZero() {
-		cancelledAt := task.CancelledAt
-		resp.CancelledAt = &cancelledAt
-	}
+	resp.CancelledAt = ladoOptionalTime(task.CancelledAt)
 	return resp
+}
+
+func ladoOptionalTime(at time.Time) *time.Time {
+	if at.IsZero() {
+		return nil
+	}
+	return &at
 }
