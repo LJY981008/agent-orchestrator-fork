@@ -1,3 +1,5 @@
+> **This is LADO**, a fork of Orchestrator.inc's Agent Orchestrator that adds issue-backed tasks, plan approval and agent rules for one developer on their own machine. See [LADO.md](LADO.md) ([한국어](LADO.ko.md)). The rest of this README is upstream's.
+
 <div align="center">
   <img src="assets/ao-logo.svg" alt="Orchestrator.inc logo" width="144" height="144" />
 
