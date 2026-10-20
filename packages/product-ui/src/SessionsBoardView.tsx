@@ -128,8 +128,10 @@ export type SessionsBoardGridViewProps<
 > = {
 	columns: KanbanColumnView[];
 	labels: BoardColumnLabels;
-	/** LADO fork: a lane rendered before the session columns (the Plan lane). */
+	/** LADO fork: lanes rendered before the session columns (Plan, Queued). */
 	leadingColumn?: ReactNode;
+	/** LADO fork: how many lanes leadingColumn renders; 1 when omitted. */
+	leadingColumnCount?: 1 | 2;
 	renderSessionCard: (session: TSession) => ReactNode;
 	sessions: TSession[];
 };
@@ -138,6 +140,7 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 	columns,
 	labels,
 	leadingColumn,
+	leadingColumnCount = 1,
 	renderSessionCard,
 	sessions,
 }: SessionsBoardGridViewProps<TSession>) {
@@ -157,7 +160,11 @@ export function SessionsBoardGridView<TSession extends BoardSessionPresentation>
 			<div
 				className={cn(
 					"relative grid h-full divide-x divide-border-strong",
-					leadingColumn ? "min-w-[80rem] grid-cols-5 2xl:min-w-0" : "min-w-[64rem] grid-cols-4 xl:min-w-0",
+					!leadingColumn
+						? "min-w-[64rem] grid-cols-4 xl:min-w-0"
+						: leadingColumnCount === 2
+							? "min-w-[96rem] grid-cols-6 2xl:min-w-0"
+							: "min-w-[80rem] grid-cols-5 2xl:min-w-0",
 				)}
 			>
 				<div

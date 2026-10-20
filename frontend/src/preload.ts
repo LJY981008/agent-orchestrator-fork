@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { LADO_DESKTOP_GET_CHANNEL, LADO_DESKTOP_SET_CHANNEL, type LadoDesktopSettings, type LadoDesktopSettingsPatch } from "./shared/lado-desktop";
+import { LADO_PRESENCE_APPROVE_PLAN_CHANNEL, type LadoPresenceApproveRequest, type LadoPresenceApproveResult } from "./shared/lado-presence";
 import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
 import {
 	SET_CHAT_DRAFT_RISK_CHANNEL,
@@ -805,6 +806,14 @@ const api = {
 			get: () => ipcRenderer.invoke(LADO_DESKTOP_GET_CHANNEL) as Promise<LadoDesktopSettings | null>,
 			set: (patch: LadoDesktopSettingsPatch) =>
 				ipcRenderer.invoke(LADO_DESKTOP_SET_CHANNEL, patch) as Promise<LadoDesktopSettings | null>,
+		},
+		// LADO fork: main confirms natively and signs the approval; only the
+		// revision id crosses (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
+		presence: {
+			approvePlan: (revisionId: string) =>
+				ipcRenderer.invoke(LADO_PRESENCE_APPROVE_PLAN_CHANNEL, {
+					revisionId,
+				} satisfies LadoPresenceApproveRequest) as Promise<LadoPresenceApproveResult | null>,
 		},
 	},
 };

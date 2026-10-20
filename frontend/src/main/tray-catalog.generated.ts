@@ -10,7 +10,11 @@ export const TRAY_MESSAGE_KEYS = [
 	"tray.show",
 	"tray.quit",
 	"zone.merge",
-	"zone.action"
+	"zone.action",
+	"lado.presence.approveTitle",
+	"lado.presence.approveDetail",
+	"lado.presence.approve",
+	"lado.presence.cancel"
 ] as const;
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
@@ -25,7 +29,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Show Agent Orchestrator",
 		"tray.quit": "Quit AO Completely",
 		"zone.merge": "Ready to merge",
-		"zone.action": "Needs you"
+		"zone.action": "Needs you",
+		"lado.presence.approveTitle": "Approve this plan?",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}, revision {{revision}}\nsha256 {{sha}}\n\nLADO starts work only from the plan you approve.",
+		"lado.presence.approve": "Approve",
+		"lado.presence.cancel": "Cancel"
 	},
 	"zh-CN": {
 		"tray.untitledSession": "未命名会话",
@@ -36,7 +44,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "显示 Agent Orchestrator",
 		"tray.quit": "完全退出 AO",
 		"zone.merge": "可合并",
-		"zone.action": "需要你处理"
+		"zone.action": "需要你处理",
+		"lado.presence.approveTitle": "批准此计划？",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}，修订 {{revision}}\nsha256 {{sha}}\n\nLADO 只会按你批准的计划开始工作。",
+		"lado.presence.approve": "批准",
+		"lado.presence.cancel": "取消"
 	},
 	"ja": {
 		"tray.untitledSession": "無題のセッション",
@@ -47,7 +59,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator を表示",
 		"tray.quit": "AO を完全に終了",
 		"zone.merge": "マージ準備完了",
-		"zone.action": "対応が必要"
+		"zone.action": "対応が必要",
+		"lado.presence.approveTitle": "この計画を承認しますか？",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}、リビジョン {{revision}}\nsha256 {{sha}}\n\nLADO は承認した計画からのみ作業を始めます。",
+		"lado.presence.approve": "承認",
+		"lado.presence.cancel": "キャンセル"
 	},
 	"ko": {
 		"tray.untitledSession": "제목 없는 세션",
@@ -58,7 +74,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator 표시",
 		"tray.quit": "AO 완전히 종료",
 		"zone.merge": "병합 준비 완료",
-		"zone.action": "확인 필요"
+		"zone.action": "확인 필요",
+		"lado.presence.approveTitle": "이 계획을 승인할까요?",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}, 리비전 {{revision}}\nsha256 {{sha}}\n\nLADO는 승인한 계획으로만 작업을 시작합니다.",
+		"lado.presence.approve": "승인",
+		"lado.presence.cancel": "취소"
 	},
 	"es": {
 		"tray.untitledSession": "Sesión sin título",
@@ -69,7 +89,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Mostrar Agent Orchestrator",
 		"tray.quit": "Salir completamente de AO",
 		"zone.merge": "Listo para fusionar",
-		"zone.action": "Te necesita"
+		"zone.action": "Te necesita",
+		"lado.presence.approveTitle": "¿Aprobar este plan?",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}, revisión {{revision}}\nsha256 {{sha}}\n\nLADO solo inicia trabajo a partir del plan que apruebes.",
+		"lado.presence.approve": "Aprobar",
+		"lado.presence.cancel": "Cancelar"
 	},
 	"fr": {
 		"tray.untitledSession": "Session sans titre",
@@ -80,7 +104,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Afficher Agent Orchestrator",
 		"tray.quit": "Quitter complètement AO",
 		"zone.merge": "Prêt à fusionner",
-		"zone.action": "Action requise"
+		"zone.action": "Action requise",
+		"lado.presence.approveTitle": "Approuver ce plan ?",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}, révision {{revision}}\nsha256 {{sha}}\n\nLADO ne lance le travail qu'à partir du plan que vous approuvez.",
+		"lado.presence.approve": "Approuver",
+		"lado.presence.cancel": "Annuler"
 	},
 	"de": {
 		"tray.untitledSession": "Unbenannte Sitzung",
@@ -91,7 +119,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Agent Orchestrator anzeigen",
 		"tray.quit": "AO vollständig beenden",
 		"zone.merge": "Bereit zum Mergen",
-		"zone.action": "Ihre Aktion nötig"
+		"zone.action": "Ihre Aktion nötig",
+		"lado.presence.approveTitle": "Diesen Plan freigeben?",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}, Revision {{revision}}\nsha256 {{sha}}\n\nLADO startet Arbeit nur nach dem freigegebenen Plan.",
+		"lado.presence.approve": "Freigeben",
+		"lado.presence.cancel": "Abbrechen"
 	},
 	"pt-BR": {
 		"tray.untitledSession": "Sessão sem título",
@@ -102,6 +134,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"tray.show": "Mostrar Agent Orchestrator",
 		"tray.quit": "Sair completamente do AO",
 		"zone.merge": "Pronto para merge",
-		"zone.action": "Precisa de você"
+		"zone.action": "Precisa de você",
+		"lado.presence.approveTitle": "Aprovar este plano?",
+		"lado.presence.approveDetail": "{{task}}\n{{issue}}, revisão {{revision}}\nsha256 {{sha}}\n\nO LADO só inicia trabalho a partir do plano que você aprovar.",
+		"lado.presence.approve": "Aprovar",
+		"lado.presence.cancel": "Cancelar"
 	}
 };

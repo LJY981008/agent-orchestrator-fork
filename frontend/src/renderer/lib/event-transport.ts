@@ -19,7 +19,7 @@ import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
-import { ladoProjectIssuesQueryKey, ladoQueryRoot, ladoTasksQueryKey } from "./lado";
+import { ladoPlanQueryRoot, ladoProjectIssuesQueryKey, ladoQueryRoot, ladoTasksQueryKey, ladoTaskViewQueryKey } from "./lado";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -68,8 +68,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
-			// LADO fork: projects whose issue-backed tasks changed.
+			// LADO fork: projects whose issue-backed tasks changed, and the tasks.
 			const pendingLadoTaskProjects = new Set<string>();
+			const pendingLadoTasks = new Set<string>();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -286,6 +287,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					invalidate(ladoProjectIssuesQueryKey(projectId));
 				}
 				pendingLadoTaskProjects.clear();
+				// An open task view follows its task's plans and approvals.
+				for (const taskId of pendingLadoTasks) {
+					invalidate(ladoTaskViewQueryKey(taskId));
+				}
+				if (pendingLadoTasks.size > 0) invalidate(ladoPlanQueryRoot);
+				pendingLadoTasks.clear();
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
@@ -324,6 +331,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 										kind?: unknown;
 										agentId?: unknown;
 										projectId?: unknown;
+										taskId?: unknown;
 								  })
 								: undefined;
 						// A review run can start or finish without this window asking for
@@ -348,6 +356,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// Plan lane and importable issues only.
 						if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
 							pendingLadoTaskProjects.add(payload.projectId);
+							if (typeof payload.taskId === "string" && payload.taskId) pendingLadoTasks.add(payload.taskId);
 							ladoTaskOnly = true;
 						}
 						if (

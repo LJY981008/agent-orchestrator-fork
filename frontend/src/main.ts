@@ -181,6 +181,8 @@ import {
 import { checkRender, measureRender } from "./main/render-check";
 import { keepDaemonAlive, shouldLinkOnAttach } from "./main/daemon-owner";
 import { createLadoDesktop, registerLadoDesktopIpc } from "./main/lado-desktop";
+// LADO fork: plan approvals confirmed and signed here (ADR 0002).
+import { registerLadoPresenceIpc } from "./main/lado-presence";
 import { readMigrationState, updateMigration, writeAppStateMarker, type MigrationState } from "./main/app-state";
 import { isAllowedAppExternalURL, openAllowedAppExternalURL } from "./main/external-open";
 import {
@@ -2842,6 +2844,24 @@ ipcMain.handle("appState:setMigration", async (_event, migration: MigrationState
 });
 
 registerLadoDesktopIpc(ipcMain, ladoDesktop);
+// LADO fork: the renderer names a plan revision; main shows a native
+// confirmation, then signs and sends the approval with a key derived from
+// the desktop token (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
+registerLadoPresenceIpc({
+	ipcMain,
+	dialog,
+	fetch: (url, init) => net.fetch(url, init),
+	token: () => browserRuntimeToken,
+	daemonBaseUrl: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
+	parentWindow: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null),
+	// The tray holds a locale only on macOS. The renderer saves a language
+	// change before showing it, so the saved setting is the current language.
+	locale: async () => {
+		const runFile = runFilePath();
+		return runFile ? (await readUiSettings(path.dirname(runFile))).locale : LADO_DESKTOP_UI_SETTINGS.locale;
+	},
+	isTrustedSender: (sender) => sender === getShellWebContents(),
+});
 ipcMain.handle("updateSettings:get", async (): Promise<UpdateSettings> => {
 	const runFile = runFilePath();
 	if (!runFile) return { enabled: false, channel: "latest", nightlyAck: false, feature: null, macDifferentialUpdates: false };

@@ -1,8 +1,9 @@
-// LADO fork: daemon calls for repository connections and issue-backed tasks
-// (docs/LJY-PRD/TDD.md §5.1 and §13). LADO routes live on this computer's
-// daemon only; remote hosts never serve them.
+// LADO fork: daemon calls for repository connections, issue-backed tasks, plans
+// and approvals (docs/LJY-PRD/TDD.md §5.1, §5.2 and §13). LADO routes live on
+// this computer's daemon only; remote hosts never serve them.
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage } from "./api-client";
+import { aoBridge } from "./bridge";
 
 export type LadoProjectSettings = components["schemas"]["LadoProjectSettingsResponse"];
 export type LadoTask = components["schemas"]["LadoTaskResponse"];
@@ -14,6 +15,13 @@ export type LadoConnectionRequest = components["schemas"]["CreateLadoConnectionR
 export type LadoClonePlacement = NonNullable<LadoConnectionRequest["placement"]>;
 export type LadoConnection = components["schemas"]["LadoConnectionResponse"];
 export type LadoImportResult = components["schemas"]["ImportLadoTasksResponse"];
+export type LadoTaskView = components["schemas"]["LadoTaskViewResponse"];
+export type LadoIssueComment = components["schemas"]["LadoIssueCommentResponse"];
+export type LadoPlan = components["schemas"]["LadoPlanResponse"];
+export type LadoPlanRevision = components["schemas"]["LadoPlanRevisionResponse"];
+export type LadoPlanProblem = components["schemas"]["LadoPlanProblemResponse"];
+export type LadoPlanRequest = components["schemas"]["LadoPlanRequestResponse"];
+export type LadoPlanApproval = components["schemas"]["LadoPlanApprovalResponse"];
 
 /**
  * A failed LADO call. It keeps the daemon's error code and details, so the
@@ -40,6 +48,10 @@ export const ladoProjectSettingsQueryKey = (projectId: string) => ["lado", "sett
 export const ladoTasksQueryKey = (projectId: string) => ["lado", "tasks", projectId] as const;
 export const ladoProjectIssuesQueryKey = (projectId: string) => ["lado", "issues", projectId] as const;
 export const ladoProjectRepositoriesQueryKey = (projectId: string) => ["lado", "repositories", projectId] as const;
+export const ladoTaskViewQueryKey = (taskId: string) => ["lado", "task", taskId] as const;
+/** Plan revisions are pinned, but whether one is the latest or approved changes. */
+export const ladoPlanQueryRoot = ["lado", "plan"] as const;
+export const ladoPlanQueryKey = (revisionId: string) => ["lado", "plan", revisionId] as const;
 
 export async function fetchLadoProjectSettings(projectId: string): Promise<LadoProjectSettings> {
 	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/settings", {
@@ -133,5 +145,64 @@ export async function checkLadoConnection(input: LadoConnectionRequest): Promise
 export async function createLadoConnection(input: LadoConnectionRequest): Promise<LadoConnection> {
 	const { data, error } = await apiClient.POST("/api/v1/lado/connections", { body: input });
 	if (error) throw ladoError(error, "Could not connect the repository");
+	return data;
+}
+
+/** The task view: the task, its issue and comments read again, and its plan history. */
+export async function fetchLadoTaskView(taskId: string): Promise<LadoTaskView> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/tasks/{taskId}", {
+		params: { path: { taskId } },
+	});
+	if (error) throw ladoError(error, "Could not load the task");
+	return data;
+}
+
+/**
+ * Asks the project's orchestrator for a plan. With a comment it converts that
+ * comment; with a note it changes the latest revision.
+ */
+export async function requestLadoPlan(
+	taskId: string,
+	input: { sourceCommentId?: string; note?: string } = {},
+): Promise<LadoPlanRequest> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/tasks/{taskId}/plan-requests", {
+		params: { path: { taskId } },
+		body: {
+			...(input.sourceCommentId ? { sourceCommentId: input.sourceCommentId } : {}),
+			...(input.note ? { note: input.note } : {}),
+		},
+	});
+	if (error) throw ladoError(error, "Could not request a plan");
+	return data;
+}
+
+export async function fetchLadoPlan(revisionId: string): Promise<LadoPlan> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/plans/{revisionId}", {
+		params: { path: { revisionId } },
+	});
+	if (error) throw ladoError(error, "Could not load the plan");
+	return data;
+}
+
+/**
+ * Approves one plan revision. In the desktop app the main process asks the
+ * developer to confirm, then signs and sends the approval itself
+ * (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md); null means the
+ * developer cancelled. In a browser there is no main process, and the daemon
+ * accepts the call only in development (AO_LADO_DEV_PRESENCE=1).
+ */
+export async function approveLadoPlan(revisionId: string, sha256: string): Promise<LadoPlanApproval | null> {
+	// The bridge answers null when there is no desktop main process to ask.
+	const result = (await aoBridge.lado?.presence?.approvePlan(revisionId)) ?? null;
+	if (result) {
+		if (result.status === "cancelled") return null;
+		if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
+		return result.approval;
+	}
+	const { data, error } = await apiClient.POST("/api/v1/lado/plans/{revisionId}/approve", {
+		params: { path: { revisionId } },
+		body: { sha256 },
+	});
+	if (error) throw ladoError(error, "Could not approve the plan");
 	return data;
 }
