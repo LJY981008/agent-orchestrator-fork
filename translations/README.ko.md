@@ -1,3 +1,5 @@
+> **이 저장소는 LADO입니다.** Orchestrator.inc의 Agent Orchestrator에 이슈 기반 작업, 계획 승인, 에이전트 규칙을 더한 포크입니다. 자세한 내용은 [LADO.ko.md](../LADO.ko.md)를 보세요. 아래는 upstream README의 한국어 번역입니다.
+
 <div align="center">
 
 ### Orchestrator.inc
