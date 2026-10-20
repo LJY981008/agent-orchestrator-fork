@@ -18,6 +18,9 @@ type fakeStore struct {
 	readErr  error
 	writeErr error
 	writes   int
+	// proofs and events are what SetLadoModeWithProof recorded.
+	proofs map[string]bool
+	events []domain.LadoAuditEvent
 }
 
 func (f *fakeStore) LadoProjectSettings(_ context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {
@@ -41,6 +44,29 @@ func (f *fakeStore) SetLadoMode(_ context.Context, projectID domain.ProjectID, o
 	settings := domain.LadoProjectSettings{ProjectID: projectID, LadoMode: on, UpdatedAt: at}
 	f.settings[projectID] = settings
 	return settings, nil
+}
+
+func (f *fakeStore) SetLadoModeWithProof(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoProjectSettings, error) {
+	if f.proofs[proof.Nonce] {
+		return domain.LadoProjectSettings{}, domain.ErrLadoPresenceReplayed
+	}
+	settings, err := f.SetLadoMode(ctx, projectID, on, at)
+	if err != nil {
+		return settings, err
+	}
+	if f.proofs == nil {
+		f.proofs = map[string]bool{}
+	}
+	f.proofs[proof.Nonce] = true
+	f.events = append(f.events, event)
+	return settings, nil
+}
+
+// presence answers as a verified proof for the action it is asked about.
+func presence(nonce string) func(action, subject string) (domain.LadoPresenceProof, error) {
+	return func(action, subject string) (domain.LadoPresenceProof, error) {
+		return domain.LadoPresenceProof{Nonce: nonce, Action: action, SubjectID: subject, ExpiresAt: now.Add(time.Minute), UsedAt: now}, nil
+	}
 }
 
 type fakeProjects struct {
@@ -156,13 +182,50 @@ func TestUpdateSettingsTurnsLadoModeOffWhateverTheIntake(t *testing.T) {
 	store := &fakeStore{settings: map[domain.ProjectID]domain.LadoProjectSettings{
 		"intake": {ProjectID: "intake", LadoMode: true},
 	}}
-	got, err := newService(store, true).UpdateSettings(context.Background(), "intake", ladoproject.UpdateInput{LadoMode: boolPtr(false)})
+	got, err := newService(store, true).UpdateSettings(context.Background(), "intake", ladoproject.UpdateInput{LadoMode: boolPtr(false), Presence: presence("nonce-1")})
 	if err != nil {
 		t.Fatalf("UpdateSettings: %v", err)
 	}
 	if got.LadoMode || store.writes != 1 {
 		t.Fatalf("settings = %+v after %d writes, want mode off in one write", got, store.writes)
 	}
+	if !store.proofs["nonce-1"] || len(store.events) != 1 || store.events[0].Action != "project.lado_mode_off" || store.events[0].SubjectID != "intake" {
+		t.Fatalf("proofs %v, events %+v; want the proof and its audit event", store.proofs, store.events)
+	}
+}
+
+func TestTurningLadoModeOffNeedsPresence(t *testing.T) {
+	on := func() *fakeStore {
+		return &fakeStore{settings: map[domain.ProjectID]domain.LadoProjectSettings{"mer": {ProjectID: "mer", LadoMode: true}}}
+	}
+	store := on()
+	_, err := newService(store, true).UpdateSettings(context.Background(), "mer", ladoproject.UpdateInput{LadoMode: boolPtr(false)})
+	requireAPIError(t, err, apierr.KindForbidden, "LADO_PRESENCE_REQUIRED")
+	if store.writes != 0 {
+		t.Fatalf("writes = %d, want none", store.writes)
+	}
+	refused := func(string, string) (domain.LadoPresenceProof, error) {
+		return domain.LadoPresenceProof{}, apierr.Forbidden("LADO_PRESENCE_INVALID", "bad proof")
+	}
+	_, err = newService(store, true).UpdateSettings(context.Background(), "mer", ladoproject.UpdateInput{LadoMode: boolPtr(false), Presence: refused})
+	requireAPIError(t, err, apierr.KindForbidden, "LADO_PRESENCE_INVALID")
+	if store.writes != 0 {
+		t.Fatalf("writes = %d after a refused proof, want none", store.writes)
+	}
+
+	store = on()
+	svc := newService(store, true)
+	if _, err := svc.UpdateSettings(context.Background(), "mer", ladoproject.UpdateInput{LadoMode: boolPtr(false), Presence: presence("nonce-1")}); err != nil {
+		t.Fatalf("turn off: %v", err)
+	}
+	if _, err := svc.UpdateSettings(context.Background(), "mer", ladoproject.UpdateInput{LadoMode: boolPtr(true), Presence: func(string, string) (domain.LadoPresenceProof, error) {
+		t.Fatal("turning LADO mode on asked for presence")
+		return domain.LadoPresenceProof{}, nil
+	}}); err != nil {
+		t.Fatalf("turn on: %v", err)
+	}
+	_, err = svc.UpdateSettings(context.Background(), "mer", ladoproject.UpdateInput{LadoMode: boolPtr(false), Presence: presence("nonce-1")})
+	requireAPIError(t, err, apierr.KindForbidden, "LADO_PRESENCE_REPLAYED")
 }
 
 func TestSettingsReportStorageFailures(t *testing.T) {

@@ -575,7 +575,8 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	// LADO fork: a task change refreshes that project's Plan lane, not the sidebar.
+	// LADO fork: a task change refreshes that project's LADO lanes and the open
+	// task view, not the sidebar.
 	it("invalidates only the changed project's LADO tasks for task CDC", () => {
 		vi.useFakeTimers();
 		try {
@@ -591,6 +592,8 @@ describe("createEventTransport", () => {
 			vi.advanceTimersByTime(200);
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "tasks", "proj-1"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "issues", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "task", "lado-task-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "plan"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
 		} finally {
 			vi.useRealTimers();

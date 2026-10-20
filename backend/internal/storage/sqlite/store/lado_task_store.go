@@ -55,7 +55,11 @@ func (s *Store) LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.Lado
 	if err != nil {
 		return domain.LadoTask{}, false, fmt.Errorf("read LADO task: %w", err)
 	}
-	return ladoTaskFromGen(row), true, nil
+	task := ladoTaskFromGen(row)
+	if task.Plan, err = s.ladoTaskPlan(ctx, task.ID); err != nil {
+		return domain.LadoTask{}, false, err
+	}
+	return task, true, nil
 }
 
 // ListLadoTasks returns a project's tasks that have an issue, oldest first.
@@ -64,12 +68,17 @@ func (s *Store) ListLadoTasks(ctx context.Context, projectID domain.ProjectID, i
 	if err != nil {
 		return nil, fmt.Errorf("list LADO tasks: %w", err)
 	}
+	plans, err := s.ladoProjectPlans(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
 	tasks := make([]domain.LadoTask, 0, len(rows))
 	for _, row := range rows {
 		task := ladoTaskFromGen(row)
 		if !includeCancelled && !task.CancelledAt.IsZero() {
 			continue
 		}
+		task.Plan = plans[task.ID]
 		tasks = append(tasks, task)
 	}
 	return tasks, nil
@@ -178,7 +187,11 @@ func (s *Store) SetLadoTaskPreferences(ctx context.Context, id domain.LadoTaskID
 	if err != nil {
 		return domain.LadoTask{}, false, fmt.Errorf("set LADO task preferences: %w", err)
 	}
-	return ladoTaskFromGen(row), true, nil
+	task := ladoTaskFromGen(row)
+	if task.Plan, err = s.ladoTaskPlan(ctx, task.ID); err != nil {
+		return domain.LadoTask{}, false, err
+	}
+	return task, true, nil
 }
 
 // CancelLadoTask cancels a task. Cancelling a cancelled task keeps the first

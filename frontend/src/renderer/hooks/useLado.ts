@@ -1,17 +1,25 @@
-// LADO fork: query hooks for LADO's project settings and issue-backed tasks.
+// LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans
+// and approvals.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	approveLadoPlan,
 	cancelLadoTask,
 	createLadoTask,
+	fetchLadoPlan,
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
 	fetchLadoProjectSettings,
 	fetchLadoTasks,
+	fetchLadoTaskView,
 	importLadoTasks,
+	ladoPlanQueryKey,
+	ladoPlanQueryRoot,
 	ladoProjectIssuesQueryKey,
 	ladoProjectRepositoriesQueryKey,
 	ladoProjectSettingsQueryKey,
 	ladoTasksQueryKey,
+	ladoTaskViewQueryKey,
+	requestLadoPlan,
 } from "../lib/lado";
 
 /**
@@ -97,6 +105,57 @@ export function useImportLadoTasks(projectId: string) {
 	return useMutation({
 		mutationFn: (issueRefs: string[]) => importLadoTasks(projectId, issueRefs),
 		onSuccess: invalidate,
+		retry: false,
+	});
+}
+
+/** The task view. It reads the issue again, so it refetches when it opens. */
+export function useLadoTaskView(taskId: string | null) {
+	return useQuery({
+		queryKey: ladoTaskViewQueryKey(taskId ?? ""),
+		queryFn: () => fetchLadoTaskView(taskId ?? ""),
+		enabled: Boolean(taskId),
+		refetchOnMount: "always",
+		retry: false,
+	});
+}
+
+/** One pinned plan revision with its content. */
+export function useLadoPlan(revisionId: string | null) {
+	return useQuery({
+		queryKey: ladoPlanQueryKey(revisionId ?? ""),
+		queryFn: () => fetchLadoPlan(revisionId ?? ""),
+		enabled: Boolean(revisionId),
+		retry: false,
+	});
+}
+
+function useInvalidateLadoTask(projectId: string, taskId: string) {
+	const queryClient = useQueryClient();
+	return () => {
+		void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
+		void queryClient.invalidateQueries({ queryKey: ladoTaskViewQueryKey(taskId) });
+		void queryClient.invalidateQueries({ queryKey: ladoPlanQueryRoot });
+	};
+}
+
+export function useRequestLadoPlan(projectId: string, taskId: string) {
+	const invalidate = useInvalidateLadoTask(projectId, taskId);
+	return useMutation({
+		mutationFn: (input: { sourceCommentId?: string; note?: string }) => requestLadoPlan(taskId, input),
+		onSuccess: invalidate,
+		retry: false,
+	});
+}
+
+/** Resolves to null when the developer cancelled the desktop confirmation. */
+export function useApproveLadoPlan(projectId: string, taskId: string) {
+	const invalidate = useInvalidateLadoTask(projectId, taskId);
+	return useMutation({
+		mutationFn: (input: { revisionId: string; sha256: string }) => approveLadoPlan(input.revisionId, input.sha256),
+		onSuccess: (approval) => {
+			if (approval) invalidate();
+		},
 		retry: false,
 	});
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -153,5 +154,37 @@ func TestSendTellsTheWorkGateWhoSent(t *testing.T) {
 	}
 	if len(msg.msgs) != 2 {
 		t.Fatalf("delivered %d messages, want 2", len(msg.msgs))
+	}
+}
+
+func TestLadoPromptSectionReachesOnlyOrchestrators(t *testing.T) {
+	st := newFakeStore()
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
+	var asked []domain.ProjectID
+	m.SetLadoPrompt(func(_ context.Context, projectID domain.ProjectID) (string, error) {
+		asked = append(asked, projectID)
+		return "## LADO project\n\nPlan, do not spawn.", nil
+	})
+	orchestrator, err := m.buildSystemPrompt(context.Background(), domain.KindOrchestrator, "mer", "mer-1", "", false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if !strings.Contains(orchestrator, "## LADO project") {
+		t.Fatalf("orchestrator prompt lacks the LADO section:\n%s", orchestrator)
+	}
+	worker, err := m.buildSystemPrompt(context.Background(), domain.KindWorker, "mer", "mer-2", "", false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt: %v", err)
+	}
+	if strings.Contains(worker, "## LADO project") {
+		t.Fatal("a worker got the orchestrator's LADO section")
+	}
+	if !reflect.DeepEqual(asked, []domain.ProjectID{"mer"}) {
+		t.Fatalf("asked for %v, want only the orchestrator's project", asked)
+	}
+	m.SetLadoPrompt(func(context.Context, domain.ProjectID) (string, error) { return "", errors.New("settings unreadable") })
+	if _, err := m.buildSystemPrompt(context.Background(), domain.KindOrchestrator, "mer", "mer-1", "", false); err == nil {
+		t.Fatal("an unreadable LADO setting must not silently drop the section")
 	}
 }

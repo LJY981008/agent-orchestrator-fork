@@ -21,6 +21,11 @@ const KEYS = [
 	"tray.quit",
 	"zone.merge",
 	"zone.action",
+	// LADO fork: the plan approval confirmation (src/main/lado-presence.ts).
+	"lado.presence.approveTitle",
+	"lado.presence.approveDetail",
+	"lado.presence.approve",
+	"lado.presence.cancel",
 ];
 
 const catalogs = {};

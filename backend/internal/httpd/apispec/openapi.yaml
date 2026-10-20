@@ -3214,6 +3214,117 @@ paths:
       summary: Check a host token with the host, then store it
       tags:
       - lado
+  /api/v1/lado/plans/{revisionId}:
+    get:
+      operationId: getLadoPlan
+      parameters:
+      - description: LADO plan revision id.
+        in: path
+        name: revisionId
+        required: true
+        schema:
+          description: LADO plan revision id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoPlanResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a plan revision with its pinned content
+      tags:
+      - lado
+  /api/v1/lado/plans/{revisionId}/approve:
+    post:
+      operationId: approveLadoPlan
+      parameters:
+      - description: LADO plan revision id.
+        in: path
+        name: revisionId
+        required: true
+        schema:
+          description: LADO plan revision id.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveLadoPlanRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoPlanApprovalResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Approve one exact plan revision; needs a human-presence proof from
+        the AO desktop app
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/issues:
     get:
       operationId: listLadoProjectIssues
@@ -3359,6 +3470,14 @@ paths:
         schema:
           description: Project whose LADO settings are read or changed.
           type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
       requestBody:
         content:
           application/json:
@@ -3378,6 +3497,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
         "404":
           content:
             application/json:
@@ -3402,7 +3527,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Change a project's LADO settings
+      summary: Change a project's LADO settings; turning LADO mode off needs a human-presence
+        proof
       tags:
       - lado
   /api/v1/lado/tasks:
@@ -3526,7 +3652,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LadoTaskResponse'
+                $ref: '#/components/schemas/LadoTaskViewResponse'
           description: OK
         "404":
           content:
@@ -3546,7 +3672,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Get a task after reading its issue again
+      summary: 'Get the task view: the task, its issue and comments read again, and
+        its plan history'
       tags:
       - lado
     patch:
@@ -3636,6 +3763,109 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Cancel a task; the issue is never closed or edited
+      tags:
+      - lado
+  /api/v1/lado/tasks/{taskId}/plan-requests:
+    post:
+      operationId: requestLadoPlan
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLadoPlanRequestRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoPlanRequestResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Pin the issue with its trusted comments and ask the project's orchestrator
+        for a plan or a changed plan
+      tags:
+      - lado
+  /api/v1/lado/tasks/{taskId}/plans:
+    get:
+      operationId: listLadoPlans
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoPlanHistoryResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List a task's plan requests, revisions and approvals
       tags:
       - lado
   /api/v1/lado/tasks/imports:
@@ -13534,6 +13764,14 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ApproveLadoPlanRequest:
+      properties:
+        sha256:
+          description: The revision's sha256 the developer reviewed.
+          type: string
+      required:
+      - sha256
+      type: object
     ArtifactFileResponse:
       properties:
         fileFingerprint:
@@ -16130,6 +16368,17 @@ components:
       required:
       - url
       type: object
+    CreateLadoPlanRequestRequest:
+      properties:
+        note:
+          description: What to change in the latest revision; makes this a change
+            request.
+          type: string
+        sourceCommentId:
+          description: An issue comment that holds the plan; the orchestrator converts
+            it faithfully.
+          type: string
+      type: object
     CreateLadoTaskRequest:
       properties:
         agent:
@@ -17179,6 +17428,37 @@ components:
       - host
       - provider
       type: object
+    LadoIssueCommentResponse:
+      properties:
+        author:
+          type: string
+        authorTrusted:
+          description: The author can work on the repository.
+          type: boolean
+        body:
+          type: string
+        byLado:
+          description: LADO wrote this comment; it is never read back into a plan.
+          type: boolean
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        included:
+          description: A plan request pins this comment for the orchestrator.
+          type: boolean
+        url:
+          type: string
+      required:
+      - id
+      - author
+      - authorTrusted
+      - byLado
+      - included
+      - createdAt
+      - body
+      type: object
     LadoIssueResponse:
       properties:
         labels:
@@ -17202,6 +17482,28 @@ components:
       - title
       - url
       - labels
+      type: object
+    LadoIssueTextResponse:
+      properties:
+        body:
+          type: string
+        state:
+          enum:
+          - open
+          - in_progress
+          - review
+          - done
+          - cancelled
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+      required:
+      - title
+      - body
+      - state
+      - url
       type: object
     LadoLinkedProjectResponse:
       properties:
@@ -17243,6 +17545,258 @@ components:
       required:
       - name
       - status
+      type: object
+    LadoPlanApprovalResponse:
+      properties:
+        approvedAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        revisionId:
+          type: string
+        sha256:
+          type: string
+        taskId:
+          type: string
+      required:
+      - id
+      - revisionId
+      - taskId
+      - sha256
+      - approvedAt
+      type: object
+    LadoPlanContentResponse:
+      properties:
+        acceptanceCriteria:
+          items:
+            type: string
+          type: array
+        affectedPaths:
+          items:
+            type: string
+          type: array
+        baseRef:
+          type: string
+        body:
+          description: The Markdown after the front matter.
+          type: string
+        permissionCeiling:
+          type: string
+        planSource:
+          description: issue, or comment:<id> for a plan converted from an issue comment.
+          type: string
+        reviewRequired:
+          type: boolean
+        reviewer:
+          type: string
+        risk:
+          type: string
+        steps:
+          items:
+            type: string
+          type: array
+        testCommands:
+          items:
+            type: string
+          type: array
+      required:
+      - steps
+      - acceptanceCriteria
+      - affectedPaths
+      - testCommands
+      - reviewRequired
+      - body
+      type: object
+    LadoPlanHistoryResponse:
+      properties:
+        approvals:
+          items:
+            $ref: '#/components/schemas/LadoPlanApprovalResponse'
+          type: array
+        requests:
+          items:
+            $ref: '#/components/schemas/LadoPlanRequestResponse'
+          type: array
+        revisions:
+          items:
+            $ref: '#/components/schemas/LadoPlanRevisionResponse'
+          type: array
+      required:
+      - requests
+      - revisions
+      - approvals
+      type: object
+    LadoPlanProblemResponse:
+      properties:
+        code:
+          description: Stable problem code the app translates.
+          enum:
+          - too_large
+          - not_text
+          - missing_front_matter
+          - invalid_front_matter
+          - missing_field
+          - invalid_field
+          - wrong_task
+          - wrong_issue
+          - unknown_source_comment
+          - wrong_source
+          - unknown_base_ref
+          type: string
+        detail:
+          description: The offending value, or the parser's message.
+          type: string
+        field:
+          description: The front matter key the problem is about.
+          type: string
+      required:
+      - code
+      type: object
+    LadoPlanRequestResponse:
+      properties:
+        basedOn:
+          description: The revision a change request starts from.
+          type: string
+        deliveredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        deliveryAttempts:
+          type: integer
+        deliveryError:
+          type: string
+        failedAt:
+          description: When LADO stopped trying to deliver the request.
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        note:
+          description: What the developer asked to change.
+          type: string
+        requestedAt:
+          format: date-time
+          type: string
+        sessionId:
+          description: The orchestrator session asked for the plan.
+          type: string
+        sourceCommentId:
+          description: The issue comment the developer named as the plan.
+          type: string
+        taskId:
+          type: string
+      required:
+      - id
+      - taskId
+      - sessionId
+      - requestedAt
+      - deliveryAttempts
+      type: object
+    LadoPlanResponse:
+      properties:
+        approved:
+          description: A valid approval covers this revision.
+          type: boolean
+        content:
+          description: The pinned plan file; empty when the pin is missing.
+          type: string
+        latest:
+          description: This is the task's newest revision.
+          type: boolean
+        plan:
+          $ref: '#/components/schemas/LadoPlanContentResponse'
+        revision:
+          $ref: '#/components/schemas/LadoPlanRevisionResponse'
+        task:
+          $ref: '#/components/schemas/LadoTaskResponse'
+      required:
+      - task
+      - revision
+      - content
+      - plan
+      - latest
+      - approved
+      type: object
+    LadoPlanRevisionResponse:
+      properties:
+        baseRef:
+          type: string
+        baseSha:
+          description: The commit base_ref named when LADO pinned the revision.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        issueSnapshotSha256:
+          description: The pinned issue snapshot the plan was made from.
+          type: string
+        number:
+          type: integer
+        problems:
+          items:
+            $ref: '#/components/schemas/LadoPlanProblemResponse'
+          type: array
+        requestId:
+          type: string
+        sha256:
+          type: string
+        source:
+          enum:
+          - agent
+          - user
+          type: string
+        taskId:
+          type: string
+        valid:
+          type: boolean
+      required:
+      - id
+      - taskId
+      - requestId
+      - number
+      - source
+      - sha256
+      - issueSnapshotSha256
+      - valid
+      - problems
+      - createdAt
+      type: object
+    LadoPlanRevisionSummaryResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          type: string
+        number:
+          description: The task's revisions count from 1.
+          type: integer
+        sha256:
+          description: Hash of the pinned plan file. An approval binds to it.
+          type: string
+        source:
+          description: 'Who wrote the version: the orchestrator, or a person editing
+            it in the artifact viewer.'
+          enum:
+          - agent
+          - user
+          type: string
+        valid:
+          description: False when the plan has problems; such a plan cannot be approved.
+          type: boolean
+      required:
+      - id
+      - number
+      - sha256
+      - source
+      - valid
+      - createdAt
       type: object
     LadoProjectIssuesResponse:
       properties:
@@ -17378,6 +17932,28 @@ components:
       required:
       - tasks
       type: object
+    LadoTaskPlanResponse:
+      properties:
+        approvedRevisionId:
+          description: The latest revision's id while a valid approval covers it.
+          type: string
+        latest:
+          $ref: '#/components/schemas/LadoPlanRevisionSummaryResponse'
+        requestError:
+          description: Why LADO stopped delivering the newest request, when it did.
+          type: string
+        requestPending:
+          description: A plan request waits for the orchestrator's plan.
+          type: boolean
+        requestedAt:
+          description: When the newest plan request was made.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - requestPending
+      type: object
     LadoTaskResponse:
       properties:
         agent:
@@ -17398,6 +17974,8 @@ components:
         model:
           description: Model chosen for the task's execution.
           type: string
+        plan:
+          $ref: '#/components/schemas/LadoTaskPlanResponse'
         projectId:
           type: string
         repository:
@@ -17408,6 +17986,8 @@ components:
           description: Derived task state.
           enum:
           - draft
+          - planned
+          - approved
           - cancelled
           - closed_unmerged
           type: string
@@ -17417,7 +17997,33 @@ components:
       - repository
       - state
       - issue
+      - plan
       - createdAt
+      type: object
+    LadoTaskViewResponse:
+      properties:
+        comments:
+          items:
+            $ref: '#/components/schemas/LadoIssueCommentResponse'
+          type: array
+        history:
+          $ref: '#/components/schemas/LadoPlanHistoryResponse'
+        issue:
+          $ref: '#/components/schemas/LadoIssueTextResponse'
+          description: Missing when the tracker could not be read.
+        issueChangedSincePlan:
+          description: The issue or a comment a plan may use changed since the latest
+            revision was planned.
+          type: boolean
+        issueReadError:
+          type: string
+        task:
+          $ref: '#/components/schemas/LadoTaskResponse'
+      required:
+      - task
+      - comments
+      - issueChangedSincePlan
+      - history
       type: object
     LadoTokenCheckResponse:
       properties:

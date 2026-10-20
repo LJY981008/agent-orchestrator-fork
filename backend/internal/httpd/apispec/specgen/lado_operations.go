@@ -47,11 +47,28 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoRepositoryResponse":           "LadoRepositoryResponse",
 	"ControllersLadoRepositoryFailureResponse":    "LadoRepositoryFailureResponse",
 	"ControllersLadoProjectRepositoriesResponse":  "LadoProjectRepositoriesResponse",
+	"ControllersLadoPlanIDParam":                  "LadoPlanIDParam",
+	"ControllersLadoPresenceHeaderParam":          "LadoPresenceHeaderParam",
+	"ControllersLadoPlanRevisionSummaryResponse":  "LadoPlanRevisionSummaryResponse",
+	"ControllersLadoTaskPlanResponse":             "LadoTaskPlanResponse",
+	"ControllersLadoPlanProblemResponse":          "LadoPlanProblemResponse",
+	"ControllersLadoPlanRevisionResponse":         "LadoPlanRevisionResponse",
+	"ControllersLadoPlanRequestResponse":          "LadoPlanRequestResponse",
+	"ControllersLadoPlanApprovalResponse":         "LadoPlanApprovalResponse",
+	"ControllersLadoPlanHistoryResponse":          "LadoPlanHistoryResponse",
+	"ControllersLadoPlanContentResponse":          "LadoPlanContentResponse",
+	"ControllersLadoPlanResponse":                 "LadoPlanResponse",
+	"ControllersCreateLadoPlanRequestRequest":     "CreateLadoPlanRequestRequest",
+	"ControllersApproveLadoPlanRequest":           "ApproveLadoPlanRequest",
+	"ControllersLadoIssueTextResponse":            "LadoIssueTextResponse",
+	"ControllersLadoIssueCommentResponse":         "LadoIssueCommentResponse",
+	"ControllersLadoTaskViewResponse":             "LadoTaskViewResponse",
 }
 
 func ladoOperations() []operation {
 	projectID := []any{controllers.LadoProjectIDParam{}}
 	taskID := []any{controllers.LadoTaskIDParam{}}
+	revisionID := []any{controllers.LadoPlanIDParam{}}
 	credentialHost := []any{controllers.LadoCredentialHostParam{}}
 	return []operation{
 		{
@@ -67,12 +84,13 @@ func ladoOperations() []operation {
 		},
 		{
 			method: http.MethodPut, path: "/api/v1/lado/projects/{projectId}/settings", id: "updateLadoProjectSettings", tag: "lado",
-			summary:    "Change a project's LADO settings",
-			pathParams: projectID,
+			summary:    "Change a project's LADO settings; turning LADO mode off needs a human-presence proof",
+			pathParams: []any{controllers.LadoProjectIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			reqBody:    controllers.UpdateLadoProjectSettingsRequest{},
 			resps: []respUnit{
 				{http.StatusOK, controllers.LadoProjectSettingsResponse{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusForbidden, envelope.APIError{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -141,9 +159,9 @@ func ladoOperations() []operation {
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/lado/tasks/{taskId}", id: "getLadoTask", tag: "lado",
-			summary:    "Get a task after reading its issue again",
+			summary:    "Get the task view: the task, its issue and comments read again, and its plan history",
 			pathParams: taskID,
-			resps:      ladoResps(http.StatusOK, controllers.LadoTaskResponse{}, http.StatusNotFound),
+			resps:      ladoResps(http.StatusOK, controllers.LadoTaskViewResponse{}, http.StatusNotFound),
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/lado/tasks/{taskId}", id: "updateLadoTask", tag: "lado",
@@ -157,6 +175,32 @@ func ladoOperations() []operation {
 			summary:    "Cancel a task; the issue is never closed or edited",
 			pathParams: taskID,
 			resps:      ladoResps(http.StatusOK, controllers.LadoTaskResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/tasks/{taskId}/plan-requests", id: "requestLadoPlan", tag: "lado",
+			summary:    "Pin the issue with its trusted comments and ask the project's orchestrator for a plan or a changed plan",
+			pathParams: taskID,
+			reqBody:    controllers.CreateLadoPlanRequestRequest{},
+			resps:      ladoResps(http.StatusCreated, controllers.LadoPlanRequestResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/tasks/{taskId}/plans", id: "listLadoPlans", tag: "lado",
+			summary:    "List a task's plan requests, revisions and approvals",
+			pathParams: taskID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoPlanHistoryResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/plans/{revisionId}", id: "getLadoPlan", tag: "lado",
+			summary:    "Get a plan revision with its pinned content",
+			pathParams: revisionID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoPlanResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/plans/{revisionId}/approve", id: "approveLadoPlan", tag: "lado",
+			summary:    "Approve one exact plan revision; needs a human-presence proof from the AO desktop app",
+			pathParams: []any{controllers.LadoPlanIDParam{}, controllers.LadoPresenceHeaderParam{}},
+			reqBody:    controllers.ApproveLadoPlanRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoPlanApprovalResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
 		},
 	}
 }

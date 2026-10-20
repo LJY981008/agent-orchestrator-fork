@@ -470,7 +470,8 @@ type Manager struct {
 	openTranscriptFile func(string) (*os.File, error)
 	harnessUseGate     HarnessUseGate
 	// LADO fork: see lado_gate.go.
-	workGate ports.WorkGate
+	workGate   ports.WorkGate
+	ladoPrompt LadoPromptSection
 	// lookPath is exec.LookPath in production; tests substitute a stub so
 	// they don't need real binaries on PATH. Returns ports.ErrAgentBinaryNotFound
 	// when the binary is missing so the sentinel propagates through toAPIError.
@@ -5745,6 +5746,15 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		if workspacePrompt != "" {
 			cfg.AdditionalSections = append(cfg.AdditionalSections, workspacePrompt)
 		}
+	}
+	// LADO fork: an orchestrator in a LADO project plans instead of spawning
+	// workers (lado_gate.go).
+	ladoSection, err := m.ladoPromptSection(ctx, kind, projectID)
+	if err != nil {
+		return "", err
+	}
+	if ladoSection != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, ladoSection)
 	}
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)

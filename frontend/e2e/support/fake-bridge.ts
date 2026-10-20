@@ -380,8 +380,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					onStreamEvent: unsubscribe,
 					agentBrowserUrl: async () => "",
 				},
-				// LADO fork: the renderer hides Background settings without a desktop API.
-				lado: { desktop: { get: async () => null, set: async () => null } },
+				// LADO fork: the renderer hides Background settings without a desktop API,
+				// and there is no presence confirmation outside Electron.
+				lado: {
+					desktop: { get: async () => null, set: async () => null },
+					presence: { approvePlan: async () => null },
+				},
 			} satisfies AoBridge;
 			(window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
 				setStatus: emitUpdateStatus,
@@ -1247,8 +1251,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					onStreamEvent: unsubscribe,
 					agentBrowserUrl: async () => "",
 				},
-				// LADO fork: the renderer hides Background settings without a desktop API.
-				lado: { desktop: { get: async () => null, set: async () => null } },
+				// LADO fork: the renderer hides Background settings without a desktop API,
+				// and there is no presence confirmation outside Electron.
+				lado: {
+					desktop: { get: async () => null, set: async () => null },
+					presence: { approvePlan: async () => null },
+				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;
 		},

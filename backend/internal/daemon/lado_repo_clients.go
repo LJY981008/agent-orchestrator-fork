@@ -26,6 +26,7 @@ type ladoIssueOps interface {
 	CreateIssue(ctx context.Context, repo domain.TrackerRepo, title, body string) (domain.Issue, error)
 	Login(ctx context.Context) (string, error)
 	CheckAccess(ctx context.Context, repo domain.TrackerRepo) (ports.LadoRepoAccess, error)
+	IssueComments(ctx context.Context, id domain.TrackerID) ([]domain.LadoIssueComment, error)
 }
 
 // ladoRepoClient joins an adapter's tracker reads and LADO operations.
@@ -44,6 +45,10 @@ func (c ladoRepoClient) Login(ctx context.Context) (string, error) {
 
 func (c ladoRepoClient) CheckAccess(ctx context.Context, repo domain.TrackerRepo) (ports.LadoRepoAccess, error) {
 	return c.issues.CheckAccess(ctx, repo)
+}
+
+func (c ladoRepoClient) IssueComments(ctx context.Context, id domain.TrackerID) ([]domain.LadoIssueComment, error) {
+	return c.issues.IssueComments(ctx, id)
 }
 
 // ladoRepoClients builds repository clients. A client on a host's token

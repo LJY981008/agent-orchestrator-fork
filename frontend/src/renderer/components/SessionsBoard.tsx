@@ -43,7 +43,7 @@ import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
 import { useBoardPresentation } from "../hooks/useBoardPresentation";
 import { useLadoMode } from "../hooks/useLado";
-import { LadoPlanLane } from "./lado/LadoPlanLane";
+import { LadoLanes } from "./lado/LadoLanes";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
 import { labelForHost } from "../lib/host-clients";
@@ -320,7 +320,8 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						columns={columns}
 						key={scopeKey}
 						labels={boardLabels}
-						leadingColumn={ladoMode && projectId ? <LadoPlanLane projectId={projectId} /> : undefined}
+						leadingColumn={ladoMode && projectId ? <LadoLanes projectId={projectId} /> : undefined}
+						leadingColumnCount={2}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
 								memory={memoryBySession?.get(session.id)}

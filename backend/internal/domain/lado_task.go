@@ -41,6 +41,36 @@ type LadoTask struct {
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
 	CancelledAt time.Time
+	// Plan holds the facts about the task's plans that its state derives
+	// from. Store reads that list or get tasks fill it.
+	Plan LadoTaskPlan
+}
+
+// LadoTaskPlan is what a task's state needs to know about its plans: the
+// newest plan request, the newest revision and the revision the newest
+// approval covers.
+type LadoTaskPlan struct {
+	Request LadoPlanRequest
+	Latest  LadoPlanRevision
+	// Approval is the newest approval of any of the task's revisions. It is
+	// valid only while it covers the latest revision with that revision's
+	// sha256 (docs/LJY-PRD/TDD.md §3.2).
+	Approval LadoPlanApproval
+}
+
+// ApprovalValid reports whether the newest approval covers the latest
+// revision, byte for byte.
+func (p LadoTaskPlan) ApprovalValid() bool {
+	return p.Latest.ID != "" && p.Approval.RevisionID == p.Latest.ID && p.Approval.SHA256 == p.Latest.SHA256
+}
+
+// RequestPending reports whether the newest plan request still waits for a
+// revision: no revision came after it and LADO has not given up delivering it.
+func (p LadoTaskPlan) RequestPending() bool {
+	if p.Request.ID == "" || !p.Request.FailedAt.IsZero() {
+		return false
+	}
+	return p.Latest.ID == "" || p.Latest.RequestID != p.Request.ID
 }
 
 // LadoObservedIssue is what LADO last read from a task's issue.
@@ -57,22 +87,28 @@ type LadoObservedIssue struct {
 // computed at read time and never stored.
 type LadoTaskState string
 
-// Task states that exist before plans do. Later build steps add the plan,
-// queue and execution states.
+// Task states up to approval. Later build steps add the queue and execution
+// states.
 const (
 	LadoTaskDraft          LadoTaskState = "draft"
+	LadoTaskPlanned        LadoTaskState = "planned"
+	LadoTaskApproved       LadoTaskState = "approved"
 	LadoTaskCancelled      LadoTaskState = "cancelled"
 	LadoTaskClosedUnmerged LadoTaskState = "closed_unmerged"
 )
 
-// State derives the task's state. A task that is neither cancelled nor tied to
-// a closed issue is a Draft until plans exist.
+// State derives the task's state. A task without a plan revision is a Draft;
+// with one it is Planned until a valid approval covers its latest revision.
 func (t LadoTask) State() LadoTaskState {
 	switch {
 	case !t.CancelledAt.IsZero():
 		return LadoTaskCancelled
 	case t.Issue.State == IssueDone || t.Issue.State == IssueCancelled:
 		return LadoTaskClosedUnmerged
+	case t.Plan.ApprovalValid():
+		return LadoTaskApproved
+	case t.Plan.Latest.ID != "":
+		return LadoTaskPlanned
 	default:
 		return LadoTaskDraft
 	}
@@ -98,11 +134,18 @@ func SplitLadoTaskText(text string) (title, body string) {
 }
 
 // LadoIssueSnapshot is an issue as LADO pins it: its canonical id, title and
-// body (docs/LJY-PRD/TDD.md §5.1). Its hash shows whether an issue changed.
+// body (docs/LJY-PRD/TDD.md §5.1). A plan request also pins the comments a
+// plan may draw on (NewLadoIssueSnapshot). Its hash shows whether an issue
+// changed.
 type LadoIssueSnapshot struct {
 	ID    IssueID `json:"id"`
 	Title string  `json:"title"`
 	Body  string  `json:"body"`
+	// Comments and OmittedComments are left out of the JSON when empty, so a
+	// snapshot without comments keeps the hash it had before comments were
+	// pinned.
+	Comments        []LadoSnapshotComment `json:"comments,omitempty"`
+	OmittedComments int                   `json:"omitted_comments,omitempty"`
 }
 
 // CanonicalJSON is the snapshot's stored form: the fields in declaration
@@ -112,7 +155,7 @@ func (s LadoIssueSnapshot) CanonicalJSON() []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	// Encoding a struct of strings cannot fail.
+	// Encoding strings, an int and a slice of string structs cannot fail.
 	_ = enc.Encode(s)
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }

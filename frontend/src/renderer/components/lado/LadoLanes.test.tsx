@@ -3,13 +3,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
 import { TooltipProvider } from "../ui/tooltip";
-import { LadoPlanLane } from "./LadoPlanLane";
+import { LadoLanes } from "./LadoLanes";
 
 vi.mock("../../lib/lado", async (original) => ({
 	...await original<typeof import("../../lib/lado")>(),
 	fetchLadoTasks: vi.fn(),
 	fetchLadoProjectRepositories: vi.fn(),
 	cancelLadoTask: vi.fn(),
+	fetchLadoTaskView: vi.fn(),
 }));
 
 const demo: lado.LadoRepository = { ref: "github:acme/demo", name: "demo", provider: "github", host: "github.com", path: "acme/demo" };
@@ -27,6 +28,7 @@ const task: lado.LadoTask = {
 		url: "https://github.com/acme/demo/issues/12",
 		observedAt: "2026-10-19T09:00:00Z",
 	},
+	plan: { requestPending: false },
 	createdAt: "2026-10-19T09:00:00Z",
 };
 
@@ -35,7 +37,7 @@ function renderLane() {
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider delayDuration={0}>
-				<LadoPlanLane projectId="demo" />
+				<LadoLanes projectId="demo" />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -105,7 +107,75 @@ test("an empty lane says where tasks come from", async () => {
 	renderLane();
 
 	expect(await screen.findByText("Create an issue from New task, or import open issues.")).toBeInTheDocument();
-	expect(screen.getByText("0")).toBeInTheDocument();
+	expect(within(screen.getByTestId("lado-plan-lane")).getByText("0")).toBeInTheDocument();
+	expect(within(screen.getByTestId("lado-queued-lane")).getByText("Approved tasks wait here until LADO starts their work.")).toBeInTheDocument();
+});
+
+const revision: NonNullable<lado.LadoTask["plan"]["latest"]> = {
+	id: "lado-plan-1",
+	number: 1,
+	sha256: "a".repeat(64),
+	source: "agent",
+	valid: true,
+	createdAt: "2026-10-19T09:30:00Z",
+};
+
+test("approved tasks wait in the Queued lane", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		task,
+		{ ...task, id: "lado-task-approved", state: "approved", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, issue: { ...task.issue, title: "Ship it" } },
+	]);
+	renderLane();
+
+	const queued = await screen.findByTestId("lado-queued-lane");
+	await within(queued).findByText("Ship it");
+	expect(within(queued).getByText("Queued")).toBeInTheDocument();
+	expect(within(queued).getByTestId("lado-task-state")).toHaveTextContent("Approved");
+	expect(within(screen.getByTestId("lado-plan-lane")).queryByText("Ship it")).not.toBeInTheDocument();
+});
+
+test("the status line follows the task's plans", async () => {
+	const cases: [string, lado.LadoTask["state"], lado.LadoTask["plan"], string][] = [
+		["draft", "draft", { requestPending: false }, "Draft"],
+		["requested", "draft", { requestPending: true, requestedAt: "2026-10-19T09:10:00Z" }, "Plan requested"],
+		["request failed", "draft", { requestPending: false, requestError: "the orchestrator has ended" }, "Plan request failed"],
+		["ready for review", "planned", { requestPending: false, latest: revision }, "Plan ready for review"],
+		["with problems", "planned", { requestPending: false, latest: { ...revision, valid: false } }, "Plan has problems"],
+		["change requested", "planned", { requestPending: true, latest: revision }, "Plan requested"],
+	];
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue(cases.map(([name, state, plan], index) => ({
+		...task,
+		id: `lado-task-${index}`,
+		state,
+		plan,
+		createdAt: `2026-10-19T0${9 - index}:00:00Z`,
+		issue: { ...task.issue, title: name },
+	})));
+	renderLane();
+
+	await screen.findByText("draft");
+	for (const [name, , , label] of cases) {
+		const card = screen.getByText(name).closest("[data-testid='lado-task-card']") as HTMLElement;
+		expect(within(card).getByTestId("lado-task-state"), name).toHaveTextContent(label);
+	}
+});
+
+test("opening a card shows the task view", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task]);
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue({
+		task,
+		issue: { title: "Add login", body: "Use the plan below.", state: "open", url: task.issue.url },
+		comments: [],
+		issueChangedSincePlan: false,
+		history: { requests: [], revisions: [], approvals: [] },
+	});
+	renderLane();
+	fireEvent.click(await screen.findByRole("button", { name: "Open task #12" }));
+
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByText("Use the plan below.");
+	expect(lado.fetchLadoTaskView).toHaveBeenCalledWith("lado-task-1");
+	expect(within(dialog).getByRole("button", { name: "Request a plan" })).toBeEnabled();
 });
 
 test("cancelling a task asks first, then cancels it and refreshes the lane", async () => {

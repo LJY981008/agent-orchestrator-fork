@@ -34,6 +34,9 @@ type fakeTracker struct {
 	getErr     error
 	creates    int
 	gets       int
+	// comments are each issue's comments, by native id.
+	comments    map[string][]domain.LadoIssueComment
+	commentsErr error
 }
 
 func newFakeTracker() *fakeTracker {
@@ -123,6 +126,25 @@ func (f *fakeTracker) Login(context.Context) (string, error) { return "ljy", nil
 
 func (f *fakeTracker) CheckAccess(context.Context, domain.TrackerRepo) (ports.LadoRepoAccess, error) {
 	return ports.LadoRepoAccess{}, errors.New("not used")
+}
+
+func (f *fakeTracker) IssueComments(_ context.Context, id domain.TrackerID) ([]domain.LadoIssueComment, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.commentsErr != nil {
+		return nil, f.commentsErr
+	}
+	return append([]domain.LadoIssueComment(nil), f.comments[id.Native]...), nil
+}
+
+// comment adds a comment to an issue.
+func (f *fakeTracker) comment(native string, c domain.LadoIssueComment) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.comments == nil {
+		f.comments = map[string][]domain.LadoIssueComment{}
+	}
+	f.comments[native] = append(f.comments[native], c)
 }
 
 func (f *fakeTracker) counts() (creates, gets int) {

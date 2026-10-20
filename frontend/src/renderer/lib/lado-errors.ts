@@ -58,6 +58,32 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	PATH_ALREADY_REGISTERED: "lado.error.pathAlreadyRegistered",
 	WORKSPACE_PARENT_COMMIT_FAILED: "lado.error.workspaceCommitFailed",
 	WORKSPACE_CHILD_RESERVED_NAME: "lado.error.workspaceReservedName",
+	// Plans and approvals (step 4b).
+	LADO_TASK_CANCELLED: "lado.error.taskCancelled",
+	LADO_ISSUE_CLOSED: "lado.error.issueClosed",
+	LADO_PLAN_NOTE_TOO_LONG: "lado.error.planNoteTooLong",
+	LADO_PLAN_REQUEST_AMBIGUOUS: "lado.error.planRequestAmbiguous",
+	LADO_PLAN_NOTHING_TO_CHANGE: "lado.error.planNothingToChange",
+	LADO_PLAN_SOURCE_COMMENT_UNKNOWN: "lado.error.planSourceCommentUnknown",
+	LADO_ORCHESTRATOR_UNAVAILABLE: "lado.error.orchestratorUnavailable",
+	LADO_PLAN_CHANGED: "lado.error.planChanged",
+	LADO_PLAN_SUPERSEDED: "lado.error.planSuperseded",
+	LADO_PLAN_INVALID: "lado.error.planInvalid",
+	LADO_PLAN_BLOB_MISSING: "lado.error.planBlobMissing",
+	LADO_PLAN_NOT_FOUND: "lado.error.planNotFound",
+	LADO_PRESENCE_REQUIRED: "lado.error.presenceRequired",
+	LADO_PRESENCE_UNAVAILABLE: "lado.error.presenceUnavailable",
+	LADO_PRESENCE_INVALID: "lado.error.presenceInvalid",
+	LADO_PRESENCE_EXPIRED: "lado.error.presenceExpired",
+	LADO_PRESENCE_REPLAYED: "lado.error.presenceReplayed",
+	// The desktop app's main process, before it reaches the daemon.
+	LADO_PRESENCE_UNTRUSTED_SENDER: "lado.error.presenceInvalid",
+	LADO_PLAN_REVISION_ID_INVALID: "lado.error.planNotFound",
+	SERVICE_UNAVAILABLE: "lado.error.unreachable",
+	LADO_SNAPSHOT_SAVE_FAILED: "lado.error.internal",
+	LADO_PLAN_REQUEST_SAVE_FAILED: "lado.error.internal",
+	LADO_PLAN_APPROVE_FAILED: "lado.error.internal",
+	LADO_PLANS_LOAD_FAILED: "lado.error.internal",
 };
 
 const problemKeys: Partial<Record<string, LadoProblemKey>> = {
@@ -80,7 +106,13 @@ function detailValues(details: Record<string, unknown> | undefined) {
 		const value = details?.[name];
 		return typeof value === "string" || typeof value === "number" ? String(value) : "";
 	};
-	return { reason: text("reason"), max: text("max"), issue: text("issue"), repository: text("repository") };
+	return {
+		reason: text("reason"),
+		max: text("max"),
+		issue: text("issue"),
+		repository: text("repository"),
+		comment: text("comment"),
+	};
 }
 
 /**
@@ -119,4 +151,30 @@ export function ladoTokenProblem(t: TFunction, check: LadoConnectionCheck): Lado
 export function ladoSSHProblem(t: TFunction, check: LadoConnectionCheck): LadoCheckProblem | null {
 	if (check.ssh.ok) return null;
 	return checkProblem(t, check.ssh.problemCode, check.ssh.problem, check.ssh.problemDetail, check.host);
+}
+
+type LadoPlanProblemKey = Extract<MessageKey, `lado.planProblem.${string}`>;
+
+const planProblemKeys: Partial<Record<string, LadoPlanProblemKey>> = {
+	too_large: "lado.planProblem.too_large",
+	not_text: "lado.planProblem.not_text",
+	missing_front_matter: "lado.planProblem.missing_front_matter",
+	invalid_front_matter: "lado.planProblem.invalid_front_matter",
+	missing_field: "lado.planProblem.missing_field",
+	invalid_field: "lado.planProblem.invalid_field",
+	wrong_task: "lado.planProblem.wrong_task",
+	wrong_issue: "lado.planProblem.wrong_issue",
+	unknown_source_comment: "lado.planProblem.unknown_source_comment",
+	wrong_source: "lado.planProblem.wrong_source",
+	unknown_base_ref: "lado.planProblem.unknown_base_ref",
+};
+
+/**
+ * A plan problem in the developer's language. The field stays as the front
+ * matter names it, since that is what the plan file says; the offending
+ * value, when the daemon sent one, is shown beside it.
+ */
+export function ladoPlanProblemText(t: TFunction, problem: { code: string; field?: string; detail?: string }): string {
+	const key = planProblemKeys[problem.code];
+	return key ? t(key, { field: problem.field ?? "" }) : problem.code;
 }
