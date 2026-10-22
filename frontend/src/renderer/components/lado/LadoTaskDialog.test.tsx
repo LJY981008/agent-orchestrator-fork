@@ -157,7 +157,8 @@ test("shows the plan and approves the exact revision", async () => {
 	expect(within(plan).getByText("None")).toBeInTheDocument();
 
 	fireEvent.click(within(dialog).getByRole("button", { name: "Approve plan" }));
-	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256));
+	// The view sends no rule hash; the desktop app reads the task's rules itself.
+	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, ""));
 });
 
 test("a plan with problems lists them and cannot be approved", async () => {

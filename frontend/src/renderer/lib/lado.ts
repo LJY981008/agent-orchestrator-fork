@@ -1,9 +1,14 @@
-// LADO fork: daemon calls for repository connections, issue-backed tasks, plans
-// and approvals (docs/LJY-PRD/TDD.md §5.1, §5.2 and §13). LADO routes live on
-// this computer's daemon only; remote hosts never serve them.
+// LADO fork: daemon calls for repository connections, issue-backed tasks, plans,
+// approvals and rules (docs/LJY-PRD/TDD.md §5.1, §5.2 and §13,
+// docs/LJY-PRD/HARNESS.md §3-§8). LADO routes live on this computer's daemon
+// only; remote hosts never serve them.
+import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
+import type { LadoCeilingMode } from "../../shared/lado-presence";
 import { apiClient, apiErrorCode, apiErrorDetails, apiErrorMessage } from "./api-client";
 import { aoBridge } from "./bridge";
+
+export type { LadoCeilingMode } from "../../shared/lado-presence";
 
 export type LadoProjectSettings = components["schemas"]["LadoProjectSettingsResponse"];
 export type LadoTask = components["schemas"]["LadoTaskResponse"];
@@ -22,6 +27,20 @@ export type LadoPlanRevision = components["schemas"]["LadoPlanRevisionResponse"]
 export type LadoPlanProblem = components["schemas"]["LadoPlanProblemResponse"];
 export type LadoPlanRequest = components["schemas"]["LadoPlanRequestResponse"];
 export type LadoPlanApproval = components["schemas"]["LadoPlanApprovalResponse"];
+export type LadoRule = components["schemas"]["LadoRuleResponse"];
+export type LadoRuleVersion = components["schemas"]["LadoRuleVersionResponse"];
+export type LadoRuleDetail = components["schemas"]["LadoRuleDetailResponse"];
+export type LadoRuleOverride = components["schemas"]["LadoRuleOverrideResponse"];
+export type LadoRuleStrength = LadoRule["strength"];
+export type LadoRuleScope = components["schemas"]["CreateLadoRuleRequest"]["scope"];
+export type LadoRuleChangeResult = components["schemas"]["LadoRuleChangeResponse"];
+export type LadoRuleImpact = components["schemas"]["LadoRuleImpactResponse"];
+export type LadoCreateRuleInput = components["schemas"]["CreateLadoRuleRequest"];
+export type LadoUpdateRuleInput = components["schemas"]["UpdateLadoRuleRequest"];
+export type LadoBindingInput = components["schemas"]["SetLadoBindingRequest"];
+export type LadoEffective = components["schemas"]["LadoEffectiveResponse"];
+export type LadoEffectiveRule = components["schemas"]["LadoEffectiveRuleResponse"];
+export type LadoPolicyProblem = components["schemas"]["LadoPolicyProblemResponse"];
 
 /**
  * A failed LADO call. It keeps the daemon's error code and details, so the
@@ -52,6 +71,26 @@ export const ladoTaskViewQueryKey = (taskId: string) => ["lado", "task", taskId]
 /** Plan revisions are pinned, but whether one is the latest or approved changes. */
 export const ladoPlanQueryRoot = ["lado", "plan"] as const;
 export const ladoPlanQueryKey = (revisionId: string) => ["lado", "plan", revisionId] as const;
+export const ladoTasksQueryRoot = ["lado", "tasks"] as const;
+export const ladoTaskViewQueryRoot = ["lado", "task"] as const;
+export const ladoRulesQueryRoot = ["lado", "rules"] as const;
+export const ladoRulesQueryKey = (includeArchived: boolean) => ["lado", "rules", includeArchived] as const;
+export const ladoRuleQueryRoot = ["lado", "rule"] as const;
+export const ladoRuleQueryKey = (ruleId: string) => ["lado", "rule", ruleId] as const;
+export const ladoEffectiveQueryRoot = ["lado", "effective"] as const;
+/** A project's rules, and its tasks' rules, share the project's prefix. */
+export const ladoEffectiveProjectQueryKey = (projectId: string) => ["lado", "effective", projectId] as const;
+export const ladoEffectiveQueryKey = (projectId: string, taskId: string) => ["lado", "effective", projectId, taskId] as const;
+
+/**
+ * Refreshes what a rule change can reach: the rules, every effective view,
+ * and the tasks, whose approvals can need review again.
+ */
+export function invalidateLadoRuleQueries(queryClient: QueryClient): void {
+	for (const queryKey of [ladoRulesQueryRoot, ladoRuleQueryRoot, ladoEffectiveQueryRoot, ladoTasksQueryRoot, ladoTaskViewQueryRoot]) {
+		void queryClient.invalidateQueries({ queryKey });
+	}
+}
 
 export async function fetchLadoProjectSettings(projectId: string): Promise<LadoProjectSettings> {
 	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/settings", {
@@ -185,13 +224,19 @@ export async function fetchLadoPlan(revisionId: string): Promise<LadoPlan> {
 }
 
 /**
- * Approves one plan revision. In the desktop app the main process asks the
- * developer to confirm, then signs and sends the approval itself
+ * Approves one plan revision together with the rules that apply to it. In the
+ * desktop app the main process reads the task's rules, asks the developer to
+ * confirm, then signs and sends the approval itself
  * (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md); null means the
- * developer cancelled. In a browser there is no main process, and the daemon
- * accepts the call only in development (AO_LADO_DEV_PRESENCE=1).
+ * developer cancelled. In a browser there is no main process: the call sends
+ * policySha256, the effective rules' snapshotSha256, and the daemon accepts it
+ * only in development (AO_LADO_DEV_PRESENCE=1).
  */
-export async function approveLadoPlan(revisionId: string, sha256: string): Promise<LadoPlanApproval | null> {
+export async function approveLadoPlan(
+	revisionId: string,
+	sha256: string,
+	policySha256: string,
+): Promise<LadoPlanApproval | null> {
 	// The bridge answers null when there is no desktop main process to ask.
 	const result = (await aoBridge.lado?.presence?.approvePlan(revisionId)) ?? null;
 	if (result) {
@@ -201,8 +246,92 @@ export async function approveLadoPlan(revisionId: string, sha256: string): Promi
 	}
 	const { data, error } = await apiClient.POST("/api/v1/lado/plans/{revisionId}/approve", {
 		params: { path: { revisionId } },
-		body: { sha256 },
+		body: { sha256, policySha256 },
 	});
 	if (error) throw ladoError(error, "Could not approve the plan");
 	return data;
+}
+
+export async function fetchLadoRules(includeArchived = false): Promise<LadoRule[]> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/rules", {
+		params: { query: { includeArchived } },
+	});
+	if (error) throw ladoError(error, "Could not load the rules");
+	return data?.rules ?? [];
+}
+
+/** One rule with every version, oldest first. */
+export async function fetchLadoRule(ruleId: string): Promise<LadoRuleDetail> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/rules/{ruleId}", {
+		params: { path: { ruleId } },
+	});
+	if (error) throw ladoError(error, "Could not load the rule");
+	return data;
+}
+
+/** With dryRun the daemon only says what the change would reach. */
+export async function createLadoRule(input: LadoCreateRuleInput): Promise<LadoRuleChangeResult> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/rules", { body: input });
+	if (error) throw ladoError(error, "Could not create the rule");
+	return data;
+}
+
+/**
+ * Edits, archives or unarchives a rule from its active version. The
+ * permission ceiling's mode goes through changeLadoCeiling, except as a dry
+ * run, which needs no confirmation.
+ */
+export async function updateLadoRule(ruleId: string, input: LadoUpdateRuleInput): Promise<LadoRuleChangeResult> {
+	const { data, error } = await apiClient.PATCH("/api/v1/lado/rules/{ruleId}", {
+		params: { path: { ruleId } },
+		body: input,
+	});
+	if (error) throw ladoError(error, "Could not change the rule");
+	return data;
+}
+
+/** Deletes a user rule that no approval used; the daemon refuses any other. */
+export async function deleteLadoRule(ruleId: string): Promise<void> {
+	const { error } = await apiClient.DELETE("/api/v1/lado/rules/{ruleId}", {
+		params: { path: { ruleId } },
+	});
+	if (error) throw ladoError(error, "Could not delete the rule");
+}
+
+/** Turns a rule on or off at Global, or forces or inherits it for a project or task. */
+export async function setLadoBinding(input: LadoBindingInput): Promise<LadoRuleChangeResult> {
+	const { data, error } = await apiClient.PUT("/api/v1/lado/bindings", { body: input });
+	if (error) throw ladoError(error, "Could not change where the rule applies");
+	return data;
+}
+
+/**
+ * The rules that apply to a project, or to one of its tasks at its latest
+ * plan revision. The daemon takes exactly one of the two ids.
+ */
+export async function fetchLadoEffective(projectId: string, taskId?: string): Promise<LadoEffective> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/effective", {
+		params: { query: taskId ? { taskId } : { projectId } },
+	});
+	if (error) throw ladoError(error, "Could not load the rules that apply");
+	return data;
+}
+
+/**
+ * Changes the permission ceiling's mode. Like an approval, the desktop app's
+ * main process reads the rule, asks the developer to confirm, and signs the
+ * change; null means the developer cancelled. In a browser the call reads the
+ * active version and patches it directly, which the daemon accepts only in
+ * development.
+ */
+export async function changeLadoCeiling(ruleId: string, mode: LadoCeilingMode): Promise<LadoRule | null> {
+	const result = (await aoBridge.lado?.presence?.changeRule(ruleId, mode)) ?? null;
+	if (result) {
+		if (result.status === "cancelled") return null;
+		if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
+		return result.rule;
+	}
+	const { rule } = await fetchLadoRule(ruleId);
+	const changed = await updateLadoRule(ruleId, { baseVersion: rule.version, ceiling: { mode } });
+	return changed.rule ?? rule;
 }

@@ -19,7 +19,17 @@ import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
-import { ladoPlanQueryRoot, ladoProjectIssuesQueryKey, ladoQueryRoot, ladoTasksQueryKey, ladoTaskViewQueryKey } from "./lado";
+import {
+	ladoEffectiveProjectQueryKey,
+	ladoPlanQueryRoot,
+	ladoProjectIssuesQueryKey,
+	ladoQueryRoot,
+	ladoRuleQueryRoot,
+	ladoRulesQueryRoot,
+	ladoTasksQueryKey,
+	ladoTaskViewQueryKey,
+	ladoTaskViewQueryRoot,
+} from "./lado";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -68,9 +78,12 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
-			// LADO fork: projects whose issue-backed tasks changed, and the tasks.
+			// LADO fork: projects whose issue-backed tasks changed, and the tasks;
+			// whether rules changed, and the LADO projects they reach.
 			const pendingLadoTaskProjects = new Set<string>();
 			const pendingLadoTasks = new Set<string>();
+			let ladoRulesInvalidationPending = false;
+			const pendingLadoRuleProjects = new Set<string>();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -293,12 +306,26 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (pendingLadoTasks.size > 0) invalidate(ladoPlanQueryRoot);
 				pendingLadoTasks.clear();
+				// A rule change can send approved tasks back to review: refresh the
+				// rules, what applies in each project reached, its lanes, and the
+				// open task view, whose key does not name its project.
+				if (ladoRulesInvalidationPending) {
+					invalidate(ladoRulesQueryRoot);
+					invalidate(ladoRuleQueryRoot);
+					if (pendingLadoRuleProjects.size > 0) invalidate(ladoTaskViewQueryRoot);
+					ladoRulesInvalidationPending = false;
+				}
+				for (const projectId of pendingLadoRuleProjects) {
+					invalidate(ladoEffectiveProjectQueryKey(projectId));
+					invalidate(ladoTasksQueryKey(projectId));
+				}
+				pendingLadoRuleProjects.clear();
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
-				let ladoTaskOnly = false;
+				let ladoOnly = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -357,7 +384,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
 							pendingLadoTaskProjects.add(payload.projectId);
 							if (typeof payload.taskId === "string" && payload.taskId) pendingLadoTasks.add(payload.taskId);
-							ladoTaskOnly = true;
+							ladoOnly = true;
+						}
+						// LADO fork: rules are global; the daemon sends one event for each
+						// LADO project a change reaches.
+						if (payload?.kind === "lado_rules") {
+							ladoRulesInvalidationPending = true;
+							if (typeof payload.projectId === "string" && payload.projectId) pendingLadoRuleProjects.add(payload.projectId);
+							ladoOnly = true;
 						}
 						if (
 							typeof payload?.reviewId === "string" &&
@@ -402,7 +436,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (!conversationOnly && !modelCatalogOnly && !ladoTaskOnly) workspaceInvalidationPending = true;
+				if (!conversationOnly && !modelCatalogOnly && !ladoOnly) workspaceInvalidationPending = true;
 				// A busy stream must not postpone visible updates until traffic
 				// stops, and the first event after a quiet period must not wait out
 				// a full window either. Flush on the leading edge when the last

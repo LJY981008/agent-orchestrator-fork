@@ -1,6 +1,7 @@
-// LADO fork: LADO's daemon errors and connection check problems in the
-// developer's language. The daemon answers in English with a stable code; the
-// app translates the code and fills in the details the daemon sends.
+// LADO fork: LADO's daemon errors, connection check problems and rules
+// problems in the developer's language. The daemon answers in English with a
+// stable code; the app translates the code and fills in the details the
+// daemon sends.
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/messages";
 import { LadoApiError, type LadoConnectionCheck } from "./lado";
@@ -84,6 +85,36 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_PLAN_REQUEST_SAVE_FAILED: "lado.error.internal",
 	LADO_PLAN_APPROVE_FAILED: "lado.error.internal",
 	LADO_PLANS_LOAD_FAILED: "lado.error.internal",
+	// Rules (step 5).
+	LADO_RULE_NOT_FOUND: "lado.error.ruleNotFound",
+	LADO_RULE_NAME_REQUIRED: "lado.error.ruleNameRequired",
+	LADO_RULE_NAME_TOO_LONG: "lado.error.ruleNameTooLong",
+	LADO_RULE_CATEGORY_TOO_LONG: "lado.error.ruleCategoryTooLong",
+	LADO_RULE_INSTRUCTION_REQUIRED: "lado.error.ruleInstructionRequired",
+	LADO_RULE_INSTRUCTION_TOO_LONG: "lado.error.ruleInstructionTooLong",
+	LADO_RULE_CONFLICT_UNKNOWN: "lado.error.ruleConflictUnknown",
+	LADO_RULE_CONFLICT_SELF: "lado.error.ruleConflictSelf",
+	LADO_RULE_CONFLICT_PROTECTED: "lado.error.ruleConflictProtected",
+	LADO_RULE_CONFLICTS_TOO_MANY: "lado.error.ruleConflictsTooMany",
+	LADO_RULE_UPDATE_EMPTY: "lado.error.ruleUpdateEmpty",
+	LADO_RULE_CEILING_INVALID: "lado.error.ruleCeilingInvalid",
+	LADO_RULE_CHANGED: "lado.error.ruleChanged",
+	LADO_RULE_ARCHIVED: "lado.error.ruleArchived",
+	LADO_RULE_PROTECTED: "lado.error.ruleProtected",
+	LADO_RULE_BUILTIN: "lado.error.ruleBuiltin",
+	LADO_RULE_REFERENCED: "lado.error.ruleReferenced",
+	LADO_BINDING_SCOPE_INVALID: "lado.error.bindingScopeInvalid",
+	LADO_BINDING_STATE_INVALID: "lado.error.bindingStateInvalid",
+	LADO_SCOPE_NOT_FOUND: "lado.error.scopeNotFound",
+	LADO_EFFECTIVE_SCOPE_REQUIRED: "lado.error.effectiveScopeRequired",
+	LADO_EFFECTIVE_SCOPE_INVALID: "lado.error.effectiveScopeInvalid",
+	LADO_POLICY_SHA_REQUIRED: "lado.error.policyShaRequired",
+	LADO_RULES_UNAVAILABLE: "lado.error.rulesUnavailable",
+	LADO_RULES_CHANGED: "lado.error.rulesChanged",
+	LADO_RULES_LOAD_FAILED: "lado.error.internal",
+	LADO_RULES_SAVE_FAILED: "lado.error.internal",
+	// The app sends includeArchived as a boolean; anything else is a bug.
+	INVALID_QUERY: "lado.error.internal",
 };
 
 const problemKeys: Partial<Record<string, LadoProblemKey>> = {
@@ -112,6 +143,7 @@ function detailValues(details: Record<string, unknown> | undefined) {
 		issue: text("issue"),
 		repository: text("repository"),
 		comment: text("comment"),
+		rule: text("rule"),
 	};
 }
 
@@ -177,4 +209,63 @@ const planProblemKeys: Partial<Record<string, LadoPlanProblemKey>> = {
 export function ladoPlanProblemText(t: TFunction, problem: { code: string; field?: string; detail?: string }): string {
 	const key = planProblemKeys[problem.code];
 	return key ? t(key, { field: problem.field ?? "" }) : problem.code;
+}
+
+type LadoPolicyProblemKey = Extract<MessageKey, `lado.policy.problem.${string}`>;
+
+// The problems a rule resolution reports (backend/internal/service/ladopolicy/resolve.go).
+const policyProblemKeys: Partial<Record<string, LadoPolicyProblemKey>> = {
+	LADO_AGENT_NOT_CHOSEN: "lado.policy.problem.agentNotChosen",
+	LADO_AGENT_CAPABILITY_UNSUPPORTED: "lado.policy.problem.capabilityUnsupported",
+	LADO_AGENT_CAPABILITY_UNVERIFIED: "lado.policy.problem.capabilityUnverified",
+	LADO_AGENT_CAPABILITY_DEGRADED: "lado.policy.problem.capabilityDegraded",
+	LADO_CODEX_ASKS_APPROVAL: "lado.policy.problem.codexAsksApproval",
+	LADO_RULES_CONFLICT: "lado.policy.problem.rulesConflict",
+	LADO_AO_RULES_FILE_UNREADABLE: "lado.policy.problem.aoRulesFileUnreadable",
+	LADO_CEILING_MISSING: "lado.policy.problem.ceilingMissing",
+	LADO_PLAN_CEILING_CLAMPED: "lado.policy.problem.planCeilingClamped",
+};
+
+const capabilityKeys: Partial<Record<string, MessageKey>> = {
+	prompt: "lado.policy.capability.prompt",
+	permission_mode: "lado.policy.capability.permissionMode",
+};
+
+// The permission modes as AO's project settings name them.
+const modeKeys: Partial<Record<string, MessageKey>> = {
+	"accept-edits": "settings.project.permissionAcceptEdits",
+	auto: "settings.project.permissionAuto",
+	"bypass-permissions": "settings.project.permissionBypass",
+};
+
+/** How a problem names rules and agents; both default to their ids. */
+export type LadoProblemLabels = { rule?: (ruleId: string) => string; agent?: (harness: string) => string };
+
+/**
+ * A rules problem in the developer's language, with the modes, capability,
+ * file and rules it names. A code this app does not know yet shows as is.
+ */
+export function ladoPolicyProblemText(
+	t: TFunction,
+	problem: { code: string; rules?: string[]; details?: Record<string, string> },
+	labels: LadoProblemLabels = {},
+): string {
+	const key = policyProblemKeys[problem.code];
+	if (!key) return problem.code;
+	const detail = (name: string) => problem.details?.[name] ?? "";
+	const label = (keys: Partial<Record<string, MessageKey>>, value: string) => {
+		const labelKey = keys[value];
+		return labelKey ? t(labelKey) : value;
+	};
+	const agent = detail("agent");
+	return t(key, {
+		agent: agent && labels.agent ? labels.agent(agent) : agent,
+		capability: label(capabilityKeys, detail("capability")),
+		mode: label(modeKeys, detail("mode")),
+		plan: label(modeKeys, detail("plan")),
+		ceiling: label(modeKeys, detail("ceiling")),
+		path: detail("path"),
+		reason: detail("reason"),
+		rules: (problem.rules ?? []).map((ruleId) => labels.rule?.(ruleId) ?? ruleId).join(", "),
+	});
 }

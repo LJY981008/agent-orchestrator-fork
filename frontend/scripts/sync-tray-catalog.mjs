@@ -21,11 +21,20 @@ const KEYS = [
 	"tray.quit",
 	"zone.merge",
 	"zone.action",
-	// LADO fork: the plan approval confirmation (src/main/lado-presence.ts).
+	// LADO fork: the plan approval and permission ceiling confirmations
+	// (src/main/lado-presence.ts).
 	"lado.presence.approveTitle",
 	"lado.presence.approveDetail",
 	"lado.presence.approve",
 	"lado.presence.cancel",
+	"lado.presence.approveRules",
+	"lado.presence.approveRulesBlocking",
+	"lado.presence.ruleChangeTitle",
+	"lado.presence.ceilingChangeDetail",
+	"lado.presence.change",
+	"lado.presence.mode.acceptEdits",
+	"lado.presence.mode.auto",
+	"lado.presence.mode.bypassPermissions",
 ];
 
 const catalogs = {};

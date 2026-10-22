@@ -600,6 +600,41 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// LADO fork: a rule change reaches every LADO project; the daemon sends one
+	// event per project, and each refreshes the rules and that project's tasks.
+	it("refreshes rules and tasks on lado_rules events", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			for (const [seq, projectId] of [[46, "proj-1"], [47, "proj-2"]] as const) {
+				cdcSources()[0].emit("session_updated", JSON.stringify({
+					seq,
+					projectId,
+					type: "session_updated",
+					payload: { kind: "lado_rules", projectId },
+					createdAt: "2026-10-22T09:00:00Z",
+				}));
+			}
+			vi.advanceTimersByTime(200);
+			for (const queryKey of [
+				["lado", "rules"],
+				["lado", "rule"],
+				["lado", "task"],
+				["lado", "effective", "proj-1"],
+				["lado", "tasks", "proj-1"],
+				["lado", "effective", "proj-2"],
+				["lado", "tasks", "proj-2"],
+			]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "tasks", "proj-3"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
 		vi.useFakeTimers();
 		const queryClient = new QueryClient();
