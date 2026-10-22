@@ -84,6 +84,30 @@ func (s *Store) ListLadoTasks(ctx context.Context, projectID domain.ProjectID, i
 	return tasks, nil
 }
 
+// ListLiveLadoTasks returns every project's tasks that have an issue and are
+// not cancelled, with their plan facts, by project and oldest first.
+func (s *Store) ListLiveLadoTasks(ctx context.Context) ([]domain.LadoTask, error) {
+	rows, err := s.qr.ListLiveLadoTasks(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list live LADO tasks: %w", err)
+	}
+	plans := map[domain.ProjectID]map[domain.LadoTaskID]domain.LadoTaskPlan{}
+	tasks := make([]domain.LadoTask, 0, len(rows))
+	for _, row := range rows {
+		task := ladoTaskFromGen(row)
+		projectPlans, ok := plans[task.ProjectID]
+		if !ok {
+			if projectPlans, err = s.ladoProjectPlans(ctx, task.ProjectID); err != nil {
+				return nil, err
+			}
+			plans[task.ProjectID] = projectPlans
+		}
+		task.Plan = projectPlans[task.ID]
+		tasks = append(tasks, task)
+	}
+	return tasks, nil
+}
+
 // ListPendingLadoTasks returns the tasks whose issue LADO has not linked yet.
 func (s *Store) ListPendingLadoTasks(ctx context.Context) ([]domain.LadoTask, error) {
 	rows, err := s.qr.ListPendingLadoTasks(ctx)

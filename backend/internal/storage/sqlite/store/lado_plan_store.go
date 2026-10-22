@@ -1,7 +1,7 @@
 package store
 
-// LADO fork: plan requests, plan revisions and plan approvals
-// (docs/LJY-PRD/TDD.md §3.1, §5.1 and §5.2).
+// LADO fork: plan requests, plan revisions, plan approvals and the rule
+// snapshots approvals fix (docs/LJY-PRD/TDD.md §3.1, §5.1 and §5.2).
 
 import (
 	"context"
@@ -230,13 +230,16 @@ func (s *Store) ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTas
 	return approvals, nil
 }
 
-// ApproveLadoPlan records an approval, the presence proof it used and its
-// audit event in one transaction (docs/LJY-PRD/TDD.md §5.2). Inside the
-// transaction it checks again that the revision is still the task's latest
-// with the approved sha256, so a revision pinned meanwhile is not approved by
-// mistake (domain.ErrLadoPlanSuperseded). A proof whose nonce was used before
-// is refused with domain.ErrLadoPresenceReplayed.
-func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoPlanApproval, domain.LadoAuditEvent, error) {
+// ApproveLadoPlan records an approval, the presence proof it used, the rule
+// snapshot it fixed and its audit event in one transaction
+// (docs/LJY-PRD/TDD.md §5.2). Inside the transaction it checks again that the
+// revision is still the task's latest with the approved sha256, so a revision
+// pinned meanwhile is not approved by mistake (domain.ErrLadoPlanSuperseded).
+// A proof whose nonce was used before is refused with
+// domain.ErrLadoPresenceReplayed. A nil snapshot stores the approval without
+// one; otherwise the snapshot takes the approval's id and time and is stored
+// with the rule versions it used. When any part fails, nothing is kept.
+func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot) (domain.LadoPlanApproval, domain.LadoAuditEvent, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return domain.LadoPlanApproval{}, domain.LadoAuditEvent{}, err
 	}
@@ -271,6 +274,11 @@ func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApp
 			return err
 		}
 		stored = ladoPlanApprovalFromGen(row)
+		if snapshot != nil {
+			if err := insertLadoPolicySnapshotTx(ctx, q, stored, *snapshot); err != nil {
+				return err
+			}
+		}
 		appended, err = appendLadoAuditEventTx(ctx, q, event)
 		return err
 	})
@@ -278,6 +286,58 @@ func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApp
 		return domain.LadoPlanApproval{}, domain.LadoAuditEvent{}, unwrapLadoSentinel(err)
 	}
 	return stored, appended, nil
+}
+
+// LadoPolicySnapshot returns the rule snapshot of one approval with the rule
+// versions it used, ordered by rule id. It reports false for an approval
+// without a snapshot.
+func (s *Store) LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error) {
+	row, err := s.qr.GetLadoPolicySnapshotByApproval(ctx, string(approvalID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.LadoPolicySnapshot{}, false, nil
+	}
+	if err != nil {
+		return domain.LadoPolicySnapshot{}, false, fmt.Errorf("read LADO rule snapshot: %w", err)
+	}
+	// The rule rows commit with the snapshot row and never change.
+	rules, err := s.qr.ListLadoPolicySnapshotRules(ctx, row.ID)
+	if err != nil {
+		return domain.LadoPolicySnapshot{}, false, fmt.Errorf("read LADO rule snapshot rules: %w", err)
+	}
+	snapshot := ladoPolicySnapshotFromGen(row)
+	snapshot.Rules = make([]domain.LadoPolicySnapshotRule, 0, len(rules))
+	for _, rule := range rules {
+		snapshot.Rules = append(snapshot.Rules, domain.LadoPolicySnapshotRule{
+			RuleID:    domain.LadoRuleID(rule.RuleID),
+			VersionID: domain.LadoRuleVersionID(rule.RuleVersionID),
+		})
+	}
+	return snapshot, true, nil
+}
+
+// insertLadoPolicySnapshotTx stores the rule snapshot of a stored approval,
+// with the approval's id and time, and the rule versions it used.
+func insertLadoPolicySnapshotTx(ctx context.Context, q *gen.Queries, approval domain.LadoPlanApproval, snapshot domain.LadoPolicySnapshot) error {
+	if _, err := q.InsertLadoPolicySnapshot(ctx, gen.InsertLadoPolicySnapshotParams{
+		ID:           string(snapshot.ID),
+		ApprovalID:   string(approval.ID),
+		Sha256:       snapshot.SHA256,
+		SnapshotJson: string(snapshot.Content),
+		Blocking:     boolInt(snapshot.Blocking),
+		CreatedAt:    approval.ApprovedAt.UTC(),
+	}); err != nil {
+		return err
+	}
+	for _, rule := range snapshot.Rules {
+		if err := q.InsertLadoPolicySnapshotRule(ctx, gen.InsertLadoPolicySnapshotRuleParams{
+			SnapshotID:    string(snapshot.ID),
+			RuleID:        string(rule.RuleID),
+			RuleVersionID: string(rule.VersionID),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // SetLadoModeWithProof stores the project's LADO mode together with the
@@ -379,10 +439,18 @@ func (s *Store) ladoTaskPlan(ctx context.Context, id domain.LadoTaskID) (domain.
 	approval, err := s.qr.GetLatestLadoPlanApproval(ctx, string(id))
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
+		return plan, nil
 	case err != nil:
 		return plan, fmt.Errorf("read LADO plan approval: %w", err)
+	}
+	plan.Approval = ladoPlanApprovalFromGen(approval)
+	snapshot, err := s.qr.GetLadoPolicySnapshotByApproval(ctx, approval.ID)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return plan, fmt.Errorf("read LADO rule snapshot: %w", err)
 	default:
-		plan.Approval = ladoPlanApprovalFromGen(approval)
+		plan.Snapshot = ladoPolicySnapshotRefFromGen(snapshot)
 	}
 	return plan, nil
 }
@@ -419,6 +487,21 @@ func (s *Store) ladoProjectPlans(ctx context.Context, projectID domain.ProjectID
 		plan := plans[id]
 		plan.Approval = ladoPlanApprovalFromGen(row)
 		plans[id] = plan
+	}
+	snapshots, err := s.qr.ListLadoPolicySnapshotsByProject(ctx, string(projectID))
+	if err != nil {
+		return nil, fmt.Errorf("read LADO rule snapshots: %w", err)
+	}
+	// A task carries the snapshot of its newest approval, which may have none.
+	byApproval := make(map[domain.LadoPlanApprovalID]gen.LadoPolicySnapshot, len(snapshots))
+	for _, row := range snapshots {
+		byApproval[domain.LadoPlanApprovalID(row.ApprovalID)] = row
+	}
+	for id, plan := range plans {
+		if row, ok := byApproval[plan.Approval.ID]; ok {
+			plan.Snapshot = ladoPolicySnapshotRefFromGen(row)
+			plans[id] = plan
+		}
 	}
 	return plans, nil
 }
@@ -478,6 +561,25 @@ func ladoPlanApprovalFromGen(row gen.LadoPlanApproval) domain.LadoPlanApproval {
 		SHA256:     row.Sha256,
 		ProofNonce: row.ProofNonce,
 		ApprovedAt: row.ApprovedAt.UTC(),
+	}
+}
+
+func ladoPolicySnapshotFromGen(row gen.LadoPolicySnapshot) domain.LadoPolicySnapshot {
+	return domain.LadoPolicySnapshot{
+		ID:         domain.LadoPolicySnapshotID(row.ID),
+		ApprovalID: domain.LadoPlanApprovalID(row.ApprovalID),
+		SHA256:     row.Sha256,
+		Content:    []byte(row.SnapshotJson),
+		Blocking:   row.Blocking == 1,
+		CreatedAt:  row.CreatedAt.UTC(),
+	}
+}
+
+func ladoPolicySnapshotRefFromGen(row gen.LadoPolicySnapshot) domain.LadoPolicySnapshotRef {
+	return domain.LadoPolicySnapshotRef{
+		ID:       domain.LadoPolicySnapshotID(row.ID),
+		SHA256:   row.Sha256,
+		Blocking: row.Blocking == 1,
 	}
 }
 

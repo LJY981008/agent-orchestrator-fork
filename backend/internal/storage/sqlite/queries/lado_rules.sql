@@ -94,6 +94,12 @@ SELECT id, approval_id, sha256, snapshot_json, blocking, created_at
 FROM lado_policy_snapshots
 WHERE approval_id = ?;
 
+-- name: ListLadoPolicySnapshotRules :many
+SELECT snapshot_id, rule_id, rule_version_id
+FROM lado_policy_snapshot_rules
+WHERE snapshot_id = ?
+ORDER BY rule_id, rule_version_id;
+
 -- name: ListLadoPolicySnapshotsByProject :many
 SELECT s.id, s.approval_id, s.sha256, s.snapshot_json, s.blocking, s.created_at
 FROM lado_policy_snapshots s

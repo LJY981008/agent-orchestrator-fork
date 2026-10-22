@@ -61,7 +61,7 @@ type Store interface {
 	LadoPlanRevision(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevision, bool, error)
 	ListLadoPlanRevisions(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanRevision, error)
 	ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanApproval, error)
-	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
+	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
 }
 
 // Projects reads AO's project registry.

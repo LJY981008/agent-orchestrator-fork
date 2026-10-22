@@ -305,6 +305,36 @@ func (q *Queries) ListLadoModeProjectIDs(ctx context.Context) ([]string, error) 
 	return items, nil
 }
 
+const listLadoPolicySnapshotRules = `-- name: ListLadoPolicySnapshotRules :many
+SELECT snapshot_id, rule_id, rule_version_id
+FROM lado_policy_snapshot_rules
+WHERE snapshot_id = ?
+ORDER BY rule_id, rule_version_id
+`
+
+func (q *Queries) ListLadoPolicySnapshotRules(ctx context.Context, snapshotID string) ([]LadoPolicySnapshotRule, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoPolicySnapshotRules, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoPolicySnapshotRule{}
+	for rows.Next() {
+		var i LadoPolicySnapshotRule
+		if err := rows.Scan(&i.SnapshotID, &i.RuleID, &i.RuleVersionID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLadoPolicySnapshotsByProject = `-- name: ListLadoPolicySnapshotsByProject :many
 SELECT s.id, s.approval_id, s.sha256, s.snapshot_json, s.blocking, s.created_at
 FROM lado_policy_snapshots s

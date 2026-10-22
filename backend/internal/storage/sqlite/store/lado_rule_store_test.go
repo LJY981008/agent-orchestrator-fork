@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -510,4 +511,135 @@ func TestListLadoModeProjectIDs(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(got, []domain.ProjectID{"abc", "zed"}) {
 		t.Fatalf("ListLadoModeProjectIDs = (%v, %v), want abc and zed", got, err)
 	}
+}
+
+func TestDeleteLadoRuleRefusesARuleASnapshotUsed(t *testing.T) {
+	s, raw := openLadoAuditStore(t)
+	ctx := context.Background()
+	seedLadoTaskWithPlan(t, s)
+	used := mustCreateLadoRule(t, s, ladoUserRule("lado-rule-1", ladoRuleAt))
+	unused := mustCreateLadoRule(t, s, ladoUserRule("lado-rule-2", ladoRuleAt.Add(time.Minute)))
+	rev := mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a')))
+	mustApproveLadoPlan(t, s, "lado-approval-1", rev, "nonce-1", ladoPolicySnapshot("lado-snapshot-1", `{}`, false, used))
+	// The snapshot used version 1; the rule has a newer one since.
+	at := ladoRuleAt.Add(2 * time.Minute)
+	if _, err := s.AddLadoRuleVersion(ctx, ladoNextVersion(used.ID, "lado-rule-1-v2", "Second.", at), 1, nil, ladoRuleEvent("rule.updated", used.ID, at)); err != nil {
+		t.Fatal(err)
+	}
+
+	before := countLadoRuleRows(t, raw)
+	if err := s.DeleteLadoRule(ctx, used.ID, ladoRuleEvent("rule.deleted", used.ID, at)); !errors.Is(err, domain.ErrLadoRuleReferenced) {
+		t.Fatalf("deleting a rule a snapshot used = %v, want ErrLadoRuleReferenced", err)
+	}
+	if after := countLadoRuleRows(t, raw); after != before {
+		t.Fatalf("rows after the refused delete = %+v, want %+v", after, before)
+	}
+	if got := mustLadoRule(t, s, used.ID); got.Version.Number != 2 {
+		t.Fatalf("the used rule = %+v, want it kept at version 2", got)
+	}
+
+	if err := s.DeleteLadoRule(ctx, unused.ID, ladoRuleEvent("rule.deleted", unused.ID, at)); err != nil {
+		t.Fatalf("deleting a rule no snapshot used = %v, want success", err)
+	}
+	want := before
+	want.rules, want.versions, want.bindings, want.events = before.rules-1, before.versions-1, before.bindings-1, before.events+1
+	if after := countLadoRuleRows(t, raw); after != want {
+		t.Fatalf("rows after the delete = %+v, want %+v", after, want)
+	}
+	if action := latestLadoAuditAction(t, raw); action != "rule.deleted" {
+		t.Fatalf("latest audit action = %q, want rule.deleted", action)
+	}
+	if _, ok, err := s.LadoRule(ctx, unused.ID); err != nil || ok {
+		t.Fatalf("LadoRule after delete = (%v, %v), want not found", ok, err)
+	}
+	if broken, err := s.VerifyLadoAuditChain(ctx); err != nil || broken != 0 {
+		t.Fatalf("VerifyLadoAuditChain = (%d, %v)", broken, err)
+	}
+}
+
+func TestLadoRuleChangesPublishToLadoProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	for id, on := range map[domain.ProjectID]bool{"abc": true, "mer": true, "off": false} {
+		seedProject(t, s, string(id))
+		if _, err := s.SetLadoMode(ctx, id, on, ladoRuleAt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seedProject(t, s, "plain")
+	// LADO mode for a project AO does not know publishes nothing.
+	if _, err := s.SetLadoMode(ctx, "ghost", true, ladoRuleAt); err != nil {
+		t.Fatal(err)
+	}
+	mustCreateLadoTask(t, s, importedLadoTask("lado-task-1", "github:acme/demo#12"))
+	seq, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// expect checks the projects the change events since the last call name.
+	expect := func(step string, want ...string) {
+		t.Helper()
+		events, err := s.EventsAfter(ctx, seq, 1000)
+		if err != nil {
+			t.Fatalf("%s: EventsAfter: %v", step, err)
+		}
+		got := make([]string, 0, len(events))
+		for _, ev := range events {
+			seq = ev.Seq
+			var payload struct {
+				Kind      string `json:"kind"`
+				ProjectID string `json:"projectId"`
+			}
+			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+				t.Fatalf("%s: payload %s: %v", step, ev.Payload, err)
+			}
+			if ev.Type != "session_updated" || ev.SessionID != "" || payload.Kind != "lado_rules" || payload.ProjectID != string(ev.ProjectID) {
+				t.Fatalf("%s: event %+v payload %+v, want a lado_rules session_updated event", step, ev, payload)
+			}
+			got = append(got, string(ev.ProjectID))
+		}
+		sort.Strings(got)
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: change events for %v, want %v", step, got, want)
+		}
+	}
+	rule := ladoUserRule("lado-rule-1", ladoRuleAt)
+	bind := func(scope domain.LadoRuleScope, scopeID string, state domain.LadoBindingState) {
+		t.Helper()
+		b := domain.LadoRuleBinding{RuleID: rule.ID, Scope: scope, ScopeID: scopeID, State: state, UpdatedAt: ladoRuleAt}
+		if err := s.SetLadoRuleBinding(ctx, b, ladoRuleEvent("rule.binding_set", rule.ID, ladoRuleAt)); err != nil {
+			t.Fatalf("SetLadoRuleBinding %+v: %v", b, err)
+		}
+	}
+
+	mustCreateLadoRule(t, s, rule)
+	// The rule, its first version and its Global binding.
+	expect("create", "abc", "abc", "abc", "mer", "mer", "mer")
+	bind(domain.LadoScopeGlobal, "", domain.LadoBindingOn)
+	expect("Global on", "abc", "mer")
+	bind(domain.LadoScopeProject, "abc", domain.LadoBindingForceOff)
+	expect("project force_off", "abc")
+	bind(domain.LadoScopeProject, "abc", domain.LadoBindingForceOn)
+	expect("project force_on", "abc")
+	bind(domain.LadoScopeProject, "abc", domain.LadoBindingInherit)
+	expect("project inherit", "abc")
+	bind(domain.LadoScopeTask, "lado-task-1", domain.LadoBindingForceOn)
+	expect("task force_on", "mer")
+	bind(domain.LadoScopeTask, "lado-task-1", domain.LadoBindingInherit)
+	expect("task inherit", "mer")
+
+	at := ladoRuleAt.Add(time.Minute)
+	if _, err := s.AddLadoRuleVersion(ctx, ladoNextVersion(rule.ID, "lado-rule-1-v2", "Second.", at), 1, nil, ladoRuleEvent("rule.updated", rule.ID, at)); err != nil {
+		t.Fatal(err)
+	}
+	expect("new version", "abc", "mer")
+	if _, err := s.SetLadoRuleArchived(ctx, rule.ID, at, ladoRuleEvent("rule.archived", rule.ID, at)); err != nil {
+		t.Fatal(err)
+	}
+	expect("archive", "abc", "mer")
+	if err := s.DeleteLadoRule(ctx, rule.ID, ladoRuleEvent("rule.deleted", rule.ID, at)); err != nil {
+		t.Fatal(err)
+	}
+	// The Global binding's removal and the rule's.
+	expect("delete", "abc", "abc", "mer", "mer")
 }

@@ -279,7 +279,7 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		SubjectKind: "plan_revision",
 		SubjectID:   string(rev.ID),
 		Payload:     payload,
-	})
+	}, nil) // no rule snapshot until the task service reads the rules
 	switch {
 	case errors.Is(err, domain.ErrLadoPresenceReplayed):
 		return domain.LadoPlanApproval{}, ladopresence.Replayed()
