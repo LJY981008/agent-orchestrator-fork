@@ -144,7 +144,8 @@ type TaskStatusTone = "muted" | "attention" | "ready";
  * The card's one status line. A plan waiting for review is the human's next
  * decision, so it takes the needs-you color; an approved plan reads as ready.
  * An approval whose rules changed since (review_required), or whose rules
- * block the run (blocked), needs the human again.
+ * block the run (blocked), needs the human again, unless a new plan it waits
+ * for is requested.
  */
 export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; tone: TaskStatusTone } {
 	switch (task.state) {
@@ -153,8 +154,10 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
 		case "approved":
 			return { label: t("lado.task.state.approved"), tone: "ready" };
 		case "review_required":
+			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
 			return { label: t("lado.task.state.reviewRequired"), tone: "attention" };
 		case "blocked":
+			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
 			return { label: t("lado.task.state.blocked"), tone: "attention" };
 		case "planned":
 			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };

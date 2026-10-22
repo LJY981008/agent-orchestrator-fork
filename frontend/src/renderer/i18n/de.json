@@ -3539,7 +3539,7 @@
 	"lado.task.state.reviewRequired": "Regeln prüfen",
 	"lado.task.state.blocked": "Blockiert",
 	"lado.view.rulesNeedReview": "Die Regeln haben sich seit der Freigabe dieses Plans geändert. Prüfe den Tab Regeln und gib dann erneut frei.",
-	"lado.view.rulesBlocked": "Die Regeln, mit denen dieser Plan freigegeben wurde, blockieren den Lauf. Behebe die Probleme im Tab Regeln und gib dann erneut frei.",
+	"lado.view.rulesBlocked": "Die Regeln, mit denen dieser Plan freigegeben wurde, blockieren den Lauf. Sobald du die Probleme im Tab Regeln behebst, kannst du ihn erneut freigeben.",
 	"lado.view.rulesJustChanged": "Die Regeln haben sich gerade geändert. Prüfe sie im Tab Regeln und gib dann erneut frei.",
 	"lado.task.rules.runsWith": "Läuft mit {{agent}} · höchstens {{mode}}",
 	"lado.task.rules.noAgent": "Kein Agent gewählt · höchstens {{mode}}",
@@ -3556,5 +3556,8 @@
 	"lado.task.rules.changedOutsideRules": "Keine Regel hat sich geändert, aber der Agent, sein Modus, die AO-Anweisungen oder AO selbst.",
 	"lado.task.rules.title": "Regeln für diese Aufgabe",
 	"lado.task.rules.workerText": "Regeltext für den Worker",
-	"lado.task.rules.noWorkerText": "Keine Regel fügt Text für den Worker hinzu."
+	"lado.task.rules.noWorkerText": "Keine Regel fügt Text für den Worker hinzu.",
+	"lado.task.rules.approvedBlocking": "Mit diesen Regeln freigegeben, aber sie halten den Lauf an, bis die Probleme unten behoben sind",
+	"lado.rules.editor.deletedRule": "Gelöschte Regel <code>{{id}}</code>",
+	"lado.rules.editor.editsKept": "Die Regel hat sich inzwischen geändert. Deine Änderungen bleiben erhalten; prüfe sie und speichere erneut."
 }

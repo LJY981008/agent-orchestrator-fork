@@ -129,10 +129,10 @@ describe("RulesSection", () => {
 
 		const ceilingRow = row(ceiling.id)!;
 		expect(within(ceilingRow).getByRole("button", { name: "Permission ceiling" })).toHaveTextContent("Auto");
-		// Protected rules take no switch and have no menu to archive or delete them.
+		// Protected rules take no switch; their menu only opens the history.
 		for (const protectedRow of [approvalRow, ceilingRow]) {
 			expect(within(protectedRow).queryByRole("switch")).not.toBeInTheDocument();
-			expect(within(protectedRow).queryByRole("button", { name: /^Actions for/ })).not.toBeInTheDocument();
+			expect(within(protectedRow).getByRole("button", { name: /^Actions for/ })).toBeInTheDocument();
 		}
 
 		// Other rules sit in their category's card with their Global switch.
@@ -176,6 +176,39 @@ describe("RulesSection", () => {
 		await waitFor(() => expect(trigger).toBeEnabled());
 		expect(trigger).toHaveTextContent("Auto");
 		expect(lado.fetchLadoRules).toHaveBeenCalledTimes(1);
+	});
+
+	it("opens the history of a protected rule", async () => {
+		const user = userEvent.setup();
+		const version = (number: number, mode: lado.LadoCeilingMode, actor: string): lado.LadoRuleVersion => ({
+			id: `agent.permission.ceiling-v${number}`,
+			number,
+			name: "Permission ceiling",
+			category: "tools",
+			instruction: "",
+			enforcement: ["tool_policy"],
+			ceiling: { mode },
+			conflictsWith: [],
+			sha256: String(number).repeat(64),
+			actor,
+			createdAt: `2026-10-22T0${number}:00:00Z`,
+		});
+		const changed = { ...ceiling, version: 2, ceiling: { mode: "accept-edits" as const } };
+		vi.mocked(lado.fetchLadoRules).mockResolvedValue([planApproval, changed, korean, review]);
+		vi.mocked(lado.fetchLadoRule).mockResolvedValue({ rule: changed, versions: [version(1, "auto", "lado"), version(2, "accept-edits", "human")] });
+		renderSection();
+
+		await user.click(within(await findRow(ceiling.id)).getByRole("button", { name: "Actions for Permission ceiling" }));
+		// A protected rule is not edited, archived or deleted, so History is all its menu holds.
+		const menu = await screen.findByRole("menu");
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["History"]);
+		await user.click(within(menu).getByRole("menuitem", { name: "History" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "History of Permission ceiling" });
+		expect(lado.fetchLadoRule).toHaveBeenCalledWith(ceiling.id);
+		// The ceiling's mode of each version is what its history is for.
+		expect(await within(dialog).findByText("Accept edits")).toBeInTheDocument();
+		expect(within(dialog).getByText("Version 1")).toBeInTheDocument();
 	});
 
 	it("turns a rule off globally after a dry run", async () => {

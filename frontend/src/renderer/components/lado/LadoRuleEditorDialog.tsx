@@ -1,11 +1,12 @@
 // LADO fork: creating and editing a rule (docs/LJY-PRD/HARNESS.md §12). The
 // daemon validates the rule; its error codes are shown in the developer's
 // language under the field they are about. An edit starts from the version
-// the developer opened, so a newer one stops it until they reload.
+// the developer opened, so a newer one stops it until they reload, which
+// keeps their edits on top of the newer version.
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
-import { useId, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { useTranslation } from "react-i18next";
+import { Fragment, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
 import { fetchLadoRule, LadoApiError, ladoRulesQueryRoot, type LadoRule, type LadoUpdateRuleInput } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
@@ -69,6 +70,18 @@ function changedFields(rule: LadoRule, draft: Draft): Omit<LadoUpdateRuleInput, 
 	};
 }
 
+/** The developer's edits on a newer version: what they changed stays, the rest is the newer version's. */
+function rebase(base: LadoRule, draft: Draft, newer: LadoRule): Draft {
+	const edited = changedFields(base, draft);
+	const latest = draftOf(newer);
+	return {
+		name: edited.name ?? latest.name,
+		category: edited.category ?? latest.category,
+		instruction: edited.instruction ?? latest.instruction,
+		conflicts: edited.conflictsWith ?? latest.conflicts,
+	};
+}
+
 /**
  * Creates a rule when rule is undefined, otherwise edits it. rules names the
  * rules a new or edited rule can conflict with; protected rules are always
@@ -99,6 +112,8 @@ export function LadoRuleEditorDialog({
 	const [on, setOn] = useState(true);
 	const [reloading, setReloading] = useState(false);
 	const [reloadError, setReloadError] = useState<unknown>(null);
+	// Set once a reload kept the edits on a newer version, until the next save.
+	const [rebased, setRebased] = useState(false);
 	const nameId = useId();
 	const categoryId = useId();
 	const instructionId = useId();
@@ -118,6 +133,10 @@ export function LadoRuleEditorDialog({
 		(candidate) =>
 			!candidate.protected && candidate.id !== base?.id && (!candidate.archived || draft.conflicts.includes(candidate.id)),
 	);
+	// Rules deleted since the rule named them: the rules no longer list them,
+	// but they stay offered so the developer can remove them.
+	const known = new Set(rules.map((entry) => entry.id));
+	const deleted = [...new Set([...(base?.conflictsWith ?? []), ...draft.conflicts])].filter((ruleId) => !known.has(ruleId)).sort();
 
 	const close = () => onOpenChange(false);
 	const edit = (next: Partial<Draft>) => {
@@ -128,6 +147,7 @@ export function LadoRuleEditorDialog({
 	const submit = (event: FormEvent) => {
 		event.preventDefault();
 		if (busy || !dirty) return;
+		setRebased(false);
 		const request: LadoRuleChangeRequest = base
 			? { kind: "update", ruleId: base.id, input: { baseVersion: base.version, ...changedFields(base, draft) } }
 			: {
@@ -150,15 +170,16 @@ export function LadoRuleEditorDialog({
 			.catch(() => undefined);
 	};
 
-	// A newer version stopped the edit: start again from it.
+	// A newer version stopped the edit: continue from it with the edits kept.
 	const reload = async () => {
 		if (!base) return;
 		setReloading(true);
 		setReloadError(null);
 		try {
 			const detail = await fetchLadoRule(base.id);
+			setDraft((current) => rebase(base, current, detail.rule));
 			setBase(detail.rule);
-			setDraft(draftOf(detail.rule));
+			setRebased(true);
 			change.reset();
 			void queryClient.invalidateQueries({ queryKey: ladoRulesQueryRoot });
 		} catch (failure) {
@@ -225,6 +246,10 @@ export function LadoRuleEditorDialog({
 									{t("lado.rules.editor.reload")}
 								</Button>
 							</div>
+						) : rebased ? (
+							<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">
+								{t("lado.rules.editor.editsKept")}
+							</p>
 						) : null}
 						<EditorField id={nameId} label={t("lado.rules.editor.name")} error={fieldError("name")}>
 							<input
@@ -266,6 +291,7 @@ export function LadoRuleEditorDialog({
 								id={conflictsId}
 								value={draft.conflicts}
 								candidates={candidates}
+								deleted={deleted}
 								error={fieldError("conflicts")}
 								onChange={(conflicts) => edit({ conflicts })}
 							/>
@@ -333,23 +359,43 @@ function EditorField({ id, label, error, children }: { id: string; label: string
 	);
 }
 
-/** A checkbox menu of the rules this one cannot be on together with. */
+/** A rule deleted since another named it as a conflict; its id is all that is left. */
+function DeletedRule({ id }: { id: string }) {
+	return <Trans i18nKey="lado.rules.editor.deletedRule" values={{ id }} components={{ code: <span className="font-mono" /> }} />;
+}
+
+/**
+ * A checkbox menu of the rules this one cannot be on together with. deleted
+ * names conflicts whose rule is gone, offered so they can be removed.
+ */
 function ConflictsMenu({
 	id,
 	value,
 	candidates,
+	deleted,
 	error,
 	onChange,
 }: {
 	id: string;
 	value: readonly string[];
 	candidates: readonly LadoRule[];
+	deleted: readonly string[];
 	error: string | null;
 	onChange: (value: string[]) => void;
 }) {
 	const { t } = useTranslation();
 	const names = new Map(candidates.map((candidate) => [candidate.id, ladoRuleName(t, candidate.id, candidate.name)]));
-	const summary = value.length === 0 ? t("lado.rules.none") : value.map((ruleId) => names.get(ruleId) ?? ruleId).join(", ");
+	const label = (ruleId: string): ReactNode => names.get(ruleId) ?? (deleted.includes(ruleId) ? <DeletedRule id={ruleId} /> : ruleId);
+	const options = [...candidates.map((candidate) => candidate.id), ...deleted];
+	const summary =
+		value.length === 0
+			? t("lado.rules.none")
+			: value.map((ruleId, index) => (
+					<Fragment key={ruleId}>
+						{index > 0 ? ", " : null}
+						{label(ruleId)}
+					</Fragment>
+				));
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
@@ -364,25 +410,25 @@ function ConflictsMenu({
 				</SettingsMenuTrigger>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="start" className={SETTINGS_MENU_SURFACE}>
-				{candidates.length === 0 ? (
+				{options.length === 0 ? (
 					<p className="px-3 py-2 text-xs text-settings-muted">{t("lado.rules.editor.noOtherRules")}</p>
 				) : (
-					candidates.map((candidate) => {
-						const checked = value.includes(candidate.id);
+					options.map((option) => {
+						const checked = value.includes(option);
 						return (
 							<DropdownMenuItem
-								key={candidate.id}
+								key={option}
 								role="menuitemcheckbox"
 								aria-checked={checked}
 								className={SETTINGS_MENU_ITEM}
 								onSelect={(event) => {
 									// Several rules can be picked, so the menu stays open.
 									event.preventDefault();
-									onChange(checked ? value.filter((ruleId) => ruleId !== candidate.id) : [...value, candidate.id].sort());
+									onChange(checked ? value.filter((ruleId) => ruleId !== option) : [...value, option].sort());
 								}}
 							>
 								<Check aria-hidden="true" className={cn("size-icon-sm shrink-0", checked ? "opacity-100" : "opacity-0")} />
-								<span className="min-w-0 truncate">{names.get(candidate.id)}</span>
+								<span className="min-w-0 truncate">{label(option)}</span>
 							</DropdownMenuItem>
 						);
 					})

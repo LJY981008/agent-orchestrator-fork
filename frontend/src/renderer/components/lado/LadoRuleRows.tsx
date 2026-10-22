@@ -1,7 +1,8 @@
 // LADO fork: the rows of Settings → Rules (docs/LJY-PRD/HARNESS.md §12). A
 // protected rule is always on and only the permission ceiling's mode changes;
-// any other rule has its Global switch and a menu for the rest, where turning
-// it off, archiving it and deleting it stay three separate actions.
+// its menu only opens the history. Any other rule has its Global switch and a
+// menu for the rest, where turning it off, archiving it and deleting it stay
+// three separate actions.
 import type { TFunction } from "i18next";
 import { Archive, ArchiveRestore, History, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -74,20 +75,22 @@ function withFailure(t: TFunction, detail: ReactNode, error: unknown): ReactNode
 }
 
 /**
- * A protected rule: always on, so it has no switch and no menu. The
- * permission ceiling keeps one control, its mode, which the desktop app
- * confirms before it changes.
+ * A protected rule: always on, so it has no switch, and its menu only opens
+ * the history, where the permission ceiling's changes show. The ceiling keeps
+ * one control, its mode, which the desktop app confirms before it changes.
  */
 export function LadoProtectedRuleRow({
 	rule,
 	busy,
 	error,
 	onCeilingChange,
+	onHistory,
 }: {
 	rule: LadoRule;
 	busy: boolean;
 	error?: unknown;
 	onCeilingChange: (mode: LadoCeilingMode) => void;
+	onHistory: () => void;
 }) {
 	const { t } = useTranslation();
 	const name = ladoRuleName(t, rule.id, rule.name);
@@ -98,21 +101,26 @@ export function LadoProtectedRuleRow({
 			label={name}
 			description={withFailure(t, ladoRuleDescription(t, rule.id, rule.name), error)}
 		>
-			{rule.id === LADO_RULE_PERMISSION_CEILING ? (
-				<SettingsOptionMenu<LadoCeilingMode | "">
-					aria-label={name}
-					value={rule.ceiling?.mode ?? ""}
-					options={LADO_CEILING_MODES.map((mode) => ({ value: mode, label: ladoCeilingModeLabel(t, mode) }))}
-					placeholder={t("lado.rules.ceilingPlaceholder")}
-					disabled={busy}
-					triggerClassName="w-fit"
-					onChange={(mode) => {
-						if (mode && mode !== rule.ceiling?.mode) onCeilingChange(mode);
-					}}
-				/>
-			) : (
-				<span className="text-sm text-settings-muted">{t("lado.rules.alwaysOn")}</span>
-			)}
+			<div className="flex items-center gap-2">
+				{rule.id === LADO_RULE_PERMISSION_CEILING ? (
+					<SettingsOptionMenu<LadoCeilingMode | "">
+						aria-label={name}
+						value={rule.ceiling?.mode ?? ""}
+						options={LADO_CEILING_MODES.map((mode) => ({ value: mode, label: ladoCeilingModeLabel(t, mode) }))}
+						placeholder={t("lado.rules.ceilingPlaceholder")}
+						disabled={busy}
+						triggerClassName="w-fit"
+						onChange={(mode) => {
+							if (mode && mode !== rule.ceiling?.mode) onCeilingChange(mode);
+						}}
+					/>
+				) : (
+					<span className="text-sm text-settings-muted">{t("lado.rules.alwaysOn")}</span>
+				)}
+				<RowMenu name={name}>
+					<HistoryItem onSelect={onHistory} />
+				</RowMenu>
+			</div>
 		</SettingsRow>
 	);
 }
@@ -170,10 +178,9 @@ export function LadoRuleRow({
 	);
 }
 
-function LadoRuleMenu({ rule, name, busy, actions }: { rule: LadoRule; name: string; busy: boolean; actions: LadoRuleRowActions }) {
+/** A row's menu button and its menu. */
+function RowMenu({ name, busy = false, children }: { name: string; busy?: boolean; children: ReactNode }) {
 	const { t } = useTranslation();
-	// LADO's own rules are never deleted, so their menu does not offer it.
-	const deletable = !rule.builtin;
 	return (
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild disabled={busy}>
@@ -186,40 +193,58 @@ function LadoRuleMenu({ rule, name, busy, actions }: { rule: LadoRule; name: str
 				</button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="min-w-40">
-				{rule.archived ? (
-					<DropdownMenuItem onSelect={actions.onUnarchive}>
-						<ArchiveRestore aria-hidden="true" />
-						{t("lado.rules.unarchive")}
-					</DropdownMenuItem>
-				) : (
-					<>
-						<DropdownMenuItem onSelect={actions.onEdit}>
-							<Pencil aria-hidden="true" />
-							{t("lado.rules.edit")}
-						</DropdownMenuItem>
-						<DropdownMenuItem onSelect={actions.onHistory}>
-							<History aria-hidden="true" />
-							{t("lado.rules.showHistory")}
-						</DropdownMenuItem>
-						<DropdownMenuItem onSelect={actions.onArchive}>
-							<Archive aria-hidden="true" />
-							{t("lado.rules.archive")}
-						</DropdownMenuItem>
-					</>
-				)}
-				{deletable ? (
-					<>
-						<DropdownMenuSeparator />
-						<DropdownMenuItem
-							className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
-							onSelect={actions.onDelete}
-						>
-							<Trash2 aria-hidden="true" />
-							{t("lado.rules.delete")}
-						</DropdownMenuItem>
-					</>
-				) : null}
+				{children}
 			</DropdownMenuContent>
 		</DropdownMenu>
+	);
+}
+
+function HistoryItem({ onSelect }: { onSelect: () => void }) {
+	const { t } = useTranslation();
+	return (
+		<DropdownMenuItem onSelect={onSelect}>
+			<History aria-hidden="true" />
+			{t("lado.rules.showHistory")}
+		</DropdownMenuItem>
+	);
+}
+
+function LadoRuleMenu({ rule, name, busy, actions }: { rule: LadoRule; name: string; busy: boolean; actions: LadoRuleRowActions }) {
+	const { t } = useTranslation();
+	// LADO's own rules are never deleted, so their menu does not offer it.
+	const deletable = !rule.builtin;
+	return (
+		<RowMenu name={name} busy={busy}>
+			{rule.archived ? (
+				<DropdownMenuItem onSelect={actions.onUnarchive}>
+					<ArchiveRestore aria-hidden="true" />
+					{t("lado.rules.unarchive")}
+				</DropdownMenuItem>
+			) : (
+				<>
+					<DropdownMenuItem onSelect={actions.onEdit}>
+						<Pencil aria-hidden="true" />
+						{t("lado.rules.edit")}
+					</DropdownMenuItem>
+					<HistoryItem onSelect={actions.onHistory} />
+					<DropdownMenuItem onSelect={actions.onArchive}>
+						<Archive aria-hidden="true" />
+						{t("lado.rules.archive")}
+					</DropdownMenuItem>
+				</>
+			)}
+			{deletable ? (
+				<>
+					<DropdownMenuSeparator />
+					<DropdownMenuItem
+						className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
+						onSelect={actions.onDelete}
+					>
+						<Trash2 aria-hidden="true" />
+						{t("lado.rules.delete")}
+					</DropdownMenuItem>
+				</>
+			) : null}
+		</RowMenu>
 	);
 }

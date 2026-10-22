@@ -2,6 +2,7 @@
 // §3-§8 and §14). A change runs as a dry run first; when it reaches tasks
 // whose approval matches the rules now, the developer sees them before those
 // approvals need review again.
+import { agentLabel } from "@aoagents/product-ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
@@ -73,14 +74,14 @@ export function ladoStrengthLabel(t: TFunction, strength: LadoRuleStrength): str
 	return t(strengthKeys[strength]);
 }
 
-/** A rules problem, naming the rules as the app shows them. */
+/** A rules problem, naming the rules and the agent as the app shows them. */
 export function ladoProblemText(
 	t: TFunction,
 	problem: LadoPolicyProblem,
 	rules: readonly { ruleId: string; name: string }[] = [],
 ): string {
 	const names = new Map(rules.map((rule) => [rule.ruleId, ladoRuleName(t, rule.ruleId, rule.name)]));
-	return ladoPolicyProblemText(t, problem, { rule: (ruleId) => names.get(ruleId) ?? ruleId });
+	return ladoPolicyProblemText(t, problem, { rule: (ruleId) => names.get(ruleId) ?? ruleId, agent: agentLabel });
 }
 
 /**

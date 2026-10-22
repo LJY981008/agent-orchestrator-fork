@@ -142,9 +142,10 @@ describe("LadoRuleEditorDialog", () => {
 		expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
 	});
 
-	it("edits only what changed and reloads a newer version", async () => {
+	it("keeps your edits when the rule changed meanwhile", async () => {
 		const user = userEvent.setup();
-		const newer = { ...review, version: 3, instruction: "Ask two teammates to review the change." };
+		// Meanwhile someone changed the instruction and the conflicts.
+		const newer = { ...review, version: 3, instruction: "Ask two teammates to review the change.", conflictsWith: [korean.id] };
 		vi.mocked(lado.updateLadoRule)
 			.mockRejectedValueOnce(new lado.LadoApiError("the rule has a newer version", "LADO_RULE_CHANGED", {}))
 			.mockImplementation(async (_ruleId, input) => ({ applied: !input.dryRun, impact: noImpact, rule: newer }));
@@ -163,16 +164,47 @@ describe("LadoRuleEditorDialog", () => {
 		expect(await within(dialog).findByRole("status")).toHaveTextContent(
 			"The rule changed since you opened it. Review the latest version and try again.",
 		);
+		// Only what changed is sent.
 		expect(lado.updateLadoRule).toHaveBeenCalledWith(review.id, { baseVersion: 2, name: "Ask for reviews", dryRun: true });
 
 		await user.click(within(dialog).getByRole("button", { name: "Reload" }));
+		// The fields the developer left come from the newer version; the name they typed stays.
 		await waitFor(() => expect(within(dialog).getByLabelText("Instruction")).toHaveValue(newer.instruction));
-		expect(name).toHaveValue("Ask for a review");
-		expect(within(dialog).queryByRole("status")).not.toBeInTheDocument();
+		expect(name).toHaveValue("Ask for reviews");
+		expect(within(dialog).getByRole("button", { name: "Conflicts with" })).toHaveTextContent("Commit messages in Korean");
+		expect(within(dialog).getByRole("status")).toHaveTextContent(
+			"The rule changed meanwhile. Your edits are kept; check them and save again.",
+		);
 
-		await user.type(name, "s");
 		await user.click(within(dialog).getByRole("button", { name: "Save" }));
 		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-		expect(lado.updateLadoRule).toHaveBeenLastCalledWith(review.id, { baseVersion: 3, name: "Ask for a reviews" });
+		expect(lado.updateLadoRule).toHaveBeenLastCalledWith(review.id, { baseVersion: 3, name: "Ask for reviews" });
+	});
+
+	it("lets a deleted conflicting rule be removed", async () => {
+		const user = userEvent.setup();
+		// The rule conflicts with one deleted since, which the rules no longer list.
+		const conflicted = { ...review, conflictsWith: [korean.id, "lado-rule-gone"] };
+		vi.mocked(lado.updateLadoRule).mockImplementation(async (_ruleId, input) => ({ applied: !input.dryRun, impact: noImpact, rule: review }));
+		const onOpenChange = vi.fn();
+		renderEditor({ rule: conflicted, onOpenChange });
+
+		const dialog = await screen.findByRole("dialog", { name: "Edit rule" });
+		const trigger = within(dialog).getByRole("button", { name: "Conflicts with" });
+		expect(trigger).toHaveTextContent("Commit messages in Korean, Deleted rule lado-rule-gone");
+		await user.click(trigger);
+		const gone = await screen.findByRole("menuitemcheckbox", { name: "Deleted rule lado-rule-gone" });
+		expect(gone).toHaveAttribute("aria-checked", "true");
+		expect(within(gone).getByText("lado-rule-gone")).toHaveClass("font-mono");
+		await user.click(gone);
+		expect(gone).toHaveAttribute("aria-checked", "false");
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("menu")).not.toBeInTheDocument());
+		expect(trigger).toHaveTextContent("Commit messages in Korean");
+		expect(trigger).not.toHaveTextContent("Deleted rule");
+
+		await user.click(within(dialog).getByRole("button", { name: "Save" }));
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(lado.updateLadoRule).toHaveBeenLastCalledWith(review.id, { baseVersion: 2, conflictsWith: [korean.id] });
 	});
 });

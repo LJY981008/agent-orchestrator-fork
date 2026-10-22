@@ -164,4 +164,15 @@ describe("rule presentation", () => {
 			]),
 		).toBe("These rules cannot be on together: Commit messages in Korean, Commits in English.");
 	});
+
+	it("names the agent in capability problems", () => {
+		const en = createFullAppI18n("en").t;
+		const problem = (code: string, agent: string) => ({ code, severity: "blocking" as const, rules: [], details: { agent, capability: "prompt" } });
+		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_UNSUPPORTED", "cursor"))).toBe("Cursor cannot apply rule text, which these rules need.");
+		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_DEGRADED", "claude-code"))).toBe("Claude Code applies rule text only partly.");
+		// An agent the app does not know keeps its id.
+		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_UNVERIFIED", "my-agent"))).toBe(
+			"LADO has not verified that my-agent applies rule text, which these rules need.",
+		);
+	});
 });

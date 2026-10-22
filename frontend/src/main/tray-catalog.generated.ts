@@ -115,7 +115,7 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveRulesBlocking": "차단 문제 {{blocking}}개: 해결할 때까지 작업은 차단됨 상태입니다.",
 		"lado.presence.ruleChangeTitle": "권한 상한을 바꿀까요?",
 		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nLADO 실행은 이 모드를 넘지 않습니다. 현재 규칙으로 승인된 작업은 다시 승인해야 합니다.",
-		"lado.presence.change": "바꾸기",
+		"lado.presence.change": "변경",
 		"lado.presence.mode.acceptEdits": "편집 수락",
 		"lado.presence.mode.auto": "자동",
 		"lado.presence.mode.bypassPermissions": "권한 우회"

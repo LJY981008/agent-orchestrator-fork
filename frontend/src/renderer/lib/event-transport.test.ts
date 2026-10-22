@@ -635,6 +635,31 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// LADO fork: a task change can change what applies to the task (its agent)
+	// and its approval, so its open Rules tab reads them again.
+	it("refreshes a task's effective rules on lado_task events", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 48,
+				projectId: "proj-1",
+				type: "session_updated",
+				payload: { kind: "lado_task", taskId: "lado-task-1", projectId: "proj-1" },
+				createdAt: "2026-10-22T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "effective", "proj-1", "lado-task-1"] }, { cancelRefetch: false });
+			// Only that task's: not the project's, and not the rules.
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "effective", "proj-1"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "effective"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "rules"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
 		vi.useFakeTimers();
 		const queryClient = new QueryClient();

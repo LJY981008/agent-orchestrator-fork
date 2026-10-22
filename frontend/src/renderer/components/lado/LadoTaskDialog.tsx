@@ -121,9 +121,12 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 	const open = task.state !== "cancelled" && task.state !== "closed_unmerged";
 	const pending = task.plan.requestPending;
 	const shown = plan.data;
-	// An approved plan is approved again when the rules changed since, or when
-	// the rules it was approved with block the run.
-	const reapprove = task.state === "review_required" || task.state === "blocked";
+	// An approved plan is approved again when the rules changed since. When the
+	// rules it was approved with block the run, approving again would sign the
+	// same rules; fixing the problems (agent or rules) changes them, and the
+	// task then needs review, so a blocked plan is neither ready nor approvable.
+	const reapprove = task.state === "review_required";
+	const blocked = task.state === "blocked";
 	const approving = readingRules || approve.isPending;
 	const canApprove =
 		open && !pending && shown !== undefined && shown.latest && shown.revision.valid && (!shown.approved || reapprove) && !approving;
@@ -306,7 +309,7 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 						>
 							{t("lado.view.requestChanges")}
 						</Button>
-						{shown?.approved && !reapprove ? (
+						{shown?.approved && !reapprove && !blocked ? (
 							<span className="text-control font-medium text-[var(--color-status-ready)]">{t("lado.view.approved")}</span>
 						) : (
 							<Button

@@ -3591,7 +3591,7 @@
 	"lado.task.state.reviewRequired": "Regras a revisar",
 	"lado.task.state.blocked": "Bloqueado",
 	"lado.view.rulesNeedReview": "As regras mudaram desde que este plano foi aprovado. Confira a aba Regras e aprove de novo.",
-	"lado.view.rulesBlocked": "As regras com que este plano foi aprovado bloqueiam a execução. Corrija os problemas na aba Regras e aprove de novo.",
+	"lado.view.rulesBlocked": "As regras com que este plano foi aprovado bloqueiam a execução. Depois que você corrigir os problemas na aba Regras, poderá aprová-lo de novo.",
 	"lado.view.rulesJustChanged": "As regras acabaram de mudar. Confira-as na aba Regras e aprove de novo.",
 	"lado.task.rules.runsWith": "Roda com {{agent}} · no máximo {{mode}}",
 	"lado.task.rules.noAgent": "Nenhum agente escolhido · no máximo {{mode}}",
@@ -3608,5 +3608,8 @@
 	"lado.task.rules.changedOutsideRules": "Nenhuma regra mudou; mudaram o agente, o modo dele, as instruções do AO ou o próprio AO.",
 	"lado.task.rules.title": "Regras desta tarefa",
 	"lado.task.rules.workerText": "Texto das regras para o worker",
-	"lado.task.rules.noWorkerText": "Nenhuma regra adiciona texto para o worker."
+	"lado.task.rules.noWorkerText": "Nenhuma regra adiciona texto para o worker.",
+	"lado.task.rules.approvedBlocking": "Aprovado com estas regras, mas elas impedem a execução até que os problemas abaixo sejam corrigidos",
+	"lado.rules.editor.deletedRule": "Regra excluída <code>{{id}}</code>",
+	"lado.rules.editor.editsKept": "A regra mudou nesse meio-tempo. Suas edições foram mantidas; revise-as e salve de novo."
 }

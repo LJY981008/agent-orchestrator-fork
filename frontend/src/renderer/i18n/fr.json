@@ -3591,7 +3591,7 @@
 	"lado.task.state.reviewRequired": "Règles à revoir",
 	"lado.task.state.blocked": "Bloqué",
 	"lado.view.rulesNeedReview": "Les règles ont changé depuis l'approbation de ce plan. Consultez l'onglet Règles, puis approuvez à nouveau.",
-	"lado.view.rulesBlocked": "Les règles avec lesquelles ce plan a été approuvé bloquent l'exécution. Corrigez les problèmes dans l'onglet Règles, puis approuvez à nouveau.",
+	"lado.view.rulesBlocked": "Les règles avec lesquelles ce plan a été approuvé bloquent l'exécution. Une fois les problèmes de l'onglet Règles corrigés, vous pourrez l'approuver à nouveau.",
 	"lado.view.rulesJustChanged": "Les règles viennent de changer. Consultez-les dans l'onglet Règles, puis approuvez à nouveau.",
 	"lado.task.rules.runsWith": "S'exécute avec {{agent}} · au plus {{mode}}",
 	"lado.task.rules.noAgent": "Aucun agent choisi · au plus {{mode}}",
@@ -3608,5 +3608,8 @@
 	"lado.task.rules.changedOutsideRules": "Aucune règle n'a changé ; c'est l'agent, son mode, les instructions AO ou AO lui-même.",
 	"lado.task.rules.title": "Règles de cette tâche",
 	"lado.task.rules.workerText": "Texte des règles pour le worker",
-	"lado.task.rules.noWorkerText": "Aucune règle n'ajoute de texte pour le worker."
+	"lado.task.rules.noWorkerText": "Aucune règle n'ajoute de texte pour le worker.",
+	"lado.task.rules.approvedBlocking": "Approuvé avec ces règles, mais elles arrêtent l'exécution tant que les problèmes ci-dessous ne sont pas corrigés",
+	"lado.rules.editor.deletedRule": "Règle supprimée <code>{{id}}</code>",
+	"lado.rules.editor.editsKept": "La règle a changé entre-temps. Vos modifications sont conservées ; vérifiez-les et enregistrez à nouveau."
 }

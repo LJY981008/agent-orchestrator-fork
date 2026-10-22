@@ -208,27 +208,48 @@ test("approves with the rule snapshot hash", async () => {
 });
 
 test("offers approval again when the rules need review", async () => {
-	const approvedTask = { ...task, plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id } };
-	for (const [state, notice] of [
-		["review_required", "The rules changed since this plan was approved. Check the Rules tab, then approve again."],
-		["blocked", "The rules this plan was approved with block the run. Fix the problems on the Rules tab, then approve again."],
-	] as const) {
-		const approved = planned({ approved: true, task: { ...approvedTask, state } });
-		vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(approved));
-		vi.mocked(lado.fetchLadoPlan).mockResolvedValue(approved);
-		vi.mocked(lado.approveLadoPlan).mockReset().mockResolvedValue(approval);
-		renderDialog();
-		const dialog = await screen.findByTestId("lado-task-dialog");
-		await within(dialog).findByTestId("lado-plan");
+	const approved = planned({
+		approved: true,
+		task: { ...task, state: "review_required", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id } },
+	});
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(approved));
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(approved);
+	vi.mocked(lado.approveLadoPlan).mockResolvedValue(approval);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
 
-		expect(within(dialog).getByText(notice)).toHaveAttribute("role", "status");
-		expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
-		const approve = within(dialog).getByRole("button", { name: "Approve plan" });
-		expect(approve, state).toBeEnabled();
-		fireEvent.click(approve);
-		await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, "e".repeat(64)));
-		cleanup();
-	}
+	expect(within(dialog).getByText("The rules changed since this plan was approved. Check the Rules tab, then approve again.")).toHaveAttribute("role", "status");
+	expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
+	const approve = within(dialog).getByRole("button", { name: "Approve plan" });
+	expect(approve).toBeEnabled();
+	fireEvent.click(approve);
+	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, "e".repeat(64)));
+});
+
+test("does not offer approval again for a blocked task", async () => {
+	const blocked = planned({
+		approved: true,
+		task: { ...task, state: "blocked", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id } },
+	});
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(blocked));
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(blocked);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	// Approving again would sign the same rules. Fixing the problems changes
+	// them, and the task then needs review, which can be approved again.
+	expect(
+		within(dialog).getByText("The rules this plan was approved with block the run. Once you fix the problems on the Rules tab, you can approve it again."),
+	).toHaveAttribute("role", "status");
+	// Not shown as approved and ready either.
+	expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
+	const approve = within(dialog).getByRole("button", { name: "Approve plan" });
+	expect(approve).toBeDisabled();
+	fireEvent.click(approve);
+	expect(lado.fetchLadoEffective).not.toHaveBeenCalled();
+	expect(lado.approveLadoPlan).not.toHaveBeenCalled();
 });
 
 test("says the rules just changed when an approval meets newer rules", async () => {

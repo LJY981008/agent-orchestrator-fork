@@ -245,6 +245,30 @@ describe("LadoTaskRules", () => {
 		expect(screen.queryByTestId("lado-approval-rules")).not.toBeInTheDocument();
 	});
 
+	it("shows that the approved rules block the run", async () => {
+		const problem = { code: "LADO_AGENT_CAPABILITY_UNSUPPORTED", severity: "blocking" as const, rules: [], details: { agent: "cursor", capability: "prompt" } };
+		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
+			effective({
+				agent: { harness: "cursor", model: "", source: "task" },
+				blocking: true,
+				problems: [problem],
+				approved: { ...effective().approved!, blocking: true },
+			}),
+		);
+		renderRules({ ...task, agent: "cursor", state: "blocked" });
+
+		// The rules are the approved ones, but they keep the run from starting:
+		// not the ready color, and the problems follow.
+		const comparison = await screen.findByTestId("lado-approval-rules");
+		expect(comparison).toHaveTextContent("Approved with these rules, but they stop the run until the problems below are fixed");
+		expect(comparison).toHaveAttribute("data-tone", "attention");
+		const problems = screen.getByRole("list", { name: "Problems" });
+		expect(comparison.compareDocumentPosition(problems) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		// The agent line, the comparison and the problems sit at the rows' inset.
+		expect(screen.getByTestId("lado-task-rules-summary")).toHaveClass("px-(--settings-row-inset)");
+		expect(screen.getByTestId("lado-task-rules-summary")).toContainElement(problems);
+	});
+
 	it("shows the rule text the worker gets, and the AO instructions", async () => {
 		const user = userEvent.setup();
 		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(

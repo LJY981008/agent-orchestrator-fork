@@ -3520,7 +3520,7 @@
 	"lado.task.state.reviewRequired": "Rules need review",
 	"lado.task.state.blocked": "Blocked",
 	"lado.view.rulesNeedReview": "The rules changed since this plan was approved. Check the Rules tab, then approve again.",
-	"lado.view.rulesBlocked": "The rules this plan was approved with block the run. Fix the problems on the Rules tab, then approve again.",
+	"lado.view.rulesBlocked": "The rules this plan was approved with block the run. Once you fix the problems on the Rules tab, you can approve it again.",
 	"lado.view.rulesJustChanged": "The rules just changed. Check them on the Rules tab, then approve again.",
 	"lado.task.rules.runsWith": "Runs with {{agent}} · at most {{mode}}",
 	"lado.task.rules.noAgent": "No agent chosen · at most {{mode}}",
@@ -3537,5 +3537,8 @@
 	"lado.task.rules.changedOutsideRules": "No rule changed; the agent, its mode, the AO instructions or AO itself did.",
 	"lado.task.rules.title": "Rules for this task",
 	"lado.task.rules.workerText": "Rule text for the worker",
-	"lado.task.rules.noWorkerText": "No rule adds text for the worker."
+	"lado.task.rules.noWorkerText": "No rule adds text for the worker.",
+	"lado.task.rules.approvedBlocking": "Approved with these rules, but they stop the run until the problems below are fixed",
+	"lado.rules.editor.deletedRule": "Deleted rule <code>{{id}}</code>",
+	"lado.rules.editor.editsKept": "The rule changed meanwhile. Your edits are kept; check them and save again."
 }

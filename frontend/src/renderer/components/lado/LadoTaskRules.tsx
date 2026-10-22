@@ -71,14 +71,15 @@ export function LadoTaskRules({ projectId, task }: { projectId: string; task: La
 	const mode = ladoCeilingModeLabel(t, data.permissionMode);
 	return (
 		<div className="flex flex-col gap-(--size-settings-section-gap)" data-testid="lado-task-rules">
-			<div className="flex flex-col gap-3">
+			{/* At the inset of the card rows below. */}
+			<div className="flex flex-col gap-3 px-(--settings-row-inset)" data-testid="lado-task-rules-summary">
 				<p className="text-sm text-foreground">
 					{data.agent.harness
 						? t("lado.task.rules.runsWith", { agent: agentLabel(data.agent.harness), mode })
 						: t("lado.task.rules.noAgent", { mode })}
 				</p>
-				<ProblemList effective={data} />
 				<ApprovalComparison effective={data} task={task} />
+				<ProblemList effective={data} />
 			</div>
 			<SettingsSection title={t("lado.task.rules.title")} grouped>
 				{data.rules.map((rule) => (
@@ -147,7 +148,15 @@ function ApprovalComparison({ effective, task }: { effective: LadoEffective; tas
 		if (!task.plan.approvedRevisionId) return null;
 		return <ComparisonLine tone="attention" text={t("lado.task.rules.approvedBeforeRules")} />;
 	}
-	if (approved.matches) return <ComparisonLine tone="ready" text={t("lado.task.rules.approvedMatches")} />;
+	if (approved.matches) {
+		// Rules approved with a blocking problem keep the run from starting
+		// (Blocked): approved, but not ready.
+		return approved.blocking ? (
+			<ComparisonLine tone="attention" text={t("lado.task.rules.approvedBlocking")} />
+		) : (
+			<ComparisonLine tone="ready" text={t("lado.task.rules.approvedMatches")} />
+		);
+	}
 	const names = new Map<string, string>();
 	for (const rule of allRules.data ?? []) names.set(rule.id, ladoRuleName(t, rule.id, rule.name));
 	for (const rule of effective.rules) names.set(rule.ruleId, ladoRuleName(t, rule.ruleId, rule.name));

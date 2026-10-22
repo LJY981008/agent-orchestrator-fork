@@ -156,6 +156,25 @@ test("shows rules that need review and blocked tasks in the Plan lane", async ()
 	expect(within(queued).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-approved"]);
 });
 
+test("shows plan requested for a task whose rules need review", async () => {
+	// Changes were requested since: the task waits for the new plan, not for the human.
+	const requested = { requestPending: true, requestedAt: "2026-10-19T09:10:00Z", latest: revision, approvedRevisionId: revision.id };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-review", state: "review_required", plan: requested, issue: { ...task.issue, title: "Rules changed" } },
+		{ ...task, id: "lado-task-blocked", state: "blocked", plan: requested, createdAt: "2026-10-19T08:00:00Z", issue: { ...task.issue, title: "Blocked run" } },
+	]);
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-plan-lane");
+	await within(lane).findByText("Rules changed");
+	for (const title of ["Rules changed", "Blocked run"]) {
+		const card = within(lane).getByText(title).closest("[data-testid='lado-task-card']") as HTMLElement;
+		const state = within(card).getByTestId("lado-task-state");
+		expect(state, title).toHaveTextContent("Plan requested");
+		expect(state.previousElementSibling, title).toHaveClass("bg-[var(--color-status-idle)]");
+	}
+});
+
 test("the status line follows the task's plans", async () => {
 	const cases: [string, lado.LadoTask["state"], lado.LadoTask["plan"], string][] = [
 		["draft", "draft", { requestPending: false }, "Draft"],

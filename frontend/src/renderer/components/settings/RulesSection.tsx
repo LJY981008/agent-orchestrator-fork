@@ -156,6 +156,7 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 											onCeilingChange={(mode) =>
 												run(rule, { kind: "ceiling", ruleId: rule.id, baseVersion: rule.version, mode })
 											}
+											onHistory={actionsFor(rule).onHistory}
 										/>
 									))}
 								</SettingsSection>

@@ -3521,7 +3521,7 @@
 	"lado.task.state.reviewRequired": "规则需要复查",
 	"lado.task.state.blocked": "已阻止",
 	"lado.view.rulesNeedReview": "此计划批准后规则已更改。请查看规则标签页，然后重新批准。",
-	"lado.view.rulesBlocked": "批准此计划时的规则阻止了运行。请在规则标签页中修复问题，然后重新批准。",
+	"lado.view.rulesBlocked": "批准此计划时的规则阻止了运行。修复规则标签页中的问题后，即可重新批准。",
 	"lado.view.rulesJustChanged": "规则刚刚更改。请在规则标签页中查看，然后重新批准。",
 	"lado.task.rules.runsWith": "使用 {{agent}} 运行 · 最高 {{mode}}",
 	"lado.task.rules.noAgent": "未选择代理 · 最高 {{mode}}",
@@ -3538,5 +3538,8 @@
 	"lado.task.rules.changedOutsideRules": "没有规则更改；代理、其模式、AO 指令或 AO 本身已更改。",
 	"lado.task.rules.title": "此任务的规则",
 	"lado.task.rules.workerText": "给 worker 的规则文本",
-	"lado.task.rules.noWorkerText": "没有规则为 worker 添加文本。"
+	"lado.task.rules.noWorkerText": "没有规则为 worker 添加文本。",
+	"lado.task.rules.approvedBlocking": "已按这些规则批准，但在修复下面的问题之前，这些规则会阻止运行",
+	"lado.rules.editor.deletedRule": "已删除的规则 <code>{{id}}</code>",
+	"lado.rules.editor.editsKept": "规则在此期间已更改。你的修改已保留；请检查后再次保存。"
 }

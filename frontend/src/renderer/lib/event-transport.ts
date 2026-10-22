@@ -19,17 +19,8 @@ import type { components } from "../../api/schema";
 import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEditorHandoff";
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
-import {
-	ladoEffectiveProjectQueryKey,
-	ladoPlanQueryRoot,
-	ladoProjectIssuesQueryKey,
-	ladoQueryRoot,
-	ladoRuleQueryRoot,
-	ladoRulesQueryRoot,
-	ladoTasksQueryKey,
-	ladoTaskViewQueryKey,
-	ladoTaskViewQueryRoot,
-} from "./lado";
+import { ladoPlanQueryRoot, ladoProjectIssuesQueryKey, ladoQueryRoot, ladoTasksQueryKey, ladoTaskViewQueryKey } from "./lado";
+import { createLadoEventBatch } from "./lado-events";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -78,12 +69,10 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			const pendingEditorHandoffSessions = new Set<string>();
 			const pendingModelCatalogScopes = new Map<string, { agentId: string; projectId: string }>();
-			// LADO fork: projects whose issue-backed tasks changed, and the tasks;
-			// whether rules changed, and the LADO projects they reach.
+			// LADO fork: projects whose issue-backed tasks changed, and the tasks.
 			const pendingLadoTaskProjects = new Set<string>();
 			const pendingLadoTasks = new Set<string>();
-			let ladoRulesInvalidationPending = false;
-			const pendingLadoRuleProjects = new Set<string>();
+			const ladoEvents = createLadoEventBatch();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -306,20 +295,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (pendingLadoTasks.size > 0) invalidate(ladoPlanQueryRoot);
 				pendingLadoTasks.clear();
-				// A rule change can send approved tasks back to review: refresh the
-				// rules, what applies in each project reached, its lanes, and the
-				// open task view, whose key does not name its project.
-				if (ladoRulesInvalidationPending) {
-					invalidate(ladoRulesQueryRoot);
-					invalidate(ladoRuleQueryRoot);
-					if (pendingLadoRuleProjects.size > 0) invalidate(ladoTaskViewQueryRoot);
-					ladoRulesInvalidationPending = false;
-				}
-				for (const projectId of pendingLadoRuleProjects) {
-					invalidate(ladoEffectiveProjectQueryKey(projectId));
-					invalidate(ladoTasksQueryKey(projectId));
-				}
-				pendingLadoRuleProjects.clear();
+				ladoEvents.flush(invalidate);
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
@@ -386,13 +362,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							if (typeof payload.taskId === "string" && payload.taskId) pendingLadoTasks.add(payload.taskId);
 							ladoOnly = true;
 						}
-						// LADO fork: rules are global; the daemon sends one event for each
-						// LADO project a change reaches.
-						if (payload?.kind === "lado_rules") {
-							ladoRulesInvalidationPending = true;
-							if (typeof payload.projectId === "string" && payload.projectId) pendingLadoRuleProjects.add(payload.projectId);
-							ladoOnly = true;
-						}
+						if (ladoEvents.note(payload)) ladoOnly = true;
 						if (
 							typeof payload?.reviewId === "string" &&
 							payload.reviewId &&
