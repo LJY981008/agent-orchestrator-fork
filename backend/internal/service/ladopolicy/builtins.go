@@ -1,6 +1,7 @@
 // Package ladopolicy is LADO's rule policy (docs/LJY-PRD/HARNESS.md §3-§8):
-// the built-in rules, what each agent can honor, and the AO project
-// instructions that LADO shows next to its own rules.
+// the built-in rules, what each agent can honor, the AO project instructions
+// that LADO shows next to its own rules, and resolution, which turns them
+// into the rules that apply to a project or a task and their snapshot.
 package ladopolicy
 
 import (
