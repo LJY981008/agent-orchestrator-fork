@@ -68,12 +68,39 @@
 
 ## Before — 수행 전 실측
 
-- 시작 HEAD: (단계 세션이 적는다)
+- 시작 HEAD: `be6340936b24fc963378dadd234a9898bfc3d01b`(`docs(lado): record S06`), 트리 깨끗.
+- `service/ladopolicy` 에는 S05·S06 의 순수 함수만 있다(`Builtins`·`CapabilityOf`·`ReadAORules`·`ChooseAgent`·`Resolve`·스냅숏). 서비스·store 연결 없음. store(S03·S04)에 규칙·버전·바인딩 쓰기(전부 감사 이벤트와 한 tx), `EnsureLadoBuiltinRules`, `ListLiveLadoTasks`, `LadoPolicySnapshot`, `ListLadoModeProjectIDs`, `ApproveLadoPlan(…, snapshot)` 가 있다.
+- 코드에서 확인한 전제: `ListLiveLadoTasks` 는 닫힌 이슈의 태스크와 보관된 프로젝트의 태스크도 낸다(S04 메모), `ListLadoModeProjectIDs` 는 `projects` 와 조인하지 않는다(S03 메모), `GetProject` 는 보관된 프로젝트도 돌려준다(`ladotask.project()` 가 `ArchivedAt` 으로 거른다), `Plan.Latest` 는 리비전 전체(sha 포함)다. presence 오류는 `ladopresence` 가 403 `LADO_PRESENCE_REQUIRED`·`INVALID`·`EXPIRED`·`UNAVAILABLE`·`REPLAYED`(`Replayed()`) 로 낸다.
+- 테스트는 구현 뒤에 썼다(TDD 의 RED 를 먼저 보지 않았다). 그래서 첫 실행 PASS 를 믿지 않고 아래 변이 검사로 테스트가 실제로 잡는지 확인했다.
 
 ## After — 수행 후 실측
 
-(단계 세션이 채운다)
+- 코드 커밋 `7d32bc5ac` `feat(lado): rules service with effective preview and change impact`: 3 파일, +2337.
+  - `service.go`: 좁은 의존 인터페이스 `Store`(규칙 쓰기·읽기 9개 + `ListLadoModeProjectIDs`·`ListLiveLadoTasks`·`LadoTask`·`LadoPolicySnapshot`), `Projects`(`GetProject`), `Blobs`(`Get`), `Deps{Store, Projects, Blobs, AOBuild, Clock, NewID, Log}`, `New`. 메서드 `EnsureBuiltins`·`List`·`Rule`·`Create`·`Update`·`Delete`·`SetBinding`·`Effective`·`Snapshot`·`CurrentSHA256` 와 플랜 §5 타입(`RuleView`·`CreateInput`·`UpdateInput`·`BindingInput`·`ChangeResult`·`EffectiveInput`·`EffectiveView`·`ApprovedView`), `LabelKey(scope, scopeId)`.
+  - `impact.go`: `Impact`·`ImpactProject`·`ImpactTask` 와 영향 계산.
+  - `service_test.go`: 필수 14종 + `TestSetBindingChecksScopeAndState`(바인딩 범위·상태 검증, 취소된 태스크는 inherit 만), `TestEffectiveNamesOneScope`(범위 없음·불일치·없는 범위). 실제 store(`sqlitetest.MustOpenAt` + 행 수·감사 로그를 읽는 raw 연결, store 테스트와 같은 방식)와 가짜 blobs, 태스크·리비전·승인 도우미(`task`·`plan`·`approve`·`approvedTask`).
+- 플랜에 없어 이 단계에서 정한 것(S08~S10 이 그대로 쓴다):
+  - 오류 Kind: `LADO_RULE_PROTECTED`·`LADO_RULE_BUILTIN` = 403(Forbidden), `LADO_RULE_REFERENCED`·`LADO_TASK_CANCELLED`·`LADO_PLAN_BLOB_MISSING` = 409. 새 코드 `LADO_EFFECTIVE_SCOPE_INVALID`(400: 범위 없음, 또는 다른 프로젝트의 태스크). Effective 의 없는 프로젝트·태스크도 404 `LADO_SCOPE_NOT_FOUND`. presence 는 `LADO_PRESENCE_REQUIRED`(Presence nil) 와 `ladopresence.Replayed()`, Presence 함수가 낸 오류는 그대로 돌려준다. details 키: `rule`·`max`·`mode`·`scope`·`scopeId`·`state`·`task`·`baseVersion`·`revision`·`projectId`·`taskId`.
+  - `Store` 에 `LadoPlanRevision` 은 넣지 않았다: 태스크의 `Plan.Latest` 가 리비전 전체이고 `Snapshot` 은 리비전을 받는다(좁은 인터페이스).
+  - 사용자 규칙: enforcement `[prompt]`, config `{}`. id `lado-rule-<id>`, 버전 `lado-rule-version-<id>`, 스냅숏 `lado-snapshot-<id>`. `On` 은 Global 에서만 쓴다. Create dry run 의 id 는 예약되지 않는다.
+  - 검사 순서(Update): 빈 요청 → 없는 규칙 → 보호 규칙(이름·분류·지시문·충돌·보관 필드가 **있기만 해도**, 값이 같아도 거부; `plan.approval.required` 의 CeilingMode 도 PROTECTED) → 다른 규칙의 CeilingMode = 400 `LADO_RULE_CEILING_INVALID` → 낡은 base(dry run 도) → 모드·내용 검사. 상한 모드는 `LadoCeilingModes` 만(`default` 거부).
+  - 아무것도 바뀌지 않는 요청(내용 sha·보관 상태·바인딩 상태가 같음)은 쓰지 않고 감사도 없으며 `Impact` 는 비고 `Applied = !DryRun`. 같은 상한 모드는 presence 를 묻지 않는다. presence 는 dry run 반환 뒤에만 묻는다.
+  - 충돌 목록은 요청이 `Conflicts` 를 보낼 때만 검사한다(Create 는 늘): 지운 규칙을 이름에 둔 규칙도 지시문은 고칠 수 있다. 이름·지시문 검사는 내용이 바뀔 때만.
+  - 한 요청의 내용 수정 + 보관은 버전 → 보관 순서의 두 쓰기(감사 2건, 한 tx 아님). 보관된 규칙의 내용 수정은 허용, 바인딩은 409 `LADO_RULE_ARCHIVED`.
+  - 바인딩 범위: 보관된 프로젝트·이슈 없는 태스크 = 404, 취소된 태스크는 inherit(제거)만 받는다.
+  - 감사 payload(subject_kind `rule`): `rule.created {version, scope, scopeId, global}`(내장은 정확히 `{"version":1,"builtin":true}`), `rule.updated {version, sha256, reason}`, `rule.archived`/`rule.unarchived {version, reason}`, `rule.deleted {version, name}`, `rule.binding_set {scope, scopeId, from, to}`, `rule.protected_changed {from, to, version, proof, dev, reason}`. 상한 버전의 actor 도 `human`/`human:dev-presence`.
+  - Impact: LADO 모드이고 보관되지 않은 프로젝트만, 태스크도 그 프로젝트의 것만(LADO 모드가 꺼진 프로젝트의 태스크는 보드에 없으므로). 태스크는 현재 sha 를 `PolicySHA256` 에 넣은 `State()` 가 approved·blocked(유효 승인, 스냅숏 = 지금, 이슈 열림)이고 변경 후 sha 가 다를 때 나온다. 고정 플랜을 못 읽는 태스크는 경고 로그 후 뺀다(한 핀 때문에 규칙 변경이 막히지 않게). 순서: 프로젝트 id 순, 태스크는 `ListLiveLadoTasks` 순.
+  - Effective: 태스크 범위는 `Plan.Latest`(유효 승인이면 승인된 리비전)로 해석하므로 `Effective.SHA256 == Snapshot(task, latest).SHA256 == CurrentSHA256(task)` — UI 가 `policySha256` 으로 보낼 값. 유효 승인이면 `Task.Plan.PolicySHA256` 을 채워 `Task.State()` 가 최신이다. `EffectiveView` 는 `Resolution` 을 임베드하고 `Agent`(출처 포함)·`AORules`(orchestrator 포함 전부)·`Task`·`Approved` 를 더했다. 프로젝트 범위: 보관 프로젝트 404, 에이전트는 프로젝트 워커(`ChooseAgent(빈 태스크, project)` — Impact 비교와 같은 값). `ApprovedView.Changed` = 같은 규칙의 다른 버전 **또는** 다른 바인딩 출처. 목록은 정렬, nil 아님.
+  - 고정 플랜을 못 읽으면 `Snapshot`·`CurrentSHA256`·`Effective` 는 409 `LADO_PLAN_BLOB_MISSING`. 플랜 상한 캐시는 리비전 id 별 map + mutex(읽기 실패는 캐시하지 않음).
+- 변이 검사(44회, 각각 적용 → 패키지 테스트 → 원복): 첫 묶음 35개 중 28 kill, 5개는 변이가 변수 미사용으로 빌드 실패(다시 써서 kill), 2개 생존 — Effective 의 프로젝트/태스크 불일치 검사 제거, Impact 가 보관 프로젝트를 포함 → `TestEffectiveNamesOneScope` 와 `TestImpactListsApprovedTasks` 끝(보관 프로젝트) 단언을 더해 kill. 변이 전에 범위 부족도 메웠다: 보관 규칙 바인딩 거부, 보관 해제, `Changed`(새 버전·출처 변경, 승인 상태로 돌아가면 다시 `Matches`), 같은 상태 바인딩 무기록, 바인딩 검증 표, `plan.approval.required` 의 CeilingMode. 최종 생존 0.
+- 추가 실행: `gofmt -l` 출력 없음. golangci-lint v2.13.2(저장소 `backend/.golangci.yml`, 이전 단계가 빌드한 바이너리, `GOPROXY=off`) `./internal/service/ladopolicy/...` → prealloc 1건(`diffRules` 의 `removed`) 고친 뒤 `0 issues`.
+- 게이트(HEAD `7d32bc5ac`, 코드 커밋 직후 깨끗한 트리): `GATES=6 MET=6 UNMET=0`(G1 `GO_TESTS_OK 14/14`). 이 엔트리를 커밋한 뒤 같은 명령을 다시 돌려 증거를 새 HEAD 에 묶는다.
 
 ## 비교/회고
 
-(단계 세션이 채운다)
+- 계획대로 끝났다. 막힌 곳 없음. 구현과 테스트 모두 첫 실행에서 통과했지만, 테스트를 구현 뒤에 쓴 만큼 그 통과는 근거가 아니었다 — 변이 검사가 실제 구멍 2개(범위 불일치, 보관 프로젝트)를 찾았다. 서비스처럼 거부 분기가 많은 코드는 "필수 테스트 이름"만 채우면 분기 절반이 무검증으로 남는다.
+- 변이 스크립트의 `if false {` 같은 치환은 조건에만 쓰이던 변수를 미사용으로 만들어 빌드가 깨진다. 변수를 남기는 꼴(`task.ID == ""`, `… || in.ProjectID != ""`)로 써야 동작 변이가 된다.
+- 다음 단계 메모:
+  - S08: `ladotask.Policy` 는 이 서비스의 `Snapshot(ctx, task, rev)`·`CurrentSHA256(ctx, task)` 그대로다. `Snapshot.ApprovalID` 는 비워 두면 store 가 승인 id·시각을 넣는다. 승인 검사 = `Snapshot(task, rev).SHA256 == policySHA256`. `CurrentSHA256` 은 부를 때마다 `ListLadoRules` + `GetProject` + `ReadAORules`(파일 읽기)를 하므로 목록에서 태스크마다 부르면 N 배다 — 목록이 느려지면 한 번 읽은 규칙·프로젝트로 여러 태스크를 해석하는 도우미를 이 패키지에 더한다(지금은 단순함 우선).
+  - S09: `RuleView.Labels` 키는 `LabelKey(scope, scopeId)`. `ChangeResult.Rule` 은 dry run 이면 "바뀐 뒤 모습"이다. 응답의 `agent.source` 는 `EffectiveView.Agent.Source`, `aoRules[].chars/readError` 는 `EffectiveView.AORules`, `approved.revision` 은 `RevisionNumber`. HTTP 상태는 apierr Kind 그대로(위 목록). `PATCH` 의 Presence 는 `Verifier.Verify(header, method, path, body, action, subject)` 를 감싼 함수로 넘긴다.
+  - S10: `lib/lado-errors.ts` 에 위 새 코드(`LADO_EFFECTIVE_SCOPE_INVALID`, `LADO_SCOPE_NOT_FOUND`, `LADO_RULE_*`, `LADO_BINDING_*`, `LADO_PLAN_BLOB_MISSING`)를 넣는다.
