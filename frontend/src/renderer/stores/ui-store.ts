@@ -28,6 +28,7 @@ export type GlobalSettingsSection =
 	| "general"
 	| "harness"
 	| "agents"
+	| "rules"
 	| "billing"
 	| "remoteHosts"
 	| "coder"

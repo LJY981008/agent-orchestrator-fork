@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Globe2, Keyboard, RefreshCw, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Globe2, Keyboard, RefreshCw, ScrollText, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -14,6 +14,7 @@ import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
+import { RulesSection } from "./RulesSection";
 import { SettingsSection } from "./SettingsSection";
 import { StayAwakeSection } from "./StayAwakeSection";
 
@@ -81,6 +82,13 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		// Account tab instead.
 		visible: ({ developerMode }) => !developerMode,
 		render: (_t, titleHidden) => <CodexAccountsSection titleHidden={titleHidden} />,
+	},
+	{
+		// LADO fork: the rules LADO applies to its projects' work (docs/LJY-PRD/HARNESS.md §12).
+		id: "rules",
+		icon: ScrollText,
+		label: (t) => t("lado.rules.title"),
+		render: (_t, titleHidden) => <RulesSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",

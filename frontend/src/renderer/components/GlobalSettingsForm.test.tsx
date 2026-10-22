@@ -20,6 +20,11 @@ vi.mock("./settings/HarnessSettingsSection", () => ({
 	},
 }));
 
+// LADO fork: the real page reads the daemon's rules; here it only marks its place.
+vi.mock("./settings/RulesSection", () => ({
+	RulesSection: () => <div data-testid="rules-section" />,
+}));
+
 // The real section reads the cloud gate and /me; here it only marks where the
 // General page places it.
 vi.mock("./settings/DefaultCloudSandboxRow", () => ({
