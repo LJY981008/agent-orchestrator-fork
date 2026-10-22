@@ -64,12 +64,28 @@
 
 ## Before — 수행 전 실측
 
-- 시작 HEAD: (단계 세션이 `git rev-parse HEAD` 를 적는다)
+- 시작 HEAD: `855653a5c46bca4c071abfdf4683f6c51ece14f7`(`docs(lado): plan step 5 as a 13-step chain`), 트리 깨끗.
+- LADO 트랙 최고 버전 4(`0004_lado_plans.sql`), 규칙 테이블·쿼리·gen 없음.
+- 테스트를 먼저 쓰고 돌림 → `lado_goose_db_version = 4, want 0005 applied` 로 실패(RED 확인).
 
 ## After — 수행 후 실측
 
-(단계 세션이 채운다: 커밋 SHA, 바뀐 파일, 게이트 결과)
+- 코드 커밋 `e8f8ca672` `feat(lado): rule tables and queries` — 5 파일, +927
+  - `migrations_lado/0005_lado_rules.sql`: 플랜 §2 SQL 그대로(문장 사이 빈 줄만 추가) + 머리 주석, Down 은 다섯 테이블 역순 DROP
+  - `queries/lado_rules.sql`: 엔트리의 최소 쿼리 24개 + `ListLadoRuleBindingsForRule`(규칙 하나의 바인딩) = 25개, ASCII 만
+  - `gen/lado_rules.sql.go`(새), `gen/models.go`(`LadoRule`·`LadoRuleVersion`·`LadoRuleBinding`·`LadoPolicySnapshot`·`LadoPolicySnapshotRule` 추가). 다른 gen 파일 변화 없음
+  - `lado_migrate_test.go`: `TestLadoMigrateCreatesRuleTables`
+- gen 을 직접 읽어 확인: `ORDER BY number DESC` + `LIMIT 1`, `ON CONFLICT (rule_id, scope, scope_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at`, `FROM lado_project_settings ... ORDER BY project_id` 모두 온전. `ListLadoRuleRows` 는 `CAST(?1 AS BOOLEAN)` → Go 인자 `includeArchived bool`.
+- 일회용 스크래치 테스트(커밋 안 함, 실행 뒤 삭제)로 쿼리 동작 확인: 보관 필터 false 1행/true 2행, `created_at, id` 정렬, 최신 버전 3(단건·목록), upsert 가 on→off 갱신, LADO 모드 켠 프로젝트만 정렬 반환.
+- 추가 실행: `go test -count=1 ./internal/storage/sqlite/ ./internal/storage/sqlite/sqlitetest/` ok(31.9s), `go test -count=1 -run Lado ./internal/storage/sqlite/store/` ok, `gofmt -l` 출력 없음.
+- 게이트(HEAD `e8f8ca672`): `GATES=8 MET=8 UNMET=0`. 이 엔트리 커밋 뒤 같은 명령으로 다시 돌려 증거를 새 HEAD 에 묶는다(원장 `.claude/hooks/.state/gate-runs.jsonl`).
 
 ## 비교/회고
 
-(단계 세션이 채운다)
+- 계획대로 끝났다. 막힌 곳·재작업 없음, sqlc 오프셋 버그도 재현되지 않았다(쿼리 파일 ASCII).
+- 버전 검사는 `== 5` 대신 "0005 적용(최고 ≥ 5)"으로 썼다. 오늘 트리에서 최고는 5이고, 파일 최고 = 원장 최고는 `TestOpenAppliesLadoTrackInItsOwnVersionTable` 이 따로 본다. 0006 이 생겨도 이 테스트는 그대로 둔다.
+- 이 테스트는 package `sqlite` 내부 테스트라 `sqlitetest`(sqlite 를 import)를 쓰면 import cycle 이다. 엔트리가 허용한 기존 방식 `openLadoDatabase(t, 1)`(업스트림 최신 스냅숏 + 실제 `Open` 1회, 약 1s)을 썼다.
+- CHECK 거부 행은 수락 행보다 먼저 넣고 오류 문자열 `CHECK constraint failed` 로 확인했다. 그래서 `('global','','force_on')` 이 PK 충돌로 거부되는 거짓 통과가 없다. `('project','p','inherit')` 거부도 넣었다(플랜 §3: inherit 는 요청 전용, 저장하지 않음).
+- FK 거부 뒤 같은 스냅숏에 실제 버전 id 를 넣어 성공시킨다. 그래서 거부 원인이 버전 FK 라는 것이 대조된다.
+- `InsertLadoRule` 은 `archived_at` 을 받지 않는다. 새 규칙·내장 시드는 보관 상태로 생기지 않고, 보관은 `SetLadoRuleArchivedAt` 이 맡는다.
+- 다음 단계 메모: gen 모델 이름(`gen.LadoRule` 등)이 S02 도메인 타입과 같으니 store 에서는 패키지 접두로 구분한다. `ListLadoPolicySnapshotsByProject/ByTask` 는 승인 시각 오름차순이라 가장 새 승인의 스냅숏이 마지막 행이다. 모든 프로젝트용 스냅숏 쿼리(`ListLiveLadoTasks`)가 필요하면 S04 엔트리 허용대로 거기서 추가한다.
