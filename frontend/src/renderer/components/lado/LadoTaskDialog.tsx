@@ -2,13 +2,24 @@
 // issue and its comments as they are now, the pinned plan revisions, and the
 // developer's decisions on them: request a plan, use a comment as the plan,
 // request changes, approve. Approving goes through the desktop app's native
-// confirmation (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
+// confirmation (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md)
+// and fixes the rules that apply at that moment; the Rules tab shows them.
+import { useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApproveLadoPlan, useLadoPlan, useLadoTaskView, useRequestLadoPlan } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
-import { ladoIssueLabel, type LadoIssueComment, type LadoPlan, type LadoRepository, type LadoTaskView } from "../../lib/lado";
+import {
+	fetchLadoEffective,
+	LadoApiError,
+	ladoEffectiveQueryKey,
+	ladoIssueLabel,
+	type LadoIssueComment,
+	type LadoPlan,
+	type LadoRepository,
+	type LadoTaskView,
+} from "../../lib/lado";
 import { ladoErrorText, ladoPlanProblemText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { ChatMarkdown } from "../chat/ChatMarkdown";
@@ -24,8 +35,15 @@ import {
 	settingsDialogHeaderClass,
 } from "../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { LadoTaskRules } from "./LadoTaskRules";
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
+
+/** The daemon refused an approval because the rules changed after they were read. */
+function rulesChanged(error: unknown): boolean {
+	return error instanceof LadoApiError && error.code === "LADO_RULES_CHANGED";
+}
 
 export function LadoTaskDialog({
 	projectId,
@@ -82,8 +100,12 @@ export function LadoTaskDialog({
 
 function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: string; view: LadoTaskView }) {
 	const { t } = useTranslation();
+	const queryClient = useQueryClient();
 	const requestPlan = useRequestLadoPlan(projectId, taskId);
 	const approve = useApproveLadoPlan(projectId, taskId);
+	const [tab, setTab] = useState("plan");
+	const [readingRules, setReadingRules] = useState(false);
+	const [rulesReadError, setRulesReadError] = useState<unknown>(null);
 	const revisions = view.history.revisions;
 	const latest = revisions.at(-1);
 	const [selected, setSelected] = useState<string | null>(latest?.id ?? null);
@@ -99,9 +121,48 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 	const open = task.state !== "cancelled" && task.state !== "closed_unmerged";
 	const pending = task.plan.requestPending;
 	const shown = plan.data;
+	// An approved plan is approved again when the rules changed since, or when
+	// the rules it was approved with block the run.
+	const reapprove = task.state === "review_required" || task.state === "blocked";
+	const approving = readingRules || approve.isPending;
 	const canApprove =
-		open && !pending && shown !== undefined && shown.latest && shown.revision.valid && !shown.approved && !approve.isPending;
-	const mutationError = requestPlan.error ?? approve.error;
+		open && !pending && shown !== undefined && shown.latest && shown.revision.valid && (!shown.approved || reapprove) && !approving;
+	const mutationError = requestPlan.error ?? approve.error ?? rulesReadError;
+	const staleRules = rulesChanged(approve.error);
+
+	// The approval fixes the rules that apply now, so they are read again here
+	// rather than taken from the Rules tab. The desktop app's main process reads
+	// and signs them itself; the hash is what a browser sends.
+	const approvePlan = async (target: LadoPlan) => {
+		approve.reset();
+		setRulesReadError(null);
+		setReadingRules(true);
+		let policySha256: string;
+		try {
+			const rules = await queryClient.fetchQuery({
+				queryKey: ladoEffectiveQueryKey(projectId, taskId),
+				queryFn: () => fetchLadoEffective(projectId, taskId),
+				staleTime: 0,
+			});
+			policySha256 = rules.snapshotSha256;
+		} catch (error) {
+			setRulesReadError(error);
+			return;
+		} finally {
+			setReadingRules(false);
+		}
+		approve.mutate(
+			{ revisionId: target.revision.id, sha256: target.revision.sha256, policySha256 },
+			{
+				onError: (error) => {
+					// Read the rules as they are now, for the developer to check again.
+					if (rulesChanged(error)) {
+						void queryClient.invalidateQueries({ queryKey: ladoEffectiveQueryKey(projectId, taskId), refetchType: "all" });
+					}
+				},
+			},
+		);
+	};
 
 	const sendChanges = () => {
 		const text = note.trim();
@@ -126,68 +187,90 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 					busy={requestPlan.isPending}
 					onUseAsPlan={(comment) => requestPlan.mutate({ sourceCommentId: comment.id })}
 				/>
-				<section aria-label={t("lado.view.plan")} className="settings-thin-scrollbar flex min-h-0 flex-col gap-4 overflow-y-auto p-5">
-					<div className="flex min-w-0 items-center gap-3">
-						<h3 className="text-sm font-semibold text-foreground">{t("lado.view.plan")}</h3>
-						{revisions.length > 1 ? (
-							<Select value={selected ?? undefined} onValueChange={setSelected}>
-								<SelectTrigger size="sm" className="ml-auto min-w-0 px-2.5 text-xs" aria-label={t("lado.view.plan")}>
-									<SelectValue />
-								</SelectTrigger>
-								<SelectContent>
-									{[...revisions].reverse().map((revision) => (
-										<SelectItem key={revision.id} value={revision.id}>
-											{revision.id === latest?.id
-												? t("lado.view.revisionLatest", { number: revision.number })
-												: t("lado.view.revision", { number: revision.number })}
-										</SelectItem>
-									))}
-								</SelectContent>
-							</Select>
-						) : latest ? (
-							<span className="ml-auto text-xs text-muted-foreground">{t("lado.view.revision", { number: latest.number })}</span>
-						) : null}
-					</div>
-					{view.task.state === "cancelled" ? (
-						<p className="text-control text-settings-muted">{t("lado.view.cancelled")}</p>
-					) : null}
-					{view.issueChangedSincePlan ? (
-						<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.issueChanged")}</p>
-					) : null}
-					{pending ? (
-						<p className="text-control text-settings-muted" role="status">{t("lado.view.waitingForPlan")}</p>
-					) : task.plan.requestError ? (
-						<p className="text-caption leading-4 text-error" role="alert">
-							{t("lado.view.requestFailed", { reason: task.plan.requestError })}
-						</p>
-					) : null}
-					{shown && !shown.latest ? (
-						<p className="text-caption leading-4 text-settings-muted">{t("lado.error.planSuperseded")}</p>
-					) : null}
-					{!latest ? (
-						<p className="text-control text-settings-muted">{t("lado.view.noPlan")}</p>
-					) : plan.isError ? (
-						<p className="text-caption leading-4 text-error" role="alert">{ladoErrorText(t, plan.error)}</p>
-					) : shown ? (
-						<PlanContent plan={shown} approvals={view.history.approvals} />
-					) : null}
-					{changing ? (
-						<div className="flex flex-col gap-2">
-							<label htmlFor={noteId} className="text-xs font-medium text-foreground">{t("lado.view.changeNote")}</label>
-							<textarea
-								id={noteId}
-								value={note}
-								onChange={(event) => setNote(event.target.value)}
-								placeholder={t("lado.view.changeNotePlaceholder")}
-								className="settings-field-control min-h-(--size-textarea-min) resize-none rounded-md! py-2.5"
-								disabled={requestPlan.isPending}
-							/>
+				<Tabs value={tab} onValueChange={setTab} asChild>
+					<section className="settings-thin-scrollbar flex min-h-0 flex-col gap-4 overflow-y-auto p-5">
+						<div className="flex min-w-0 items-center gap-3">
+							<TabsList className="h-8 shrink-0">
+								{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
+								<TabsTrigger value="plan">
+									<span className="text-xs font-medium">{t("lado.view.plan")}</span>
+								</TabsTrigger>
+								<TabsTrigger value="rules">
+									<span className="text-xs font-medium">{t("lado.rules.title")}</span>
+								</TabsTrigger>
+							</TabsList>
+							{tab !== "plan" ? null : revisions.length > 1 ? (
+								<Select value={selected ?? undefined} onValueChange={setSelected}>
+									<SelectTrigger size="sm" className="ml-auto min-w-0 px-2.5 text-xs" aria-label={t("lado.view.plan")}>
+										<SelectValue />
+									</SelectTrigger>
+									<SelectContent>
+										{[...revisions].reverse().map((revision) => (
+											<SelectItem key={revision.id} value={revision.id}>
+												{revision.id === latest?.id
+													? t("lado.view.revisionLatest", { number: revision.number })
+													: t("lado.view.revision", { number: revision.number })}
+											</SelectItem>
+										))}
+									</SelectContent>
+								</Select>
+							) : latest ? (
+								<span className="ml-auto text-xs text-muted-foreground">{t("lado.view.revision", { number: latest.number })}</span>
+							) : null}
 						</div>
-					) : null}
-				</section>
+						<TabsContent value="plan" className="flex flex-none flex-col gap-4">
+							{view.task.state === "cancelled" ? (
+								<p className="text-control text-settings-muted">{t("lado.view.cancelled")}</p>
+							) : null}
+							{task.state === "review_required" ? (
+								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.rulesNeedReview")}</p>
+							) : task.state === "blocked" ? (
+								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.rulesBlocked")}</p>
+							) : null}
+							{view.issueChangedSincePlan ? (
+								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.issueChanged")}</p>
+							) : null}
+							{pending ? (
+								<p className="text-control text-settings-muted" role="status">{t("lado.view.waitingForPlan")}</p>
+							) : task.plan.requestError ? (
+								<p className="text-caption leading-4 text-error" role="alert">
+									{t("lado.view.requestFailed", { reason: task.plan.requestError })}
+								</p>
+							) : null}
+							{shown && !shown.latest ? (
+								<p className="text-caption leading-4 text-settings-muted">{t("lado.error.planSuperseded")}</p>
+							) : null}
+							{!latest ? (
+								<p className="text-control text-settings-muted">{t("lado.view.noPlan")}</p>
+							) : plan.isError ? (
+								<p className="text-caption leading-4 text-error" role="alert">{ladoErrorText(t, plan.error)}</p>
+							) : shown ? (
+								<PlanContent plan={shown} approvals={view.history.approvals} />
+							) : null}
+							{changing ? (
+								<div className="flex flex-col gap-2">
+									<label htmlFor={noteId} className="text-xs font-medium text-foreground">{t("lado.view.changeNote")}</label>
+									<textarea
+										id={noteId}
+										value={note}
+										onChange={(event) => setNote(event.target.value)}
+										placeholder={t("lado.view.changeNotePlaceholder")}
+										className="settings-field-control min-h-(--size-textarea-min) resize-none rounded-md! py-2.5"
+										disabled={requestPlan.isPending}
+									/>
+								</div>
+							) : null}
+						</TabsContent>
+						<TabsContent value="rules" className="flex-none">
+							<LadoTaskRules projectId={projectId} task={task} />
+						</TabsContent>
+					</section>
+				</Tabs>
 			</div>
 			<div className={cn(settingsDialogFooterClass, "gap-2 p-4")}>
-				{mutationError ? (
+				{staleRules ? (
+					<p role="status" className="mr-auto text-caption leading-4 text-[var(--color-status-needs-you)]">{t("lado.view.rulesJustChanged")}</p>
+				) : mutationError ? (
 					<p role="alert" className="mr-auto text-caption leading-4 text-error">{ladoErrorText(t, mutationError)}</p>
 				) : null}
 				{!open ? null : changing ? (
@@ -211,10 +294,19 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 					</Button>
 				) : (
 					<>
-						<Button type="button" variant="footer" className={compactButtonClass} disabled={pending || requestPlan.isPending} onClick={() => setChanging(true)}>
+						<Button
+							type="button"
+							variant="footer"
+							className={compactButtonClass}
+							disabled={pending || requestPlan.isPending}
+							onClick={() => {
+								setChanging(true);
+								setTab("plan");
+							}}
+						>
 							{t("lado.view.requestChanges")}
 						</Button>
-						{shown?.approved ? (
+						{shown?.approved && !reapprove ? (
 							<span className="text-control font-medium text-[var(--color-status-ready)]">{t("lado.view.approved")}</span>
 						) : (
 							<Button
@@ -222,9 +314,9 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 								variant="footer-primary"
 								className={compactButtonClass}
 								disabled={!canApprove}
-								onClick={() => shown && approve.mutate({ revisionId: shown.revision.id, sha256: shown.revision.sha256 })}
+								onClick={() => shown && void approvePlan(shown)}
 							>
-								{approve.isPending ? t("lado.view.approving") : t("lado.view.approve")}
+								{approving ? t("lado.view.approving") : t("lado.view.approve")}
 							</Button>
 						)}
 					</>

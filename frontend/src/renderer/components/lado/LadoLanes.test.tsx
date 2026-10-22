@@ -134,6 +134,28 @@ test("approved tasks wait in the Queued lane", async () => {
 	expect(within(screen.getByTestId("lado-plan-lane")).queryByText("Ship it")).not.toBeInTheDocument();
 });
 
+test("shows rules that need review and blocked tasks in the Plan lane", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-review", state: "review_required", plan: approvedPlan, issue: { ...task.issue, title: "Rules changed" } },
+		{ ...task, id: "lado-task-blocked", state: "blocked", plan: approvedPlan, createdAt: "2026-10-19T08:00:00Z", issue: { ...task.issue, title: "Blocked run" } },
+		{ ...task, id: "lado-task-approved", state: "approved", plan: approvedPlan, createdAt: "2026-10-19T07:00:00Z", issue: { ...task.issue, title: "Ship it" } },
+	]);
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-plan-lane");
+	await within(lane).findByText("Rules changed");
+	for (const [title, label] of [["Rules changed", "Rules need review"], ["Blocked run", "Blocked"]]) {
+		const card = within(lane).getByText(title).closest("[data-testid='lado-task-card']") as HTMLElement;
+		const state = within(card).getByTestId("lado-task-state");
+		expect(state, title).toHaveTextContent(label);
+		// One dot and one line, in the needs-you color: the human acts next.
+		expect(state.previousElementSibling, title).toHaveClass("bg-[var(--color-status-needs-you)]");
+	}
+	const queued = screen.getByTestId("lado-queued-lane");
+	expect(within(queued).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-approved"]);
+});
+
 test("the status line follows the task's plans", async () => {
 	const cases: [string, lado.LadoTask["state"], lado.LadoTask["plan"], string][] = [
 		["draft", "draft", { requestPending: false }, "Draft"],

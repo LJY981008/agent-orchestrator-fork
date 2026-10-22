@@ -72,17 +72,21 @@ function changedFields(rule: LadoRule, draft: Draft): Omit<LadoUpdateRuleInput, 
 /**
  * Creates a rule when rule is undefined, otherwise edits it. rules names the
  * rules a new or edited rule can conflict with; protected rules are always
- * on, so they are not offered. Mount it again for each opening.
+ * on, so they are not offered. A rule created for one project (projectId) is
+ * on there only; the daemon leaves it off everywhere else. Mount it again for
+ * each opening.
  */
 export function LadoRuleEditorDialog({
 	open,
 	rule,
 	rules,
+	projectId,
 	onOpenChange,
 }: {
 	open: boolean;
 	rule?: LadoRule;
 	rules: readonly LadoRule[];
+	projectId?: string;
 	onOpenChange: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
@@ -133,9 +137,9 @@ export function LadoRuleEditorDialog({
 						category: draft.category,
 						instruction: draft.instruction,
 						conflictsWith: draft.conflicts,
-						scope: "global",
-						scopeId: "",
-						on,
+						...(projectId
+							? { scope: "project" as const, scopeId: projectId, on: true }
+							: { scope: "global" as const, scopeId: "", on }),
 					},
 				};
 		change
@@ -197,7 +201,11 @@ export function LadoRuleEditorDialog({
 				</DialogClose>
 				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
 					<DialogTitle className="settings-dialog-title text-base">
-						{base ? t("lado.rules.editor.editTitle") : t("lado.rules.newRule")}
+						{base
+							? t("lado.rules.editor.editTitle")
+							: projectId
+								? t("lado.rules.project.newRule")
+								: t("lado.rules.newRule")}
 					</DialogTitle>
 				</div>
 				<form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
@@ -262,7 +270,7 @@ export function LadoRuleEditorDialog({
 								onChange={(conflicts) => edit({ conflicts })}
 							/>
 						</EditorField>
-						{base ? null : (
+						{base || projectId ? null : (
 							<div className="flex items-center justify-between gap-3">
 								<label htmlFor={onId} className="settings-field-label">
 									{t("lado.rules.editor.onEverywhere")}

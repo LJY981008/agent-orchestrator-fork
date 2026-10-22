@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
 import { TooltipProvider } from "../ui/tooltip";
@@ -11,6 +12,8 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoPlan: vi.fn(),
 	requestLadoPlan: vi.fn(),
 	approveLadoPlan: vi.fn(),
+	fetchLadoEffective: vi.fn(),
+	fetchLadoRules: vi.fn(),
 }));
 
 const task: lado.LadoTask = {
@@ -83,6 +86,27 @@ function plannedView(plan: lado.LadoPlan = planned()): lado.LadoTaskView {
 	return view({ task: plan.task, history: { requests: [], revisions: [plan.revision], approvals: [] } });
 }
 
+// The rules that apply to the task; an approval sends their snapshot hash.
+function rules(snapshotSha256: string, fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective {
+	return {
+		projectId: "demo",
+		taskId: "lado-task-1",
+		agent: { harness: "claude-code", model: "", source: "project" },
+		permissionCeiling: "auto",
+		permissionMode: "accept-edits",
+		rules: [],
+		aoRules: [],
+		prompt: "",
+		capabilities: [],
+		problems: [],
+		blocking: false,
+		snapshotSha256,
+		...fields,
+	};
+}
+
+const approval: lado.LadoPlanApproval = { id: "a-1", revisionId: "lado-plan-1", taskId: "lado-task-1", sha256: revision.sha256, approvedAt: "2026-10-20T10:00:00Z" };
+
 function renderDialog() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(
@@ -99,6 +123,8 @@ beforeEach(() => {
 	vi.mocked(lado.requestLadoPlan).mockResolvedValue({
 		id: "req-2", taskId: "lado-task-1", sessionId: "demo-orch-1", requestedAt: "2026-10-20T10:00:00Z", deliveryAttempts: 1,
 	});
+	vi.mocked(lado.fetchLadoEffective).mockResolvedValue(rules("e".repeat(64)));
+	vi.mocked(lado.fetchLadoRules).mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -144,7 +170,7 @@ test("requests a plan, then waits for it", async () => {
 test("shows the plan and approves the exact revision", async () => {
 	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView());
 	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(planned());
-	vi.mocked(lado.approveLadoPlan).mockResolvedValue({ id: "a-1", revisionId: "lado-plan-1", taskId: "lado-task-1", sha256: revision.sha256, approvedAt: "2026-10-20T10:00:00Z" });
+	vi.mocked(lado.approveLadoPlan).mockResolvedValue(approval);
 	renderDialog();
 	const dialog = await screen.findByTestId("lado-task-dialog");
 
@@ -157,8 +183,71 @@ test("shows the plan and approves the exact revision", async () => {
 	expect(within(plan).getByText("None")).toBeInTheDocument();
 
 	fireEvent.click(within(dialog).getByRole("button", { name: "Approve plan" }));
-	// The view sends no rule hash; the desktop app reads the task's rules itself.
-	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, ""));
+	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, "e".repeat(64)));
+});
+
+test("approves with the rule snapshot hash", async () => {
+	const user = userEvent.setup();
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView());
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(planned());
+	vi.mocked(lado.approveLadoPlan).mockResolvedValue(approval);
+	// The Rules tab saw one snapshot; the rules changed before the approval.
+	vi.mocked(lado.fetchLadoEffective).mockResolvedValueOnce(rules("d".repeat(64))).mockResolvedValue(rules("e".repeat(64)));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	await user.click(within(dialog).getByRole("tab", { name: "Rules" }));
+	expect(await within(dialog).findByText("Runs with Claude Code · at most Accept edits")).toBeInTheDocument();
+	expect(lado.fetchLadoEffective).toHaveBeenCalledWith("demo", "lado-task-1");
+	await user.click(within(dialog).getByRole("button", { name: "Approve plan" }));
+
+	// The approval reads the rules again and sends the hash of what applies now.
+	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, "e".repeat(64)));
+	expect(vi.mocked(lado.fetchLadoEffective).mock.invocationCallOrder[1]).toBeLessThan(vi.mocked(lado.approveLadoPlan).mock.invocationCallOrder[0]);
+});
+
+test("offers approval again when the rules need review", async () => {
+	const approvedTask = { ...task, plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id } };
+	for (const [state, notice] of [
+		["review_required", "The rules changed since this plan was approved. Check the Rules tab, then approve again."],
+		["blocked", "The rules this plan was approved with block the run. Fix the problems on the Rules tab, then approve again."],
+	] as const) {
+		const approved = planned({ approved: true, task: { ...approvedTask, state } });
+		vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(approved));
+		vi.mocked(lado.fetchLadoPlan).mockResolvedValue(approved);
+		vi.mocked(lado.approveLadoPlan).mockReset().mockResolvedValue(approval);
+		renderDialog();
+		const dialog = await screen.findByTestId("lado-task-dialog");
+		await within(dialog).findByTestId("lado-plan");
+
+		expect(within(dialog).getByText(notice)).toHaveAttribute("role", "status");
+		expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
+		const approve = within(dialog).getByRole("button", { name: "Approve plan" });
+		expect(approve, state).toBeEnabled();
+		fireEvent.click(approve);
+		await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, "e".repeat(64)));
+		cleanup();
+	}
+});
+
+test("says the rules just changed when an approval meets newer rules", async () => {
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView());
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(planned());
+	vi.mocked(lado.approveLadoPlan).mockRejectedValue(
+		new lado.LadoApiError("The rules changed while you were approving. Review them again, then approve.", "LADO_RULES_CHANGED"),
+	);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	fireEvent.click(within(dialog).getByRole("button", { name: "Approve plan" }));
+	const notice = await within(dialog).findByText("The rules just changed. Check them on the Rules tab, then approve again.");
+	expect(notice).toHaveAttribute("role", "status");
+	expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+	// The rules are read again for the developer to check.
+	await waitFor(() => expect(lado.fetchLadoEffective).toHaveBeenCalledTimes(2));
+	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeEnabled();
 });
 
 test("a plan with problems lists them and cannot be approved", async () => {
