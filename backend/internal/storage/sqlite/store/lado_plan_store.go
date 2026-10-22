@@ -345,7 +345,12 @@ func isSQLitePrimaryKey(err error) bool {
 // unwrapLadoSentinel returns a LADO domain sentinel as is, so callers can
 // match it without the transaction's wrapping text.
 func unwrapLadoSentinel(err error) error {
-	for _, sentinel := range []error{domain.ErrLadoPresenceReplayed, domain.ErrLadoPlanSuperseded} {
+	for _, sentinel := range []error{
+		domain.ErrLadoPresenceReplayed,
+		domain.ErrLadoPlanSuperseded,
+		domain.ErrLadoRuleChanged,
+		domain.ErrLadoRuleReferenced,
+	} {
 		if errors.Is(err, sentinel) {
 			return sentinel
 		}
