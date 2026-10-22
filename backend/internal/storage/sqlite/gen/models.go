@@ -468,6 +468,21 @@ type LadoPlanRevision struct {
 	CreatedAt           time.Time
 }
 
+type LadoPolicySnapshot struct {
+	ID           string
+	ApprovalID   string
+	Sha256       string
+	SnapshotJson string
+	Blocking     int64
+	CreatedAt    time.Time
+}
+
+type LadoPolicySnapshotRule struct {
+	SnapshotID    string
+	RuleID        string
+	RuleVersionID string
+}
+
 type LadoPresenceProof struct {
 	Nonce     string
 	Action    string
@@ -481,6 +496,37 @@ type LadoProjectSetting struct {
 	ProjectID string
 	LadoMode  int64
 	UpdatedAt time.Time
+}
+
+type LadoRule struct {
+	ID         string
+	Builtin    int64
+	Protected  int64
+	CreatedAt  time.Time
+	ArchivedAt sql.NullTime
+}
+
+type LadoRuleBinding struct {
+	RuleID    string
+	Scope     string
+	ScopeID   string
+	State     string
+	UpdatedAt time.Time
+}
+
+type LadoRuleVersion struct {
+	ID              string
+	RuleID          string
+	Number          int64
+	Name            string
+	Category        string
+	Instruction     string
+	EnforcementJson string
+	ConfigJson      string
+	ConflictsJson   string
+	Sha256          string
+	Actor           string
+	CreatedAt       time.Time
 }
 
 type LadoTask struct {

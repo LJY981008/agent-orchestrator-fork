@@ -248,3 +248,68 @@ func TestMigrateDropsLadoChangeTriggersBeforeUpstreamRebuilds(t *testing.T) {
 		t.Fatal("lado_cdc_fixture_insert survived; only ladoCDCTriggers may be recreated after upstream")
 	}
 }
+
+func TestLadoMigrateCreatesRuleTables(t *testing.T) {
+	db := openLadoDatabase(t, 1)
+	if got := appliedVersion(t, db, ladoVersionTable); got < 5 {
+		t.Fatalf("%s = %d, want 0005 applied", ladoVersionTable, got)
+	}
+	for _, name := range []string{"lado_rules", "lado_rule_versions", "lado_rule_bindings", "lado_policy_snapshots", "lado_policy_snapshot_rules"} {
+		var count int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count); err != nil {
+			t.Fatalf("look up table %s: %v", name, err)
+		}
+		if count != 1 {
+			t.Fatalf("table %s missing after the LADO track", name)
+		}
+	}
+
+	// A global binding is on or off; a project or task binding forces one
+	// scope, and INHERIT is a missing row.
+	mustExec(t, db, `INSERT INTO lado_rules (id, builtin, protected, created_at) VALUES ('rule', 0, 0, CURRENT_TIMESTAMP)`)
+	insertBinding := func(scope, scopeID, state string) error {
+		_, err := db.Exec(`INSERT INTO lado_rule_bindings (rule_id, scope, scope_id, state, updated_at)
+			VALUES ('rule', ?, ?, ?, CURRENT_TIMESTAMP)`, scope, scopeID, state)
+		return err
+	}
+	for _, row := range [][3]string{
+		{"global", "x", "on"},
+		{"project", "", "force_on"},
+		{"task", "t", "on"},
+		{"global", "", "force_on"},
+		{"project", "p", "inherit"},
+	} {
+		if err := insertBinding(row[0], row[1], row[2]); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("binding %v: err = %v, want the CHECK refusal", row, err)
+		}
+	}
+	for _, row := range [][3]string{{"global", "", "on"}, {"project", "p", "force_off"}} {
+		if err := insertBinding(row[0], row[1], row[2]); err != nil {
+			t.Fatalf("binding %v: %v", row, err)
+		}
+	}
+
+	// A snapshot belongs to a plan approval, which needs its task, request,
+	// revision and presence proof.
+	hash := strings.Repeat("a", 64)
+	mustExec(t, db, `INSERT INTO lado_tasks (id, project_id, issue_repo, issue_ref, created_at, updated_at)
+		VALUES ('task', 'p', 'github:o/r', 'github:o/r#1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO lado_plan_requests (id, task_id, session_id, issue_snapshot_sha256, requested_at)
+		VALUES ('request', 'task', 's', ?, CURRENT_TIMESTAMP)`, hash)
+	mustExec(t, db, `INSERT INTO lado_plan_revisions (id, task_id, request_id, number, session_id, path, artifact_version, source, sha256, issue_snapshot_sha256, created_at)
+		VALUES ('revision', 'task', 'request', 1, 's', 'plan.md', 1, 'agent', ?, ?, CURRENT_TIMESTAMP)`, hash, hash)
+	mustExec(t, db, `INSERT INTO lado_presence_proofs (nonce, action, subject_id, expires_at, used_at)
+		VALUES ('nonce', 'plan.approve', 'revision', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO lado_plan_approvals (id, revision_id, task_id, sha256, proof_nonce, approved_at)
+		VALUES ('approval', 'revision', 'task', ?, 'nonce', CURRENT_TIMESTAMP)`, hash)
+	mustExec(t, db, `INSERT INTO lado_policy_snapshots (id, approval_id, sha256, snapshot_json, blocking, created_at)
+		VALUES ('snapshot', 'approval', ?, '{}', 0, CURRENT_TIMESTAMP)`, hash)
+	if _, err := db.Exec(`INSERT INTO lado_policy_snapshot_rules (snapshot_id, rule_id, rule_version_id)
+		VALUES ('snapshot', 'rule', 'missing')`); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("snapshot rule naming a missing version: err = %v, want the FOREIGN KEY refusal", err)
+	}
+	mustExec(t, db, `INSERT INTO lado_rule_versions (id, rule_id, number, name, enforcement_json, sha256, actor, created_at)
+		VALUES ('rule-v1', 'rule', 1, 'Rule', '["prompt"]', ?, 'lado', CURRENT_TIMESTAMP)`, hash)
+	mustExec(t, db, `INSERT INTO lado_policy_snapshot_rules (snapshot_id, rule_id, rule_version_id)
+		VALUES ('snapshot', 'rule', 'rule-v1')`)
+}
