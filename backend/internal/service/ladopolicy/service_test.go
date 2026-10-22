@@ -112,11 +112,17 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 // task adds a task of demo with an open issue, run by agent.
 func (fx *serviceFixture) task(t *testing.T, agent string) domain.LadoTask {
 	t.Helper()
+	return fx.taskOf(t, "demo", agent)
+}
+
+// taskOf adds a task of the project with an open issue, run by agent.
+func (fx *serviceFixture) taskOf(t *testing.T, project domain.ProjectID, agent string) domain.LadoTask {
+	t.Helper()
 	fx.tasks++
 	n := fx.tasks
 	task, err := fx.store.CreateLadoTask(context.Background(), domain.LadoTask{
 		ID:        domain.LadoTaskID(fmt.Sprintf("lado-task-%d", n)),
-		ProjectID: "demo",
+		ProjectID: project,
 		Repo:      domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/demo"},
 		IssueRef:  domain.IssueID(fmt.Sprintf("github:acme/demo#%d", n)),
 		Issue: domain.LadoObservedIssue{
@@ -539,6 +545,55 @@ func TestUpdateRuleRefusesAStaleBase(t *testing.T) {
 	}
 	if got := fx.rule(t, rule.ID).Version; got.Number != 2 || got.Content.Instruction != "Second." {
 		t.Fatalf("active version = %+v, want version 2 kept", got)
+	}
+}
+
+// A deleted rule stays in the conflicts of a rule that named it, so the
+// editor sends it back with every change of the list. It must not block the
+// change; a rule the change adds is still checked.
+func TestUpdateKeepsConflictsWithADeletedRule(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	create := func(name string, conflicts ...domain.LadoRuleID) domain.LadoRule {
+		t.Helper()
+		got, err := fx.svc.Create(ctx, CreateInput{Name: name, Instruction: name + ".", Conflicts: conflicts, Scope: domain.LadoScopeGlobal})
+		if err != nil || !got.Applied {
+			t.Fatalf("Create %s = (%+v, %v), want an applied rule", name, got, err)
+		}
+		return got.Rule.Rule
+	}
+	b := create("Squash merges")
+	a := create("Merge commits", b.ID)
+	// No snapshot used B, so it can be deleted.
+	if err := fx.svc.Delete(ctx, b.ID); err != nil {
+		t.Fatalf("Delete B: %v", err)
+	}
+	c := create("Linear history")
+
+	got, err := fx.svc.Update(ctx, a.ID, UpdateInput{BaseVersion: 1, Conflicts: &[]domain.LadoRuleID{b.ID, c.ID}})
+	if err != nil || !got.Applied {
+		t.Fatalf("adding C next to the deleted B = (%+v, %v), want applied", got, err)
+	}
+	want := []domain.LadoRuleID{b.ID, c.ID}
+	slices.Sort(want)
+	if v := fx.rule(t, a.ID).Version; v.Number != 2 || !slices.Equal(v.Content.Conflicts, want) {
+		t.Fatalf("A's active version = %+v, want version 2 conflicting with %v", v, want)
+	}
+
+	before := fx.rows(t)
+	for code, added := range map[string]domain.LadoRuleID{
+		"LADO_RULE_CONFLICT_UNKNOWN":   "lado-rule-missing",
+		"LADO_RULE_CONFLICT_SELF":      a.ID,
+		"LADO_RULE_CONFLICT_PROTECTED": domain.LadoRulePlanApproval,
+	} {
+		_, err := fx.svc.Update(ctx, a.ID, UpdateInput{BaseVersion: 2, Conflicts: &[]domain.LadoRuleID{b.ID, c.ID, added}})
+		wantAPIError(t, err, apierr.KindInvalid, code)
+	}
+	// A new rule has no list to keep: every rule it names must exist.
+	_, err = fx.svc.Create(ctx, CreateInput{Name: "Rebase", Instruction: "Rebase.", Conflicts: []domain.LadoRuleID{b.ID}, Scope: domain.LadoScopeGlobal})
+	wantAPIError(t, err, apierr.KindInvalid, "LADO_RULE_CONFLICT_UNKNOWN")
+	if after := fx.rows(t); after != before {
+		t.Fatalf("rows after the refused changes = %+v, want %+v", after, before)
 	}
 }
 
@@ -1061,6 +1116,114 @@ func TestSnapshotMatchesCurrentSHA(t *testing.T) {
 	}
 	if current, err := fx.svc.CurrentSHA256(ctx, task); err != nil || current == snapshot.SHA256 {
 		t.Fatalf("after the task's binding = %s, %v, want another hash", current, err)
+	}
+}
+
+// countingStore counts the rule reads of the service.
+type countingStore struct {
+	Store
+	mu    sync.Mutex
+	lists int
+}
+
+func (c *countingStore) ListLadoRules(ctx context.Context, includeArchived bool) ([]domain.LadoRule, error) {
+	c.mu.Lock()
+	c.lists++
+	c.mu.Unlock()
+	return c.Store.ListLadoRules(ctx, includeArchived)
+}
+
+// countingProjects counts the reads of each project.
+type countingProjects struct {
+	Projects
+	mu    sync.Mutex
+	reads map[string]int
+}
+
+func (c *countingProjects) GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error) {
+	c.mu.Lock()
+	c.reads[id]++
+	c.mu.Unlock()
+	return c.Projects.GetProject(ctx, id)
+}
+
+func TestCurrentSHA256sMatchesOneByOne(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	bound := fx.approvedTask(t, "claude-code")
+	if _, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: domain.LadoRuleKoreanCommits, Scope: domain.LadoScopeTask, ScopeID: string(bound.ID), State: domain.LadoBindingForceOn}); err != nil {
+		t.Fatal(err)
+	}
+	lower, _ := fx.plan(t, fx.task(t, "claude-code"), domain.PermissionModeAcceptEdits)
+	unreadable, rev := fx.plan(t, fx.task(t, "claude-code"), domain.PermissionModeAuto)
+	fx.blobs.mu.Lock()
+	delete(fx.blobs.data, rev.SHA256)
+	fx.blobs.mu.Unlock()
+	tasks := []domain.LadoTask{
+		fx.approvedTask(t, "claude-code"),
+		fx.approvedTask(t, "codex"),
+		bound,
+		lower,
+		fx.taskOf(t, "other", "claude-code"),
+		fx.task(t, ""),
+		unreadable,
+		fx.taskOf(t, "ghost", "claude-code"),
+	}
+
+	got, err := fx.svc.CurrentSHA256s(ctx, tasks)
+	if err != nil {
+		t.Fatalf("CurrentSHA256s: %v", err)
+	}
+	// A task CurrentSHA256 cannot resolve, for its pinned plan or its
+	// project, is left out.
+	want := map[domain.LadoTaskID]string{}
+	for _, task := range tasks {
+		if sum, err := fx.svc.CurrentSHA256(ctx, task); err == nil {
+			want[task.ID] = sum
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("CurrentSHA256s = %v, want the hashes one by one %v", got, want)
+	}
+	distinct := map[string]bool{}
+	for _, sum := range want {
+		distinct[sum] = true
+	}
+	if len(want) != len(tasks)-2 || len(distinct) != len(want) {
+		t.Fatalf("one by one: %d hashes, %d distinct, want %d different ones", len(want), len(distinct), len(tasks)-2)
+	}
+}
+
+func TestCurrentSHA256sReadsRulesOnce(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	tasks := []domain.LadoTask{fx.approvedTask(t, "claude-code"), fx.approvedTask(t, "codex"), fx.approvedTask(t, "claude-code")}
+	store := &countingStore{Store: fx.store}
+	projects := &countingProjects{Projects: fx.store, reads: map[string]int{}}
+	fx.svc.deps.Store, fx.svc.deps.Projects = store, projects
+
+	sums, err := fx.svc.CurrentSHA256s(ctx, tasks)
+	if err != nil || len(sums) != len(tasks) {
+		t.Fatalf("CurrentSHA256s = (%v, %v), want a hash for each task", sums, err)
+	}
+	if store.lists != 1 || !reflect.DeepEqual(projects.reads, map[string]int{"demo": 1}) {
+		t.Fatalf("three tasks of demo read the rules %d times and the projects %v, want once each", store.lists, projects.reads)
+	}
+}
+
+// A cancelled request reads no pinned plan, and the ceiling it did not read
+// is not kept for the requests after it.
+func TestPlanCeilingReadsNoBlobOnceCancelled(t *testing.T) {
+	fx := newServiceFixture(t)
+	_, rev := fx.plan(t, fx.task(t, "claude-code"), domain.PermissionModeAcceptEdits)
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if got, err := fx.svc.planCeiling(cancelled, rev); !errors.Is(err, context.Canceled) {
+		t.Fatalf("planCeiling with a cancelled context = (%q, %v), want context.Canceled", got, err)
+	}
+	if got, err := fx.svc.planCeiling(context.Background(), rev); err != nil || got != domain.PermissionModeAcceptEdits {
+		t.Fatalf("planCeiling after the cancelled read = (%q, %v), want accept-edits", got, err)
 	}
 }
 

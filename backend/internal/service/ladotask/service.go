@@ -77,6 +77,9 @@ type Policy interface {
 	// CurrentSHA256 is the snapshot hash the rules give the task's approved
 	// revision now.
 	CurrentSHA256(ctx context.Context, task domain.LadoTask) (string, error)
+	// CurrentSHA256s is CurrentSHA256 for many tasks, reading the rules
+	// once. A task it cannot resolve is left out.
+	CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error)
 }
 
 // ProjectRepo is one repository of a project whose tracker can hold the
@@ -374,11 +377,7 @@ func (s *Service) List(ctx context.Context, projectID domain.ProjectID, includeC
 	if err != nil {
 		return nil, apierr.Internal("LADO_TASKS_LOAD_FAILED", "Failed to load tasks")
 	}
-	// Few tasks hold a valid approval, so each resolves its rules alone.
-	for i := range tasks {
-		tasks[i] = s.withPolicy(ctx, tasks[i])
-	}
-	return tasks, nil
+	return s.withPolicies(ctx, tasks), nil
 }
 
 // Get returns a task after reading its issue again, as when the task view
@@ -415,6 +414,33 @@ func (s *Service) withPolicy(ctx context.Context, task domain.LadoTask) domain.L
 	}
 	task.Plan.PolicySHA256 = sum
 	return task
+}
+
+// withPolicies is withPolicy for a task list, which resolves the rules once
+// for all of its approved tasks.
+func (s *Service) withPolicies(ctx context.Context, tasks []domain.LadoTask) []domain.LadoTask {
+	if s.deps.Policy == nil {
+		return tasks
+	}
+	approved := make([]domain.LadoTask, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Plan.ApprovalValid() {
+			approved = append(approved, task)
+		}
+	}
+	if len(approved) == 0 {
+		return tasks
+	}
+	sums, err := s.deps.Policy.CurrentSHA256s(ctx, approved)
+	if err != nil {
+		s.deps.Log.Debug("LADO could not resolve the rules of a task list", "err", err)
+		return tasks
+	}
+	// A task left out keeps an empty hash.
+	for i := range tasks {
+		tasks[i].Plan.PolicySHA256 = sums[tasks[i].ID]
+	}
+	return tasks
 }
 
 // UpdatePreferences changes a task's agent or model. A nil field keeps its

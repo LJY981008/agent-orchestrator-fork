@@ -1,6 +1,7 @@
 package ladopolicy_test
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
@@ -636,14 +637,14 @@ func TestResolveAORulesFileUnreadable(t *testing.T) {
 	// The reason is what ReadAORules found.
 	project := domain.ProjectRecord{ID: string(projectA), Path: t.TempDir(), Config: domain.ProjectConfig{AgentRulesFile: "docs/agents.md"}}
 	in := taskInput(seeded(), claudeCode)
-	in.AORules = ladopolicy.ReadAORules(project)
+	in.AORules = ladopolicy.ReadAORules(context.Background(), project)
 	if got := problemsWith(ladopolicy.Resolve(in), "LADO_AO_RULES_"); !sameList(got, want) {
 		t.Errorf("missing file: problems %+v, want %+v", got, want)
 	}
 
 	// A file that was read raises nothing.
 	writeFile(t, project.Path, "docs/agents.md", "Run make test.")
-	in.AORules = ladopolicy.ReadAORules(project)
+	in.AORules = ladopolicy.ReadAORules(context.Background(), project)
 	r := ladopolicy.Resolve(in)
 	if got := problemsWith(r, "LADO_AO_RULES_"); len(got) != 0 || r.Blocking() {
 		t.Errorf("readable file: problems %+v, want none", r.Problems)

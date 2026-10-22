@@ -1,6 +1,7 @@
 package ladopolicy_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"os"
@@ -44,7 +45,7 @@ func TestReadAORulesHashesTrimmedText(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, dir, "docs/rules.md", "\n\n  Use tabs.\n\n")
 
-	got := ladopolicy.ReadAORules(projectAt(dir, domain.ProjectConfig{
+	got := ladopolicy.ReadAORules(context.Background(), projectAt(dir, domain.ProjectConfig{
 		AgentRules:        "  커밋은 한국어로  \n",
 		AgentRulesFile:    " docs/rules.md ",
 		OrchestratorRules: "\tPlan first.\n",
@@ -60,13 +61,13 @@ func TestReadAORulesHashesTrimmedText(t *testing.T) {
 	}
 
 	// Text that differs only in surrounding whitespace hashes the same.
-	plain := ladopolicy.ReadAORules(projectAt(dir, domain.ProjectConfig{AgentRules: "커밋은 한국어로"}))
+	plain := ladopolicy.ReadAORules(context.Background(), projectAt(dir, domain.ProjectConfig{AgentRules: "커밋은 한국어로"}))
 	if len(plain) != 1 || plain[0] != got[0] {
 		t.Errorf("untrimmed and trimmed text differ: %+v and %+v", plain, got[0])
 	}
 
 	// Settings that are empty or only whitespace make no entry.
-	empty := ladopolicy.ReadAORules(projectAt(dir, domain.ProjectConfig{AgentRules: " \n", AgentRulesFile: "  ", OrchestratorRules: "\t"}))
+	empty := ladopolicy.ReadAORules(context.Background(), projectAt(dir, domain.ProjectConfig{AgentRules: " \n", AgentRulesFile: "  ", OrchestratorRules: "\t"}))
 	if len(empty) != 0 {
 		t.Errorf("blank settings gave entries: %+v", empty)
 	}
@@ -74,7 +75,7 @@ func TestReadAORulesHashesTrimmedText(t *testing.T) {
 	// A configured file with only whitespace keeps its entry, with the empty
 	// text's hash.
 	writeFile(t, dir, "docs/blank.md", " \n\t\n")
-	blank := ladopolicy.ReadAORules(projectAt(dir, domain.ProjectConfig{AgentRulesFile: "docs/blank.md"}))
+	blank := ladopolicy.ReadAORules(context.Background(), projectAt(dir, domain.ProjectConfig{AgentRulesFile: "docs/blank.md"}))
 	wantBlank := []ladopolicy.AORule{{Kind: ladopolicy.AORuleWorkerInstructionsFile, Path: "docs/blank.md", SHA256: hexSHA256("")}}
 	if !reflect.DeepEqual(blank, wantBlank) {
 		t.Errorf("blank file gave %+v, want %+v", blank, wantBlank)
@@ -101,7 +102,7 @@ func TestReadAORulesRefusesPathsOutsideTheProject(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ladopolicy.ReadAORules(c.project)
+			got := ladopolicy.ReadAORules(context.Background(), c.project)
 			if len(got) != 1 {
 				t.Fatalf("ReadAORules() = %+v, want one entry", got)
 			}
@@ -146,7 +147,7 @@ func TestReadAORulesReportsUnreadableFiles(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := ladopolicy.ReadAORules(projectAt(dir, domain.ProjectConfig{
+			got := ladopolicy.ReadAORules(context.Background(), projectAt(dir, domain.ProjectConfig{
 				AgentRules:        "Worker rules.",
 				AgentRulesFile:    c.rel,
 				OrchestratorRules: "Orchestrator rules.",
@@ -179,5 +180,23 @@ func TestReadAORulesReportsUnreadableFiles(t *testing.T) {
 				t.Errorf("read error %q names the project folder", file.ReadError)
 			}
 		})
+	}
+}
+
+// The agentRulesFile is the only entry read from disk: a cancelled request
+// skips it and says so.
+func TestReadAORulesReadsNoFileOnceCancelled(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "docs/rules.md", "Use tabs.")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	got := ladopolicy.ReadAORules(ctx, projectAt(dir, domain.ProjectConfig{AgentRules: "Worker rules.", AgentRulesFile: "docs/rules.md"}))
+	want := []ladopolicy.AORule{
+		{Kind: ladopolicy.AORuleWorkerInstructions, SHA256: hexSHA256("Worker rules."), Chars: 13},
+		{Kind: ladopolicy.AORuleWorkerInstructionsFile, Path: "docs/rules.md", ReadError: context.Canceled.Error()},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ReadAORules() =\n%+v\nwant\n%+v", got, want)
 	}
 }

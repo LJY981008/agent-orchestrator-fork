@@ -296,6 +296,9 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		return domain.LadoPlanApproval{}, ladopresence.Replayed()
 	case errors.Is(err, domain.ErrLadoPlanSuperseded):
 		return domain.LadoPlanApproval{}, superseded()
+	case errors.Is(err, domain.ErrLadoRulesChanged):
+		// A rule the snapshot used was deleted after it was resolved.
+		return domain.LadoPlanApproval{}, rulesChanged()
 	case err != nil:
 		s.deps.Log.Error("LADO could not record a plan approval", "revision", rev.ID, "err", err)
 		return domain.LadoPlanApproval{}, apierr.Internal("LADO_PLAN_APPROVE_FAILED", "Failed to save the approval")
@@ -305,6 +308,10 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 
 func superseded() error {
 	return apierr.Conflict("LADO_PLAN_SUPERSEDED", "A newer version of this plan exists. Review the latest plan and approve that one.", nil)
+}
+
+func rulesChanged() error {
+	return apierr.Conflict("LADO_RULES_CHANGED", "The rules changed while you were approving. Review them again, then approve.", nil)
 }
 
 // ruleSnapshot fixes the rules for approving a revision. It refuses when
@@ -327,7 +334,7 @@ func (s *Service) ruleSnapshot(ctx context.Context, task domain.LadoTask, rev do
 		return domain.LadoPolicySnapshot{}, apierr.Internal("LADO_RULES_LOAD_FAILED", "Failed to load the rules")
 	}
 	if snapshot.SHA256 != policySHA256 {
-		return domain.LadoPolicySnapshot{}, apierr.Conflict("LADO_RULES_CHANGED", "The rules changed while you were approving. Review them again, then approve.", nil)
+		return domain.LadoPolicySnapshot{}, rulesChanged()
 	}
 	return snapshot, nil
 }

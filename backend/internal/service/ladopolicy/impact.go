@@ -60,7 +60,7 @@ func (s *Service) impact(ctx context.Context, before, after []domain.LadoRule) (
 		if !ok || !project.ArchivedAt.IsZero() {
 			continue
 		}
-		scope := projectScope{record: project, aoRules: ReadAORules(project)}
+		scope := projectScope{record: project, aoRules: ReadAORules(ctx, project)}
 		projects[id] = scope
 		in := s.projectInput(scope)
 		if changes(in, before, after) {
@@ -79,7 +79,7 @@ func (s *Service) impact(ctx context.Context, before, after []domain.LadoRule) (
 		if !ok || !task.Plan.ApprovalValid() {
 			continue
 		}
-		in, err := s.taskInput(task, scope, task.Plan.Latest)
+		in, err := s.taskInput(ctx, task, scope, task.Plan.Latest)
 		if err != nil {
 			s.deps.Log.Warn("LADO left a task out of a rule change's impact: its pinned plan is unreadable", "task", task.ID, "err", err)
 			continue

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -136,10 +137,16 @@ type fakePolicy struct {
 	mu       sync.Mutex
 	sha      string
 	blocking bool
-	// currentErr fails CurrentSHA256.
+	// rules are the rule versions each snapshot used.
+	rules []domain.LadoPolicySnapshotRule
+	// currentErr fails CurrentSHA256 and CurrentSHA256s.
 	currentErr error
 	// resolved are the revisions Snapshot resolved the rules for.
 	resolved []domain.LadoPlanRevisionID
+	// singles counts the CurrentSHA256 calls; batches are the tasks of each
+	// CurrentSHA256s call.
+	singles int
+	batches [][]domain.LadoTaskID
 }
 
 func (p *fakePolicy) set(sha string, blocking bool) {
@@ -157,16 +164,34 @@ func (p *fakePolicy) Snapshot(_ context.Context, _ domain.LadoTask, rev domain.L
 		SHA256:   p.sha,
 		Content:  []byte(`{"compiler":"lado-policy/1"}`),
 		Blocking: p.blocking,
+		Rules:    p.rules,
 	}, nil
 }
 
 func (p *fakePolicy) CurrentSHA256(context.Context, domain.LadoTask) (string, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.singles++
 	if p.currentErr != nil {
 		return "", p.currentErr
 	}
 	return p.sha, nil
+}
+
+func (p *fakePolicy) CurrentSHA256s(_ context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ids := make([]domain.LadoTaskID, 0, len(tasks))
+	sums := make(map[domain.LadoTaskID]string, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+		sums[task.ID] = p.sha
+	}
+	p.batches = append(p.batches, ids)
+	if p.currentErr != nil {
+		return nil, p.currentErr
+	}
+	return sums, nil
 }
 
 func (p *fakePolicy) revisions() []domain.LadoPlanRevisionID {
@@ -640,6 +665,32 @@ func TestApprovePlanRefusesChangedRules(t *testing.T) {
 	}
 }
 
+// The rules are resolved before the approval's transaction; a rule the
+// snapshot uses can be deleted in between, which the store refuses. The
+// developer then reviews the rules again, as for any rule change.
+func TestApprovePlanMapsADeletedRuleToRulesChanged(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+
+	pf.policy.rules = []domain.LadoPolicySnapshotRule{{RuleID: "lado-rule-deleted", VersionID: "lado-rule-version-deleted"}}
+	_, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID))
+	if apiCode(err) != "LADO_RULES_CHANGED" || apiKind(err) != apierr.KindConflict {
+		t.Fatalf("approving with a rule deleted meanwhile = %v, want 409 LADO_RULES_CHANGED", err)
+	}
+	for table, want := range map[string]int{"lado_plan_approvals": 0, "lado_presence_proofs": 0, "lado_policy_snapshots": 0} {
+		if n := pf.count(t, table); n != want {
+			t.Fatalf("%s has %d rows after a refused approval, want %d", table, n, want)
+		}
+	}
+	if len(pf.approvalEvents(t)) != 0 {
+		t.Fatal("a refused approval was audited as approved")
+	}
+	if state := pf.latest(t).State(); state != domain.LadoTaskPlanned {
+		t.Fatalf("state = %q, want planned", state)
+	}
+}
+
 func TestApprovePlanNeedsThePolicySHA(t *testing.T) {
 	pf := newPlanFixture(t)
 	ctx := context.Background()
@@ -696,6 +747,39 @@ func TestTaskStateFollowsRuleChanges(t *testing.T) {
 	pf.wantState(t, domain.LadoTaskBlocked)
 	if events := pf.approvalEvents(t); events[len(events)-1]["blocking"] != true {
 		t.Fatalf("approval event = %v, want blocking", events[len(events)-1])
+	}
+}
+
+// A project's task list resolves the rules once for all its approved tasks,
+// as the board reads the list again at every change.
+func TestListResolvesTheRulesOfApprovedTasksAtOnce(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	unapproved, err := pf.svc.Create(ctx, CreateInput{ProjectID: "demo", Text: "Add logout"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	pf.policy.set(policyB, false)
+	pf.policy.mu.Lock()
+	pf.policy.singles, pf.policy.batches = 0, nil
+	pf.policy.mu.Unlock()
+
+	tasks, err := pf.svc.List(ctx, "demo", false)
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("List = (%d tasks, %v), want both", len(tasks), err)
+	}
+	states := map[domain.LadoTaskID]domain.LadoTaskState{tasks[0].ID: tasks[0].State(), tasks[1].ID: tasks[1].State()}
+	if states[pf.task.ID] != domain.LadoTaskReviewRequired || states[unapproved.ID] == domain.LadoTaskReviewRequired {
+		t.Fatalf("states = %v, want only the approved task to need review", states)
+	}
+	pf.policy.mu.Lock()
+	defer pf.policy.mu.Unlock()
+	if pf.policy.singles != 0 || !reflect.DeepEqual(pf.policy.batches, [][]domain.LadoTaskID{{pf.task.ID}}) {
+		t.Fatalf("List resolved %d tasks alone and batches %v, want one batch of the approved task", pf.policy.singles, pf.policy.batches)
 	}
 }
 

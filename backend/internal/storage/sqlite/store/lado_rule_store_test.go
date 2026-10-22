@@ -593,10 +593,10 @@ func TestLadoRuleChangesPublishToLadoProjects(t *testing.T) {
 			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
 				t.Fatalf("%s: payload %s: %v", step, ev.Payload, err)
 			}
-			if ev.Type != "session_updated" || ev.SessionID != "" || payload.Kind != "lado_rules" || payload.ProjectID != string(ev.ProjectID) {
+			if ev.Type != "session_updated" || ev.SessionID != "" || payload.Kind != "lado_rules" || payload.ProjectID != ev.ProjectID {
 				t.Fatalf("%s: event %+v payload %+v, want a lado_rules session_updated event", step, ev, payload)
 			}
-			got = append(got, string(ev.ProjectID))
+			got = append(got, ev.ProjectID)
 		}
 		sort.Strings(got)
 		if !reflect.DeepEqual(got, want) {

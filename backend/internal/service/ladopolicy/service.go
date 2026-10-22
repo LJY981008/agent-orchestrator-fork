@@ -227,7 +227,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (ChangeResult, err
 		Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementPrompt},
 		Conflicts:   in.Conflicts,
 	}.Normalize()
-	if err := checkContent(rule.ID, content, rules, true); err != nil {
+	if err := checkContent(rule.ID, content, rules, nil); err != nil {
 		return ChangeResult{}, err
 	}
 	if in.Scope == domain.LadoScopeGlobal {
@@ -330,7 +330,7 @@ func (s *Service) Update(ctx context.Context, id domain.LadoRuleID, in UpdateInp
 	content = content.Normalize()
 	after := rule
 	if content.SHA256() != rule.Version.Content.SHA256() {
-		if err := checkContent(id, content, rules, in.Conflicts != nil); err != nil {
+		if err := checkContent(id, content, rules, rule.Version.Content.Conflicts); err != nil {
 			return ChangeResult{}, err
 		}
 		after.Version = s.newVersion(id, rule.Version.Number+1, content, actorAPI, now)
@@ -690,6 +690,42 @@ func (s *Service) CurrentSHA256(ctx context.Context, task domain.LadoTask) (stri
 	return r.SHA256, nil
 }
 
+// CurrentSHA256s is CurrentSHA256 for many tasks, as a task list needs it:
+// it reads the rules once and each project with its AO instructions once. A
+// task whose project or pinned plan cannot be read is left out, which reads
+// as no change, as when CurrentSHA256 fails for it; only rules that cannot
+// be read fail the call.
+func (s *Service) CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error) {
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// A nil scope is a project that cannot be read.
+	scopes := map[domain.ProjectID]*projectScope{}
+	sums := make(map[domain.LadoTaskID]string, len(tasks))
+	for _, task := range tasks {
+		scope, read := scopes[task.ProjectID]
+		if !read {
+			if got, err := s.projectScope(ctx, task.ProjectID); err != nil {
+				s.deps.Log.Debug("LADO could not read a project for its tasks' rules", "project", task.ProjectID, "err", err)
+			} else {
+				scope = &got
+			}
+			scopes[task.ProjectID] = scope
+		}
+		if scope == nil {
+			continue
+		}
+		r, _, err := s.resolveTaskWith(ctx, rules, *scope, task, task.Plan.Latest)
+		if err != nil {
+			s.deps.Log.Debug("LADO could not resolve a task's rules", "task", task.ID, "err", err)
+			continue
+		}
+		sums[task.ID] = r.SHA256
+	}
+	return sums, nil
+}
+
 // projectScope is a project with its AO instructions, read once for every
 // resolution of the project and its tasks.
 type projectScope struct {
@@ -706,7 +742,7 @@ func (s *Service) projectScope(ctx context.Context, id domain.ProjectID) (projec
 	if !ok {
 		return projectScope{}, scopeNotFound(domain.LadoScopeProject, string(id))
 	}
-	return projectScope{record: project, aoRules: ReadAORules(project)}, nil
+	return projectScope{record: project, aoRules: ReadAORules(ctx, project)}, nil
 }
 
 // projectInput is what resolution reads for a project. Its agent is the
@@ -722,8 +758,8 @@ func (s *Service) projectInput(scope projectScope) Input {
 
 // taskInput is what resolution reads for a task at a plan revision, which
 // may be empty.
-func (s *Service) taskInput(task domain.LadoTask, scope projectScope, rev domain.LadoPlanRevision) (Input, error) {
-	ceiling, err := s.planCeiling(rev)
+func (s *Service) taskInput(ctx context.Context, task domain.LadoTask, scope projectScope, rev domain.LadoPlanRevision) (Input, error) {
+	ceiling, err := s.planCeiling(ctx, rev)
 	if err != nil {
 		return Input{}, err
 	}
@@ -747,7 +783,13 @@ func (s *Service) resolveTask(ctx context.Context, task domain.LadoTask, rev dom
 	if err != nil {
 		return Resolution{}, Input{}, err
 	}
-	in, err := s.taskInput(task, scope, rev)
+	return s.resolveTaskWith(ctx, rules, scope, task, rev)
+}
+
+// resolveTaskWith resolves the rules for a task at a plan revision with the
+// rules and the task's project as read before.
+func (s *Service) resolveTaskWith(ctx context.Context, rules []domain.LadoRule, scope projectScope, task domain.LadoTask, rev domain.LadoPlanRevision) (Resolution, Input, error) {
+	in, err := s.taskInput(ctx, task, scope, rev)
 	if err != nil {
 		s.deps.Log.Warn("LADO could not read a pinned plan for its rules", "revision", rev.ID, "err", err)
 		return Resolution{}, Input{}, apierr.Conflict("LADO_PLAN_BLOB_MISSING",
@@ -759,8 +801,9 @@ func (s *Service) resolveTask(ctx context.Context, task domain.LadoTask, rev dom
 }
 
 // planCeiling returns the permission ceiling a plan revision asks for, read
-// from its pinned plan once. Without a revision there is none.
-func (s *Service) planCeiling(rev domain.LadoPlanRevision) (domain.PermissionMode, error) {
+// from its pinned plan once. Without a revision there is none. A cancelled
+// request reads no plan.
+func (s *Service) planCeiling(ctx context.Context, rev domain.LadoPlanRevision) (domain.PermissionMode, error) {
 	if rev.ID == "" {
 		return "", nil
 	}
@@ -769,6 +812,9 @@ func (s *Service) planCeiling(rev domain.LadoPlanRevision) (domain.PermissionMod
 	s.mu.Unlock()
 	if ok {
 		return ceiling, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
 	content, err := s.deps.Blobs.Get(rev.SHA256, domain.LadoPlanMaxBytes)
 	if err != nil {
@@ -783,10 +829,11 @@ func (s *Service) planCeiling(rev domain.LadoPlanRevision) (domain.PermissionMod
 	return plan.PermissionCeiling, nil
 }
 
-// checkContent checks a user rule's normalized content. Conflicts are checked
-// when the change names them, so an edit of the text still works after a
-// rule it names was deleted.
-func checkContent(id domain.LadoRuleID, c domain.LadoRuleContent, rules []domain.LadoRule, conflicts bool) error {
+// checkContent checks a user rule's normalized content. A conflict in kept,
+// the conflicts of the rule's active version, passes as it is, so the rule
+// stays editable after a rule it names was deleted; any other must name a
+// rule that exists, is not the rule itself and is not protected.
+func checkContent(id domain.LadoRuleID, c domain.LadoRuleContent, rules []domain.LadoRule, kept []domain.LadoRuleID) error {
 	switch {
 	case c.Name == "":
 		return apierr.Invalid("LADO_RULE_NAME_REQUIRED", "Name the rule.", nil)
@@ -798,12 +845,13 @@ func checkContent(id domain.LadoRuleID, c domain.LadoRuleContent, rules []domain
 		return apierr.Invalid("LADO_RULE_INSTRUCTION_REQUIRED", "Write the instruction workers get.", nil)
 	case utf8.RuneCountInString(c.Instruction) > maxInstructionRunes:
 		return apierr.Invalid("LADO_RULE_INSTRUCTION_TOO_LONG", fmt.Sprintf("Keep the instruction within %d characters.", maxInstructionRunes), map[string]any{"max": maxInstructionRunes})
-	case !conflicts:
-		return nil
 	case len(c.Conflicts) > maxConflicts:
 		return apierr.Invalid("LADO_RULE_CONFLICTS_TOO_MANY", fmt.Sprintf("Name at most %d conflicting rules.", maxConflicts), map[string]any{"max": maxConflicts})
 	}
 	for _, other := range c.Conflicts {
+		if slices.Contains(kept, other) {
+			continue
+		}
 		rule, ok := findRule(rules, other)
 		switch {
 		case other == id:

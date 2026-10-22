@@ -1,9 +1,16 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // LadoPolicySnapshotID identifies a rule snapshot.
 type LadoPolicySnapshotID string
+
+// ErrLadoRulesChanged reports that a rule version an approval's snapshot
+// used was deleted after the rules were resolved for the approval.
+var ErrLadoRulesChanged = errors.New("a rule version the snapshot used no longer exists")
 
 // LadoProblemSeverity says what a policy problem does to a task.
 type LadoProblemSeverity string

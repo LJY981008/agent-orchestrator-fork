@@ -1,6 +1,7 @@
 package ladopolicy
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -50,15 +51,15 @@ type AORule struct {
 
 // ReadAORules reads the project's AO instructions. A setting that is empty
 // or only whitespace gives no entry, and an agentRulesFile that cannot be
-// read gives one with ReadError.
-func ReadAORules(project domain.ProjectRecord) []AORule {
+// read, or is not read because ctx is done, gives one with ReadError.
+func ReadAORules(ctx context.Context, project domain.ProjectRecord) []AORule {
 	cfg := project.Config
 	rules := make([]AORule, 0, 3)
 	if text := strings.TrimSpace(cfg.AgentRules); text != "" {
 		rules = append(rules, textAORule(AORuleWorkerInstructions, text))
 	}
 	if rel := strings.TrimSpace(cfg.AgentRulesFile); rel != "" {
-		rules = append(rules, fileAORule(project.Path, rel))
+		rules = append(rules, fileAORule(ctx, project.Path, rel))
 	}
 	if text := strings.TrimSpace(cfg.OrchestratorRules); text != "" {
 		rules = append(rules, textAORule(AORuleOrchestratorInstructions, text))
@@ -74,8 +75,8 @@ func textAORule(kind AORuleKind, text string) AORule {
 
 // fileAORule describes the agentRulesFile rel of the project at
 // projectPath.
-func fileAORule(projectPath, rel string) AORule {
-	data, err := readProjectFile(projectPath, rel)
+func fileAORule(ctx context.Context, projectPath, rel string) AORule {
+	data, err := readProjectFile(ctx, projectPath, rel)
 	if err != nil {
 		return AORule{Kind: AORuleWorkerInstructionsFile, Path: rel, ReadError: err.Error()}
 	}
@@ -88,7 +89,10 @@ func fileAORule(projectPath, rel string) AORule {
 // reads when it starts a worker, up to maxAORulesFileBytes. Its errors leave
 // out where the project lives: they are shown next to rel and go into rule
 // snapshots.
-func readProjectFile(projectPath, rel string) ([]byte, error) {
+func readProjectFile(ctx context.Context, projectPath, rel string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	path, err := projectRelativeFile(projectPath, rel)
 	if err != nil {
 		return nil, err

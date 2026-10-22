@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -17,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 var ladoRuleTime = time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
@@ -324,6 +326,66 @@ func TestLadoAPI_UpdateRulePassesTheExactBodyToPresence(t *testing.T) {
 	if svc.calls != before {
 		t.Fatalf("the service was called for a body with an unknown field")
 	}
+}
+
+// The ceiling change through the real presence check and the real rule
+// service: only a proof the app made over the exact body changes the
+// ceiling, and a proof works once.
+func TestLadoAPI_CeilingChangeChecksPresenceEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	rules := ladopolicy.New(ladopolicy.Deps{Store: store, Projects: store, Log: slog.New(slog.NewTextHandler(io.Discard, nil))})
+	if err := rules.EnsureBuiltins(ctx); err != nil {
+		t.Fatalf("EnsureBuiltins: %v", err)
+	}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoRules: rules, LadoPresence: presenceVerifier()})
+	path := "/api/v1/lado/rules/" + string(domain.LadoRulePermissionCeiling)
+	change := `{"baseVersion":1,"ceiling":{"mode":"bypass-permissions"}}`
+	// wantCeiling checks the active version of the ceiling in the store.
+	wantCeiling := func(t *testing.T, number int, mode domain.PermissionMode) {
+		t.Helper()
+		rule, ok, err := store.LadoRule(ctx, domain.LadoRulePermissionCeiling)
+		if err != nil || !ok {
+			t.Fatalf("LadoRule = (%v, %v)", ok, err)
+		}
+		var config domain.LadoCeilingConfig
+		if err := json.Unmarshal(rule.Version.Content.Config, &config); err != nil || rule.Version.Number != number || config.Mode != mode {
+			t.Fatalf("ceiling = version %d %s (%v), want version %d %s", rule.Version.Number, rule.Version.Content.Config, err, number, mode)
+		}
+	}
+
+	t.Run("without a proof", func(t *testing.T) {
+		body, status, _ := doRequest(t, srv, "PATCH", path, change)
+		wantLadoErrorCode(t, body, status, http.StatusForbidden, "LADO_PRESENCE_REQUIRED")
+		wantCeiling(t, 1, domain.PermissionModeAuto)
+	})
+	t.Run("a body changed after signing", func(t *testing.T) {
+		body, status := signedRequest(t, srv, "PATCH", path, change, `{"baseVersion":1,"ceiling":{"mode":"accept-edits"}}`)
+		wantLadoErrorCode(t, body, status, http.StatusForbidden, "LADO_PRESENCE_INVALID")
+		wantCeiling(t, 1, domain.PermissionModeAuto)
+	})
+	t.Run("a proof over the body", func(t *testing.T) {
+		body, status := signedRequest(t, srv, "PATCH", path, change, change)
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, body %s", status, body)
+		}
+		resp := decodeLadoJSON[controllers.LadoRuleChangeResponse](t, body)
+		if !resp.Applied || resp.Rule == nil || resp.Rule.Version != 2 || resp.Rule.Ceiling == nil || resp.Rule.Ceiling.Mode != string(domain.PermissionModeBypassPermissions) {
+			t.Fatalf("response = %+v, want version 2 at bypass-permissions", resp)
+		}
+		wantCeiling(t, 2, domain.PermissionModeBypassPermissions)
+	})
+	t.Run("the same proof again", func(t *testing.T) {
+		// Sent again as it was, the request names version 1, which is gone.
+		body, status := signedRequest(t, srv, "PATCH", path, change, change)
+		wantLadoErrorCode(t, body, status, http.StatusConflict, "LADO_RULE_CHANGED")
+		// signedRequest signs with one nonce, so this proof over the next
+		// change reuses the stored one.
+		next := `{"baseVersion":2,"ceiling":{"mode":"accept-edits"}}`
+		body, status = signedRequest(t, srv, "PATCH", path, next, next)
+		wantLadoErrorCode(t, body, status, http.StatusForbidden, "LADO_PRESENCE_REPLAYED")
+		wantCeiling(t, 2, domain.PermissionModeBypassPermissions)
+	})
 }
 
 func TestLadoAPI_DeleteRule(t *testing.T) {

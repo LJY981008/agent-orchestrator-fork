@@ -507,6 +507,41 @@ func TestApproveLadoPlanRollsBackWhenTheSnapshotFails(t *testing.T) {
 	}
 }
 
+// The rules are resolved for an approval before its transaction, so a rule
+// the snapshot uses can be deleted in between. The approval is refused as a
+// rule change, and keeps nothing.
+func TestApproveLadoPlanRefusesARuleDeletedMeanwhile(t *testing.T) {
+	s, raw := openLadoAuditStore(t)
+	ctx := context.Background()
+	seedLadoTaskWithPlan(t, s)
+	kept := mustCreateLadoRule(t, s, ladoUserRule("lado-rule-1", ladoRuleAt))
+	deleted := mustCreateLadoRule(t, s, ladoUserRule("lado-rule-2", ladoRuleAt.Add(time.Minute)))
+	rev := mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a')))
+	snapshot := ladoPolicySnapshot("lado-snapshot-1", `{}`, false, kept, deleted)
+	at := ladoRuleAt.Add(2 * time.Minute)
+	if err := s.DeleteLadoRule(ctx, deleted.ID, ladoRuleEvent("rule.deleted", deleted.ID, at)); err != nil {
+		t.Fatalf("DeleteLadoRule: %v", err)
+	}
+
+	tables := []string{"lado_plan_approvals", "lado_presence_proofs", "lado_policy_snapshots", "lado_policy_snapshot_rules", "lado_audit_events"}
+	before := countLadoTables(t, raw, tables...)
+	approval := domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: rev.SHA256, ApprovedAt: ladoPlanAt.Add(time.Minute)}
+	_, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot)
+	if !errors.Is(err, domain.ErrLadoRulesChanged) {
+		t.Fatalf("ApproveLadoPlan = %v, want ErrLadoRulesChanged", err)
+	}
+	after := countLadoTables(t, raw, tables...)
+	if !reflect.DeepEqual(after, before) || after["lado_plan_approvals"] != 0 || after["lado_presence_proofs"] != 0 || after["lado_policy_snapshots"] != 0 {
+		t.Fatalf("rows = %v, want %v: no approval, nonce, snapshot or audit event", after, before)
+	}
+
+	// The nonce was not used up: the approval goes through with the rules
+	// resolved again.
+	if _, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), ladoPolicySnapshot("lado-snapshot-1", `{}`, false, kept)); err != nil {
+		t.Fatalf("ApproveLadoPlan with the remaining rule = %v, want success", err)
+	}
+}
+
 func TestLadoTaskReadsCarryTheRuleSnapshot(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()

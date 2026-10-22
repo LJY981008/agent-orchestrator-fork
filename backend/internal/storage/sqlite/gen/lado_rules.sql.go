@@ -11,6 +11,24 @@ import (
 	"time"
 )
 
+const countLadoRuleVersion = `-- name: CountLadoRuleVersion :one
+SELECT COUNT(*)
+FROM lado_rule_versions
+WHERE id = ? AND rule_id = ?
+`
+
+type CountLadoRuleVersionParams struct {
+	ID     string
+	RuleID string
+}
+
+func (q *Queries) CountLadoRuleVersion(ctx context.Context, arg CountLadoRuleVersionParams) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLadoRuleVersion, arg.ID, arg.RuleID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const countLadoSnapshotRulesForRule = `-- name: CountLadoSnapshotRulesForRule :one
 SELECT COUNT(*)
 FROM lado_policy_snapshot_rules
@@ -346,44 +364,6 @@ ORDER BY a.task_id, a.approved_at, a.id
 
 func (q *Queries) ListLadoPolicySnapshotsByProject(ctx context.Context, projectID string) ([]LadoPolicySnapshot, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoPolicySnapshotsByProject, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []LadoPolicySnapshot{}
-	for rows.Next() {
-		var i LadoPolicySnapshot
-		if err := rows.Scan(
-			&i.ID,
-			&i.ApprovalID,
-			&i.Sha256,
-			&i.SnapshotJson,
-			&i.Blocking,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLadoPolicySnapshotsByTask = `-- name: ListLadoPolicySnapshotsByTask :many
-SELECT s.id, s.approval_id, s.sha256, s.snapshot_json, s.blocking, s.created_at
-FROM lado_policy_snapshots s
-JOIN lado_plan_approvals a ON a.id = s.approval_id
-WHERE a.task_id = ?
-ORDER BY a.approved_at, a.id
-`
-
-func (q *Queries) ListLadoPolicySnapshotsByTask(ctx context.Context, taskID string) ([]LadoPolicySnapshot, error) {
-	rows, err := q.db.QueryContext(ctx, listLadoPolicySnapshotsByTask, taskID)
 	if err != nil {
 		return nil, err
 	}

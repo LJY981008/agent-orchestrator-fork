@@ -238,7 +238,9 @@ func (s *Store) ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTas
 // A proof whose nonce was used before is refused with
 // domain.ErrLadoPresenceReplayed. A nil snapshot stores the approval without
 // one; otherwise the snapshot takes the approval's id and time and is stored
-// with the rule versions it used. When any part fails, nothing is kept.
+// with the rule versions it used, which must all still exist: the rules are
+// resolved before the transaction, so a rule deleted in between is refused
+// with domain.ErrLadoRulesChanged. When any part fails, nothing is kept.
 func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot) (domain.LadoPlanApproval, domain.LadoAuditEvent, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return domain.LadoPlanApproval{}, domain.LadoAuditEvent{}, err
@@ -258,6 +260,11 @@ func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApp
 		}
 		if latest.ID != string(approval.RevisionID) || latest.Sha256 != approval.SHA256 {
 			return domain.ErrLadoPlanSuperseded
+		}
+		if snapshot != nil {
+			if err := checkLadoSnapshotRulesTx(ctx, q, *snapshot); err != nil {
+				return err
+			}
 		}
 		if err := insertLadoPresenceProof(ctx, q, proof); err != nil {
 			return err
@@ -313,6 +320,21 @@ func (s *Store) LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPl
 		})
 	}
 	return snapshot, true, nil
+}
+
+// checkLadoSnapshotRulesTx refuses a snapshot that uses a rule version that
+// no longer exists with domain.ErrLadoRulesChanged.
+func checkLadoSnapshotRulesTx(ctx context.Context, q *gen.Queries, snapshot domain.LadoPolicySnapshot) error {
+	for _, rule := range snapshot.Rules {
+		n, err := q.CountLadoRuleVersion(ctx, gen.CountLadoRuleVersionParams{ID: string(rule.VersionID), RuleID: string(rule.RuleID)})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return domain.ErrLadoRulesChanged
+		}
+	}
+	return nil
 }
 
 // insertLadoPolicySnapshotTx stores the rule snapshot of a stored approval,
@@ -410,6 +432,7 @@ func unwrapLadoSentinel(err error) error {
 		domain.ErrLadoPlanSuperseded,
 		domain.ErrLadoRuleChanged,
 		domain.ErrLadoRuleReferenced,
+		domain.ErrLadoRulesChanged,
 	} {
 		if errors.Is(err, sentinel) {
 			return sentinel

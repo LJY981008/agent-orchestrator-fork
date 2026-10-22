@@ -52,6 +52,11 @@ FROM lado_rule_versions
 WHERE rule_id = ?
 ORDER BY number;
 
+-- name: CountLadoRuleVersion :one
+SELECT COUNT(*)
+FROM lado_rule_versions
+WHERE id = ? AND rule_id = ?;
+
 -- name: DeleteLadoRuleVersions :exec
 DELETE FROM lado_rule_versions
 WHERE rule_id = ?;
@@ -107,13 +112,6 @@ JOIN lado_plan_approvals a ON a.id = s.approval_id
 JOIN lado_tasks t ON t.id = a.task_id
 WHERE t.project_id = ?
 ORDER BY a.task_id, a.approved_at, a.id;
-
--- name: ListLadoPolicySnapshotsByTask :many
-SELECT s.id, s.approval_id, s.sha256, s.snapshot_json, s.blocking, s.created_at
-FROM lado_policy_snapshots s
-JOIN lado_plan_approvals a ON a.id = s.approval_id
-WHERE a.task_id = ?
-ORDER BY a.approved_at, a.id;
 
 -- name: CountLadoSnapshotRulesForRule :one
 SELECT COUNT(*)
