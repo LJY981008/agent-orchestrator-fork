@@ -3,7 +3,9 @@ package ladotask
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
 )
 
@@ -120,6 +123,58 @@ func (g fakeGit) RevParse(_ context.Context, _ string, ref string) (string, erro
 	return "", fmt.Errorf("%s names no commit", ref)
 }
 
+// Rule snapshot hashes the fake rules give.
+var (
+	policyA = strings.Repeat("a", 64)
+	policyB = strings.Repeat("b", 64)
+	policyC = strings.Repeat("c", 64)
+)
+
+// fakePolicy is the rules: every resolution gives the same snapshot until a
+// test changes the rules with set.
+type fakePolicy struct {
+	mu       sync.Mutex
+	sha      string
+	blocking bool
+	// currentErr fails CurrentSHA256.
+	currentErr error
+	// resolved are the revisions Snapshot resolved the rules for.
+	resolved []domain.LadoPlanRevisionID
+}
+
+func (p *fakePolicy) set(sha string, blocking bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.sha, p.blocking = sha, blocking
+}
+
+func (p *fakePolicy) Snapshot(_ context.Context, _ domain.LadoTask, rev domain.LadoPlanRevision) (domain.LadoPolicySnapshot, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.resolved = append(p.resolved, rev.ID)
+	return domain.LadoPolicySnapshot{
+		ID:       domain.LadoPolicySnapshotID(fmt.Sprintf("lado-snapshot-%d", len(p.resolved))),
+		SHA256:   p.sha,
+		Content:  []byte(`{"compiler":"lado-policy/1"}`),
+		Blocking: p.blocking,
+	}, nil
+}
+
+func (p *fakePolicy) CurrentSHA256(context.Context, domain.LadoTask) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.currentErr != nil {
+		return "", p.currentErr
+	}
+	return p.sha, nil
+}
+
+func (p *fakePolicy) revisions() []domain.LadoPlanRevisionID {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]domain.LadoPlanRevisionID(nil), p.resolved...)
+}
+
 const orchestratorID domain.SessionID = "demo-orchestrator-1"
 
 type planFixture struct {
@@ -127,6 +182,8 @@ type planFixture struct {
 	orchestrators *fakeOrchestrators
 	artifacts     *fakeArtifacts
 	blobs         *ladoblob.Store
+	policy        *fakePolicy
+	raw           *sql.DB
 	artifactDir   string
 	task          domain.LadoTask
 	native        string
@@ -136,11 +193,18 @@ type planFixture struct {
 func newPlanFixture(t *testing.T) *planFixture {
 	t.Helper()
 	fx := newGitHubTaskFixture(t)
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(fx.dataDir, "ao.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open raw connection: %v", err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
 	pf := &planFixture{
 		taskFixture:   fx,
 		orchestrators: &fakeOrchestrators{},
 		artifacts:     &fakeArtifacts{},
 		blobs:         ladoblob.New(t.TempDir()),
+		policy:        &fakePolicy{sha: policyA},
+		raw:           raw,
 		artifactDir:   t.TempDir(),
 	}
 	t.Cleanup(func() { _ = pf.blobs.Close() })
@@ -160,6 +224,7 @@ func newPlanFixture(t *testing.T) *planFixture {
 		Orchestrators: pf.orchestrators,
 		Artifacts:     pf.artifacts,
 		Git:           fakeGit{refs: map[string]string{"main": strings.Repeat("c", 40)}},
+		Policy:        pf.policy,
 	})
 	task, err := fx.svc.Create(context.Background(), CreateInput{ProjectID: "demo", Text: "Add login\nThe plan is in the comments."})
 	if err != nil {
@@ -221,6 +286,109 @@ func (pf *planFixture) latest(t *testing.T) domain.LadoTask {
 		t.Fatalf("LadoTask: %v %v", ok, err)
 	}
 	return task
+}
+
+// planned asks for a plan, has the orchestrator write a valid one and
+// returns its revision.
+func (pf *planFixture) planned(t *testing.T) domain.LadoPlanRevision {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := pf.svc.RequestPlan(ctx, PlanRequestInput{TaskID: pf.task.ID}); err != nil {
+		t.Fatalf("RequestPlan: %v", err)
+	}
+	pf.now = pf.now.Add(time.Minute)
+	pf.writePlan(pf.planFile("issue"), domain.ArtifactVersionSourceAgent)
+	pf.svc.WatchPlans(ctx)
+	rev := pf.latest(t).Plan.Latest
+	if !rev.Valid() {
+		t.Fatalf("revision = %+v, want a valid plan", rev)
+	}
+	return rev
+}
+
+// count returns the rows of a table.
+func (pf *planFixture) count(t *testing.T, table string) int {
+	t.Helper()
+	var n int
+	if err := pf.raw.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&n); err != nil {
+		t.Fatalf("count %s: %v", table, err)
+	}
+	return n
+}
+
+// approvalEvents returns the payloads of the plan.approved audit events,
+// oldest first.
+func (pf *planFixture) approvalEvents(t *testing.T) []map[string]any {
+	t.Helper()
+	rows, err := pf.raw.Query(`SELECT payload_json FROM lado_audit_events WHERE action = 'plan.approved' ORDER BY id`)
+	if err != nil {
+		t.Fatalf("read audit events: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var events []map[string]any
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan audit event: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			t.Fatalf("decode audit payload %s: %v", raw, err)
+		}
+		events = append(events, payload)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("read audit events: %v", err)
+	}
+	return events
+}
+
+// states returns the task's state as each service call that returns the
+// task shows it.
+func (pf *planFixture) states(t *testing.T) map[string]domain.LadoTaskState {
+	t.Helper()
+	ctx := context.Background()
+	tasks, err := pf.svc.List(ctx, "demo", false)
+	if err != nil || len(tasks) != 1 {
+		t.Fatalf("List = (%d tasks, %v), want the task", len(tasks), err)
+	}
+	task, err := pf.svc.Get(ctx, pf.task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	view, err := pf.svc.View(ctx, pf.task.ID)
+	if err != nil {
+		t.Fatalf("View: %v", err)
+	}
+	plan, err := pf.svc.Plan(ctx, task.Plan.Latest.ID)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	model := task.Model
+	updated, err := pf.svc.UpdatePreferences(ctx, pf.task.ID, nil, &model)
+	if err != nil {
+		t.Fatalf("UpdatePreferences: %v", err)
+	}
+	return map[string]domain.LadoTaskState{
+		"List": tasks[0].State(), "Get": task.State(), "View": view.Task.State(), "Plan": plan.Task.State(), "UpdatePreferences": updated.State(),
+	}
+}
+
+func (pf *planFixture) wantState(t *testing.T, want domain.LadoTaskState) {
+	t.Helper()
+	for read, got := range pf.states(t) {
+		if got != want {
+			t.Fatalf("%s shows the task as %q, want %q", read, got, want)
+		}
+	}
+}
+
+func apiKind(err error) apierr.Kind {
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.Kind
+	}
+	return apierr.KindInternal
 }
 
 func TestRequestPlanPinsTheIssueWithTrustedCommentsAndAsksTheOrchestrator(t *testing.T) {
@@ -352,7 +520,7 @@ func TestWatchPlansRecordsProblemsAndSkipsTamperedVersions(t *testing.T) {
 	if rev.Valid() || rev.Problems[0].Code != domain.LadoPlanUnknownBaseRef {
 		t.Fatalf("revision = %+v, want unknown_base_ref", rev)
 	}
-	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_INVALID" {
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_INVALID" {
 		t.Fatalf("approving a plan with problems = %v, want LADO_PLAN_INVALID", err)
 	}
 
@@ -378,11 +546,11 @@ func TestApprovePlanBindsTheExactRevision(t *testing.T) {
 	pf.svc.WatchPlans(ctx)
 	rev := pf.latest(t).Plan.Latest
 
-	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, strings.Repeat("0", 64), pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_CHANGED" {
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, strings.Repeat("0", 64), policyA, pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_CHANGED" {
 		t.Fatalf("approving other bytes = %v, want LADO_PLAN_CHANGED", err)
 	}
 	proof := pf.proof(rev.ID)
-	approval, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, proof)
+	approval, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, proof)
 	if err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
@@ -396,7 +564,7 @@ func TestApprovePlanBindsTheExactRevision(t *testing.T) {
 		t.Fatalf("audit chain = (%d, %v)", broken, err)
 	}
 	// Gate 10: a used proof cannot approve again.
-	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, proof); apiCode(err) != "LADO_PRESENCE_REPLAYED" {
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, proof); apiCode(err) != "LADO_PRESENCE_REPLAYED" {
 		t.Fatalf("a replayed proof = %v, want LADO_PRESENCE_REPLAYED", err)
 	}
 
@@ -409,8 +577,153 @@ func TestApprovePlanBindsTheExactRevision(t *testing.T) {
 	if task.State() != domain.LadoTaskPlanned || task.Plan.Latest.SHA256 == rev.SHA256 {
 		t.Fatalf("after an edit: state %q, latest %+v", task.State(), task.Plan.Latest)
 	}
-	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_SUPERSEDED" {
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_SUPERSEDED" {
 		t.Fatalf("approving the old revision = %v, want LADO_PLAN_SUPERSEDED", err)
+	}
+}
+
+func TestApprovePlanStoresTheRuleSnapshot(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+
+	approval, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID))
+	if err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	if got := pf.policy.revisions(); len(got) != 1 || got[0] != rev.ID {
+		t.Fatalf("the rules were resolved for %v, want the approved revision %s", got, rev.ID)
+	}
+	task, err := pf.svc.Get(ctx, pf.task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if task.Plan.Approval.ID != approval.ID || task.Plan.Snapshot.SHA256 != policyA || task.Plan.Snapshot.Blocking ||
+		task.Plan.PolicySHA256 != policyA || task.State() != domain.LadoTaskApproved {
+		t.Fatalf("plan = %+v, state %q; want the approval with the rules' snapshot", task.Plan, task.State())
+	}
+	stored, ok, err := pf.store.LadoPolicySnapshot(ctx, approval.ID)
+	if err != nil || !ok || stored.ApprovalID != approval.ID || stored.SHA256 != policyA {
+		t.Fatalf("stored snapshot = (%+v, %v, %v)", stored, ok, err)
+	}
+	events := pf.approvalEvents(t)
+	if len(events) != 1 || events[0]["policySnapshot"] != policyA || events[0]["blocking"] != false || events[0]["sha256"] != rev.SHA256 {
+		t.Fatalf("approval events = %v, want the plan and rule snapshot hashes", events)
+	}
+	if broken, err := pf.store.VerifyLadoAuditChain(ctx); err != nil || broken != 0 {
+		t.Fatalf("audit chain = (%d, %v)", broken, err)
+	}
+}
+
+func TestApprovePlanRefusesChangedRules(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+
+	// The developer reviewed the rules as policyA; a rule changed before the
+	// approval arrived.
+	pf.policy.set(policyB, false)
+	_, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID))
+	if apiCode(err) != "LADO_RULES_CHANGED" || apiKind(err) != apierr.KindConflict {
+		t.Fatalf("approving rules that changed = %v, want 409 LADO_RULES_CHANGED", err)
+	}
+	for table, want := range map[string]int{"lado_plan_approvals": 0, "lado_presence_proofs": 0, "lado_policy_snapshots": 0} {
+		if n := pf.count(t, table); n != want {
+			t.Fatalf("%s has %d rows after a refused approval, want %d", table, n, want)
+		}
+	}
+	if len(pf.approvalEvents(t)) != 0 {
+		t.Fatal("a refused approval was audited as approved")
+	}
+	if state := pf.latest(t).State(); state != domain.LadoTaskPlanned {
+		t.Fatalf("state = %q, want planned", state)
+	}
+}
+
+func TestApprovePlanNeedsThePolicySHA(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+
+	// The plan's own checks come first.
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, strings.Repeat("0", 64), "", pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_CHANGED" {
+		t.Fatalf("other plan bytes without a rule hash = %v, want LADO_PLAN_CHANGED", err)
+	}
+	_, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, "", pf.proof(rev.ID))
+	if apiCode(err) != "LADO_POLICY_SHA_REQUIRED" || apiKind(err) != apierr.KindInvalid {
+		t.Fatalf("an approval without the rule hash = %v, want 400 LADO_POLICY_SHA_REQUIRED", err)
+	}
+	// Without the rules nothing can be approved.
+	pf.svc.deps.Policy = nil
+	_, err = pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID))
+	if apiCode(err) != "LADO_RULES_UNAVAILABLE" || apiKind(err) != apierr.KindInternal {
+		t.Fatalf("an approval without the rule service = %v, want 500 LADO_RULES_UNAVAILABLE", err)
+	}
+	if n := pf.count(t, "lado_plan_approvals"); n != 0 {
+		t.Fatalf("%d approvals stored, want none", n)
+	}
+}
+
+func TestTaskStateFollowsRuleChanges(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	pf.wantState(t, domain.LadoTaskApproved)
+
+	pf.policy.set(policyB, false)
+	pf.wantState(t, domain.LadoTaskReviewRequired)
+	if stored := pf.latest(t); stored.State() != domain.LadoTaskApproved || stored.Plan.PolicySHA256 != "" {
+		t.Fatalf("the store's task = %+v, want no current rule hash: the service fills it", stored.Plan)
+	}
+	pf.policy.set(policyA, false)
+	pf.wantState(t, domain.LadoTaskApproved)
+
+	// Rules LADO cannot resolve show no change.
+	pf.policy.set(policyB, false)
+	pf.policy.currentErr = errors.New("the pinned plan is gone")
+	pf.wantState(t, domain.LadoTaskApproved)
+	pf.policy.currentErr = nil
+
+	// An approval whose snapshot holds a blocking problem stands, and the
+	// task shows as blocked.
+	pf.policy.set(policyC, true)
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyC, pf.proof(rev.ID)); err != nil {
+		t.Fatalf("approving a blocking snapshot: %v", err)
+	}
+	pf.wantState(t, domain.LadoTaskBlocked)
+	if events := pf.approvalEvents(t); events[len(events)-1]["blocking"] != true {
+		t.Fatalf("approval event = %v, want blocking", events[len(events)-1])
+	}
+}
+
+func TestReviewRequiredTaskCanBeApprovedAgain(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	pf.policy.set(policyB, false)
+	if task, err := pf.svc.Get(ctx, pf.task.ID); err != nil || task.State() != domain.LadoTaskReviewRequired {
+		t.Fatalf("after a rule change: state %q, %v; want review_required", task.State(), err)
+	}
+
+	again, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyB, pf.proof(rev.ID))
+	if err != nil {
+		t.Fatalf("approving the same revision under the new rules: %v", err)
+	}
+	task, err := pf.svc.Get(ctx, pf.task.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if again.RevisionID != rev.ID || task.Plan.Approval.ID != again.ID || task.Plan.Snapshot.SHA256 != policyB || task.State() != domain.LadoTaskApproved {
+		t.Fatalf("after approving again: plan %+v, state %q; want approved under policyB", task.Plan, task.State())
+	}
+	if n := pf.count(t, "lado_plan_approvals"); n != 2 {
+		t.Fatalf("%d approvals, want both kept", n)
 	}
 }
 

@@ -13766,6 +13766,11 @@ components:
       type: object
     ApproveLadoPlanRequest:
       properties:
+        policySha256:
+          description: The sha256 of the rule snapshot the developer reviewed for
+            this approval. The service requires it and refuses the approval when the
+            rules changed since.
+          type: string
         sha256:
           description: The revision's sha256 the developer reviewed.
           type: string
@@ -17983,10 +17988,14 @@ components:
             github:owner/repo.
           type: string
         state:
-          description: Derived task state.
+          description: 'Derived task state. review_required: the rules changed since
+            the approval; blocked: the approval''s rule snapshot holds a blocking
+            problem.'
           enum:
           - draft
           - planned
+          - review_required
+          - blocked
           - approved
           - cancelled
           - closed_unmerged

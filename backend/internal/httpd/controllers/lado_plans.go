@@ -109,7 +109,7 @@ func (c *LadoController) approvePlan(w http.ResponseWriter, r *http.Request) {
 	if !decodeLadoBytes(w, r, body, &req) {
 		return
 	}
-	approval, err := c.Tasks.ApprovePlan(r.Context(), revision, req.SHA256, proof)
+	approval, err := c.Tasks.ApprovePlan(r.Context(), revision, req.SHA256, req.PolicySHA256, proof)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

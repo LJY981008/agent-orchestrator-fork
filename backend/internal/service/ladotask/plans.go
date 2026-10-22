@@ -228,9 +228,12 @@ func (s *Service) deliver(ctx context.Context, task domain.LadoTask, req domain.
 }
 
 // ApprovePlan approves one exact plan revision with a human-presence proof
-// (docs/LJY-PRD/TDD.md §5.2). sha256 is the hash the developer saw; the
-// approval, the proof and the audit event commit together.
-func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRevisionID, sha256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error) {
+// (docs/LJY-PRD/TDD.md §5.2). sha256 is the plan hash and policySHA256 the
+// rule snapshot hash the developer saw; the approval, the rule snapshot, the
+// proof and the audit event commit together. A snapshot with a blocking
+// problem is approved too, and the task shows as Blocked. A task that needs
+// review, or is blocked, approves its latest revision again.
+func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRevisionID, sha256, policySHA256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error) {
 	rev, err := s.revision(ctx, revisionID)
 	if err != nil {
 		return domain.LadoPlanApproval{}, err
@@ -251,35 +254,43 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		s.deps.Log.Error("LADO could not read a pinned plan before approval", "revision", rev.ID, "err", err)
 		return domain.LadoPlanApproval{}, apierr.Conflict("LADO_PLAN_BLOB_MISSING", "The pinned copy of this plan is missing or changed on disk, so it cannot be approved.", nil)
 	}
+	snapshot, err := s.ruleSnapshot(ctx, task, rev, policySHA256)
+	if err != nil {
+		return domain.LadoPlanApproval{}, err
+	}
 	now := s.deps.Clock().UTC()
 	actor := "human"
 	if proof.Dev {
 		actor = "human:dev-presence"
 	}
 	payload, _ := json.Marshal(map[string]any{
-		"task":          task.ID,
-		"issue":         task.IssueRef,
-		"revision":      rev.Number,
-		"sha256":        rev.SHA256,
-		"issueSnapshot": rev.IssueSnapshotSHA256,
-		"proof":         proof.Nonce,
-		"dev":           proof.Dev,
+		"task":           task.ID,
+		"issue":          task.IssueRef,
+		"revision":       rev.Number,
+		"sha256":         rev.SHA256,
+		"issueSnapshot":  rev.IssueSnapshotSHA256,
+		"policySnapshot": snapshot.SHA256,
+		"blocking":       snapshot.Blocking,
+		"proof":          proof.Nonce,
+		"dev":            proof.Dev,
 	})
-	approval, _, err := s.deps.Store.ApproveLadoPlan(ctx, domain.LadoPlanApproval{
+	approval := domain.LadoPlanApproval{
 		ID:         domain.LadoPlanApprovalID("lado-approval-" + s.deps.NewID()),
 		RevisionID: rev.ID,
 		TaskID:     task.ID,
 		SHA256:     rev.SHA256,
 		ProofNonce: proof.Nonce,
 		ApprovedAt: now,
-	}, proof, domain.LadoAuditEvent{
+	}
+	snapshot.ApprovalID = approval.ID
+	approval, _, err = s.deps.Store.ApproveLadoPlan(ctx, approval, proof, domain.LadoAuditEvent{
 		At:          now,
 		Actor:       actor,
 		Action:      "plan.approved",
 		SubjectKind: "plan_revision",
 		SubjectID:   string(rev.ID),
 		Payload:     payload,
-	}, nil) // no rule snapshot until the task service reads the rules
+	}, &snapshot)
 	switch {
 	case errors.Is(err, domain.ErrLadoPresenceReplayed):
 		return domain.LadoPlanApproval{}, ladopresence.Replayed()
@@ -294,6 +305,31 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 
 func superseded() error {
 	return apierr.Conflict("LADO_PLAN_SUPERSEDED", "A newer version of this plan exists. Review the latest plan and approve that one.", nil)
+}
+
+// ruleSnapshot fixes the rules for approving a revision. It refuses when
+// they are not the rules the developer reviewed, so an approval never takes
+// rules nobody saw.
+func (s *Service) ruleSnapshot(ctx context.Context, task domain.LadoTask, rev domain.LadoPlanRevision, policySHA256 string) (domain.LadoPolicySnapshot, error) {
+	if policySHA256 == "" {
+		return domain.LadoPolicySnapshot{}, apierr.Invalid("LADO_POLICY_SHA_REQUIRED", "Send the sha256 of the rule snapshot you reviewed with the approval.", nil)
+	}
+	if s.deps.Policy == nil {
+		return domain.LadoPolicySnapshot{}, apierr.Internal("LADO_RULES_UNAVAILABLE", "LADO cannot read its rules, so no plan can be approved.")
+	}
+	snapshot, err := s.deps.Policy.Snapshot(ctx, task, rev)
+	if err != nil {
+		var apiErr *apierr.Error
+		if errors.As(err, &apiErr) {
+			return domain.LadoPolicySnapshot{}, err
+		}
+		s.deps.Log.Error("LADO could not resolve the rules for an approval", "revision", rev.ID, "err", err)
+		return domain.LadoPolicySnapshot{}, apierr.Internal("LADO_RULES_LOAD_FAILED", "Failed to load the rules")
+	}
+	if snapshot.SHA256 != policySHA256 {
+		return domain.LadoPolicySnapshot{}, apierr.Conflict("LADO_RULES_CHANGED", "The rules changed while you were approving. Review them again, then approve.", nil)
+	}
+	return snapshot, nil
 }
 
 // PlanView is one revision with its content, for review and for the
@@ -321,7 +357,7 @@ func (s *Service) Plan(ctx context.Context, revisionID domain.LadoPlanRevisionID
 		return PlanView{}, err
 	}
 	view := PlanView{
-		Task:     task,
+		Task:     s.withPolicy(ctx, task),
 		Revision: rev,
 		Latest:   task.Plan.Latest.ID == rev.ID,
 		Approved: task.Plan.ApprovalValid() && task.Plan.Latest.ID == rev.ID,
@@ -402,6 +438,7 @@ func (s *Service) View(ctx context.Context, id domain.LadoTaskID) (TaskView, err
 	if view.History, err = s.Plans(ctx, id); err != nil {
 		return TaskView{}, err
 	}
+	view.Task = s.withPolicy(ctx, view.Task)
 	return view, nil
 }
 

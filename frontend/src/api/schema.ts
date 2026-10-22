@@ -4668,6 +4668,8 @@ export interface components {
             rssBytes: number;
         };
         ApproveLadoPlanRequest: {
+            /** @description The sha256 of the rule snapshot the developer reviewed for this approval. The service requires it and refuses the approval when the rules changed since. */
+            policySha256?: string;
             /** @description The revision's sha256 the developer reviewed. */
             sha256: string;
         };
@@ -6278,10 +6280,10 @@ export interface components {
             /** @description Canonical id of the repository that holds the issue, such as github:owner/repo. */
             repository: string;
             /**
-             * @description Derived task state.
+             * @description Derived task state. review_required: the rules changed since the approval; blocked: the approval's rule snapshot holds a blocking problem.
              * @enum {string}
              */
-            state: "draft" | "planned" | "approved" | "cancelled" | "closed_unmerged";
+            state: "draft" | "planned" | "review_required" | "blocked" | "approved" | "cancelled" | "closed_unmerged";
         };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];

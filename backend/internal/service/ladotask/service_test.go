@@ -185,12 +185,15 @@ type taskFixture struct {
 	clients *fakeClients
 	repo    domain.TrackerRepo
 	now     time.Time
+	// dataDir holds the store's database.
+	dataDir string
 }
 
 func newTaskFixture(t *testing.T, origin string) *taskFixture {
 	t.Helper()
 	ctx := context.Background()
-	store := sqlitetest.MustOpen(t)
+	dataDir := t.TempDir()
+	store := sqlitetest.MustOpenAt(t, dataDir)
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "demo", Path: t.TempDir(), RepoOriginURL: origin, RegisteredAt: taskEpoch}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
@@ -201,7 +204,7 @@ func newTaskFixture(t *testing.T, origin string) *taskFixture {
 	if err != nil {
 		t.Fatalf("origin %s: %v", origin, err)
 	}
-	fx := &taskFixture{store: store, tracker: newFakeTracker(), repo: repo, now: taskEpoch}
+	fx := &taskFixture{store: store, tracker: newFakeTracker(), repo: repo, now: taskEpoch, dataDir: dataDir}
 	fx.clients = &fakeClients{tracker: fx.tracker}
 	ids := 0
 	fx.svc = New(Deps{

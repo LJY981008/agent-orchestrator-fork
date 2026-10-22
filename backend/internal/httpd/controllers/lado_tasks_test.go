@@ -48,15 +48,16 @@ type fakeLadoTaskService struct {
 	gotModel        *string
 	calls           int
 	// Plan routes.
-	view        ladotask.TaskView
-	planView    ladotask.PlanView
-	history     ladotask.PlanHistory
-	request     domain.LadoPlanRequest
-	approval    domain.LadoPlanApproval
-	gotPlanReq  ladotask.PlanRequestInput
-	gotRevision domain.LadoPlanRevisionID
-	gotSHA      string
-	gotProof    domain.LadoPresenceProof
+	view         ladotask.TaskView
+	planView     ladotask.PlanView
+	history      ladotask.PlanHistory
+	request      domain.LadoPlanRequest
+	approval     domain.LadoPlanApproval
+	gotPlanReq   ladotask.PlanRequestInput
+	gotRevision  domain.LadoPlanRevisionID
+	gotSHA       string
+	gotPolicySHA string
+	gotProof     domain.LadoPresenceProof
 }
 
 func (f *fakeLadoTaskService) View(_ context.Context, id domain.LadoTaskID) (ladotask.TaskView, error) {
@@ -87,9 +88,9 @@ func (f *fakeLadoTaskService) Plan(_ context.Context, id domain.LadoPlanRevision
 	return f.planView, f.err
 }
 
-func (f *fakeLadoTaskService) ApprovePlan(_ context.Context, id domain.LadoPlanRevisionID, sha256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error) {
+func (f *fakeLadoTaskService) ApprovePlan(_ context.Context, id domain.LadoPlanRevisionID, sha256, policySHA256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error) {
 	f.calls++
-	f.gotRevision, f.gotSHA, f.gotProof = id, sha256, proof
+	f.gotRevision, f.gotSHA, f.gotPolicySHA, f.gotProof = id, sha256, policySHA256, proof
 	return f.approval, f.err
 }
 

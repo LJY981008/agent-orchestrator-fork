@@ -70,6 +70,15 @@ type Projects interface {
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 }
 
+// Policy resolves LADO's rules for a task (docs/LJY-PRD/HARNESS.md §8).
+type Policy interface {
+	// Snapshot fixes the rules for approving the task's plan revision.
+	Snapshot(ctx context.Context, task domain.LadoTask, rev domain.LadoPlanRevision) (domain.LadoPolicySnapshot, error)
+	// CurrentSHA256 is the snapshot hash the rules give the task's approved
+	// revision now.
+	CurrentSHA256(ctx context.Context, task domain.LadoTask) (string, error)
+}
+
 // ProjectRepo is one repository of a project whose tracker can hold the
 // project's issues: a single-repo project's origin, or each child of a
 // workspace project that has one.
@@ -108,6 +117,9 @@ type Deps struct {
 	// DeliveryTimeout is how long a request is retried; zero uses ten
 	// minutes.
 	DeliveryTimeout time.Duration
+	// Policy fixes the rules in each approval and tells whether they changed
+	// since. Without it no plan can be approved.
+	Policy Policy
 }
 
 // Service creates, imports and tracks tasks.
@@ -362,6 +374,10 @@ func (s *Service) List(ctx context.Context, projectID domain.ProjectID, includeC
 	if err != nil {
 		return nil, apierr.Internal("LADO_TASKS_LOAD_FAILED", "Failed to load tasks")
 	}
+	// Few tasks hold a valid approval, so each resolves its rules alone.
+	for i := range tasks {
+		tasks[i] = s.withPolicy(ctx, tasks[i])
+	}
 	return tasks, nil
 }
 
@@ -375,11 +391,30 @@ func (s *Service) Get(ctx context.Context, id domain.LadoTaskID) (domain.LadoTas
 	if task.CancelledAt.IsZero() {
 		if err := s.observe(ctx, task); err != nil {
 			s.deps.Log.Debug("LADO could not refresh a task's issue", "task", id, "err", err)
-			return task, nil
+			return s.withPolicy(ctx, task), nil
 		}
-		return s.task(ctx, id)
+		if task, err = s.task(ctx, id); err != nil {
+			return domain.LadoTask{}, err
+		}
 	}
-	return task, nil
+	return s.withPolicy(ctx, task), nil
+}
+
+// withPolicy fills what the rules give the task's approved revision now, so
+// its state shows whether they changed since the approval. A task without a
+// valid approval needs nothing; a failure leaves the hash empty, which reads
+// as no change.
+func (s *Service) withPolicy(ctx context.Context, task domain.LadoTask) domain.LadoTask {
+	if s.deps.Policy == nil || !task.Plan.ApprovalValid() {
+		return task
+	}
+	sum, err := s.deps.Policy.CurrentSHA256(ctx, task)
+	if err != nil {
+		s.deps.Log.Debug("LADO could not resolve a task's rules", "task", task.ID, "err", err)
+		return task
+	}
+	task.Plan.PolicySHA256 = sum
+	return task
 }
 
 // UpdatePreferences changes a task's agent or model. A nil field keeps its
@@ -405,7 +440,9 @@ func (s *Service) UpdatePreferences(ctx context.Context, id domain.LadoTaskID, a
 	if !ok {
 		return domain.LadoTask{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "Unknown task")
 	}
-	return updated, nil
+	// The approval's rules name the agent and model, so a change may need
+	// review.
+	return s.withPolicy(ctx, updated), nil
 }
 
 // Cancel cancels a task. It never closes or edits the issue.
@@ -417,7 +454,7 @@ func (s *Service) Cancel(ctx context.Context, id domain.LadoTaskID) (domain.Lado
 	if !ok {
 		return domain.LadoTask{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "Unknown task")
 	}
-	return cancelled, nil
+	return s.withPolicy(ctx, cancelled), nil
 }
 
 // link records a created issue on its pending task.
