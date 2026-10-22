@@ -26,6 +26,7 @@ type LadoController struct {
 	Projects    LadoProjectService
 	Connections LadoConnectionService
 	Tasks       LadoTaskService
+	Rules       LadoRuleService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
@@ -54,6 +55,13 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/tasks/{taskId}/plans", c.listPlans)
 	r.Get("/lado/plans/{revisionId}", c.getPlan)
 	r.Post("/lado/plans/{revisionId}/approve", c.approvePlan)
+	r.Get("/lado/rules", c.listRules)
+	r.Post("/lado/rules", c.createRule)
+	r.Get("/lado/rules/{ruleId}", c.getRule)
+	r.Patch("/lado/rules/{ruleId}", c.updateRule)
+	r.Delete("/lado/rules/{ruleId}", c.deleteRule)
+	r.Put("/lado/bindings", c.setBinding)
+	r.Get("/lado/effective", c.getEffective)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +83,7 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// Turning LADO mode off needs a presence proof over these exact bytes.
-	body, ok := readLadoPresenceBody(w, r)
+	body, ok := readLadoPresenceBody(w, r, maxLadoPresenceBody)
 	if !ok {
 		return
 	}

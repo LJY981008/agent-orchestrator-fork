@@ -95,7 +95,7 @@ func (c *LadoController) approvePlan(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "POST", ladoPlanApprovePath)
 		return
 	}
-	body, ok := readLadoPresenceBody(w, r)
+	body, ok := readLadoPresenceBody(w, r, maxLadoPresenceBody)
 	if !ok {
 		return
 	}
@@ -133,10 +133,10 @@ func (c *LadoController) presenceCheck(r *http.Request, body []byte) func(action
 	}
 }
 
-// readLadoPresenceBody reads a small body whole, so the proof's body hash
-// can be checked against exactly these bytes.
-func readLadoPresenceBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxLadoPresenceBody))
+// readLadoPresenceBody reads a body of at most limit bytes whole, so the
+// proof's body hash can be checked against exactly these bytes.
+func readLadoPresenceBody(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	if err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {

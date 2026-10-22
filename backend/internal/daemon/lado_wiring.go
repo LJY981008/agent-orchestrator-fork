@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoconnect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladogate"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -55,10 +56,11 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store, ModeSwitch: devMode})
 }
 
-// wireLadoWork builds LADO's repository connections and issue-backed tasks
-// with their plans. The daemon calls it once AO's project service exists,
-// after installLadoCredentials opened the token store.
-func wireLadoWork(cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service) {
+// wireLadoWork builds LADO's repository connections, its rules with the
+// built-in ones seeded, and issue-backed tasks with their plans, whose
+// approvals fix the rules. The daemon calls it once AO's project service
+// exists, after installLadoCredentials opened the token store.
+func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service, *ladopolicy.Service) {
 	if ladoStoredTokens == nil {
 		installLadoCredentials(cfg, log)
 	}
@@ -70,7 +72,14 @@ func wireLadoWork(cfg config.Config, store *sqlite.Store, projects ladoProjectCl
 		Cloner:      ladoCloner{projects: projects},
 		Log:         log,
 	})
-	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: ladoblob.New(cfg.StateDir)}
+	blobs := ladoblob.New(cfg.StateDir)
+	rules := ladopolicy.New(ladopolicy.Deps{Store: store, Projects: store, Blobs: blobs, AOBuild: cfg.Telemetry.AppVersion, Log: log})
+	// A failed seed leaves the permission ceiling missing, which resolves to
+	// a blocking problem the app shows, so the daemon still starts.
+	if err := rules.EnsureBuiltins(ctx); err != nil {
+		log.Error("LADO could not seed its built-in rules", "err", err)
+	}
+	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: blobs, Policy: rules}
 	if work.orchestrators != nil && work.sender != nil {
 		deps.Orchestrators = ladoOrchestrators{spawner: work.orchestrators, sender: work.sender, store: store, dataDir: cfg.DataDir}
 	}
@@ -78,7 +87,7 @@ func wireLadoWork(cfg config.Config, store *sqlite.Store, projects ladoProjectCl
 		deps.Artifacts = ladoArtifacts{capturer: work.artifacts, store: store}
 	}
 	tasks := ladotask.New(deps)
-	return connections, tasks
+	return connections, tasks, rules
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.

@@ -1220,6 +1220,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn a rule on or off at Global, or force it for a project or task, or show what that reaches with dryRun */
+        put: operations["setLadoBinding"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/connections": {
         parameters: {
             query?: never;
@@ -1284,6 +1301,23 @@ export interface paths {
         post?: never;
         /** Delete a host's stored token */
         delete: operations["deleteLadoCredential"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/effective": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Resolve the rules for a project, or for a task at its latest plan revision */
+        get: operations["getLadoEffective"];
+        put?: never;
+        post?: never;
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1373,6 +1407,43 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/rules": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the rules with their active versions and bindings */
+        get: operations["listLadoRules"];
+        put?: never;
+        /** Create a user rule, or show what creating it reaches with dryRun */
+        post: operations["createLadoRule"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/rules/{ruleId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a rule with its versions */
+        get: operations["getLadoRule"];
+        put?: never;
+        post?: never;
+        /** Delete a user rule no approval used */
+        delete: operations["deleteLadoRule"];
+        options?: never;
+        head?: never;
+        /** Edit, archive or unarchive a rule, or show what the change reaches with dryRun; the permission ceiling's mode needs a human-presence proof */
+        patch: operations["updateLadoRule"];
         trace?: never;
     };
     "/api/v1/lado/tasks": {
@@ -5652,6 +5723,24 @@ export interface components {
             /** @description An issue comment that holds the plan; the orchestrator converts it faithfully. */
             sourceCommentId?: string;
         };
+        CreateLadoRuleRequest: {
+            category?: string;
+            /** @description Rules that cannot be on together with this one. */
+            conflictsWith?: string[];
+            /** @description Show the change and what it reaches without making it. */
+            dryRun?: boolean;
+            instruction: string;
+            name: string;
+            /** @description Turn the rule on at Global; only for scope global. */
+            on?: boolean;
+            /**
+             * @description Where the rule starts. At global it is on or off for every LADO project as on says; for a project or a task it is off at Global and forced on there.
+             * @enum {string}
+             */
+            scope: "global" | "project" | "task";
+            /** @description The project or task id; empty at global. */
+            scopeId?: string;
+        };
         CreateLadoTaskRequest: {
             agent?: string;
             model?: string;
@@ -6011,6 +6100,41 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        LadoAORuleResponse: {
+            chars: number;
+            /** @enum {string} */
+            kind: "worker_instructions" | "worker_instructions_file" | "orchestrator_instructions";
+            /** @description The configured agentRulesFile; empty for the other kinds. */
+            path: string;
+            /** @description Why the file was not read; empty when it was. */
+            readError: string;
+            /** @description Hash of the trimmed text; empty when the file was not read. */
+            sha256: string;
+        };
+        LadoApprovedRulesResponse: {
+            /** @description Rules on now but not at the approval. */
+            added: string[];
+            /** Format: date-time */
+            approvedAt: string;
+            /** @description The approved snapshot holds a blocking problem. */
+            blocking: boolean;
+            /** @description Rules on in both with another version or binding. */
+            changed: string[];
+            /** @description The rules still give the approved snapshot. */
+            matches: boolean;
+            /** @description Rules on at the approval but not now. */
+            removed: string[];
+            /** @description The approved plan revision's number. */
+            revision: number;
+            /** @description Hash of the rule snapshot fixed in the approval. */
+            snapshotSha256: string;
+        };
+        LadoCapabilityResponse: {
+            /** @enum {string} */
+            class: "prompt" | "permission_mode";
+            /** @enum {string} */
+            status: "supported" | "degraded" | "unsupported" | "unverified";
+        };
         LadoConnectionCheckResponse: {
             /** @description Host the token belongs to. */
             host: string;
@@ -6039,6 +6163,77 @@ export interface components {
             login?: string;
             /** @enum {string} */
             provider: "github" | "gitlab";
+        };
+        LadoEffectiveAgentResponse: {
+            /** @description Empty when nobody chose an agent. */
+            harness: string;
+            model: string;
+            /** @description task or project: whose choice it is; empty when nobody chose an agent. */
+            source: string;
+        };
+        LadoEffectiveResponse: {
+            agent: components["schemas"]["LadoEffectiveAgentResponse"];
+            /** @description The project's AO instructions; the snapshot keeps only the worker kinds. */
+            aoRules: components["schemas"]["LadoAORuleResponse"][];
+            /** @description The task's valid approval next to now; missing without one, and for an approval given before LADO had rules. */
+            approved?: components["schemas"]["LadoApprovedRulesResponse"];
+            blocking: boolean;
+            /** @description What a task's rules need from its agent; empty for a project. */
+            capabilities: components["schemas"]["LadoCapabilityResponse"][];
+            /** @enum {string} */
+            permissionCeiling: "accept-edits" | "auto" | "bypass-permissions";
+            /**
+             * @description The mode an execution runs with: the plan's ceiling, lowered to the rules' ceiling.
+             * @enum {string}
+             */
+            permissionMode: "accept-edits" | "auto" | "bypass-permissions";
+            /** @description Sorted by severity, code and rules. */
+            problems: components["schemas"]["LadoPolicyProblemResponse"][];
+            projectId: string;
+            /** @description The rule text a worker gets; empty when no rule has any. */
+            prompt: string;
+            /** @description Rules that are not archived, oldest first. */
+            rules: components["schemas"]["LadoEffectiveRuleResponse"][];
+            /** @description Hash of the rule snapshot; an approval sends it as policySha256. */
+            snapshotSha256: string;
+            /** @description Empty for a project. */
+            taskId: string;
+        };
+        LadoEffectiveRuleResponse: {
+            builtin: boolean;
+            category: string;
+            enforcement: string[];
+            /** @enum {string} */
+            global: "on" | "off";
+            name: string;
+            on: boolean;
+            /**
+             * @description The rule's binding for the project; a protected rule ignores it.
+             * @enum {string}
+             */
+            project: "inherit" | "force_on" | "force_off";
+            protected: boolean;
+            ruleId: string;
+            source: components["schemas"]["LadoRuleSourceResponse"];
+            /** @enum {string} */
+            strength: "prevents" | "detects" | "advisory";
+            /**
+             * @description The rule's binding for the task; inherit for a project.
+             * @enum {string}
+             */
+            task: "inherit" | "force_on" | "force_off";
+            version: number;
+        };
+        LadoImpactProjectResponse: {
+            id: string;
+            name: string;
+        };
+        LadoImpactTaskResponse: {
+            id: string;
+            issueRef: string;
+            projectId: string;
+            /** @description The issue's title as LADO last read it. */
+            title: string;
         };
         LadoIssueCommentResponse: {
             author: string;
@@ -6194,6 +6389,20 @@ export interface components {
             /** @description False when the plan has problems; such a plan cannot be approved. */
             valid: boolean;
         };
+        LadoPolicyProblemResponse: {
+            /** @description Stable problem code the app translates. */
+            code: string;
+            /** @description The values the code is about, such as the plan's and the rules' ceiling. */
+            details: {
+                [key: string]: string;
+            };
+            rules: string[];
+            /**
+             * @description A blocking problem blocks the task.
+             * @enum {string}
+             */
+            severity: "blocking" | "warning" | "info";
+        };
         LadoProjectIssuesResponse: {
             failures: components["schemas"]["LadoRepositoryFailureResponse"][];
             issues: components["schemas"]["LadoIssueResponse"][];
@@ -6220,6 +6429,104 @@ export interface components {
             provider: "github" | "gitlab";
             /** @description Canonical repository id, such as github:owner/repo. */
             ref: string;
+        };
+        LadoRuleCeiling: {
+            /**
+             * @description The highest permission mode a LADO execution may run with.
+             * @enum {string}
+             */
+            mode: "accept-edits" | "auto" | "bypass-permissions";
+        };
+        LadoRuleChangeResponse: {
+            /** @description False for a dry run, which changes nothing. */
+            applied: boolean;
+            impact: components["schemas"]["LadoRuleImpactResponse"];
+            /** @description The rule after the change, or as it would be after a dry run. */
+            rule?: components["schemas"]["LadoRuleResponse"];
+        };
+        LadoRuleDetailResponse: {
+            rule: components["schemas"]["LadoRuleResponse"];
+            versions: components["schemas"]["LadoRuleVersionResponse"][];
+        };
+        LadoRuleImpactResponse: {
+            projects: components["schemas"]["LadoImpactProjectResponse"][];
+            /** @description Tasks whose approval matches the rules now and would need a new one after the change. */
+            tasks: components["schemas"]["LadoImpactTaskResponse"][];
+        };
+        LadoRuleListResponse: {
+            rules: components["schemas"]["LadoRuleResponse"][];
+        };
+        LadoRuleOverrideResponse: {
+            /** @description The project's name or the task's issue title; empty when LADO no longer finds the scope. */
+            label: string;
+            /** @enum {string} */
+            scope: "project" | "task";
+            scopeId: string;
+            /** @enum {string} */
+            state: "force_on" | "force_off";
+        };
+        LadoRuleResponse: {
+            archived: boolean;
+            /** Format: date-time */
+            archivedAt?: null | string;
+            /** @description LADO's own rule, which is never deleted. */
+            builtin: boolean;
+            category: string;
+            /** @description The permission ceiling's setting; only that rule has one. */
+            ceiling?: components["schemas"]["LadoRuleCeiling"];
+            /** @description Rules that cannot be on together with this one. */
+            conflictsWith: string[];
+            /** Format: date-time */
+            createdAt: string;
+            /** @description How LADO applies the rule: prompt, validator, tool_policy or workflow_gate. */
+            enforcement: string[];
+            /**
+             * @description The Global binding, which applies to every LADO project.
+             * @enum {string}
+             */
+            global: "on" | "off";
+            id: string;
+            /** @description The text workers get while the rule is on. */
+            instruction: string;
+            name: string;
+            /** @description Project and task bindings; a scope without one inherits. */
+            overrides: components["schemas"]["LadoRuleOverrideResponse"][];
+            /** @description Always on: it takes no binding and is never archived; only the permission ceiling's mode changes. */
+            protected: boolean;
+            /** @description Hash of the active version's content. */
+            sha256: string;
+            /** @enum {string} */
+            strength: "prevents" | "detects" | "advisory";
+            /**
+             * Format: date-time
+             * @description When the active version was made.
+             */
+            updatedAt: string;
+            /** @description The active version's number; an edit sends it back as baseVersion. */
+            version: number;
+            versionId: string;
+        };
+        LadoRuleSourceResponse: {
+            /** @enum {string} */
+            scope: "global" | "project" | "task";
+            scopeId: string;
+            /** @enum {string} */
+            state: "on" | "off" | "force_on" | "force_off";
+        };
+        LadoRuleVersionResponse: {
+            /** @description Who made the version: lado for a built-in's seed, api for an unverified caller, human or human:dev-presence for a confirmed change. */
+            actor: string;
+            category: string;
+            ceiling?: components["schemas"]["LadoRuleCeiling"];
+            conflictsWith: string[];
+            /** Format: date-time */
+            createdAt: string;
+            enforcement: string[];
+            id: string;
+            instruction: string;
+            name: string;
+            number: number;
+            sha256: string;
         };
         LadoSSHCheckResponse: {
             ok: boolean;
@@ -7240,6 +7547,20 @@ export interface components {
         SetConversationTitleResponse: {
             title: string;
         };
+        SetLadoBindingRequest: {
+            /** @description Show the change and what it reaches without making it. */
+            dryRun?: boolean;
+            ruleId: string;
+            /** @enum {string} */
+            scope: "global" | "project" | "task";
+            /** @description The project or task id; empty at global. */
+            scopeId?: string;
+            /**
+             * @description on or off at global; inherit, force_on or force_off for a project or a task. inherit removes the binding.
+             * @enum {string}
+             */
+            state: "on" | "off" | "inherit" | "force_on" | "force_off";
+        };
         SetProjectConfigInput: {
             config: components["schemas"]["ProjectConfig"];
         };
@@ -7794,6 +8115,22 @@ export interface components {
         UpdateLadoProjectSettingsRequest: {
             /** @description Put the project's workers under LADO's worker gate. Changing it needs AO_LADO_DEV=on until LADO's dispatcher exists. */
             ladoMode: null | boolean;
+        };
+        UpdateLadoRuleRequest: {
+            /** @description Archive or unarchive the rule. */
+            archived?: null | boolean;
+            /** @description The version the change started from; a newer one refuses the change. */
+            baseVersion: number;
+            category?: null | string;
+            /** @description The permission ceiling's new mode; only that rule takes one. */
+            ceiling?: components["schemas"]["LadoRuleCeiling"];
+            conflictsWith?: null | string[];
+            /** @description Show the change and what it reaches without making it; needs no presence proof. */
+            dryRun?: boolean;
+            instruction?: null | string;
+            name?: null | string;
+            /** @description Goes into the audit log. */
+            reason?: string;
         };
         UpdateLadoTaskRequest: {
             agent?: null | string;
@@ -12003,6 +12340,84 @@ export interface operations {
             };
         };
     };
+    setLadoBinding: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLadoBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRuleChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     createLadoConnection: {
         parameters: {
             query?: never;
@@ -12236,6 +12651,76 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoEffective: {
+        parameters: {
+            query?: {
+                /** @description Project to resolve. Name exactly one of projectId and taskId. */
+                projectId?: string;
+                /** @description Task to resolve at its latest plan revision. Name exactly one of projectId and taskId. */
+                taskId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoEffectiveResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -12600,6 +13085,325 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LadoProjectSettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoRules: {
+        parameters: {
+            query?: {
+                /** @description When true, archived rules are listed too. */
+                includeArchived?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRuleListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createLadoRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLadoRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRuleChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO rule id, such as agent.permission.ceiling. */
+                ruleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRuleDetailResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteLadoRule: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO rule id, such as agent.permission.ceiling. */
+                ruleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoRule: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description LADO rule id, such as agent.permission.ceiling. */
+                ruleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoRuleRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRuleChangeResponse"];
                 };
             };
             /** @description Bad Request */

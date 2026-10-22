@@ -3020,6 +3020,62 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/lado/bindings:
+    put:
+      operationId: setLadoBinding
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLadoBindingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRuleChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Turn a rule on or off at Global, or force it for a project or task,
+        or show what that reaches with dryRun
+      tags:
+      - lado
   /api/v1/lado/connections:
     post:
       operationId: createLadoConnection
@@ -3212,6 +3268,64 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Check a host token with the host, then store it
+      tags:
+      - lado
+  /api/v1/lado/effective:
+    get:
+      operationId: getLadoEffective
+      parameters:
+      - description: Project to resolve. Name exactly one of projectId and taskId.
+        in: query
+        name: projectId
+        schema:
+          description: Project to resolve. Name exactly one of projectId and taskId.
+          type: string
+      - description: Task to resolve at its latest plan revision. Name exactly one
+          of projectId and taskId.
+        in: query
+        name: taskId
+        schema:
+          description: Task to resolve at its latest plan revision. Name exactly one
+            of projectId and taskId.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoEffectiveResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Resolve the rules for a project, or for a task at its latest plan revision
       tags:
       - lado
   /api/v1/lado/plans/{revisionId}:
@@ -3529,6 +3643,248 @@ paths:
           description: Not Implemented
       summary: Change a project's LADO settings; turning LADO mode off needs a human-presence
         proof
+      tags:
+      - lado
+  /api/v1/lado/rules:
+    get:
+      operationId: listLadoRules
+      parameters:
+      - description: When true, archived rules are listed too.
+        in: query
+        name: includeArchived
+        schema:
+          description: When true, archived rules are listed too.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRuleListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the rules with their active versions and bindings
+      tags:
+      - lado
+    post:
+      operationId: createLadoRule
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLadoRuleRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRuleChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Create a user rule, or show what creating it reaches with dryRun
+      tags:
+      - lado
+  /api/v1/lado/rules/{ruleId}:
+    delete:
+      operationId: deleteLadoRule
+      parameters:
+      - description: LADO rule id, such as agent.permission.ceiling.
+        in: path
+        name: ruleId
+        required: true
+        schema:
+          description: LADO rule id, such as agent.permission.ceiling.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete a user rule no approval used
+      tags:
+      - lado
+    get:
+      operationId: getLadoRule
+      parameters:
+      - description: LADO rule id, such as agent.permission.ceiling.
+        in: path
+        name: ruleId
+        required: true
+        schema:
+          description: LADO rule id, such as agent.permission.ceiling.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRuleDetailResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a rule with its versions
+      tags:
+      - lado
+    patch:
+      operationId: updateLadoRule
+      parameters:
+      - description: LADO rule id, such as agent.permission.ceiling.
+        in: path
+        name: ruleId
+        required: true
+        schema:
+          description: LADO rule id, such as agent.permission.ceiling.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoRuleRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRuleChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Edit, archive or unarchive a rule, or show what the change reaches
+        with dryRun; the permission ceiling's mode needs a human-presence proof
       tags:
       - lado
   /api/v1/lado/tasks:
@@ -16384,6 +16740,42 @@ components:
             it faithfully.
           type: string
       type: object
+    CreateLadoRuleRequest:
+      properties:
+        category:
+          type: string
+        conflictsWith:
+          description: Rules that cannot be on together with this one.
+          items:
+            type: string
+          type: array
+        dryRun:
+          description: Show the change and what it reaches without making it.
+          type: boolean
+        instruction:
+          type: string
+        name:
+          type: string
+        "on":
+          description: Turn the rule on at Global; only for scope global.
+          type: boolean
+        scope:
+          description: Where the rule starts. At global it is on or off for every
+            LADO project as on says; for a project or a task it is off at Global and
+            forced on there.
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          description: The project or task id; empty at global.
+          type: string
+      required:
+      - name
+      - instruction
+      - scope
+      type: object
     CreateLadoTaskRequest:
       properties:
         agent:
@@ -17362,6 +17754,92 @@ components:
       - ok
       - sessionId
       type: object
+    LadoAORuleResponse:
+      properties:
+        chars:
+          type: integer
+        kind:
+          enum:
+          - worker_instructions
+          - worker_instructions_file
+          - orchestrator_instructions
+          type: string
+        path:
+          description: The configured agentRulesFile; empty for the other kinds.
+          type: string
+        readError:
+          description: Why the file was not read; empty when it was.
+          type: string
+        sha256:
+          description: Hash of the trimmed text; empty when the file was not read.
+          type: string
+      required:
+      - kind
+      - path
+      - sha256
+      - chars
+      - readError
+      type: object
+    LadoApprovedRulesResponse:
+      properties:
+        added:
+          description: Rules on now but not at the approval.
+          items:
+            type: string
+          type: array
+        approvedAt:
+          format: date-time
+          type: string
+        blocking:
+          description: The approved snapshot holds a blocking problem.
+          type: boolean
+        changed:
+          description: Rules on in both with another version or binding.
+          items:
+            type: string
+          type: array
+        matches:
+          description: The rules still give the approved snapshot.
+          type: boolean
+        removed:
+          description: Rules on at the approval but not now.
+          items:
+            type: string
+          type: array
+        revision:
+          description: The approved plan revision's number.
+          type: integer
+        snapshotSha256:
+          description: Hash of the rule snapshot fixed in the approval.
+          type: string
+      required:
+      - snapshotSha256
+      - approvedAt
+      - revision
+      - matches
+      - blocking
+      - added
+      - removed
+      - changed
+      type: object
+    LadoCapabilityResponse:
+      properties:
+        class:
+          enum:
+          - prompt
+          - permission_mode
+          type: string
+        status:
+          enum:
+          - supported
+          - degraded
+          - unsupported
+          - unverified
+          type: string
+      required:
+      - class
+      - status
+      type: object
     LadoConnectionCheckResponse:
       properties:
         host:
@@ -17432,6 +17910,182 @@ components:
       required:
       - host
       - provider
+      type: object
+    LadoEffectiveAgentResponse:
+      properties:
+        harness:
+          description: Empty when nobody chose an agent.
+          type: string
+        model:
+          type: string
+        source:
+          description: 'task or project: whose choice it is; empty when nobody chose
+            an agent.'
+          type: string
+      required:
+      - harness
+      - model
+      - source
+      type: object
+    LadoEffectiveResponse:
+      properties:
+        agent:
+          $ref: '#/components/schemas/LadoEffectiveAgentResponse'
+        aoRules:
+          description: The project's AO instructions; the snapshot keeps only the
+            worker kinds.
+          items:
+            $ref: '#/components/schemas/LadoAORuleResponse'
+          type: array
+        approved:
+          $ref: '#/components/schemas/LadoApprovedRulesResponse'
+          description: The task's valid approval next to now; missing without one,
+            and for an approval given before LADO had rules.
+        blocking:
+          type: boolean
+        capabilities:
+          description: What a task's rules need from its agent; empty for a project.
+          items:
+            $ref: '#/components/schemas/LadoCapabilityResponse'
+          type: array
+        permissionCeiling:
+          enum:
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        permissionMode:
+          description: 'The mode an execution runs with: the plan''s ceiling, lowered
+            to the rules'' ceiling.'
+          enum:
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        problems:
+          description: Sorted by severity, code and rules.
+          items:
+            $ref: '#/components/schemas/LadoPolicyProblemResponse'
+          type: array
+        projectId:
+          type: string
+        prompt:
+          description: The rule text a worker gets; empty when no rule has any.
+          type: string
+        rules:
+          description: Rules that are not archived, oldest first.
+          items:
+            $ref: '#/components/schemas/LadoEffectiveRuleResponse'
+          type: array
+        snapshotSha256:
+          description: Hash of the rule snapshot; an approval sends it as policySha256.
+          type: string
+        taskId:
+          description: Empty for a project.
+          type: string
+      required:
+      - projectId
+      - taskId
+      - agent
+      - permissionCeiling
+      - permissionMode
+      - rules
+      - aoRules
+      - prompt
+      - capabilities
+      - problems
+      - blocking
+      - snapshotSha256
+      type: object
+    LadoEffectiveRuleResponse:
+      properties:
+        builtin:
+          type: boolean
+        category:
+          type: string
+        enforcement:
+          items:
+            type: string
+          type: array
+        global:
+          enum:
+          - "on"
+          - "off"
+          type: string
+        name:
+          type: string
+        "on":
+          type: boolean
+        project:
+          description: The rule's binding for the project; a protected rule ignores
+            it.
+          enum:
+          - inherit
+          - force_on
+          - force_off
+          type: string
+        protected:
+          type: boolean
+        ruleId:
+          type: string
+        source:
+          $ref: '#/components/schemas/LadoRuleSourceResponse'
+        strength:
+          enum:
+          - prevents
+          - detects
+          - advisory
+          type: string
+        task:
+          description: The rule's binding for the task; inherit for a project.
+          enum:
+          - inherit
+          - force_on
+          - force_off
+          type: string
+        version:
+          type: integer
+      required:
+      - ruleId
+      - name
+      - category
+      - builtin
+      - protected
+      - version
+      - "on"
+      - strength
+      - enforcement
+      - global
+      - project
+      - task
+      - source
+      type: object
+    LadoImpactProjectResponse:
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+      required:
+      - id
+      - name
+      type: object
+    LadoImpactTaskResponse:
+      properties:
+        id:
+          type: string
+        issueRef:
+          type: string
+        projectId:
+          type: string
+        title:
+          description: The issue's title as LADO last read it.
+          type: string
+      required:
+      - id
+      - projectId
+      - title
+      - issueRef
       type: object
     LadoIssueCommentResponse:
       properties:
@@ -17803,6 +18457,34 @@ components:
       - valid
       - createdAt
       type: object
+    LadoPolicyProblemResponse:
+      properties:
+        code:
+          description: Stable problem code the app translates.
+          type: string
+        details:
+          additionalProperties:
+            type: string
+          description: The values the code is about, such as the plan's and the rules'
+            ceiling.
+          type: object
+        rules:
+          items:
+            type: string
+          type: array
+        severity:
+          description: A blocking problem blocks the task.
+          enum:
+          - blocking
+          - warning
+          - info
+          type: string
+      required:
+      - code
+      - severity
+      - rules
+      - details
+      type: object
     LadoProjectIssuesResponse:
       properties:
         failures:
@@ -17871,6 +18553,248 @@ components:
       - provider
       - host
       - path
+      type: object
+    LadoRuleCeiling:
+      properties:
+        mode:
+          description: The highest permission mode a LADO execution may run with.
+          enum:
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+      required:
+      - mode
+      type: object
+    LadoRuleChangeResponse:
+      properties:
+        applied:
+          description: False for a dry run, which changes nothing.
+          type: boolean
+        impact:
+          $ref: '#/components/schemas/LadoRuleImpactResponse'
+        rule:
+          $ref: '#/components/schemas/LadoRuleResponse'
+          description: The rule after the change, or as it would be after a dry run.
+      required:
+      - applied
+      - impact
+      type: object
+    LadoRuleDetailResponse:
+      properties:
+        rule:
+          $ref: '#/components/schemas/LadoRuleResponse'
+        versions:
+          items:
+            $ref: '#/components/schemas/LadoRuleVersionResponse'
+          type: array
+      required:
+      - rule
+      - versions
+      type: object
+    LadoRuleImpactResponse:
+      properties:
+        projects:
+          items:
+            $ref: '#/components/schemas/LadoImpactProjectResponse'
+          type: array
+        tasks:
+          description: Tasks whose approval matches the rules now and would need a
+            new one after the change.
+          items:
+            $ref: '#/components/schemas/LadoImpactTaskResponse'
+          type: array
+      required:
+      - projects
+      - tasks
+      type: object
+    LadoRuleListResponse:
+      properties:
+        rules:
+          items:
+            $ref: '#/components/schemas/LadoRuleResponse'
+          type: array
+      required:
+      - rules
+      type: object
+    LadoRuleOverrideResponse:
+      properties:
+        label:
+          description: The project's name or the task's issue title; empty when LADO
+            no longer finds the scope.
+          type: string
+        scope:
+          enum:
+          - project
+          - task
+          type: string
+        scopeId:
+          type: string
+        state:
+          enum:
+          - force_on
+          - force_off
+          type: string
+      required:
+      - scope
+      - scopeId
+      - state
+      - label
+      type: object
+    LadoRuleResponse:
+      properties:
+        archived:
+          type: boolean
+        archivedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        builtin:
+          description: LADO's own rule, which is never deleted.
+          type: boolean
+        category:
+          type: string
+        ceiling:
+          $ref: '#/components/schemas/LadoRuleCeiling'
+          description: The permission ceiling's setting; only that rule has one.
+        conflictsWith:
+          description: Rules that cannot be on together with this one.
+          items:
+            type: string
+          type: array
+        createdAt:
+          format: date-time
+          type: string
+        enforcement:
+          description: 'How LADO applies the rule: prompt, validator, tool_policy
+            or workflow_gate.'
+          items:
+            type: string
+          type: array
+        global:
+          description: The Global binding, which applies to every LADO project.
+          enum:
+          - "on"
+          - "off"
+          type: string
+        id:
+          type: string
+        instruction:
+          description: The text workers get while the rule is on.
+          type: string
+        name:
+          type: string
+        overrides:
+          description: Project and task bindings; a scope without one inherits.
+          items:
+            $ref: '#/components/schemas/LadoRuleOverrideResponse'
+          type: array
+        protected:
+          description: 'Always on: it takes no binding and is never archived; only
+            the permission ceiling''s mode changes.'
+          type: boolean
+        sha256:
+          description: Hash of the active version's content.
+          type: string
+        strength:
+          enum:
+          - prevents
+          - detects
+          - advisory
+          type: string
+        updatedAt:
+          description: When the active version was made.
+          format: date-time
+          type: string
+        version:
+          description: The active version's number; an edit sends it back as baseVersion.
+          type: integer
+        versionId:
+          type: string
+      required:
+      - id
+      - name
+      - category
+      - instruction
+      - builtin
+      - protected
+      - archived
+      - version
+      - versionId
+      - sha256
+      - enforcement
+      - strength
+      - conflictsWith
+      - global
+      - overrides
+      - createdAt
+      - updatedAt
+      type: object
+    LadoRuleSourceResponse:
+      properties:
+        scope:
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          type: string
+        state:
+          enum:
+          - "on"
+          - "off"
+          - force_on
+          - force_off
+          type: string
+      required:
+      - scope
+      - scopeId
+      - state
+      type: object
+    LadoRuleVersionResponse:
+      properties:
+        actor:
+          description: 'Who made the version: lado for a built-in''s seed, api for
+            an unverified caller, human or human:dev-presence for a confirmed change.'
+          type: string
+        category:
+          type: string
+        ceiling:
+          $ref: '#/components/schemas/LadoRuleCeiling'
+        conflictsWith:
+          items:
+            type: string
+          type: array
+        createdAt:
+          format: date-time
+          type: string
+        enforcement:
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        instruction:
+          type: string
+        name:
+          type: string
+        number:
+          type: integer
+        sha256:
+          type: string
+      required:
+      - id
+      - number
+      - name
+      - category
+      - instruction
+      - enforcement
+      - conflictsWith
+      - sha256
+      - actor
+      - createdAt
       type: object
     LadoSSHCheckResponse:
       properties:
@@ -20414,6 +21338,37 @@ components:
       required:
       - title
       type: object
+    SetLadoBindingRequest:
+      properties:
+        dryRun:
+          description: Show the change and what it reaches without making it.
+          type: boolean
+        ruleId:
+          type: string
+        scope:
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          description: The project or task id; empty at global.
+          type: string
+        state:
+          description: on or off at global; inherit, force_on or force_off for a project
+            or a task. inherit removes the binding.
+          enum:
+          - "on"
+          - "off"
+          - inherit
+          - force_on
+          - force_off
+          type: string
+      required:
+      - ruleId
+      - scope
+      - state
+      type: object
     SetProjectConfigInput:
       properties:
         config:
@@ -21841,6 +22796,48 @@ components:
           - boolean
       required:
       - ladoMode
+      type: object
+    UpdateLadoRuleRequest:
+      properties:
+        archived:
+          description: Archive or unarchive the rule.
+          type:
+          - "null"
+          - boolean
+        baseVersion:
+          description: The version the change started from; a newer one refuses the
+            change.
+          type: integer
+        category:
+          type:
+          - "null"
+          - string
+        ceiling:
+          $ref: '#/components/schemas/LadoRuleCeiling'
+          description: The permission ceiling's new mode; only that rule takes one.
+        conflictsWith:
+          items:
+            type: string
+          type:
+          - "null"
+          - array
+        dryRun:
+          description: Show the change and what it reaches without making it; needs
+            no presence proof.
+          type: boolean
+        instruction:
+          type:
+          - "null"
+          - string
+        name:
+          type:
+          - "null"
+          - string
+        reason:
+          description: Goes into the audit log.
+          type: string
+      required:
+      - baseVersion
       type: object
     UpdateLadoTaskRequest:
       properties:
