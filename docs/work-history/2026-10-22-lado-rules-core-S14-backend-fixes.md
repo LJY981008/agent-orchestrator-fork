@@ -14,6 +14,7 @@ S01~S13 이 끝난 뒤 백엔드 리뷰(블로커·메이저 0, 마이너 8)에�
 - **B5 — 권한 상한 PATCH 의 HTTP 테스트가 모두 통과시키는 가짜 검증기를 쓴다.** 고침: `lado_plans_test.go` 의 `signedRequest`/`presenceVerifier()` 꼴로 **실제** `ladopresence.Verifier` + **실제** `ladopolicy.Service`(`sqlitetest.MustOpen`) 를 묶은 컨트롤러 테스트: 헤더 없음 → 403 `LADO_PRESENCE_REQUIRED`, 서명 뒤 본문 변조 → 403 `LADO_PRESENCE_INVALID`, 올바른 증명 → 200·버전 2, 같은 증명 재사용 → 403 `LADO_PRESENCE_REPLAYED`. 각 경우 뒤 store 의 활성 버전 번호를 단언한다.
 - **B7 — I/O 함수에 ctx 가 없다**(AGENTS.md "Use `context.Context` as the first argument for functions that do I/O"). 고침: `ReadAORules(ctx context.Context, project domain.ProjectRecord) []AORule`, 플랜 상한을 읽는 함수도 ctx 첫 인자. 호출부·테스트 갱신.
 - **B8 — 쓰이지 않는 쿼리.** `queries/lado_rules.sql` 의 `ListLadoPolicySnapshotsByTask` 를 지우고 `npm run sqlc`.
+- **L1 — 로컬 CI 미러의 golangci-lint v2.13.2 실패 2건(`unconvert`)**: `backend/internal/storage/sqlite/store/lado_rule_store_test.go:596` 과 `:599` 의 `string(ev.ProjectID)`(이미 string). 변환을 지운다. 이 단계 끝에 lint 전체가 0건이어야 한다.
 - 하지 않는다: 프런트·문서(S15), B3·B6(설계 그대로).
 
 ## 절차
@@ -64,6 +65,9 @@ S01~S13 이 끝난 뒤 백엔드 리뷰(블로커·메이저 0, 마이너 8)에�
 - [ ] S14-G8: 전체 빌드·vet
   CHECK: bash .claude/gate/lado-rules-core.sh go-build
   EXPECT: GO_BUILD_OK
+- [ ] S14-G10: golangci-lint v2.13.2 0건(CI lint 잡과 같은 명령)
+  CHECK: cd backend && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --path-mode=abs && echo S14_LINT_OK
+  EXPECT: S14_LINT_OK
 - [ ] S14-G9: 미커밋 변경 없음
   CHECK: bash .claude/gate/lado-rules-core.sh tree-clean
   EXPECT: TREE_CLEAN
