@@ -120,11 +120,11 @@ Status: **HAVE** = AO has it and LADO uses it as is. **EXTEND** = AO has the bas
 
 | ID | P | Requirement | Status | AO today | LADO change |
 |---|---|---|---|---|---|
-| HAR-001 | P0 | Global, Project and Task scopes | EXTEND | Project-only prompt rules `AgentRules`, `AgentRulesFile`, `OrchestratorRules` (`domain/projectconfig.go:40-47`), injected by the system prompt builder (`session_manager/prompt.go:82-98,147-169`). No global setting exists | `lado_rule_*` tables. AO project rules appear as Project-scope rules |
-| HAR-002 | P0 | Toggle ordinary rules ON/OFF; OFF does not delete | ADD | — | HARNESS §4 |
-| HAR-003 | P0 | INHERIT / FORCE_ON / FORCE_OFF at Project and Task scope | ADD | — | HARNESS §4 |
-| HAR-004 | P0 | Protected gates cannot be disabled from lower scopes | ADD | — | HARNESS §4 |
-| HAR-005 | P0 | Effective preview; snapshot fixed at queue admission; a relevant change before start triggers review, never silent replacement | ADD | — | HARNESS §8 |
+| HAR-001 | P0 | Global, Project and Task scopes | EXTEND | Project-only prompt rules `AgentRules`, `AgentRulesFile`, `OrchestratorRules` (`domain/projectconfig.go:40-47`), injected by the system prompt builder (`session_manager/prompt.go:82-98,147-169`). No global setting exists | `lado_rule_*` tables. AO project rules appear as read-only Project-scope entries. Built in step 5 (`service/ladopolicy`, TDD §15) |
+| HAR-002 | P0 | Toggle ordinary rules ON/OFF; OFF does not delete | ADD | — | HARNESS §4. Step 5: the Global switch in Settings → Rules; archive and delete are separate actions (HARNESS §12) |
+| HAR-003 | P0 | INHERIT / FORCE_ON / FORCE_OFF at Project and Task scope | ADD | — | HARNESS §4. Step 5: `PUT /lado/bindings`, project settings → Rules and the task view's Rules tab |
+| HAR-004 | P0 | Protected gates cannot be disabled from lower scopes | ADD | — | HARNESS §4, §14. Step 5: `plan.approval.required` and `agent.permission.ceiling`; the ceiling's mode changes only with presence |
+| HAR-005 | P0 | Effective preview; snapshot fixed at queue admission; a relevant change before start triggers review, never silent replacement | ADD | — | HARNESS §8. Step 5: `GET /lado/effective`; the snapshot is written in the plan approval transaction (TDD §5.2), and a rule change after approval shows the task as Review required (TDD §3.2). The queue's comparison at dispatch comes with step 6 |
 | HAR-006 | P1 | AI-drafted rule changes with preview and approval | EXTEND | One-shot `chat.Service.RunBackgroundTask` (`service/chat/background.go:13-46`), no HTTP route | LADO route wraps it; the result is a draft |
 | HAR-007 | P1 | Triggers and enforcement: prompt, validator, tool policy, workflow gate | EXTEND | Prompt: system prompt builder. Tool policy: permission modes, `LaunchConfig.AllowedTools/DisallowedTools` (`ports/agent.go:707-735`). Gates: none | HARNESS §6 |
 | HAR-008 | P1 | Conflict detection, versioning, application log, diagnostics | ADD | — | HARNESS §10 |
