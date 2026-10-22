@@ -76,12 +76,42 @@
 
 ## Before — 수행 전 실측
 
-- 시작 HEAD: (단계 세션이 적는다)
+- 시작 HEAD: `f6dcf2fa6`(`docs(lado): record S14`), 트리 깨끗.
+- `event-transport.ts` 는 5단계 시작점 `855653a5c` 대비 44줄(+39 −5) — 규칙 이벤트 로직이 업스트림 파일 안에 있었다(G4 미충족).
+- 지적마다 먼저 쓴 테스트(필수 8 + 기존 1 수정)가 고치기 전 코드에서 실패한 모습(9건 RED, 7 파일):
+  - F1 `shows that the approved rules block the run`: 비교 줄이 `Approved with these rules`(초록 ready). `does not offer approval again for a blocked task`: blocked 안내 문장이 옛 "Fix the problems …, then approve again." 이고 Approve plan 이 켜져 있었다(재승인 대상에 blocked 포함).
+  - F2 `lets a deleted conflicting rule be removed`: 요약이 `Commit messages in Korean, lado-rule-gone`(날 id), 메뉴에 삭제된 규칙 항목이 없어 해제 불가.
+  - F4 `keeps your edits when the rule changed meanwhile`(기존 "edits only what changed and reloads a newer version" 을 고쳐 이름을 바꿈): Reload 뒤 이름이 `Ask for a review` 로 돌아가 편집이 사라졌다.
+  - F3 `refreshes a task's effective rules on lado_task events`: `["lado","effective","proj-1","lado-task-1"]` 무효화 호출 없음.
+  - F5 `names the agent in capability problems`: `cursor cannot apply rule text, …`(하네스 id).
+  - F6 `shows plan requested for a task whose rules need review`: 계획 요청 대기 중에도 `Rules need review`/`Blocked`(needs-you).
+  - F7 `opens the history of a protected rule` + 기존 `lists protected rules as always on`(보호 행에 메뉴가 없음을 단언하던 줄을 메뉴가 있음으로 고침): `Actions for Permission ceiling` 버튼 없음.
+- ko 실측: `"{{name}} 작업"`·`"최대 권한"`·`"{{agent}}에서 실행 · 최대 {{mode}}"`·`"바꾸기"`(G3 미충족).
 
 ## After — 수행 후 실측
 
-(단계 세션이 채운다)
+- 코드 커밋 `57db343b5` `fix(lado): review fixes for the rules UI`: 25 파일, +478 −166(새 파일 `lib/lado-events.ts`, 생성물 `tray-catalog.generated.ts` 포함).
+  - F1 `LadoTaskRules.tsx`: `approved.matches && approved.blocking` → attention 톤 `lado.task.rules.approvedBlocking`. 문장이 "the problems below" 라 비교 줄을 문제 목록 **위**로 옮겼다(에이전트 줄 → 승인 비교 → 문제). `LadoTaskDialog.tsx`: `reapprove = review_required` 만, `blocked` 이면 초록 "Approved" 대신 꺼진 Approve plan + Plan 탭 안내 `lado.view.rulesBlocked` 를 "Once you fix the problems on the Rules tab, you can approve it again." 로 바꿈(8 로캘).
+  - F2 `LadoRuleEditorDialog.tsx`: 규칙 목록에 없는 충돌 id(활성 버전의 충돌 ∪ 초안)를 체크 항목 `<DeletedRule>`(`Trans` + `<code>` → `font-mono` span)로 메뉴 끝에 보인다. 체크를 풀어도 항목은 남아 다시 체크할 수 있다(그 id 는 활성 버전에 있으므로 S14 B1 로 서버가 받는다). 요약도 React 노드로 같은 이름을 쓴다.
+  - F4 같은 파일 `rebase(base, draft, newer)`: `changedFields(base, draft)` 로 사용자가 바꾼 필드만 남기고 나머지는 새 버전 값, `baseVersion` 은 새 활성 버전. 상단 문장 `lado.rules.editor.editsKept`(needs-you 색, `role=status`)는 다음 저장까지.
+  - F3·F11 `lib/lado-events.ts` `createLadoEventBatch()`: `note(payload)`(lado_task → 그 태스크의 effective 키, lado_rules → 규칙·프로젝트) + `flush(invalidate)`. `event-transport.ts` 는 855653a5c 그대로에 import 1·생성 1·flush 1·note 1 + `ladoTaskOnly`→`ladoOnly` 3줄 → **10줄**(+7 −3).
+  - F5 `lib/lado-rules.ts` `ladoProblemText` 가 `agent: agentLabel`(`@aoagents/product-ui`, 모르는 id 는 그대로)을 넘긴다.
+  - F6 `LadoLanes.tsx` `ladoTaskStatus`: review_required·blocked 도 `plan.requestPending` 이면 muted "Plan requested".
+  - F7 `LadoRuleRows.tsx`: 메뉴 버튼을 `RowMenu`·`HistoryItem` 으로 떼어 보호 행은 History 만, 일반 행은 전과 같다. `RulesSection.tsx` 가 `onHistory` 를 넘긴다.
+  - F8 요약 묶음(에이전트 줄·비교·문제)에 `px-(--settings-row-inset)`.
+  - F9 ko 4곳 + 같은 줄의 짝 `lado.task.rules.noAgent`("최대" → "권한 상한"), `node scripts/sync-tray-catalog.mjs` 로 트레이 카탈로그 재생성(ko `변경` 1줄). 새 키 3개(`approvedBlocking`·`deletedRule`·`editsKept`)는 8 로캘 실제 번역.
+- 문서 커밋 `ea5c16628` `docs(lado): record the rules UI decisions and re-approval rule`: DESIGN.md 결정 로그 끝 행(프로젝트 규칙 페이지, Plan \| Rules 탭과 리비전 선택 위치, 규칙 탭 순서·inset, 카드 상태 줄 둘과 Plan requested, blocked 재승인 없음과 이유, 보호 행 History 메뉴 — S11 행의 "no menu" 를 고친다고 적음). TDD.md §5.2 에 지정 문장 둘(+ B2 의 "아무것도 쓰지 않는다, nonce 도"), §9 AO 지시 문단에 심링크 문장, 그리고 같은 문서 §3.2 의 "A task in either state can approve its latest revision again" 을 새 규칙에 맞춰 고쳤다.
+- 테스트: 바뀐 7 파일 + i18n·트레이·presence 4 파일 = 11 파일 156 통과(경고 출력 없음). 렌더러 전체 `400 passed (400)`, `6464 passed | 6 skipped`, 80초. 타입체크(`typecheck` + `typecheck:e2e`) 통과.
+- 게이트(HEAD `ea5c16628`, 트리 깨끗, 한 번에 전부): `GATES=9 MET=9 UNMET=0`. 이 엔트리를 커밋한 뒤 다시 돌려 증거를 새 HEAD 에 묶는다.
+- 하지 않음: 백엔드 코드(S14 끝), nit 12(`compactButtonClass`), 승인된 플랜 문서(§9 문장은 이 엔트리가 대체한다 — 플랜 머리말대로 엔트리가 우선).
 
 ## 비교/회고
 
-(단계 세션이 채운다)
+- 계획대로 끝났다. 막힌 곳 없음. 지적마다 실패하는 테스트 → 고침 → 통과 순서를 지켰고, RED 9건은 모두 기능이 없어서 실패했다(오타·환경 실패 없음).
+- 엔트리 문장보다 구체적으로 정한 것:
+  - F1 blocked 태스크의 푸터: 버튼을 숨기지 않고 **꺼진** Approve plan 을 둔다 — 잘못된 플랜·이전 리비전과 같은 처리이고, 문제를 고치면 review_required 가 되어 같은 자리의 버튼이 켜진다. 데몬은 blocked 재승인을 거절하지 않는다(상태 검사 없음, 백엔드는 범위 밖) — TDD §5.2 에 그대로 적었다.
+  - F1 문장 "the problems below" 에 맞추려고 규칙 탭의 비교 줄과 문제 목록 순서를 바꿨다. 비교(승인이 아직 유효한가)가 문제 목록의 요약 역할을 한다.
+  - F2 해제한 삭제 규칙을 메뉴에서 바로 없애지 않는다: 보관된 규칙(초안에 있을 때만 보임)과 달리 메뉴가 열린 채 항목이 사라지지 않게, 활성 버전의 충돌에 있는 동안은 남긴다.
+  - F9 `noAgent` 는 엔트리 목록에 없지만 `runsWith` 와 같은 줄의 다른 상태라 "권한 상한" 으로 같이 맞췄다(용어집).
+  - F11 G4 한도(12줄) 때문에 4단계의 lado_task 로직은 그대로 두고 5단계에서 더한 로직만 옮겼다. 4단계 것까지 옮기면 855653a5c 대비 삭제 줄이 한도를 넘는다.
+- 다음에 볼 것: 규칙 탭 순서 변경과 blocked 푸터는 실제 앱에서 아직 눈으로 보지 않았다(단위 테스트만). 체인이 끝난 뒤 lab 레시피로 확인하면 좋다.
