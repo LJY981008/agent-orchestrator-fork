@@ -1,7 +1,8 @@
 package ladoqueue
 
 // One dispatch of a claimed queue entry (docs/LJY-PRD/TDD.md §5.3): the
-// checks in their order, then the worker's spawn and its link to the entry.
+// checks in their order, then the worker's spawn and its link to the entry,
+// with how far the base moved since the plan was made.
 
 import (
 	"context"
@@ -45,9 +46,9 @@ var retryAfter = [maxAttempts - 1]time.Duration{30 * time.Second, 2 * time.Minut
 // longer holds needs review, a closed issue cancels the entry, what only a
 // new plan or setup can fix blocks it, and a check that could not run holds
 // it for a minute without spending its attempt. A pass that stops before the
-// spawn hands the entry back as it was. It returns only the writes that
-// failed.
-func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, now time.Time) error {
+// spawn hands the entry back as it was. It reports whether a worker started,
+// which takes a run slot, and returns only the writes that failed.
+func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, now time.Time) (bool, error) {
 	// 1. The entry's approval is the task's newest and still covers the
 	// latest revision.
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
@@ -56,15 +57,15 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	}
 	if err != nil {
 		s.deps.Log.Warn("LADO could not read the task of a queue entry", "entry", entry.ID, "err", err)
-		return s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
 	}
 	switch {
 	case !task.CancelledAt.IsZero():
 		// Cancelling the task cancelled its entry too; only the claim is
 		// left to give up.
-		return s.release(ctx, entry, time.Time{}, "")
+		return false, s.release(ctx, entry, time.Time{}, "")
 	case !task.Plan.ApprovalValid() || task.Plan.Approval.ID != entry.PlanApprovalID:
-		return s.review(ctx, entry, domain.LadoReviewPlanSuperseded)
+		return false, s.review(ctx, entry, domain.LadoReviewPlanSuperseded)
 	}
 
 	// 2. The issue is open and reads as it did when the plan was made.
@@ -73,12 +74,12 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	case err != nil:
 		s.deps.Log.Warn("LADO could not read the issue of a queued task", "entry", entry.ID, "task", task.ID,
 			"problem", problem(err, "the issue could not be read"))
-		return s.recheck(ctx, entry, domain.LadoWaitingIssueUnreadable, now)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingIssueUnreadable, now)
 	case issue.State == domain.IssueDone || issue.State == domain.IssueCancelled:
 		// IssueCheck recorded the state, so the task shows Closed unmerged.
-		return s.cancel(ctx, entry, now)
+		return false, s.cancel(ctx, entry, now)
 	case issue.SHA256 != task.Plan.Latest.IssueSnapshotSHA256:
-		return s.review(ctx, entry, domain.LadoReviewIssueEdited)
+		return false, s.review(ctx, entry, domain.LadoReviewIssueEdited)
 	}
 
 	// 3. The rules still give the approval's snapshot.
@@ -86,56 +87,88 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	if err != nil {
 		s.deps.Log.Warn("LADO could not resolve the rules of a queued task", "entry", entry.ID, "task", task.ID,
 			"problem", problem(err, "the rules could not be resolved"))
-		return s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
 	}
 	if current != task.Plan.Snapshot.SHA256 {
-		return s.review(ctx, entry, domain.LadoReviewRulesChanged)
+		return false, s.review(ctx, entry, domain.LadoReviewRulesChanged)
 	}
 
-	// 4. The plan's base is the branch AO starts the worker from.
-	base, err := s.workerBase(ctx, task)
+	// 4. The plan's base is the branch AO starts the worker from. How far
+	// that branch moved since the plan was made is recorded, not refused
+	// (decision e of the step 6 plan).
+	dir, base, err := s.workerBase(ctx, task)
 	if err != nil {
 		s.deps.Log.Warn("LADO could not tell which branch a queued task's worker starts from", "entry", entry.ID, "task", task.ID,
 			"problem", problem(err, "the base branch could not be resolved"))
-		return s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
 	}
 	if !namesBase(task.Plan.Latest.BaseRef, base) {
-		return s.block(ctx, entry, domain.LadoBlockedBaseRefMismatch)
+		return false, s.block(ctx, entry, domain.LadoBlockedBaseRefMismatch)
 	}
+	dispatchSHA, ahead := s.baseMove(ctx, entry, dir, base, task.Plan.Latest)
 
-	// 5. S08 admits the entry here: the global and project caps, and memory.
+	// 5. Admission took place before the dispatch: the pass claimed the
+	// entry for a free run slot, within its project's cap, while memory
+	// allowed (admit).
 
 	// 6. The snapshot lets its agent run.
 	in, err := s.deps.Tasks.RunInput(ctx, task)
 	if err != nil {
 		if ctx.Err() != nil {
-			return s.handBack(ctx, entry)
+			return false, s.handBack(ctx, entry)
 		}
-		return s.attemptFailed(ctx, entry, problem(err, "the approved plan could not be read"))
+		return false, s.attemptFailed(ctx, entry, problem(err, "the approved plan could not be read"))
 	}
 	agent, err := snapshotAgent(in.Snapshot)
 	if err != nil {
-		return s.attemptFailed(ctx, entry, "the rule snapshot could not be read")
+		return false, s.attemptFailed(ctx, entry, "the rule snapshot could not be read")
 	}
 	switch {
 	case in.Snapshot.Blocking:
-		return s.block(ctx, entry, domain.LadoBlockedSnapshot)
+		return false, s.block(ctx, entry, domain.LadoBlockedSnapshot)
 	case !runnable(agent.Harness):
-		return s.block(ctx, entry, domain.LadoBlockedAgentUnsupported)
+		return false, s.block(ctx, entry, domain.LadoBlockedAgentUnsupported)
 	case agent.PermissionMode == "" || agent.PermissionMode == domain.PermissionModeDefault:
 		// Resolution picks a mode under the ceiling; a snapshot without one
 		// cannot say how the worker may run.
-		return s.block(ctx, entry, domain.LadoBlockedSnapshot)
+		return false, s.block(ctx, entry, domain.LadoBlockedSnapshot)
 	}
 
 	if ctx.Err() != nil {
-		return s.handBack(ctx, entry)
+		return false, s.handBack(ctx, entry)
 	}
-	session, _, _, err := s.deps.Sessions.Spawn(ctx, spawnConfig(task, entry, in, agent))
+	cfg := spawnConfig(task, entry, in, agent)
+	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
+	exec := domain.LadoExecution{SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead}
 	if err != nil {
-		return s.attemptFailed(ctx, entry, problem(err, "the worker session could not start"))
+		// AO can fail a spawn after it started the session, as when the
+		// reply is lost. The attempt's session then runs, and it is the
+		// entry's execution.
+		rec, found, lookupErr := s.deps.Store.GetSessionByClientRequestID(context.WithoutCancel(ctx), cfg.ClientRequestID)
+		if lookupErr != nil {
+			s.deps.Log.Warn("LADO could not look for the session of a failed spawn", "entry", entry.ID, "err", lookupErr)
+		}
+		if lookupErr != nil || !found || !rec.ClientRequestCommitted {
+			return false, s.attemptFailed(ctx, entry, problem(err, "the worker session could not start"))
+		}
+		s.deps.Log.Warn("LADO's spawn of a worker failed after AO started it", "entry", entry.ID, "session", rec.ID,
+			"problem", problem(err, "the worker session could not start"))
+		exec.SessionID = rec.ID
 	}
-	return s.link(context.WithoutCancel(ctx), entry, in, session.ID, settings)
+	exec.StartedAt = s.deps.Clock().UTC()
+	ctx = context.WithoutCancel(ctx)
+	err = s.link(ctx, entry, exec, settings)
+	switch {
+	case errors.Is(err, domain.ErrLadoLeaseLost):
+		s.deps.Log.Warn("LADO started a worker but lost the claim of its queue entry before linking it",
+			"entry", entry.ID, "task", entry.TaskID, "session", exec.SessionID)
+		return true, nil
+	case err != nil:
+		return true, err
+	}
+	s.deps.Log.Info("LADO started a task's worker", "entry", entry.ID, "task", entry.TaskID, "session", exec.SessionID, "attempt", entry.AttemptCount)
+	s.stopIfUnwanted(ctx, entry, exec.SessionID)
+	return true, nil
 }
 
 // spawnConfig starts the worker from the snapshot's agent and permission mode
@@ -175,26 +208,27 @@ func runnable(agent domain.AgentHarness) bool {
 }
 
 // workerBase resolves the branch AO starts the task's worker from, the way
-// AO's spawn resolves it (session_manager refreshDefaultBranchesBestEffort):
-// for a single repository, the project's default branch setting, where auto
-// means the repository's own default; for a workspace project, the branch
-// recorded for the child repository that holds the task's issue.
-func (s *Service) workerBase(ctx context.Context, task domain.LadoTask) (ports.WorkspaceDefaultBranch, error) {
+// AO's spawn resolves it (session_manager refreshDefaultBranchesBestEffort),
+// and the repository it is resolved in: for a single repository, the
+// project's default branch setting, where auto means the repository's own
+// default; for a workspace project, the branch recorded for the child
+// repository that holds the task's issue.
+func (s *Service) workerBase(ctx context.Context, task domain.LadoTask) (string, ports.WorkspaceDefaultBranch, error) {
 	if s.deps.Branches == nil {
-		return ports.WorkspaceDefaultBranch{}, errors.New("no branch resolver is wired")
+		return "", ports.WorkspaceDefaultBranch{}, errors.New("no branch resolver is wired")
 	}
 	project, ok, err := s.deps.Projects.GetProject(ctx, string(task.ProjectID))
 	if err != nil {
-		return ports.WorkspaceDefaultBranch{}, err
+		return "", ports.WorkspaceDefaultBranch{}, err
 	}
 	if !ok {
-		return ports.WorkspaceDefaultBranch{}, fmt.Errorf("project %s not found", task.ProjectID)
+		return "", ports.WorkspaceDefaultBranch{}, fmt.Errorf("project %s not found", task.ProjectID)
 	}
 	dir, configured := project.Path, project.Config.WorktreeBaseBranch()
 	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
 		children, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
 		if err != nil {
-			return ports.WorkspaceDefaultBranch{}, err
+			return "", ports.WorkspaceDefaultBranch{}, err
 		}
 		found := false
 		for _, child := range children {
@@ -205,12 +239,41 @@ func (s *Service) workerBase(ctx context.Context, task domain.LadoTask) (ports.W
 			}
 		}
 		if !found {
-			return ports.WorkspaceDefaultBranch{}, fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
+			return "", ports.WorkspaceDefaultBranch{}, fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
 		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, baseResolveTimeout)
 	defer cancel()
-	return s.deps.Branches.ResolveDefaultBranch(ctx, dir, configured)
+	base, err := s.deps.Branches.ResolveDefaultBranch(ctx, dir, configured)
+	return dir, base, err
+}
+
+// baseMove reads the commit the worker's base names now, in the repository
+// at dir, and how many commits it has that the plan's base SHA does not. The
+// canonical ref AO starts the worker from is read, or the plan's base_ref
+// where none was resolved. What git cannot tell stays unknown and holds
+// nothing up: an empty SHA, and a nil count.
+func (s *Service) baseMove(ctx context.Context, entry domain.LadoQueueEntry, dir string, base ports.WorkspaceDefaultBranch, rev domain.LadoPlanRevision) (string, *int) {
+	ref := base.BaseRef
+	if ref == "" {
+		ref = rev.BaseRef
+	}
+	sha, err := s.deps.Git.RevParse(ctx, dir, ref)
+	if err != nil {
+		s.deps.Log.Warn("LADO could not read the commit a queued task's worker starts from", "entry", entry.ID, "dir", dir, "ref", ref,
+			"problem", problem(err, "git could not read the base"))
+		return "", nil
+	}
+	if rev.BaseSHA == "" {
+		return sha, nil
+	}
+	ahead, err := s.deps.Git.CountCommits(ctx, dir, rev.BaseSHA, sha)
+	if err != nil {
+		s.deps.Log.Warn("LADO could not count how far a queued task's base moved", "entry", entry.ID, "dir", dir, "from", rev.BaseSHA, "to", sha,
+			"problem", problem(err, "git could not count the commits"))
+		return sha, nil
+	}
+	return sha, &ahead
 }
 
 // namesBase reports whether a plan's base_ref names the branch a worker
@@ -230,36 +293,22 @@ func namesBase(ref string, base ports.WorkspaceDefaultBranch) bool {
 	return slices.Contains(names, ref)
 }
 
-// link records the session as the entry's execution, deadline included. A
-// claim lost meanwhile is no failure: the session exists, and recovery links
-// the session of the entry's attempt (S08).
-func (s *Service) link(ctx context.Context, entry domain.LadoQueueEntry, in ladotask.RunInput, sessionID domain.SessionID, settings domain.LadoDispatchSettings) error {
-	started := s.deps.Clock().UTC()
-	exec := domain.LadoExecution{
-		SessionID:        sessionID,
-		TaskID:           entry.TaskID,
-		QueueEntryID:     entry.ID,
-		PlanRevisionID:   in.Revision.ID,
-		PlanApprovalID:   entry.PlanApprovalID,
-		PolicySnapshotID: entry.PolicySnapshotID,
-		Attempt:          entry.AttemptCount,
-		StartedAt:        started,
-	}
+// link records the session of exec as the entry's execution, with the
+// deadline its start and the settings give. The caller gives the session,
+// the start and the base move; the entry gives the rest. A claim lost
+// meanwhile is domain.ErrLadoLeaseLost: the session exists, and recovery
+// links the session of the entry's attempt.
+func (s *Service) link(ctx context.Context, entry domain.LadoQueueEntry, exec domain.LadoExecution, settings domain.LadoDispatchSettings) error {
+	exec.TaskID, exec.QueueEntryID, exec.Attempt = entry.TaskID, entry.ID, entry.AttemptCount
+	exec.PlanApprovalID, exec.PolicySnapshotID = entry.PlanApprovalID, entry.PolicySnapshotID
 	if settings.MaxRunMinutes > 0 {
-		exec.DeadlineAt = started.Add(time.Duration(settings.MaxRunMinutes) * time.Minute)
+		exec.DeadlineAt = exec.StartedAt.Add(time.Duration(settings.MaxRunMinutes) * time.Minute)
 	}
 	err := s.deps.Store.LinkLadoExecution(ctx, entry.ID, entry.LeaseToken, exec)
-	if errors.Is(err, domain.ErrLadoLeaseLost) {
-		s.deps.Log.Warn("LADO started a worker but lost the claim of its queue entry before linking it",
-			"entry", entry.ID, "task", entry.TaskID, "session", sessionID)
-		return nil
+	if err != nil && !errors.Is(err, domain.ErrLadoLeaseLost) {
+		return fmt.Errorf("link session %s: %w", exec.SessionID, err)
 	}
-	if err != nil {
-		return fmt.Errorf("link session %s: %w", sessionID, err)
-	}
-	s.deps.Log.Info("LADO started a task's worker", "entry", entry.ID, "task", entry.TaskID, "session", sessionID, "attempt", entry.AttemptCount)
-	s.stopIfUnwanted(ctx, entry, sessionID)
-	return nil
+	return err
 }
 
 // stopIfUnwanted stops a worker its task no longer wants. A cancel or a newer

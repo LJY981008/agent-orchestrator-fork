@@ -16,9 +16,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -31,6 +33,10 @@ var (
 	_ Policy   = (*ladopolicy.Service)(nil)
 	_ Sessions = (*sessionsvc.Service)(nil)
 	_ Branches = (*router.Workspace)(nil)
+	_ Memory   = (*usage.MemoryReader)(nil)
+	_ Git      = execGit{}
+	// The dispatcher stops the worker of a task cancelled while it runs.
+	_ ladotask.Killer = (*Service)(nil)
 )
 
 var t0 = time.Date(2026, 10, 23, 9, 0, 0, 0, time.UTC)
@@ -43,6 +49,9 @@ const (
 	testIssueBody   = "Sessions expire after 5 minutes instead of 30."
 	testPlanText    = "---\ntask: task-1\nissue: github:acme/app#12\nbase_ref: main\n---\n\n# Plan\n\n1. Read the timeout from the settings.\n"
 	testIssueFile   = "# Issue github:acme/app#12, as LADO pinned it\n\n## Body\n\n```text\nSessions expire after 5 minutes instead of 30.\n```\n"
+	// testDispatchSHA is the commit the fixture's base names at dispatch;
+	// the plan was made at c0ffee.
+	testDispatchSHA = "d15ba7c4d15ba7c4d15ba7c4d15ba7c4d15ba7c4"
 )
 
 // pinnedIssueSHA is the hash of the issue as the plan was made from it.
@@ -106,6 +115,8 @@ type fixture struct {
 	sessions *fakeSessions
 	projects *fakeProjects
 	branches *fakeBranches
+	memory   *fakeMemory
+	git      *fakeGit
 	logs     *lockedBuffer
 	svc      *Service
 
@@ -117,7 +128,11 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{
-		store: &fakeStore{tasks: map[domain.LadoTaskID]domain.LadoTask{}, settings: domain.DefaultLadoDispatchSettings()},
+		store: &fakeStore{
+			tasks: map[domain.LadoTaskID]domain.LadoTask{}, settings: domain.DefaultLadoDispatchSettings(),
+			running: map[domain.ProjectID]int{}, caps: map[domain.ProjectID]int{}, modeOff: map[domain.ProjectID]bool{},
+			sessions: map[string]domain.SessionRecord{},
+		},
 		tasks: &fakeTasks{
 			live: domain.LadoIssueSnapshot{ID: testIssueRef, Title: testIssueTitle, Body: testIssueBody},
 			input: ladotask.RunInput{
@@ -132,13 +147,15 @@ func newFixture(t *testing.T) *fixture {
 			Config: domain.ProjectConfig{DefaultBranch: domain.DefaultBranchAuto},
 		}},
 		branches: &fakeBranches{resolved: ports.WorkspaceDefaultBranch{Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main"}},
+		memory:   &fakeMemory{pressure: procmem.Pressure{Source: procmem.PressureSourcePSI, Raw: 1.5}},
+		git:      &fakeGit{sha: testDispatchSHA, ahead: 2},
 		logs:     &lockedBuffer{},
 		now:      t0,
 	}
 	f.store.tasks["task-1"] = testTask()
 	f.svc = New(Deps{
 		Store: f.store, Tasks: f.tasks, Policy: f.policy, Sessions: f.sessions,
-		Projects: f.projects, Branches: f.branches,
+		Projects: f.projects, Branches: f.branches, Memory: f.memory, Git: f.git,
 		Clock: f.clock, NewID: f.newID,
 		Log: slog.New(slog.NewTextHandler(f.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 	})
@@ -198,13 +215,24 @@ type fakeStore struct {
 	tasks    map[domain.LadoTaskID]domain.LadoTask
 	entries  []domain.LadoQueueEntry
 	settings domain.LadoDispatchSettings
-	// running counts executions whose session runs; live leases are counted
-	// from the entries.
-	running   int
-	claims    []int
-	links     []domain.LadoExecution
-	linkErr   error
-	taskReads int
+	// running counts the executions whose session runs, by project; live
+	// leases are counted from the entries.
+	running map[domain.ProjectID]int
+	// caps are the projects' run caps, 1 where unset; modeOff the projects
+	// with LADO mode off.
+	caps    map[domain.ProjectID]int
+	modeOff map[domain.ProjectID]bool
+	// sessions are AO's sessions by client request id.
+	sessions   map[string]domain.SessionRecord
+	sessionErr error
+	// overdue are the running executions with a deadline.
+	overdue    []domain.LadoExecution
+	timeOuts   []domain.LadoAuditEvent
+	claims     []int
+	links      []domain.LadoExecution
+	linkErr    error
+	waitWrites int
+	taskReads  int
 }
 
 func (f *fakeStore) add(entries ...domain.LadoQueueEntry) {
@@ -256,16 +284,116 @@ func (f *fakeStore) LadoDispatchSettings(context.Context) (domain.LadoDispatchSe
 	return f.settings, nil
 }
 
+func (f *fakeStore) LadoProjectMaxConcurrent(_ context.Context, project domain.ProjectID) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if n, ok := f.caps[project]; ok {
+		return n, nil
+	}
+	return domain.LadoDefaultProjectMaxConcurrent, nil
+}
+
 func (f *fakeStore) CountLiveLadoExecutions(_ context.Context, now time.Time) (int, map[domain.ProjectID]int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	total := f.running
+	total, perProject := 0, map[domain.ProjectID]int{}
+	for project, n := range f.running {
+		total += n
+		perProject[project] += n
+	}
 	for _, e := range f.entries {
 		if open(e) && e.LeaseToken != "" && e.LeaseExpiresAt.After(now) {
 			total++
+			perProject[e.ProjectID]++
 		}
 	}
-	return total, nil, nil
+	return total, perProject, nil
+}
+
+// SetLadoQueueWaiting writes what the store's statement does: the reason of
+// the open entries without a lease whose project's mode suits it, where it
+// differs.
+func (f *fakeStore) SetLadoQueueWaiting(_ context.Context, reason string, project *domain.ProjectID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int64
+	for i := range f.entries {
+		e := &f.entries[i]
+		if !open(*e) || e.LeaseToken != "" || e.WaitingReason == reason || (project != nil && e.ProjectID != *project) ||
+			f.modeOff[e.ProjectID] != (reason == domain.LadoWaitingModeOff) {
+			continue
+		}
+		e.WaitingReason = reason
+		n++
+	}
+	f.waitWrites += int(n)
+	return n, nil
+}
+
+func (f *fakeStore) writtenWaits() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.waitWrites
+}
+
+func (f *fakeStore) LeasedLadoQueueEntries(context.Context) ([]domain.LadoQueueEntry, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var leased []domain.LadoQueueEntry
+	for _, e := range f.entries {
+		if e.LeaseToken != "" {
+			leased = append(leased, e)
+		}
+	}
+	slices.SortStableFunc(leased, func(a, b domain.LadoQueueEntry) int { return a.ClaimedAt.Compare(b.ClaimedAt) })
+	return leased, nil
+}
+
+func (f *fakeStore) GetSessionByClientRequestID(_ context.Context, id string) (domain.SessionRecord, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.sessionErr != nil {
+		return domain.SessionRecord{}, false, f.sessionErr
+	}
+	rec, ok := f.sessions[id]
+	return rec, ok, nil
+}
+
+func (f *fakeStore) addSession(rec domain.SessionRecord) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sessions[rec.ClientRequestID] = rec
+}
+
+func (f *fakeStore) LadoExecutionsPastDeadline(_ context.Context, now time.Time) ([]domain.LadoExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var due []domain.LadoExecution
+	for _, exec := range f.overdue {
+		if exec.TimedOutAt.IsZero() && !exec.DeadlineAt.IsZero() && !exec.DeadlineAt.After(now) {
+			due = append(due, exec)
+		}
+	}
+	return due, nil
+}
+
+func (f *fakeStore) MarkLadoExecutionTimedOut(_ context.Context, id domain.SessionID, event domain.LadoAuditEvent) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for i := range f.overdue {
+		if exec := &f.overdue[i]; exec.SessionID == id && exec.TimedOutAt.IsZero() {
+			exec.TimedOutAt = event.At
+			f.timeOuts = append(f.timeOuts, event)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeStore) timedOut() ([]domain.LadoExecution, []domain.LadoAuditEvent) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.overdue), slices.Clone(f.timeOuts)
 }
 
 func open(e domain.LadoQueueEntry) bool {
@@ -286,7 +414,7 @@ func (f *fakeStore) ClaimLadoQueueEntries(_ context.Context, now, leaseUntil tim
 	for _, i := range order {
 		e := &f.entries[i]
 		leased := e.LeaseToken != "" && e.LeaseExpiresAt.After(now)
-		if len(claimed) == limit || !open(*e) || leased || e.NextAttemptAt.After(now) {
+		if len(claimed) == limit || !open(*e) || leased || e.NextAttemptAt.After(now) || f.modeOff[e.ProjectID] {
 			continue
 		}
 		e.LeaseToken, e.ClaimedAt, e.LeaseExpiresAt = newToken(), now, leaseUntil
@@ -350,12 +478,15 @@ func (f *fakeStore) LinkLadoExecution(_ context.Context, id domain.LadoQueueEntr
 	if err != nil {
 		return err
 	}
-	if !f.leased(id, token, func(e *domain.LadoQueueEntry) { e.DispatchedSessionID = exec.SessionID }) {
+	var project domain.ProjectID
+	if !f.leased(id, token, func(e *domain.LadoQueueEntry) { e.DispatchedSessionID, project = exec.SessionID, e.ProjectID }) {
 		return domain.ErrLadoLeaseLost
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.links = append(f.links, exec)
+	// The linked session runs and takes a slot from now on.
+	f.running[project]++
 	return nil
 }
 
@@ -433,13 +564,17 @@ func (f *fakePolicy) CurrentSHA256(context.Context, domain.LadoTask) (string, er
 }
 
 // fakeSessions records each spawn and answers with errs in turn, then with a
-// new session. onSpawn runs inside the spawn, as AO starts the worker.
+// new session, the one start makes when set. onSpawn runs inside the spawn,
+// as AO starts the worker. A kill fails with killErrs' error for its
+// session.
 type fakeSessions struct {
-	mu      sync.Mutex
-	configs []ports.SpawnConfig
-	errs    []error
-	onSpawn func(cfg ports.SpawnConfig)
-	kills   []domain.SessionID
+	mu       sync.Mutex
+	configs  []ports.SpawnConfig
+	errs     []error
+	onSpawn  func(cfg ports.SpawnConfig)
+	start    func(cfg ports.SpawnConfig) (domain.SessionID, error)
+	kills    []domain.SessionID
+	killErrs map[domain.SessionID]error
 }
 
 func (f *fakeSessions) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -450,7 +585,7 @@ func (f *fakeSessions) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.S
 	if n <= len(f.errs) {
 		err = f.errs[n-1]
 	}
-	hook := f.onSpawn
+	hook, start := f.onSpawn, f.start
 	f.mu.Unlock()
 	if hook != nil {
 		hook(cfg)
@@ -458,13 +593,22 @@ func (f *fakeSessions) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.S
 	if err != nil {
 		return domain.Session{}, 0, 0, err
 	}
-	return domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID("sess-" + strconv.Itoa(n))}}, 0, 0, nil
+	id := domain.SessionID("sess-" + strconv.Itoa(n))
+	if start != nil {
+		if id, err = start(cfg); err != nil {
+			return domain.Session{}, 0, 0, err
+		}
+	}
+	return domain.Session{SessionRecord: domain.SessionRecord{ID: id}}, 0, 0, nil
 }
 
 func (f *fakeSessions) RequestKill(_ context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.kills = append(f.kills, id)
+	if err := f.killErrs[id]; err != nil {
+		return sessionmanager.KillResult{}, err
+	}
 	return sessionmanager.KillResult{Freed: true}, nil
 }
 
@@ -480,9 +624,11 @@ func (f *fakeSessions) killed() []domain.SessionID {
 	return slices.Clone(f.kills)
 }
 
+// fakeProjects holds the fixture's project and any others a test adds.
 type fakeProjects struct {
 	mu      sync.Mutex
 	project domain.ProjectRecord
+	others  map[string]domain.ProjectRecord
 	repos   []domain.WorkspaceRepoRecord
 	calls   int
 }
@@ -491,7 +637,11 @@ func (f *fakeProjects) GetProject(_ context.Context, id string) (domain.ProjectR
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls++
-	return f.project, f.project.ID == id, nil
+	if f.project.ID == id {
+		return f.project, true, nil
+	}
+	project, ok := f.others[id]
+	return project, ok, nil
 }
 
 func (f *fakeProjects) ListWorkspaceRepos(_ context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
@@ -523,4 +673,59 @@ func (f *fakeBranches) calls() [][2]string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return slices.Clone(f.asked)
+}
+
+// fakeMemory answers every reading with pressure, or with err.
+type fakeMemory struct {
+	mu       sync.Mutex
+	pressure procmem.Pressure
+	err      error
+	reads    int
+}
+
+func (f *fakeMemory) Pressure(context.Context) (procmem.Pressure, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	return f.pressure, f.err
+}
+
+func (f *fakeMemory) set(pressure procmem.Pressure, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pressure, f.err = pressure, err
+}
+
+func (f *fakeMemory) readings() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
+}
+
+// fakeGit names one commit for every ref and counts ahead commits from any
+// other, or fails with its errors.
+type fakeGit struct {
+	mu       sync.Mutex
+	sha      string
+	ahead    int
+	revErr   error
+	countErr error
+}
+
+func (f *fakeGit) RevParse(context.Context, string, string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.sha, f.revErr
+}
+
+func (f *fakeGit) CountCommits(_ context.Context, _, from, to string) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.countErr != nil {
+		return 0, f.countErr
+	}
+	if from == to {
+		return 0, nil
+	}
+	return f.ahead, nil
 }

@@ -386,6 +386,12 @@ func (pf *planFixture) end(t *testing.T, id domain.SessionID) {
 	}
 }
 
+// timedOutEvent is the audit event of a run the dispatcher stopped at its
+// deadline.
+func timedOutEvent(id domain.SessionID, at time.Time) domain.LadoAuditEvent {
+	return domain.LadoAuditEvent{At: at, Actor: "lado", Action: "execution.timed_out", SubjectKind: "execution", SubjectID: string(id)}
+}
+
 // count returns the rows of a table.
 func (pf *planFixture) count(t *testing.T, table string) int {
 	t.Helper()
@@ -952,7 +958,7 @@ func TestApprovalAgainFollowsTheTaskState(t *testing.T) {
 
 	// A run that timed out, or whose PR closed unmerged, refuses approvals
 	// while its session lives, and is approved again once it ended.
-	if ok, err := pf.store.MarkLadoExecutionTimedOut(ctx, session, pf.now); err != nil || !ok {
+	if ok, err := pf.store.MarkLadoExecutionTimedOut(ctx, session, timedOutEvent(session, pf.now)); err != nil || !ok {
 		t.Fatalf("MarkLadoExecutionTimedOut = %v, %v", ok, err)
 	}
 	wantState(t, domain.LadoTaskFailed)

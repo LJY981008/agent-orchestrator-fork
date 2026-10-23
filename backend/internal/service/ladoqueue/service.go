@@ -1,22 +1,24 @@
 // Package ladoqueue is LADO's dispatcher: it starts the worker of each
 // approved task in its turn (docs/LJY-PRD/TDD.md §5.3). Approving a plan
-// queues it (service/ladotask); the dispatcher claims queue entries, checks
-// that the approval still holds, spawns the worker through AO's session
-// service in Chat mode, and links the session to its entry as the task's
-// execution.
+// queues it (service/ladotask); the dispatcher claims queue entries within
+// the run caps, checks that the approval still holds, spawns the worker
+// through AO's session service in Chat mode, and links the session to its
+// entry as the task's execution. It also links the workers a dispatch that
+// stopped midway had started, and stops the runs past their deadline.
 package ladoqueue
 
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 )
@@ -26,12 +28,15 @@ const (
 	defaultLease    = 2 * time.Minute
 )
 
-// Store keeps the queue: the task reads a dispatch checks and the primitives
-// that claim entries and record what became of them.
+// Store keeps the queue: the task reads a dispatch checks, the primitives
+// that claim entries and record what became of them, and the session AO
+// keeps for a client request id.
 type Store interface {
 	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
 	LadoDispatchSettings(ctx context.Context) (domain.LadoDispatchSettings, error)
+	LadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID) (int, error)
 	CountLiveLadoExecutions(ctx context.Context, now time.Time) (int, map[domain.ProjectID]int, error)
+	SetLadoQueueWaiting(ctx context.Context, reason string, projectID *domain.ProjectID) (int64, error)
 	ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, newToken func() string) ([]domain.LadoQueueEntry, error)
 	ReleaseLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token string, nextAttempt time.Time, waiting string) (bool, error)
 	HoldLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, waiting string, nextAttempt time.Time) (bool, error)
@@ -40,6 +45,10 @@ type Store interface {
 	FailLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, message string, at time.Time) (bool, error)
 	CancelLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token string, at time.Time) (bool, error)
 	LinkLadoExecution(ctx context.Context, entryID domain.LadoQueueEntryID, token string, exec domain.LadoExecution) error
+	LeasedLadoQueueEntries(ctx context.Context) ([]domain.LadoQueueEntry, error)
+	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
+	LadoExecutionsPastDeadline(ctx context.Context, now time.Time) ([]domain.LadoExecution, error)
+	MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.SessionID, event domain.LadoAuditEvent) (bool, error)
 }
 
 // Tasks reads a task's issue now and the inputs its worker starts from.
@@ -68,6 +77,12 @@ type Projects interface {
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 }
 
+// Memory reads the machine's memory pressure. The daemon's usage memory
+// reader (*usage.MemoryReader) implements it.
+type Memory interface {
+	Pressure(ctx context.Context) (procmem.Pressure, error)
+}
+
 // Branches resolves the branch AO starts a repository's worktrees from, given
 // the branch the project configures for it ("" for the repository's own
 // default). AO's workspace adapter implements it, and AO's spawn calls it the
@@ -86,6 +101,12 @@ type Deps struct {
 	// Branches tells which branch a worker starts from. Without it no entry
 	// passes the base check.
 	Branches Branches
+	// Memory tells whether memory pressure is tight. Without it entries never
+	// wait for memory.
+	Memory Memory
+	// Git records how far a worker's base moved since its plan was made; nil
+	// uses the system git.
+	Git Git
 	// Clock stamps changes; nil uses time.Now.
 	Clock func() time.Time
 	// NewID returns a new unique id, used for lease tokens; nil uses
@@ -102,6 +123,8 @@ type Deps struct {
 // Service dispatches LADO's queue.
 type Service struct {
 	deps Deps
+	// memoryUnreadable is set once a memory reading failed and was logged.
+	memoryUnreadable atomic.Bool
 }
 
 // New returns a Service.
@@ -114,6 +137,9 @@ func New(deps Deps) *Service {
 	}
 	if deps.Log == nil {
 		deps.Log = slog.Default()
+	}
+	if deps.Git == nil {
+		deps.Git = execGit{}
 	}
 	if deps.Interval <= 0 {
 		deps.Interval = defaultInterval
@@ -146,43 +172,38 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
-// Tick runs one dispatch pass at now: it claims as many entries as there are
-// free run slots, oldest first, and dispatches each. What an entry waits for
-// or why it stopped is the entry's state, not an error; Tick returns the
-// writes that failed, joined.
+// Tick runs one dispatch pass at now. It first settles the claims of a
+// dispatch that stopped midway and stops the runs past their deadline; then,
+// while run slots are free and memory allows, it claims entries one at a
+// time, oldest first, and dispatches each. No entry is claimed while a lease
+// could not be settled, because the lease may hide a worker. What an entry
+// waits for or why it stopped is the entry's state, not an error; Tick
+// returns the reads and writes that failed, joined.
 func (s *Service) Tick(ctx context.Context, now time.Time) error {
 	now = now.UTC()
-	// S08 recovers the leases a stopped daemon left and stops runs past
-	// their deadline here, before the slots are counted.
 	settings, err := s.deps.Store.LadoDispatchSettings(ctx)
 	if err != nil {
 		return err
 	}
-	// Running executions and live leases both take a slot.
-	taken, _, err := s.deps.Store.CountLiveLadoExecutions(ctx, now)
-	if err != nil {
-		return err
-	}
-	free := settings.MaxConcurrent - taken
-	if free <= 0 {
-		return nil
-	}
-	claimed, err := s.deps.Store.ClaimLadoQueueEntries(ctx, now, now.Add(s.deps.Lease), free, s.deps.NewID)
-	if err != nil {
-		return err
-	}
 	var problems []error
-	for _, entry := range claimed {
-		if ctx.Err() != nil {
-			// Stopping: hand the rest back without spending their attempts.
-			if err := s.handBack(ctx, entry); err != nil {
-				problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
-			}
-			continue
-		}
-		if err := s.dispatch(ctx, entry, settings, now); err != nil {
-			problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
+	recovered := s.recover(ctx, now, settings)
+	if recovered != nil {
+		problems = append(problems, recovered)
+	}
+	if err := s.stopOverdue(ctx, now); err != nil {
+		problems = append(problems, err)
+	}
+	if recovered == nil {
+		if err := s.admit(ctx, now, settings); err != nil {
+			problems = append(problems, err)
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// Stop stops a worker session through AO. It is the task service's Killer,
+// for a task cancelled while its worker runs.
+func (s *Service) Stop(ctx context.Context, sessionID domain.SessionID) error {
+	_, err := s.deps.Sessions.RequestKill(ctx, sessionID)
+	return err
 }

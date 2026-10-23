@@ -678,6 +678,91 @@ func TestClaimLadoQueueEntriesLeasesOldestOpen(t *testing.T) {
 	mustClaimLadoQueue(t, s, later.Add(time.Hour), 10, tokens, zed, first, second, third, fourth)
 }
 
+func TestSetLadoQueueWaiting(t *testing.T) {
+	s, raw := openLadoQueueStore(t)
+	ctx := context.Background()
+	for _, project := range []string{"mer", "zed", "kim"} {
+		seedProject(t, s, project)
+	}
+	mustLadoMode(t, s, "mer", true)
+	mustLadoMode(t, s, "zed", false)
+	// kim has no LADO settings, so its mode is off too.
+	at := ladoQueueAt
+	leased := mustQueuedLadoTask(t, s, "1", "mer", at)
+	review := mustQueuedLadoTask(t, s, "2", "mer", at.Add(time.Minute))
+	retry := mustQueuedLadoTask(t, s, "3", "mer", at.Add(2*time.Minute))
+	now := at.Add(time.Hour)
+	claimed := mustClaimLadoQueue(t, s, now, 3, ladoTokens("token"), leased, review, retry)
+	if ok, err := s.MarkLadoQueueEntryReviewRequired(ctx, review, claimed[1].LeaseToken, domain.LadoReviewIssueEdited); err != nil || !ok {
+		t.Fatalf("mark %s review required = (%v, %v)", review, ok, err)
+	}
+	next := now.Add(10 * time.Minute)
+	if ok, err := s.ReleaseLadoQueueEntry(ctx, retry, claimed[2].LeaseToken, next, domain.LadoWaitingRetry); err != nil || !ok {
+		t.Fatalf("release %s = (%v, %v)", retry, ok, err)
+	}
+	open := mustQueuedLadoTask(t, s, "4", "mer", at.Add(3*time.Minute))
+	zed := mustQueuedLadoTask(t, s, "5", "zed", at.Add(4*time.Minute))
+	kim := mustQueuedLadoTask(t, s, "6", "kim", at.Add(5*time.Minute))
+	set := func(reason string, project *domain.ProjectID, want int64) {
+		t.Helper()
+		if n, err := s.SetLadoQueueWaiting(ctx, reason, project); err != nil || n != want {
+			t.Fatalf("SetLadoQueueWaiting(%q, %v) = (%d, %v), want %d", reason, project, n, err, want)
+		}
+	}
+	waiting := func(want map[domain.LadoQueueEntryID]string) {
+		t.Helper()
+		rows := ladoQueueRows(t, raw)
+		for id, reason := range want {
+			if got := rows[id].WaitingReason; got != reason {
+				t.Fatalf("entry %s waits for %q, want %q", id, got, reason)
+			}
+		}
+	}
+
+	// A reason marks the open entries no lease holds in projects with LADO
+	// mode on, a waiting one too; its attempt and next attempt stay. The same
+	// reason again writes nothing.
+	set(domain.LadoWaitingMemoryTight, nil, 2)
+	set(domain.LadoWaitingMemoryTight, nil, 0)
+	waiting(map[domain.LadoQueueEntryID]string{
+		open: domain.LadoWaitingMemoryTight, retry: domain.LadoWaitingMemoryTight,
+		leased: "", review: "", zed: "", kim: "",
+	})
+	if row := ladoQueueRows(t, raw)[retry]; !row.NextAttemptAt.Valid || !row.NextAttemptAt.Time.Equal(next) || row.AttemptCount != 1 {
+		t.Fatalf("waiting entry %+v, want its next attempt at %s and its attempt kept", row, next)
+	}
+
+	// The entries of projects with LADO mode off wait for that alone; the
+	// other reasons leave them.
+	set(domain.LadoWaitingModeOff, nil, 2)
+	set(domain.LadoWaitingModeOff, nil, 0)
+	set(domain.LadoWaitingSlotGlobal, nil, 2)
+	waiting(map[domain.LadoQueueEntryID]string{
+		open: domain.LadoWaitingSlotGlobal, retry: domain.LadoWaitingSlotGlobal,
+		zed: domain.LadoWaitingModeOff, kim: domain.LadoWaitingModeOff, leased: "", review: "",
+	})
+
+	// One project's entries.
+	mer, zedProject := domain.ProjectID("mer"), domain.ProjectID("zed")
+	set(domain.LadoWaitingMemoryTight, &zedProject, 0)
+	set(domain.LadoWaitingModeOff, &mer, 0)
+	set(domain.LadoWaitingMemoryTight, &mer, 2)
+
+	// Once zed turns LADO mode on, its entry waits for what the others do,
+	// and a claim clears the reason.
+	mustLadoMode(t, s, "zed", true)
+	set(domain.LadoWaitingMemoryTight, nil, 1)
+	waiting(map[domain.LadoQueueEntryID]string{zed: domain.LadoWaitingMemoryTight, kim: domain.LadoWaitingModeOff})
+	for _, entry := range mustClaimLadoQueue(t, s, now, 10, ladoTokens("again"), open, zed) {
+		if entry.WaitingReason != "" {
+			t.Fatalf("claimed %+v, want no waiting reason", entry)
+		}
+	}
+	if _, err := s.SetLadoQueueWaiting(ctx, "", nil); err == nil {
+		t.Fatal("a waiting reason of nothing was accepted")
+	}
+}
+
 func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 	s, _ := openLadoQueueStore(t)
 	ctx := context.Background()
@@ -1158,8 +1243,16 @@ func TestLadoEntryPolicyByClientRequest(t *testing.T) {
 	}
 }
 
+// ladoTimedOutEvent is the audit event of a run LADO stopped at its deadline.
+func ladoTimedOutEvent(session domain.SessionID, at time.Time) domain.LadoAuditEvent {
+	return domain.LadoAuditEvent{
+		At: at, Actor: "lado", Action: "execution.timed_out", SubjectKind: "execution", SubjectID: string(session),
+		Payload: json.RawMessage(`{"session":"` + string(session) + `"}`),
+	}
+}
+
 func TestLadoExecutionsPastDeadline(t *testing.T) {
-	s, _ := openLadoQueueStore(t)
+	s, raw := openLadoQueueStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
 	mustLadoMode(t, s, "mer", true)
@@ -1190,7 +1283,7 @@ func TestLadoExecutionsPastDeadline(t *testing.T) {
 	start(now.Add(-time.Minute), true)
 	start(time.Time{}, false)
 	marked := start(now.Add(-time.Hour), false)
-	if ok, err := s.MarkLadoExecutionTimedOut(ctx, marked.SessionID, now.Add(-time.Hour)); err != nil || !ok {
+	if ok, err := s.MarkLadoExecutionTimedOut(ctx, marked.SessionID, ladoTimedOutEvent(marked.SessionID, now.Add(-time.Hour))); err != nil || !ok {
 		t.Fatalf("MarkLadoExecutionTimedOut = (%v, %v)", ok, err)
 	}
 	overdue.PR = mustWriteLadoPR(t, s, overdue.SessionID, 5, false, false, now.Add(-time.Hour))
@@ -1204,14 +1297,14 @@ func TestLadoExecutionsPastDeadline(t *testing.T) {
 
 	// A time-out keeps its first time, and the run leaves the list.
 	for i, want := range []bool{true, false} {
-		if ok, err := s.MarkLadoExecutionTimedOut(ctx, overdue.SessionID, now.Add(time.Duration(i)*time.Minute)); err != nil || ok != want {
+		if ok, err := s.MarkLadoExecutionTimedOut(ctx, overdue.SessionID, ladoTimedOutEvent(overdue.SessionID, now.Add(time.Duration(i)*time.Minute))); err != nil || ok != want {
 			t.Fatalf("time-out %d = (%v, %v), want %v", i+1, ok, err, want)
 		}
 	}
-	if ok, err := s.MarkLadoExecutionTimedOut(ctx, "mer-unknown", now); err != nil || ok {
+	if ok, err := s.MarkLadoExecutionTimedOut(ctx, "mer-unknown", ladoTimedOutEvent("mer-unknown", now)); err != nil || ok {
 		t.Fatalf("time-out of a session that is not an execution = (%v, %v), want false", ok, err)
 	}
-	if _, err := s.MarkLadoExecutionTimedOut(ctx, due.SessionID, time.Time{}); err == nil {
+	if _, err := s.MarkLadoExecutionTimedOut(ctx, due.SessionID, ladoTimedOutEvent(due.SessionID, time.Time{})); err == nil {
 		t.Fatal("a time-out without a time was accepted")
 	}
 	if got, err := s.LadoExecutionsPastDeadline(ctx, now); err != nil || !reflect.DeepEqual(got, []domain.LadoExecution{due}) {
@@ -1220,6 +1313,27 @@ func TestLadoExecutionsPastDeadline(t *testing.T) {
 	stopped, _, err := s.LadoExecution(ctx, overdue.SessionID)
 	if err != nil || !stopped.TimedOutAt.Equal(now) {
 		t.Fatalf("timed-out execution = %+v (%v), want timed out at %s", stopped, err, now)
+	}
+	// Each time-out wrote its audit event with it, and only the time-outs did.
+	rows, err := raw.Query(`SELECT subject_id, at FROM lado_audit_events WHERE action = 'execution.timed_out' ORDER BY id`)
+	if err != nil {
+		t.Fatalf("read audit events: %v", err)
+	}
+	defer func() { _ = rows.Close() }()
+	var audited []string
+	for rows.Next() {
+		var subject string
+		var at time.Time
+		if err := rows.Scan(&subject, &at); err != nil {
+			t.Fatalf("scan audit event: %v", err)
+		}
+		audited = append(audited, subject+"@"+at.UTC().Format(time.TimeOnly))
+	}
+	if want := []string{
+		string(marked.SessionID) + "@" + now.Add(-time.Hour).Format(time.TimeOnly),
+		string(overdue.SessionID) + "@" + now.Format(time.TimeOnly),
+	}; !slices.Equal(audited, want) || rows.Err() != nil {
+		t.Fatalf("time-out audit events = %v (%v), want %v", audited, rows.Err(), want)
 	}
 	task, _, err := s.LadoTask(ctx, overdue.TaskID)
 	if err != nil || task.State() != domain.LadoTaskFailed || task.StateReason() != domain.LadoFailedTimedOut {

@@ -1365,7 +1365,10 @@ func TestImpactCountsQueuedAndFailedTasks(t *testing.T) {
 		t.Fatalf("WritePR: %v", err)
 	}
 	timedOut, token := approveAndClaim(t)
-	ok, err = fx.store.MarkLadoExecutionTimedOut(ctx, run(t, timedOut, token), now)
+	stopped := run(t, timedOut, token)
+	ok, err = fx.store.MarkLadoExecutionTimedOut(ctx, stopped, domain.LadoAuditEvent{
+		At: now, Actor: "lado", Action: "execution.timed_out", SubjectKind: "execution", SubjectID: string(stopped),
+	})
 	mark(t, "MarkLadoExecutionTimedOut", ok, err)
 	queued := fx.approvedTask(t, "claude-code")
 

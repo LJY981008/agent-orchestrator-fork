@@ -1108,6 +1108,58 @@ func (q *Queries) SetLadoQueueEntryDispatched(ctx context.Context, arg SetLadoQu
 	return result.RowsAffected()
 }
 
+const setLadoQueueWaiting = `-- name: SetLadoQueueWaiting :execrows
+UPDATE lado_queue_entries
+SET waiting_reason = ?1
+WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND lease_token IS NULL
+  AND waiting_reason <> ?1
+  AND (lado_queue_entries.project_id = ?2 OR ?2 IS NULL)
+  AND lado_queue_entries.project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+`
+
+type SetLadoQueueWaitingParams struct {
+	Reason    string
+	ProjectID sql.NullString
+}
+
+// Why open entries no lease holds wait, in projects with LADO mode on, of one
+// project or of all when project_id is NULL. Attempts and next attempts stay.
+// An entry that already waits for the reason is not written again.
+func (q *Queries) SetLadoQueueWaiting(ctx context.Context, arg SetLadoQueueWaitingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setLadoQueueWaiting, arg.Reason, arg.ProjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setLadoQueueWaitingModeOff = `-- name: SetLadoQueueWaitingModeOff :execrows
+UPDATE lado_queue_entries
+SET waiting_reason = ?1
+WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND lease_token IS NULL
+  AND waiting_reason <> ?1
+  AND (lado_queue_entries.project_id = ?2 OR ?2 IS NULL)
+  AND lado_queue_entries.project_id NOT IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+`
+
+type SetLadoQueueWaitingModeOffParams struct {
+	Reason    string
+	ProjectID sql.NullString
+}
+
+// SetLadoQueueWaiting for the entries of projects with LADO mode off.
+func (q *Queries) SetLadoQueueWaitingModeOff(ctx context.Context, arg SetLadoQueueWaitingModeOffParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setLadoQueueWaitingModeOff, arg.Reason, arg.ProjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const supersedeOpenLadoQueueEntries = `-- name: SupersedeOpenLadoQueueEntries :execrows
 UPDATE lado_queue_entries
 SET superseded_at = ?

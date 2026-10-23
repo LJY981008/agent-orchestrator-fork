@@ -156,7 +156,7 @@ func TestWorkerSectionComesFromTheSnapshot(t *testing.T) {
 	// The run times out and ends, and the plan is approved again under rules
 	// without any text: the next run gets none, and the first worker keeps
 	// the rules of its own snapshot, so a restore rebuilds the same section.
-	if ok, err := pf.store.MarkLadoExecutionTimedOut(ctx, worker, pf.now); err != nil || !ok {
+	if ok, err := pf.store.MarkLadoExecutionTimedOut(ctx, worker, timedOutEvent(worker, pf.now)); err != nil || !ok {
 		t.Fatalf("MarkLadoExecutionTimedOut = %v, %v", ok, err)
 	}
 	pf.end(t, worker)

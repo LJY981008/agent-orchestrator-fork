@@ -212,6 +212,39 @@ func (s *Store) HoldLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntry
 	})
 }
 
+// SetLadoQueueWaiting records why the open entries no lease holds wait, of
+// projectID or of every project for a nil one, and returns how many it
+// changed. The entries of a project whose LADO mode is off wait for nothing
+// else: domain.LadoWaitingModeOff marks exactly those, and any other reason
+// the entries of projects with LADO mode on. Attempts and next attempts stay,
+// and an entry that already waits for reason is not written again, so a
+// dispatch pass that finds the same reason publishes no change. A claim
+// clears the reason.
+func (s *Store) SetLadoQueueWaiting(ctx context.Context, reason string, projectID *domain.ProjectID) (int64, error) {
+	if reason == "" {
+		return 0, errors.New("set LADO queue waiting: a reason is required")
+	}
+	var project sql.NullString
+	if projectID != nil {
+		project = sql.NullString{String: string(*projectID), Valid: true}
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
+	defer s.writeMu.Unlock()
+	var n int64
+	var err error
+	if reason == domain.LadoWaitingModeOff {
+		n, err = s.qw.SetLadoQueueWaitingModeOff(ctx, gen.SetLadoQueueWaitingModeOffParams{Reason: reason, ProjectID: project})
+	} else {
+		n, err = s.qw.SetLadoQueueWaiting(ctx, gen.SetLadoQueueWaitingParams{Reason: reason, ProjectID: project})
+	}
+	if err != nil {
+		return 0, fmt.Errorf("set LADO queue waiting: %w", err)
+	}
+	return n, nil
+}
+
 // MarkLadoQueueEntryReviewRequired stops a leased entry for reason
 // (domain.LadoReview*) until the task is approved again, and clears the
 // lease. It reports false, changing nothing, when token no longer holds the
@@ -432,18 +465,34 @@ func (s *Store) LadoExecutionsPastDeadline(ctx context.Context, now time.Time) (
 }
 
 // MarkLadoExecutionTimedOut records that LADO stopped an execution at its
-// deadline. It reports false for a session that is not an execution or was
-// marked before, whose first time stays.
-func (s *Store) MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.SessionID, at time.Time) (bool, error) {
-	if at.IsZero() {
+// deadline, at the event's time, with its audit event in one transaction. It
+// reports false, writing neither, for a session that is not an execution or
+// was marked before, whose first time stays.
+func (s *Store) MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.SessionID, event domain.LadoAuditEvent) (bool, error) {
+	if event.At.IsZero() {
 		return false, errors.New("mark LADO execution timed out: a time is required")
 	}
-	return s.writeLadoRow(ctx, "mark LADO execution timed out", func(q *gen.Queries) (int64, error) {
-		return q.MarkLadoExecutionTimedOut(ctx, gen.MarkLadoExecutionTimedOutParams{
-			TimedOutAt: ladoNullTime(at),
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.writeMu.Unlock()
+	marked := false
+	err := s.inTx(ctx, "mark LADO execution timed out", func(q *gen.Queries) error {
+		n, err := q.MarkLadoExecutionTimedOut(ctx, gen.MarkLadoExecutionTimedOutParams{
+			TimedOutAt: ladoNullTime(event.At),
 			SessionID:  string(sessionID),
 		})
+		if err != nil || n == 0 {
+			return err
+		}
+		marked = true
+		_, err = appendLadoAuditEventTx(ctx, q, event)
+		return err
 	})
+	if err != nil {
+		return false, err
+	}
+	return marked, nil
 }
 
 // LadoExecution returns the execution a session runs, with whether the

@@ -104,6 +104,30 @@ SET lease_token = NULL,
     next_attempt_at = sqlc.narg(next_attempt_at)
 WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
 
+-- name: SetLadoQueueWaiting :execrows
+-- Why open entries no lease holds wait, in projects with LADO mode on, of one
+-- project or of all when project_id is NULL. Attempts and next attempts stay.
+-- An entry that already waits for the reason is not written again.
+UPDATE lado_queue_entries
+SET waiting_reason = sqlc.arg(reason)
+WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND lease_token IS NULL
+  AND waiting_reason <> sqlc.arg(reason)
+  AND (lado_queue_entries.project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL)
+  AND lado_queue_entries.project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1);
+
+-- name: SetLadoQueueWaitingModeOff :execrows
+-- SetLadoQueueWaiting for the entries of projects with LADO mode off.
+UPDATE lado_queue_entries
+SET waiting_reason = sqlc.arg(reason)
+WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND lease_token IS NULL
+  AND waiting_reason <> sqlc.arg(reason)
+  AND (lado_queue_entries.project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL)
+  AND lado_queue_entries.project_id NOT IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1);
+
 -- name: MarkLadoQueueEntryReviewRequired :execrows
 UPDATE lado_queue_entries
 SET lease_token = NULL,

@@ -58,9 +58,11 @@ func TestDispatchSpawnsAnApprovedTask(t *testing.T) {
 			if spawned := f.sessions.spawned(); len(spawned) != 1 || !reflect.DeepEqual(spawned[0], want) {
 				t.Fatalf("spawned %+v\nwant one spawn %+v", spawned, want)
 			}
+			ahead := 2
 			wantExec := domain.LadoExecution{
 				SessionID: "sess-1", TaskID: "task-1", QueueEntryID: "entry-1", PlanRevisionID: "rev-2",
 				PlanApprovalID: "approval-1", PolicySnapshotID: "snap-1", Attempt: 1, StartedAt: started,
+				DispatchBaseSHA: testDispatchSHA, BaseCommitsAhead: &ahead,
 			}
 			if c.deadline > 0 {
 				wantExec.DeadlineAt = started.Add(c.deadline)
@@ -418,6 +420,16 @@ func TestDispatchKeepsTokensOut(t *testing.T) {
 		clean(t, f, "the base branch could not be resolved")
 	})
 
+	t.Run("a base git cannot read", func(t *testing.T) {
+		f := newTokenFixture(t)
+		f.git.revErr = fmt.Errorf("git -c http.extraHeader=Authorization: Bearer %s rev-parse: exit status 128", token)
+		f.tick(t, t0)
+		if links := f.store.linked(); len(links) != 1 || links[0].DispatchBaseSHA != "" || links[0].BaseCommitsAhead != nil {
+			t.Fatalf("linked %+v, want the worker started without a base move", links)
+		}
+		clean(t, f, "git could not read the base")
+	})
+
 	t.Run("a worker that cannot start", func(t *testing.T) {
 		f := newTokenFixture(t)
 		fetch := apierr.Conflict("WORKSPACE_CREATE_FAILED",
@@ -446,19 +458,22 @@ func TestTickClaimsWithinTheGlobalCap(t *testing.T) {
 		// now.
 		running int
 		leased  bool
-		// limits are the claim sizes asked for; none when no slot is free.
+		// limits are the claim sizes asked for, one entry at a time until
+		// the slots are full or nothing is left; none when no slot is free.
 		limits []int
 		spawns int
 	}{
 		{"one slot left beside a run and a lease", 3, 1, true, []int{1}, 1},
 		{"every slot taken by a run and a lease", 2, 1, true, nil, 0},
 		{"more running than a lowered cap", 1, 2, false, nil, 0},
-		{"a slot for each entry", 8, 0, false, []int{8}, 3},
+		{"a slot for each entry", 8, 0, false, []int{1, 1, 1, 1}, 3},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			f := newFixture(t)
 			f.store.settings.MaxConcurrent = c.cap
-			f.store.running = c.running
+			f.store.running["proj-1"] = c.running
+			// The project's own cap leaves room for every entry.
+			f.store.caps["proj-1"] = domain.LadoMaxConcurrent
 			for i := range 3 {
 				f.store.add(testEntry(domain.LadoQueueEntryID(fmt.Sprintf("entry-%d", i+1)), t0.Add(time.Duration(i-10)*time.Minute)))
 			}
@@ -481,6 +496,14 @@ func TestTickClaimsWithinTheGlobalCap(t *testing.T) {
 			for i, cfg := range spawned {
 				if want := domain.LadoClientRequestID(domain.LadoQueueEntryID(fmt.Sprintf("entry-%d", i+1)), 1); cfg.ClientRequestID != want {
 					t.Fatalf("spawn %d is for %s, want %s", i+1, cfg.ClientRequestID, want)
+				}
+			}
+			// With every slot taken, the entries wait for one.
+			if c.spawns == 0 {
+				for i := range 3 {
+					if e := f.store.entry(domain.LadoQueueEntryID(fmt.Sprintf("entry-%d", i+1))); e.WaitingReason != domain.LadoWaitingSlotGlobal || e.AttemptCount != 0 {
+						t.Fatalf("entry = %+v, want it waiting for a free slot without an attempt", e)
+					}
 				}
 			}
 		})
