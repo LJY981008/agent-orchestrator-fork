@@ -72,12 +72,44 @@ LADO 프로젝트에서 워커를 띄울 유일한 길(디스패처가 지금 �
 
 ## Before — 수행 전 실측
 
-(이 단계의 세션이 채운다)
+- 시작 HEAD `925a76178`(`docs(lado): record S04`), 트리 깨끗. 환경 umask 0022·TZ=UTC, go1.27.1. `defs-unchanged` → `DEFS_UNCHANGED`, `diff-budget 50 …`(G5 의 네 파일) → `BUDGET_OK 0/50`.
+- 게이트: `ports.WorkGate` 는 `AuthorizeSpawn`·`AuthorizeSend` 둘, `ladogate.New(settings, sessions)`. LADO 프로젝트의 워커는 전부 `LADO_TASK_REQUIRED`(`gate_test.go` 의 "`lado:entry-1` 거부" 사례가 고정). 턴 설정·config 옵션·에이전트 전환·인터페이스 전환에는 LADO 훅이 없다.
+- 프롬프트 훅: `LadoPromptSection func(ctx, projectID) (string, error)`, `ladoPromptSection` 은 오케스트레이터만 부른다. `TestLadoPromptSectionReachesOnlyOrchestrators` 가 워커 제외와 "읽기 오류면 섹션을 조용히 빼지 않음"을 고정. 데몬은 `PromptSource.OrchestratorSection` 을 꽂는다.
+- store: S04 의 `LadoDispatchGrant` 는 있으나, client request id 로 항목 스냅숏의 상한·문구를 읽는 메서드가 없다(`GetLadoQueueEntryPlan` 은 스냅숏 sha256 만).
+- 기준선: `go test -count=1 ./internal/service/ladogate/ ./internal/daemon/` ok, `-run 'Lado' ./internal/session_manager/ ./internal/service/chat/` ok. 알려진 실패는 S03 이 남긴 6개(ladotask 4·ladopolicy 2, S06 몫).
+- 테스트 순서: 필수 테스트는 구현 직후에 썼다(RED 먼저가 아님). 대신 업스트림 훅을 하나씩 끄는 변이로 훅 테스트가 잡는지 확인했다(After).
 
 ## After — 수행 후 실측
 
-(이 단계의 세션이 채운다)
+- 코드 커밋 `05bbc2e6d` `feat(lado): dispatch grant, turn-setting cap and fixed executions in the worker gate` — 20 파일, +929 −59. 리뷰 반영 `6f223001f` `test(lado): pin the config-mode probe per harness and the no-ceiling refusals` — 3 파일, +56 −1.
+  - `ports/lado_gate.go`: `WorkGate` 에 플랜 §5 시그니처 그대로 `ClampTurnSettings`·`AuthorizeConfigMode`·`AuthorizeExecutionChange`.
+  - `service/ladogate/gate.go`: 의존성 `Grants`(`LadoDispatchGrant`)·`Policies`(`LadoEntryPolicyByClientRequest`), `New(settings, sessions, grants, policies)`. `AuthorizeSpawn` 은 절차 1 순서 그대로이고, 워커는 `granted`(id 파싱 → `time.Now()` 로 허가 읽기 → Active·프로젝트·해시 셋 다)일 때만 통과, 허가 읽기 오류는 `LADO gate: %w` 로 거부. 세 메서드는 공통 `execution(target)`(세션 → `ClientRequestID` → 항목 정책)과 `aboveCeiling` 을 쓴다. 거부는 409 `LADO_APPROVAL_ABOVE_CEILING`(details `sessionId·mode·ceiling`)·`LADO_EXECUTION_FIXED`(`sessionId`).
+  - store: `LadoEntryPolicyByClientRequest` + 새 쿼리 `GetLadoQueueEntrySnapshot`(항목의 `policy_snapshot_id` 로 JOIN 한 `snapshot_json` 한 열; ASCII, gen 은 `npm run sqlc` 로 만들고 읽어 확인). 스냅숏 JSON 에서 `permissionCeiling`·`prompt` 만 푼다(store 가 `ladopolicy` 를 import 하지 않게 익명 구조체). 도메인 `LadoEntryPolicy{Ceiling, Prompt}`.
+  - session_manager: `LadoPromptSection func(ctx, kind, projectID, sessionID) (string, error)`, `ladoPromptSection` 은 오케스트레이터 조건을 지우고 소스에 넘긴다(프로젝트 없는 세션만 거른다). `authorizeLadoExecutionChange` 도우미. 업스트림: `SwitchAgent`·`StartInterfaceTransition` 맨 앞에 4줄씩, `manager.go` 의 호출에 `sessionID`(2줄 변경).
+  - chat: `lado_gate.go` 에 `clampLadoTurnSettings`(`ConversationSettings` ↔ `ChatTurnSettings` 변환, 결과를 저장값으로)·`authorizeLadoConfigOption`·`ladoConfigMode`(결정 3). 업스트림 `service.go` 10줄(훅 둘, 주석 포함).
+  - ladotask `PromptSource.Section(ctx, kind, projectID, sessionID)`: 오케스트레이터 → `OrchestratorSection`, 그 밖 → `""`. 데몬: `ladogate.New(store, store, store, store)`, `SetLadoPrompt(PromptSource{Settings: store}.Section)`.
+  - 테스트: 필수 9개 + `TestLadoPromptSectionComesFromTheSource`(옛 `…ReachesOnlyOrchestrators` 를 새 뜻으로: 소스가 kind 별로 답하고, 프로젝트 없는 세션은 묻지 않고, 읽기 오류는 두 kind 모두 실패) + `TestLadoConfigModeReadsEveryApprovalControl`(하네스 6종 17사례: 게이트가 묻는 모드 = 제공자 응답에서 기록될 모드). 기존 사례 고침: `TestAuthorizeSpawnRefusesEveryWorkerPathInALadoProject` 의 `lado:entry-1` → `lado:entry-1/1` + 해시, 허가 없음으로 거부; `TestPromptSourceAddsTheSectionOnlyInLadoMode` 에 `Section` 두 줄; `TestWireLadoInstallsOneGateOnEverySendAndSpawnPath` 에 새 시그니처·워커 섹션 없음·허가 없는 `lado:` id 거부.
+- 엔트리·플랜이 정하지 않았거나 다르게 적은 것:
+  1. **`LadoPromptSection` 은 `(string, error)` 를 유지**했다(엔트리 절차 5·플랜 §5 는 `string`). 오류를 버리면 S06 의 워커 문구 읽기가 DB 오류에서 조용히 비어 워커가 규칙 문구 없이 뜨고(플랜 §1 j 와 반대), 5단계의 fail-closed(오케스트레이터 섹션을 조용히 빼지 않음, 테스트로 고정)도 깨진다. 스폰 실패는 디스패처가 재시도하고, 복원 실패는 지금 오케스트레이터와 같은 경로다. `PromptSource.Section` 도 같은 반환. 리뷰도 이 편을 지지했다.
+  2. 상한 비교: `LadoPermissionRank` 가 0 인 모드(지금은 `default` 뿐 — 대화 설정 라우트가 `PermissionMode.Valid()` 의 네 모드만 받음)를 모두 상한 위로 쳤다. 엔트리 식("`default` 이거나 rank 초과")과 같은 결과이고 모르는 모드에도 안전하다. 상한이 유효하지 않은 스냅숏(rank 0)의 실행은 세 메서드 모두 오류로 거부한다(추측해 깎지 않음). 디스패치 검사 6 이 그런 스냅숏을 막으므로 정상 경로에는 없다.
+  3. config 모드를 provider 호출 **전**에 아는 방법: 선택값 하나짜리 옵션을 `permissionConfigOptions(harness, …)` 에 통과시켜 `PermissionMode` 를 읽는다 — `settingsFromConfigOptions` 가 응답에서 쓰는 같은 표. provider 를 한 번 더 부르지 않고(`ListConfigOptions` 없음), 모드가 아닌 옵션(model 등)은 게이트를 묻지 않는다. 훅 위치는 `requireChatSession` 바로 뒤라 거부 때 컨트롤러도 띄우지 않는다.
+  4. "실행" 판정 = 세션의 `ClientRequestID` 가 항목을 찾는 것(세션 종류·LADO 모드를 보지 않음). 그래서 LADO 모드를 끈 프로젝트의 실행도 계속 고정·상한이다(플랜 §1 l "running executions go on" — 스냅숏대로 돈다). 시도 번호는 보지 않는다(모든 시도가 같은 스냅숏). 대체된 항목도 정책을 준다 — 그 항목이 띄운 워커는 그 스냅숏으로 돈다(store 테스트).
+  5. `ClampTurnSettings` 결과는 approval 만이 아니라 model·effort 까지 저장값에 되돌린다("결과로 저장"). 게이트는 approval 만 바꾼다.
+- 확인:
+  - 필수 9개 PASS(게이트 스크립트가 `-v` 로 이름별 확인). 변이: `SwitchAgent`·`StartInterfaceTransition` 훅을 끄면 두 테스트 FAIL, chat 훅 둘을 끄면 두 테스트 FAIL(저장 approval `bypass-permissions`, 거부 없음). 되돌린 뒤 diff 는 훅 줄뿐.
+  - `go test -count=1 ./internal/session_manager/ ./internal/service/chat/ ./internal/ports/ ./internal/domain/` ok(38.9s·66.1s), `-run 'Lado' ./internal/storage/sqlite/...` ok, G4 race ok(chat 19.0s), golangci-lint v2.13.2(오프라인 빌드) 변경 패키지 8묶음 0 issues, gofmt 없음.
+  - 독립 리뷰 서브에이전트(Sonnet) 1회: blocker·should-fix 없음. nit 3(하네스별 probe 표 테스트, `(string, error)` 이유 주석, 상한 없는 스냅숏을 다른 두 메서드에서도 확인) — 모두 `6f223001f` 로 반영. 리뷰가 확인한 것: Copilot 의 상승 경로(`allow_all`·autopilot)는 LADO 와 무관하게 `copilotConfigOptionAllowed` 가 막고, 승인은 턴 설정이라 clamp 가 덮는다.
+  - 실패는 S03 이 남긴 6개 그대로(ladotask 4·ladopolicy 2) — S06 몫.
+  - 업스트림 diff 22/50(chat `service.go` 10, `agent_switching.go` 4, `interface_transition.go` 4, `manager.go` 2+2).
+- 게이트(HEAD `05bbc2e6d`): `GATES=8 MET=8 UNMET=0`. 이 엔트리 커밋 뒤 같은 명령으로 다시 돌려 증거를 새 HEAD 에 묶는다.
 
 ## 비교/회고
 
-(이 단계의 세션이 채운다)
+- 범위대로 끝났다. 엔트리에 없던 것: 쿼리 1개(`GetLadoQueueEntrySnapshot`), 테스트 2개(옛 프롬프트 테스트를 새 뜻으로 바꾼 것, 하네스별 probe 표), 데몬 배선 테스트 보강. 엔트리와 다르게 한 것은 After 결정 1(`(string, error)`) 하나.
+- 남은 틈(이 단계 범위 밖, 기록만):
+  - `SetConfigOption` 은 provider 응답의 현재 모드를 그대로 기록한다. 모드가 아닌 옵션을 바꿨는데 provider 가 스스로 상한 위 모드를 보고하면 그 값이 다음 턴 approval 이 된다. 지금 매핑되는 하네스(Claude·OpenCode·Agy·CommandCode)는 모드 옵션 말고는 모드를 바꾸지 않아 실제 경로는 없다. 막으려면 기록 직전에도 clamp 해야 하고 업스트림 줄이 더 든다.
+  - Claude 의 ExitPlanMode 같은 provider 자체 권한 흐름은 AO 를 거치지 않는다(플랜 범위 밖).
+- 다음 단계 메모:
+  - S06: `PromptSource.Section` 의 워커 분기를 `WorkerSection(ctx, sessionID)` 로 바꾼다. 스폰 때 `buildSystemPrompt` 전에 세션 행(`ClientRequestID` 포함)이 이미 저장된다(`CreateClientRequestSession` → `buildSpawnTexts`; chat 스폰도 저장된 `rec` 로 부른다). 그래서 `WorkerSection` 은 `GetSession` → `LadoEntryPolicyByClientRequest` 로 충분하다. `PromptSource` 에 세션·정책 읽기 필드를 더하고 `wireLado` 의 `PromptSource{Settings: store}` 에 store 를 넘긴다. 반환은 `(string, error)` — 읽기 오류는 그대로 돌려준다(결정 1). 빈 `Prompt` 는 `""`(섹션 생략, 플랜 §1 j). 섹션 머리(예 `## LADO rules`)를 붙일지는 S06 이 정한다.
+  - S07: 스폰 `SpawnConfig` 의 `ClientRequestID = domain.LadoClientRequestID(entry.ID, entry.AttemptCount)`(claim 이 센 시도 수와 같아야 허가가 Active), `ClientRequestHash = domain.LadoDispatchHash(planSHA, snapshotSHA)`. `sessionsvc.Service.Spawn` 은 받은 해시를 그대로 쓴다(본문 해시는 HTTP 라우트만 만든다). 게이트가 `time.Now()` 로 리스를 보므로 리스(2분) 안에 스폰을 시작할 것.
+  - S09·S10: 새 오류 코드 `LADO_APPROVAL_ABOVE_CEILING`·`LADO_EXECUTION_FIXED` 는 `apierr.Conflict` 다. 세션 라우트는 `toAPIError` → `envelope.WriteError`, 대화 라우트는 `writeConversationError` 의 default 분기 → `envelope.WriteError` 로 나가므로 409 가 될 것이다(코드로만 따라감 — HTTP 테스트로는 확인 안 함, S09 몫). 렌더러 `lado-errors.ts` 와 문구에 더한다(S10).
