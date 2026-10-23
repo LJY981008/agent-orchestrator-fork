@@ -14,6 +14,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. 쓰기 메서드는 모두 `s.writeMu.LockContext(ctx)` + 행이 둘 이상이면 `s.inTx`(LADO store 꼴 — `lado_plan_store.go` 참조). 토큰을 받는 메서드는 `id AND lease_token = ?` 로만 쓰고, 0행이면 `false`(또는 `domain.ErrLadoLeaseLost`).
 2. `ClaimLadoQueueEntries(ctx, now, leaseUntil, limit, newToken)`: 한 트랜잭션에서 claimable 목록을 읽고 하나씩 `ClaimLadoQueueEntry`(조건 재확인 CAS) — 0행이면 건너뛴다. 잡은 항목을 다시 읽어 돌려준다(attempt_count 는 +1 된 값). LADO 모드가 꺼진 프로젝트의 항목은 잡지 않는다.
 3. `HoldLadoQueueEntry`: 리스를 비우고 attempt_count 를 1 줄인다(보류는 시도가 아니다 — 플랜 §1 h), waiting_reason·next_attempt_at 을 쓴다. `ReleaseLadoQueueEntry` 는 attempt_count 를 그대로 둔다.
@@ -23,7 +24,8 @@
 7. `LadoExecutionByClientRequest(ctx, id)`: `domain.ParseLadoClientRequestID` → 항목의 실행. 형식이 아니면 `found=false`.
 8. 설정: 행이 없으면 `domain.DefaultLadoDispatchSettings()`. `SetLadoDispatchSettings(ctx, settings, event)` 는 upsert 와 감사 이벤트(`dispatch.settings_changed`, actor `api`)를 한 트랜잭션에. `SetLadoProjectMaxConcurrent(ctx, project, n, event)` 도 upsert + 감사(`project.max_concurrent_changed`). `LadoProjectMaxConcurrent` 는 행이 없으면 1.
 9. `ListLadoQueue(ctx, projectID *domain.ProjectID)`: 항목과 태스크 제목·이슈 ref 를 함께(대기열 화면용 — S09 DTO 가 쓴다).
-10. 커밋 메시지 예: `feat(lado): dispatch primitives and settings in the store`.
+10. S02 메모: 태스크를 돌려주는 store 메서드는 모두 `Queue`·`Execution` 을 채워야 한다(안 채우면 승인된 태스크가 `approved_before_queue` 로 보인다). S03 이 빠뜨린 메서드(예: `SetLadoTaskPreferences`·`CancelLadoTask` 가 돌려주는 태스크)가 있으면 여기서 채우고 `TestLadoTaskReadsCarryQueueAndExecution` 에 사례를 더한다.
+11. 커밋 메시지 예: `feat(lado): dispatch primitives and settings in the store`.
 
 ## 마무리 (모든 단계 공통)
 

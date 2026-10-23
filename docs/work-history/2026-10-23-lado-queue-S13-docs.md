@@ -13,6 +13,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. 먼저 S01~S12 엔트리의 After·회고를 읽어 계획과 달라진 점을 모은다. 문서는 **실제로 만든 것**을 적는다(플랜과 다르면 엔트리를 따른다).
 2. `TDD.md`:
    - §3.2: "As built in step 6" — 새 상태(queued, dispatching, running, failed, completed, 실행 뒤 closed_unmerged)와 순서, 이유 문자열, 6단계 전 승인은 `approved_before_queue` 로 Review required, `approved` 는 더 나오지 않음, completed 는 PR 머지(통합 승인은 8단계).

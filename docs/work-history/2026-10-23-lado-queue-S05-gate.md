@@ -16,6 +16,7 @@ LADO 프로젝트에서 워커를 띄울 유일한 길(디스패처가 지금 �
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. 플랜 §5 를 읽는다. `AuthorizeSpawn` 순서: 프로젝트 없음 → 통과; LADO 모드 아님 → 통과; 자동화 → `LADO_AUTOMATION_REFUSED`(그대로); 오케스트레이터 → 통과; 워커는 `domain.ParseLadoClientRequestID(cfg.ClientRequestID)` 가 되고 `Grants.LadoDispatchGrant(ctx, entry, attempt, now)` 가 `Active` 이고 `ProjectID == cfg.ProjectID` 이고 `Hash == cfg.ClientRequestHash` 일 때만 통과, 아니면 `LADO_TASK_REQUIRED`(기존 메시지·details 유지). 허가 읽기 오류는 거부(`LADO gate: %w`).
 2. `ClampTurnSettings(ctx, target, s)`: `Sessions.GetSession(target)` → 레코드의 `ClientRequestID` → `LadoEntryPolicyByClientRequest`. 실행이 아니면 `s` 그대로. 실행이면 `s.Approval` 이 비었으면 그대로(대화의 시작 모드 = 스냅숏 모드), `default` 이거나 `domain.LadoPermissionRank(s.Approval) > domain.LadoPermissionRank(ceiling)` 이면 `s.Approval = ceiling`. `default` 의 rank 가 0 이어도 상한 위로 친다(플랜 §1 i — Codex 의 default 는 bypass).
 3. `AuthorizeConfigMode(ctx, target, mode)`: 실행이고 mode 가 `default` 이거나 상한보다 높으면 409 `LADO_APPROVAL_ABOVE_CEILING`, details `{sessionId, mode, ceiling}`. `AuthorizeExecutionChange(ctx, target)`: 실행이면 409 `LADO_EXECUTION_FIXED`, details `{sessionId}`. 둘 다 실행이 아니면 nil, 읽기 오류는 거부.

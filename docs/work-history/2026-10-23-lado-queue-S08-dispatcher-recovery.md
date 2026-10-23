@@ -14,6 +14,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. `Tick(ctx, now)` 최종 순서: `recover` → `stopOverdue` → 설정 읽기(`LadoDispatchSettings`) → LADO 모드 꺼진 프로젝트의 열린 항목에 대기 표시 `lado_mode_off` → 메모리 판정(보류 켜짐 + tight → 열린 항목 전부 `memory_tight` 표시하고 이번 틱은 잡지 않음) → 전체 여유(`settings.MaxConcurrent - total`) 가 0 이면 열린 항목에 `slot_global` 표시하고 잡지 않음 → 하나씩 잡기: 잡은 항목의 프로젝트가 상한(`LadoProjectMaxConcurrent`)이면 `HoldLadoQueueEntry(slot_project, now+Interval)` 하고 다음 항목을 잡는다(이번 틱에 띄운 것도 센다), 여유가 다 차거나 잡을 것이 없을 때까지(안전 상한 반복 50).
 2. tight 판정(`admission.go`, product UI 와 같은 표): `psi` → Raw > 20, `memorystatus` → Raw >= 4, `available_pct` → Raw > 90. `ErrUnsupported`·오류 → tight 아님(로그 한 번).
 3. store `SetLadoQueueWaiting(ctx, reason string, projectID *domain.ProjectID) (int64, error)`: 열린 + 리스 없는 항목의 `waiting_reason` 만 쓴다(시도 수·next_attempt_at 그대로; 이미 같은 이유면 쓰지 않아 CDC 가 매 틱 울리지 않게). 잡기(`ClaimLadoQueueEntry`)는 `waiting_reason` 을 비운다(S01 쿼리 그대로).

@@ -14,8 +14,10 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. `ApprovePlan`: 기존 검사·스냅숏 뒤 `domain.LadoQueueEntry{ID: "lado-queue-"+NewID(), TaskID, ProjectID: task.ProjectID, EnqueuedAt: now}` 를 만들어 `Store.ApproveLadoPlan(..., &snapshot, &entry)` 로 넘긴다. 감사 payload 에 `queueEntry` 를 더한다.
-2. 재승인 규칙(`openTask` 또는 승인 검사): 최신 리비전의 승인을 다시 하는 것은 review_required 와 failed 에서 허용, blocked 는 지금처럼 UI 만 막는다(데몬은 거절하지 않음 — 5단계 그대로). 다른 상태(queued·dispatching·running 등)에서 같은 리비전을 다시 승인하면 409 `LADO_TASK_ALREADY_QUEUED`(details `{taskId, state}`).
+2. 승인 규칙(`openTask` 또는 승인 검사): 최신 리비전의 승인을 다시 하는 것은 review_required 와 failed 에서 허용, blocked 는 지금처럼 UI 만 막는다(데몬은 거절하지 않음 — 5단계 그대로). queued·dispatching 에서 **같은 리비전**을 다시 승인하면 409 `LADO_TASK_ALREADY_QUEUED`(details `{taskId, state}`), 새 리비전 승인은 허용(앞 항목 superseded). running·completed 에서는 **어떤 승인도** 409 `LADO_TASK_RUNNING`(details `{taskId, state}`) — 워커가 두 개 뜨지 않게(S02 메모). `openTask` 의 닫힌 이슈 판정은 `State() == ClosedUnmerged` 가 아니라 `task.Issue.State` 를 직접 본다(실행이 있으면 이슈가 닫혀도 running·completed 이기 때문).
+2-1. `service/ladopolicy/impact.go` 의 승인된 태스크 필터(`Approved`·`Blocked` 만 보던 곳, 약 89행): 이제 승인된 태스크는 queued·dispatching·blocked·failed·review_required 다. 뜻은 "유효한 승인이 있고 아직 디스패치되지 않은 태스크"(실행 뒤에는 스냅숏이 고정) — 상태 목록을 고치거나 그 뜻으로 판정한다. 테스트 고정값이 아니라 필터를 고친다(S02 메모).
 3. `IssueCheck(ctx, task)`: `readIssueWithComments` 와 `domain.NewLadoIssueSnapshot(task.IssueRef, title, body, comments)` 로 해시(= `View` 의 IssueChanged 계산과 같은 방법), 이슈 상태를 함께 돌려준다. 읽은 상태는 `ObserveLadoTaskIssue` 로 기록한다(닫힌 이슈를 태스크가 Closed unmerged 로 보이게). 읽기 실패는 감싼 오류(토큰을 절대 넣지 않는다).
 4. `RunInput(ctx, task)`: 항목의 승인이 가리키는 리비전의 고정 계획 바이트(`Blobs.Get(rev.SHA256, LadoPlanMaxBytes)`), 그 리비전 요청의 고정 이슈 스냅숏(blob)을 `renderIssueFile` 과 같은 방식(모든 텍스트 펜스)으로 렌더한 `IssueContext`, 리비전·승인·스냅숏(`Store.LadoPolicySnapshot(approvalID)`). 프롬프트 문장은 디스패처가 만든다(S07).
 5. `WorkerSection(ctx, sessionID)`: 세션 레코드의 client request id → `LadoEntryPolicyByClientRequest` → 스냅숏 `prompt`(비었으면 ""). 그 밖의 세션은 "". S05 의 `Section` 이 워커일 때 이것을 부르게 바꾼다.
@@ -33,7 +35,8 @@
 ## 필수 테스트
 
 - ladotask `TestApprovePlanQueuesTheTask` — 항목이 생기고 태스크가 queued; 재승인은 앞 항목을 superseded 로
-- ladotask `TestApprovalAgainFollowsTheTaskState` — review_required·failed 는 다시 승인됨, queued 는 `LADO_TASK_ALREADY_QUEUED`
+- ladotask `TestApprovalAgainFollowsTheTaskState` — review_required·failed 는 다시 승인됨, queued 의 같은 리비전은 `LADO_TASK_ALREADY_QUEUED`, queued 의 새 리비전은 승인(앞 항목 superseded), running·completed 는 `LADO_TASK_RUNNING`
+- ladopolicy `TestImpactCountsQueuedAndFailedTasks` — 규칙 변경의 영향 목록에 queued·dispatching·failed·blocked·review_required 태스크가 들고, running·completed 태스크는 들지 않는다
 - ladotask `TestIssueCheckHashesTrustedComments` — 바뀌지 않은 이슈는 리비전의 해시와 같다(신뢰 댓글 포함); 본문 수정 → 다름; 닫힘 → 상태 done 이 기록됨; 읽기 실패 오류에 토큰 없음
 - ladotask `TestRunInputCarriesThePinnedPlanAndIssue` — 계획 바이트가 blob 과 같고 IssueContext 가 고정 스냅숏을 펜스로 담는다(이슈를 다시 읽지 않는다)
 - ladotask `TestWorkerSectionComesFromTheSnapshot` — `lado:` 세션은 스냅숏 문구, 문구 없는 스냅숏 → "", 다른 세션 → ""
@@ -52,6 +55,9 @@
 - [ ] S06-G2: ladoproject 필수 테스트 2개
   CHECK: bash .claude/gate/lado-queue.sh go-tests ./internal/service/ladoproject/ TestModeSwitchNeedsNoDevFlag TestUpdateSettingsSetsMaxConcurrent
   EXPECT: GO_TESTS_OK 2/2
+- [ ] S06-G2b: 영향 필터 테스트
+  CHECK: bash .claude/gate/lado-queue.sh go-tests ./internal/service/ladopolicy/ TestImpactCountsQueuedAndFailedTasks
+  EXPECT: GO_TESTS_OK 1/1
 - [ ] S06-G3: LADO 서비스·컨트롤러·데몬 패키지 전체 통과
   CHECK: bash .claude/gate/lado-queue.sh go-pkg ./internal/service/ladotask/ ./internal/service/ladoproject/ ./internal/service/ladopolicy/ ./internal/httpd/controllers/ ./internal/daemon/
   EXPECT: GO_PKG_OK

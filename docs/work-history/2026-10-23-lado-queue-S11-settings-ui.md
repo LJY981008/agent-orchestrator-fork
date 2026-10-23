@@ -14,6 +14,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. **`DESIGN.md` 를 먼저 읽는다** — 설정 모달 구성, 행 패턴, 스위치·선택 컴포넌트, sentence case, 공유 목록 규칙. `RulesSection.tsx`·`LadoProjectRulesSection.tsx`·`GeneralSettingsSection.tsx` 의 행 꼴(`settings-grouped-rows`, `settings-row-bar` 등)을 그대로 쓴다. shadcn 프리미티브(`components/ui/*`)를 쓴다.
 2. 설정 → **실행**(en "Runs"): 카드 하나에 세 행 — "동시 실행"(1-8 선택), "최대 실행 시간"(끔·1·2·4·8·12·24시간 선택; 값은 분), "메모리가 부족하면 기다리기"(스위치, 설명 한 줄). 바꾸면 바로 `updateLadoDispatchSettings` 로 저장(세 값 함께), 실패하면 행 아래에 데몬 문구(`ladoErrorText`), 저장 중에는 컨트롤 비활성. 설명 문장: 이 값은 LADO 모드 프로젝트의 승인된 작업에만 적용된다.
 3. 프로젝트 설정 → **LADO**: "LADO 모드" 스위치 — 켜기는 바로 `setLadoMode(id, true)`(트래커 intake 가 켜져 있으면 데몬 오류 문구를 보여 줌), 끄기는 `setLadoMode(id, false)` → 데스크톱 확인이 취소되면 스위치가 다시 켜진 상태로. "이 프로젝트의 동시 실행"(1-8 선택) → `updateLadoProjectSettings`. 모드가 꺼져 있을 때도 상한은 바꿀 수 있다. 설명: 켜면 이 프로젝트의 워커는 승인한 계획으로만 시작한다.

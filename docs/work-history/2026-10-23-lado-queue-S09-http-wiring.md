@@ -15,6 +15,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. 기존 LADO 컨트롤러 꼴을 따른다(`lado_projects.go:25-65` 의 `LadoController` 와 `Register`, nil 서비스면 `apispec.NotImplemented`, 경로 상수, DTO 태그). 오류는 `apierr` 그대로.
 2. 대기열 항목 DTO: `id`, `taskId`, `issueRef`, `title`, `state`(도메인 `LadoQueueState`), `reason`, `attempts`, `nextAttemptAt`, `error`, `enqueuedAt`. 실행 상세 DTO: 플랜 §8 필드 전부 — 스냅숏 요약은 저장된 스냅숏 JSON 을 `ladopolicy.SnapshotContent` 로 읽어 `agent`·`permissionMode`·`permissionCeiling`·규칙 이름(내장 규칙은 seed 이름 — 표시 번역은 렌더러)·`prompt`. 실행이 아닌 세션은 404 `LADO_EXECUTION_NOT_FOUND`.
 3. 디스패치 설정 PUT 은 세 필드 필수(`{maxConcurrent, maxRunMinutes, holdOnMemoryTight}`), 검증 실패 400 `LADO_DISPATCH_SETTINGS_INVALID`. presence 없음.

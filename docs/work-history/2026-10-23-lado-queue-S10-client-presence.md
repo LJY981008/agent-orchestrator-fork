@@ -14,9 +14,10 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. 기존 `approveLadoPlan`·`changeLadoCeiling` 의 브리지 우선 패턴을 따른다. `setLadoMode(projectId, false)`: `aoBridge.lado?.presence?.setLadoMode(projectId, false)` → `cancelled` 면 null(아무것도 안 바뀜), `error` 면 `LadoApiError`, 브리지가 없으면 직접 PUT.
 2. 메인 프로세스(`lado-presence.ts`): `changeRule` 채널과 같은 구조로 — 데몬에서 프로젝트 설정을 직접 읽고(렌더러가 말하는 이름을 믿지 않는다), 앱 언어로 네이티브 확인("Turn off LADO mode for <project>? Queued tasks wait until it is on again; running workers keep running." 와 각 로캘 번역은 트레이 카탈로그로), 확인하면 `PUT /api/v1/lado/projects/{id}/settings {"ladoMode": false}` 를 presence 헤더로 서명. `on = true` 는 이 채널에서 거절(렌더러 직접 호출).
-3. 새 문구 키는 `lado.` 접두로 기존 LADO 키 뒤에 추가: 오류 문구, 대기열 이유(`slot_global` 등), 실패 이유(`attempts_exhausted`·`timed_out`·`ended_without_pr`), 상태 이름(queued·dispatching·running·failed·completed). 한국어 용어: 대기열, 실행, 대기 중, 실행 중, 실패, 완료.
+3. 새 문구 키는 `lado.` 접두로 기존 LADO 키 뒤에 추가: 오류 문구, 대기열 이유(`slot_global` 등), 실패 이유(`attempts_exhausted`·`timed_out`·`ended_without_pr`), 상태 이름(queued·dispatching·running·failed·completed). 한국어 용어: 대기열, 실행, 대기 중, 실행 중, 실패, 완료. `approved_before_queue` 문구는 "6단계 전 승인"이 아니라 "대기열에 없음 — 다시 승인하면 대기열에 듭니다" 뜻으로(S02 메모: 항목이 취소·대체된 경우에도 쓰인다). 새 오류 코드 `LADO_TASK_RUNNING` 도 문구를 단다.
 4. 커밋 메시지 예: `feat(lado): renderer client for the queue and runs, and the desktop mode-off confirmation`.
 
 ## 마무리 (모든 단계 공통)

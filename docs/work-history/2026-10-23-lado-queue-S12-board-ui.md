@@ -14,6 +14,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. **`DESIGN.md` 를 먼저 읽는다**(상태 점·톤, 카드 상태 줄 규칙, 인스펙터 레일 구성). S11 의 결정 로그 행 아래에 이 화면들의 행을 하나 더한다(`| 2026-10-23 | LADO fork: queue states, run line and run panel | ... |`).
 2. 레인: Plan 레인 = draft·planned·review_required·blocked·failed(failed 는 attention 톤, 이유 문장), Queued 레인 = queued·dispatching(dispatching 은 진행 톤). 카드 둘째 줄에 이유: 대기 — 빈 자리(`slot_global`·`slot_project`), 메모리, 이슈 읽기, 재시도(다음 시도 시각 상대 표시), LADO 모드 꺼짐; "시도 n/3"(시도가 1 이상일 때). running·completed·closed_unmerged 태스크는 레인에서 빠진다(취소된 것처럼 서버가 걸러내지 않으므로 렌더러가 거른다).
 3. 태스크 뷰: 실행이 있으면 바닥줄 위에 상태 줄("실행 중 · 세션 열기" 링크 — 세션 라우트로 이동, PR 이 있으면 PR 링크), failed 면 이유와 함께 "계획 승인"이 다시 켜진다(review_required 와 같은 길 — `canApprove` 규칙 갱신). queued·dispatching 이면 승인 버튼 대신 상태 표시.

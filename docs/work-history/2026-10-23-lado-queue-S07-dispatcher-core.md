@@ -13,6 +13,7 @@
 
 ## 절차
 
+0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
 1. 의존성은 이 패키지 안의 작은 인터페이스로 정의한다(플랜 §7): `Store`(S04 primitive + `LadoTask(ctx, id)` + `LadoDispatchSettings`), `Tasks`(`IssueCheck`, `RunInput` — `*ladotask.Service` 가 만족), `Policy`(`CurrentSHA256(ctx, task)`), `Sessions`(`Spawn(ctx, ports.SpawnConfig) (domain.Session, int, int, error)`, `RequestKill`), `Projects`(워커가 시작하는 베이스 브랜치 — `project.Config.WorktreeBaseBranch()` 를 읽는 가장 작은 인터페이스; 워크스페이스 프로젝트에서 AO 가 베이스를 어떻게 고르는지 코드로 확인하고 After 에 적는다), `Clock`, `NewID`, `Log`, `Interval`(기본 15 s), `Lease`(기본 2 min). 자동화 스케줄러(`service/automation/scheduler.go`)의 꼴을 따른다.
 2. `Tick(ctx, now)`: (S08 자리: 복구·마감) → 전체 상한에서 살아 있는 실행·리스를 뺀 만큼 `ClaimLadoQueueEntries` → 잡은 항목마다 `dispatch`. 오류는 모아서 돌려준다(`errors.Join`).
 3. `dispatch(entry)` 검사 순서(플랜 §7):
