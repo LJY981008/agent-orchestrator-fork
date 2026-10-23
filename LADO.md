@@ -24,7 +24,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 4a | Repository connections (access token and SSH, link or clone, workspaces with several repositories) and issue-backed tasks | Merged |
 | — | Korean as the desktop app's default language, with a reviewed Korean catalog | Merged |
 | 4b | Plan requests and revisions, plans written in issue comments, approvals confirmed in the desktop app, the Plan and Queued lanes, the task view | Merged |
-| 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | In progress |
+| 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | Merged |
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Planned |
 | 7 | Adopting your local agent setup (CLAUDE.md, hooks, skills, MCP) into one managed place | Planned |
 | 8 | Verification, evidence and integration approval | Planned |
