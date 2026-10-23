@@ -29,8 +29,9 @@ const (
 )
 
 // Store keeps the queue: the task reads a dispatch checks, the primitives
-// that claim entries and record what became of them, and the session AO
-// keeps for a client request id.
+// that claim entries and record what became of them, the session AO keeps
+// for a client request id, and what the app reads about the queue, its
+// executions and the dispatch settings (views.go).
 type Store interface {
 	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
 	LadoDispatchSettings(ctx context.Context) (domain.LadoDispatchSettings, error)
@@ -49,6 +50,12 @@ type Store interface {
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
 	LadoExecutionsPastDeadline(ctx context.Context, now time.Time) ([]domain.LadoExecution, error)
 	MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.SessionID, event domain.LadoAuditEvent) (bool, error)
+	ListLadoQueue(ctx context.Context, projectID *domain.ProjectID) ([]domain.LadoQueueItem, error)
+	LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error)
+	LadoPlanRevision(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevision, bool, error)
+	ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanApproval, error)
+	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
+	SetLadoDispatchSettings(ctx context.Context, settings domain.LadoDispatchSettings, event domain.LadoAuditEvent) (domain.LadoDispatchSettings, error)
 }
 
 // Tasks reads a task's issue now and the inputs its worker starts from.

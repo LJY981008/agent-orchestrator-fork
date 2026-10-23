@@ -6,7 +6,9 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -30,10 +33,15 @@ func (s *ladoGateSink) SetWorkGate(gate ports.WorkGate) { s.gate = gate }
 
 func (s *ladoGateSink) SetLadoPrompt(section sessionmanager.LadoPromptSection) { s.prompt = section }
 
-// SetWorkGate and SetLadoPrompt keep wiring_test.go's fake a sessionLifecycle.
+// SetWorkGate, SetLadoPrompt and ResolveDefaultBranch keep wiring_test.go's
+// fake a sessionLifecycle.
 func (f *fakeSessionLifecycle) SetWorkGate(ports.WorkGate) {}
 
 func (f *fakeSessionLifecycle) SetLadoPrompt(sessionmanager.LadoPromptSection) {}
+
+func (f *fakeSessionLifecycle) ResolveDefaultBranch(context.Context, string, string) (ports.WorkspaceDefaultBranch, error) {
+	return ports.WorkspaceDefaultBranch{}, ports.ErrWorkspaceDefaultBranchUnresolved
+}
 
 func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	ctx := context.Background()
@@ -103,8 +111,36 @@ func TestWireLadoGivesADispatchedWorkerItsRules(t *testing.T) {
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)
 	at := time.Now().UTC().Truncate(time.Second)
+	rules := "## LADO rules\n\nWrite commit messages in Korean."
+	plan, snapshot := seedLadoApprovedTask(t, store, at, rules)
+	worker, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, ClientRequestID: domain.LadoClientRequestID("lado-queue-1", 1),
+		ClientRequestHash: domain.LadoDispatchHash(plan, snapshot), CreatedAt: at, UpdatedAt: at,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessions := &ladoGateSink{}
+
+	wireLado(store, sessions, &ladoGateSink{})
+
+	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID); err != nil || section != rules {
+		t.Fatalf("LADO prompt section for the dispatched worker = %q, %v; want the snapshot's rules", section, err)
+	}
+}
+
+// seedLadoApprovedTask seeds what approving a plan leaves at at: project mer
+// in LADO mode, task lado-task-1 with its pinned plan, and the approval with
+// a rule snapshot whose prompt is rules, which queued entry lado-queue-1. It
+// returns the plan's and the snapshot's hashes.
+func seedLadoApprovedTask(t *testing.T, store *sqlite.Store, at time.Time, rules string) (plan, snapshotSHA string) {
+	t.Helper()
+	ctx := context.Background()
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: "/tmp/mer", RegisteredAt: at}); err != nil {
 		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := store.SetLadoMode(ctx, "mer", true, at); err != nil {
+		t.Fatalf("turn LADO mode on: %v", err)
 	}
 	issue, plan := strings.Repeat("1", 64), strings.Repeat("2", 64)
 	if _, err := store.CreateLadoTask(ctx, domain.LadoTask{
@@ -124,7 +160,6 @@ func TestWireLadoGivesADispatchedWorkerItsRules(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PinLadoPlanRevision: %v", err)
 	}
-	rules := "## LADO rules\n\nWrite commit messages in Korean."
 	content, err := json.Marshal(map[string]string{"permissionCeiling": "auto", "prompt": rules})
 	if err != nil {
 		t.Fatal(err)
@@ -136,19 +171,99 @@ func TestWireLadoGivesADispatchedWorkerItsRules(t *testing.T) {
 		proof, event, &snapshot, &domain.LadoQueueEntry{ID: "lado-queue-1"}); err != nil {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
-	worker, err := store.CreateSession(ctx, domain.SessionRecord{
+	return plan, snapshot.SHA256
+}
+
+// ladoWorkerSessions stands for AO's session service: it starts no worker
+// and records the workers LADO stops.
+type ladoWorkerSessions struct {
+	mu     sync.Mutex
+	killed []domain.SessionID
+}
+
+func (s *ladoWorkerSessions) Spawn(context.Context, ports.SpawnConfig) (domain.Session, int, int, error) {
+	return domain.Session{}, 0, 0, errors.New("this test starts no worker")
+}
+
+func (s *ladoWorkerSessions) RequestKill(_ context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.killed = append(s.killed, id)
+	return sessionmanager.KillResult{Freed: true}, nil
+}
+
+func (s *ladoWorkerSessions) stopped() []domain.SessionID {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.killed)
+}
+
+// The dispatcher wireLadoWork builds runs once started: its first pass finds
+// the worker a dispatch had started before the daemon stopped and links it.
+// It stops with the daemon's context, and a task cancelled while its worker
+// runs stops that worker through it.
+func TestWireLadoWorkStartsTheDispatcher(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	useLadoStoredTokens(t, nil)
+	cfg := config.Config{DataDir: t.TempDir(), StateDir: t.TempDir()}
+	store := sqlitetest.MustOpen(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	plan, snapshot := seedLadoApprovedTask(t, store, at, "")
+	// A dispatch claimed the entry and AO started its worker; the daemon
+	// stopped before LADO linked the two.
+	claimed, err := store.ClaimLadoQueueEntries(ctx, at, at.Add(2*time.Minute), 1, func() string { return "lease-1" })
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %+v, %v; want lado-queue-1", claimed, err)
+	}
+	worker, _, err := store.CreateClientRequestSession(ctx, domain.SessionRecord{
 		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, ClientRequestID: domain.LadoClientRequestID("lado-queue-1", 1),
-		ClientRequestHash: domain.LadoDispatchHash(plan, snapshot.SHA256), CreatedAt: at, UpdatedAt: at,
+		ClientRequestHash: domain.LadoDispatchHash(plan, snapshot), CreatedAt: at, UpdatedAt: at,
 	})
 	if err != nil {
-		t.Fatalf("CreateSession: %v", err)
+		t.Fatalf("CreateClientRequestSession: %v", err)
 	}
-	sessions := &ladoGateSink{}
+	if err := store.CommitClientRequestSession(ctx, worker.ID); err != nil {
+		t.Fatalf("CommitClientRequestSession: %v", err)
+	}
+	sessions := &ladoWorkerSessions{}
 
-	wireLado(store, sessions, &ladoGateSink{})
+	_, tasks, _, queue := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	done := queue.Start(ctx)
 
-	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID); err != nil || section != rules {
-		t.Fatalf("LADO prompt section for the dispatched worker = %q, %v; want the snapshot's rules", section, err)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		exec, ok, err := store.LadoExecution(ctx, worker.ID)
+		if err != nil {
+			t.Fatalf("LadoExecution: %v", err)
+		}
+		if ok {
+			if exec.TaskID != "lado-task-1" || exec.QueueEntryID != "lado-queue-1" || exec.Attempt != 1 {
+				t.Fatalf("execution %+v, want attempt 1 of lado-queue-1", exec)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the dispatcher did not link the worker within 10s")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the dispatcher did not stop within 10s of the daemon's context")
+	}
+	if stopped := sessions.stopped(); len(stopped) != 0 {
+		t.Fatalf("the dispatcher stopped %v, want the worker left running", stopped)
+	}
+
+	cancelled, err := tasks.Cancel(context.Background(), "lado-task-1")
+	if err != nil || cancelled.State() != domain.LadoTaskCancelled {
+		t.Fatalf("Cancel = %+v, %v", cancelled, err)
+	}
+	if stopped := sessions.stopped(); !slices.Equal(stopped, []domain.SessionID{worker.ID}) {
+		t.Fatalf("stopped %v after the cancel, want the worker %s", stopped, worker.ID)
 	}
 }
 
@@ -163,7 +278,7 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	}
 	log := slog.New(slog.DiscardHandler)
 
-	_, tasks, rules := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	_, tasks, rules, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
 
 	if tasks == nil || rules == nil {
 		t.Fatalf("wireLadoWork returned tasks %v, rules %v", tasks, rules)
@@ -245,7 +360,7 @@ func TestWireLadoWorkGivesTasksTheRules(t *testing.T) {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
 
-	_, tasks, rules := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	_, tasks, rules, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
 
 	listed, err := tasks.List(ctx, "mer", false)
 	if err != nil || len(listed) != 1 {

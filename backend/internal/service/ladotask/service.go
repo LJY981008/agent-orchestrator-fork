@@ -166,6 +166,13 @@ func New(deps Deps) *Service {
 	return &Service{deps: deps}
 }
 
+// SetKiller installs the Killer of Deps. The dispatcher that implements it
+// is built from this service, so the daemon installs it afterwards, before
+// the API serves.
+func (s *Service) SetKiller(killer Killer) {
+	s.deps.Killer = killer
+}
+
 // CreateInput is a New Task composer request in a LADO project.
 type CreateInput struct {
 	ProjectID domain.ProjectID

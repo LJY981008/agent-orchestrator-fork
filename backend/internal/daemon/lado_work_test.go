@@ -269,7 +269,7 @@ func TestWireLadoWorkBuildsConnectionsAndTasks(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir(), StateDir: t.TempDir()}
 	cloner := &recordingProjectCloner{}
 
-	connections, tasks, _ := wireLadoWork(ctx, cfg, sqlitetest.MustOpen(t), cloner, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	connections, tasks, _, _ := wireLadoWork(ctx, cfg, sqlitetest.MustOpen(t), cloner, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
 
 	if connections == nil || tasks == nil || ladoStoredTokens == nil {
 		t.Fatalf("wireLadoWork = %v, %v with store %v", connections, tasks, ladoStoredTokens)

@@ -13,6 +13,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladogate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -48,10 +49,13 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 }
 
 // wireLadoWork builds LADO's repository connections, its rules with the
-// built-in ones seeded, and issue-backed tasks with their plans, whose
-// approvals fix the rules. The daemon calls it once AO's project service
-// exists, after installLadoCredentials opened the token store.
-func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service, *ladopolicy.Service) {
+// built-in ones seeded, issue-backed tasks with their plans, whose approvals
+// fix the rules and queue the plans, and the dispatcher that starts the
+// queued plans' workers and stops the worker of a cancelled task. The daemon
+// calls it once AO's project service exists, after installLadoCredentials
+// opened the token store, and starts the dispatcher once workers may spawn.
+// Without AO's session service the dispatcher only reads; it must not start.
+func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service, *ladopolicy.Service, *ladoqueue.Service) {
 	if ladoStoredTokens == nil {
 		installLadoCredentials(cfg, log)
 	}
@@ -78,7 +82,20 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 		deps.Artifacts = ladoArtifacts{capturer: work.artifacts, store: store}
 	}
 	tasks := ladotask.New(deps)
-	return connections, tasks, rules
+	queue := ladoqueue.New(ladoqueue.Deps{
+		Store:    store,
+		Tasks:    tasks,
+		Policy:   rules,
+		Sessions: work.sessions,
+		Projects: store,
+		Branches: work.branches,
+		Memory:   work.memory,
+		Log:      log,
+	})
+	if work.sessions != nil {
+		tasks.SetKiller(queue)
+	}
+	return connections, tasks, rules, queue
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.

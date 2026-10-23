@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -51,12 +52,20 @@ func ladoDevPresenceOn(raw string) bool {
 	return false
 }
 
-// ladoWorkDeps are the AO parts LADO's plans use. A missing part leaves the
-// plan loop off, as in tests that only need tasks.
+// ladoWorkDeps are the AO parts LADO's plans and its dispatcher use. A
+// missing part leaves the plan loop off, or the dispatcher unable to start
+// workers, as in tests that only need tasks.
 type ladoWorkDeps struct {
 	orchestrators ladoOrchestratorSpawner
 	sender        ladoMessageSender
 	artifacts     *artifactversions.Capturer
+	// sessions starts and stops workers: AO's session service.
+	sessions ladoqueue.Sessions
+	// branches resolves the branch a worker starts from: the session
+	// manager, through its workspace.
+	branches ladoqueue.Branches
+	// memory reads memory pressure: the daemon's usage memory reader.
+	memory ladoqueue.Memory
 }
 
 // ladoOrchestratorSpawner is AO's session service.

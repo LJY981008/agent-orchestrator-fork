@@ -246,10 +246,11 @@ func ladoTaskResponses(tasks []domain.LadoTask) []LadoTaskResponse {
 
 func ladoTaskResponse(task domain.LadoTask) LadoTaskResponse {
 	resp := LadoTaskResponse{
-		ID:         string(task.ID),
-		ProjectID:  string(task.ProjectID),
-		Repository: domain.LadoRepoRef(task.Repo),
-		State:      string(task.State()),
+		ID:          string(task.ID),
+		ProjectID:   string(task.ProjectID),
+		Repository:  domain.LadoRepoRef(task.Repo),
+		State:       string(task.State()),
+		StateReason: task.StateReason(),
 		Issue: LadoTaskIssueResponse{
 			Ref:        string(task.IssueRef),
 			Title:      task.Issue.Title,
@@ -260,6 +261,8 @@ func ladoTaskResponse(task domain.LadoTask) LadoTaskResponse {
 		Agent:     task.Agent,
 		Model:     task.Model,
 		Plan:      ladoTaskPlanResponse(task.Plan),
+		Queue:     ladoTaskQueueResponse(task.Queue, time.Now()),
+		Execution: ladoTaskExecutionResponse(task),
 		CreatedAt: task.CreatedAt,
 	}
 	if id, err := domain.ParseLadoIssueRef(task.IssueRef); err == nil {

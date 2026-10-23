@@ -3270,6 +3270,68 @@ paths:
       summary: Check a host token with the host, then store it
       tags:
       - lado
+  /api/v1/lado/dispatch-settings:
+    get:
+      operationId: getLadoDispatchSettings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDispatchSettingsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get the dispatch settings: the cap on running executions, their maximum
+        run time and the memory hold'
+      tags:
+      - lado
+    put:
+      operationId: updateLadoDispatchSettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoDispatchSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDispatchSettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the dispatch settings; needs no human-presence proof
+      tags:
+      - lado
   /api/v1/lado/effective:
     get:
       operationId: getLadoEffective
@@ -3326,6 +3388,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Resolve the rules for a project, or for a task at its latest plan revision
+      tags:
+      - lado
+  /api/v1/lado/executions/{sessionId}:
+    get:
+      operationId: getLadoExecution
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoExecutionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get the execution a worker session runs: its task, plan, rule snapshot,
+        base and run'
       tags:
       - lado
   /api/v1/lado/plans/{revisionId}:
@@ -3641,8 +3743,41 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Change a project's LADO settings; turning LADO mode off needs a human-presence
-        proof
+      summary: Change a project's LADO mode or its cap on running executions; turning
+        LADO mode off needs a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/queue:
+    get:
+      operationId: listLadoQueue
+      parameters:
+      - description: Project whose entries are listed; every project's when omitted.
+        in: query
+        name: projectId
+        schema:
+          description: Project whose entries are listed; every project's when omitted.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoQueueResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the approved plans waiting for the dispatcher, in the order it
+        takes them
       tags:
       - lado
   /api/v1/lado/rules:
@@ -17911,6 +18046,41 @@ components:
       - host
       - provider
       type: object
+    LadoDispatchSettingsResponse:
+      properties:
+        holdOnMemoryTight:
+          description: Keep queued work waiting while memory pressure is tight.
+          type: boolean
+        maxConcurrent:
+          description: How many executions run at once across projects. Each project
+            has its own cap too.
+          maximum: 8
+          minimum: 1
+          type: integer
+        maxRunMinutes:
+          description: How long an execution may run before LADO stops it; 0 means
+            no limit.
+          enum:
+          - 0
+          - 60
+          - 120
+          - 240
+          - 480
+          - 720
+          - 1440
+          type: integer
+        updatedAt:
+          description: When the settings last changed; omitted while the defaults
+            apply.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - maxConcurrent
+      - maxRunMinutes
+      - holdOnMemoryTight
+      type: object
     LadoEffectiveAgentResponse:
       properties:
         harness:
@@ -18059,6 +18229,173 @@ components:
       - project
       - task
       - source
+      type: object
+    LadoExecutionBaseResponse:
+      properties:
+        commitsAhead:
+          description: How many commits the base moved between the two; omitted when
+            unknown.
+          type:
+          - "null"
+          - integer
+        dispatchSha:
+          description: The commit the worker's base named when LADO started it.
+          type: string
+        planSha:
+          description: The commit the plan's base_ref named when LADO pinned the plan.
+          type: string
+      type: object
+    LadoExecutionPRResponse:
+      properties:
+        closed:
+          description: Closed without a merge.
+          type: boolean
+        merged:
+          type: boolean
+        number:
+          type: integer
+        url:
+          type: string
+      required:
+      - url
+      - number
+      - merged
+      - closed
+      type: object
+    LadoExecutionPlanResponse:
+      properties:
+        approvedAt:
+          format: date-time
+          type: string
+        number:
+          type: integer
+        revisionId:
+          type: string
+        sha256:
+          description: Hash of the approved plan file.
+          type: string
+      required:
+      - revisionId
+      - number
+      - sha256
+      - approvedAt
+      type: object
+    LadoExecutionResponse:
+      properties:
+        attempt:
+          description: The attempt that started the worker, from 1.
+          type: integer
+        base:
+          $ref: '#/components/schemas/LadoExecutionBaseResponse'
+        deadlineAt:
+          description: When LADO stops the run; omitted without a limit.
+          format: date-time
+          type:
+          - "null"
+          - string
+        plan:
+          $ref: '#/components/schemas/LadoExecutionPlanResponse'
+        pr:
+          $ref: '#/components/schemas/LadoExecutionPRResponse'
+          description: The newest PR of the worker session; omitted while it has none.
+        sessionEnded:
+          type: boolean
+        sessionId:
+          type: string
+        snapshot:
+          $ref: '#/components/schemas/LadoExecutionSnapshotResponse'
+        startedAt:
+          format: date-time
+          type: string
+        task:
+          $ref: '#/components/schemas/LadoExecutionTaskResponse'
+        timedOutAt:
+          description: When LADO stopped the run at its deadline.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - sessionId
+      - task
+      - plan
+      - snapshot
+      - base
+      - attempt
+      - startedAt
+      - sessionEnded
+      type: object
+    LadoExecutionRuleResponse:
+      properties:
+        id:
+          type: string
+        name:
+          description: The rule's name when the plan was approved. A built-in rule
+            keeps its English seed name, which the app translates.
+          type: string
+        version:
+          type: integer
+      required:
+      - id
+      - name
+      - version
+      type: object
+    LadoExecutionSnapshotResponse:
+      properties:
+        agent:
+          description: The agent harness the worker runs, such as claude-code.
+          type: string
+        model:
+          type: string
+        permissionCeiling:
+          description: The highest mode a turn of the worker may use.
+          enum:
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        permissionMode:
+          description: The mode the worker started with.
+          enum:
+          - accept-edits
+          - auto
+          - bypass-permissions
+          type: string
+        prompt:
+          description: The rules text in the worker's system prompt; empty when no
+            rule adds any.
+          type: string
+        rules:
+          description: The rules that were on, by id.
+          items:
+            $ref: '#/components/schemas/LadoExecutionRuleResponse'
+          type: array
+        sha256:
+          type: string
+      required:
+      - sha256
+      - agent
+      - permissionMode
+      - permissionCeiling
+      - rules
+      - prompt
+      type: object
+    LadoExecutionTaskResponse:
+      properties:
+        id:
+          type: string
+        issueRef:
+          type: string
+        issueUrl:
+          type: string
+        title:
+          description: The issue's title as LADO last read it.
+          type: string
+      required:
+      - id
+      - title
+      - issueRef
+      - issueUrl
       type: object
     LadoImpactProjectResponse:
       properties:
@@ -18513,11 +18850,95 @@ components:
         ladoMode:
           description: Whether the project's workers are under LADO's worker gate.
           type: boolean
+        maxConcurrent:
+          description: How many executions run at once in the project, 1 to 8.
+          type: integer
         projectId:
           type: string
       required:
       - projectId
       - ladoMode
+      - maxConcurrent
+      type: object
+    LadoQueueItemResponse:
+      properties:
+        attempts:
+          description: Attempts to start the worker so far. LADO gives up after three;
+            waiting for a slot, memory or the issue is not an attempt.
+          type: integer
+        enqueuedAt:
+          description: When the plan was approved.
+          format: date-time
+          type: string
+        error:
+          description: Why the last attempt failed, without secrets.
+          type: string
+        id:
+          type: string
+        issueRef:
+          type: string
+        nextAttemptAt:
+          description: When LADO looks at the entry again; omitted once that is due.
+          format: date-time
+          type:
+          - "null"
+          - string
+        projectId:
+          type: string
+        reason:
+          description: Why the entry waits, needs review or is blocked, for the app
+            to translate.
+          enum:
+          - rules_changed
+          - issue_edited
+          - plan_superseded
+          - blocking_snapshot
+          - base_ref_mismatch
+          - agent_unsupported
+          - slot_global
+          - slot_project
+          - memory_tight
+          - issue_unreadable
+          - retry
+          - lado_mode_off
+          type: string
+        state:
+          description: 'Derived entry state. The queue lists open entries: queued,
+            waiting (reason says why) and dispatching, while LADO starts the worker.'
+          enum:
+          - queued
+          - waiting
+          - dispatching
+          - dispatched
+          - failed
+          - review_required
+          - blocked
+          - superseded
+          - cancelled
+          type: string
+        taskId:
+          type: string
+        title:
+          description: The issue's title as LADO last read it.
+          type: string
+      required:
+      - id
+      - taskId
+      - projectId
+      - issueRef
+      - title
+      - state
+      - attempts
+      - enqueuedAt
+      type: object
+    LadoQueueResponse:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/LadoQueueItemResponse'
+          type: array
+      required:
+      - entries
       type: object
     LadoRepositoryFailureResponse:
       properties:
@@ -18820,6 +19241,48 @@ components:
       required:
       - ok
       type: object
+    LadoTaskExecutionResponse:
+      properties:
+        deadlineAt:
+          description: When LADO stops the run; omitted without a limit.
+          format: date-time
+          type:
+          - "null"
+          - string
+        planRevisionId:
+          description: The plan revision the worker runs.
+          type: string
+        planRevisionNumber:
+          description: That revision's number; omitted once a newer revision is pinned.
+            GET /api/v1/lado/executions/{sessionId} always has it.
+          type: integer
+        policySha256:
+          description: Hash of the rule snapshot the worker runs under; omitted for
+            the run of an older approval. GET /api/v1/lado/executions/{sessionId}
+            always has it.
+          type: string
+        pr:
+          $ref: '#/components/schemas/LadoExecutionPRResponse'
+          description: The newest PR of the worker session; omitted while it has none.
+        sessionEnded:
+          description: The worker session ended. While it lives, the task cannot be
+            approved again.
+          type: boolean
+        sessionId:
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        timedOut:
+          description: LADO stopped the run at its deadline.
+          type: boolean
+      required:
+      - sessionId
+      - planRevisionId
+      - startedAt
+      - timedOut
+      - sessionEnded
+      type: object
     LadoTaskIssueResponse:
       properties:
         number:
@@ -18883,6 +19346,52 @@ components:
       required:
       - requestPending
       type: object
+    LadoTaskQueueResponse:
+      properties:
+        attempts:
+          description: Attempts to start the worker so far; LADO gives up after three.
+          type: integer
+        error:
+          description: Why starting the worker failed, without secrets.
+          type: string
+        nextAttemptAt:
+          description: When LADO looks at the entry again; omitted once that is due.
+          format: date-time
+          type:
+          - "null"
+          - string
+        reason:
+          description: Why the entry waits, needs review or is blocked.
+          enum:
+          - rules_changed
+          - issue_edited
+          - plan_superseded
+          - blocking_snapshot
+          - base_ref_mismatch
+          - agent_unsupported
+          - slot_global
+          - slot_project
+          - memory_tight
+          - issue_unreadable
+          - retry
+          - lado_mode_off
+          type: string
+        state:
+          enum:
+          - queued
+          - waiting
+          - dispatching
+          - dispatched
+          - failed
+          - review_required
+          - blocked
+          - superseded
+          - cancelled
+          type: string
+      required:
+      - state
+      - attempts
+      type: object
     LadoTaskResponse:
       properties:
         agent:
@@ -18896,6 +19405,9 @@ components:
         createdAt:
           format: date-time
           type: string
+        execution:
+          $ref: '#/components/schemas/LadoTaskExecutionResponse'
+          description: The newest execution; omitted before the first worker started.
         id:
           type: string
         issue:
@@ -18907,22 +19419,55 @@ components:
           $ref: '#/components/schemas/LadoTaskPlanResponse'
         projectId:
           type: string
+        queue:
+          $ref: '#/components/schemas/LadoTaskQueueResponse'
+          description: The queue entry of the newest approval; omitted without one.
         repository:
           description: Canonical id of the repository that holds the issue, such as
             github:owner/repo.
           type: string
         state:
-          description: 'Derived task state. review_required: the rules changed since
-            the approval; blocked: the approval''s rule snapshot holds a blocking
-            problem.'
+          description: 'Derived task state. review_required: the plan needs a new
+            approval; blocked: the plan or the setup must change first; queued: the
+            approved plan waits for the dispatcher; dispatching: LADO starts its worker;
+            running: the worker session lives or its PR is open; failed: the worker
+            did not start, timed out or ended without a PR; completed: the PR merged;
+            closed_unmerged: the PR or the issue closed without a merge. approved
+            is no longer sent.'
           enum:
           - draft
           - planned
           - review_required
           - blocked
           - approved
+          - queued
+          - dispatching
+          - running
+          - failed
+          - completed
           - cancelled
           - closed_unmerged
+          type: string
+        stateReason:
+          description: Why the task needs review, is blocked or failed, or what its
+            queued plan waits for, for the app to translate.
+          enum:
+          - rules_changed
+          - issue_edited
+          - plan_superseded
+          - approved_before_queue
+          - blocking_snapshot
+          - base_ref_mismatch
+          - agent_unsupported
+          - attempts_exhausted
+          - timed_out
+          - ended_without_pr
+          - slot_global
+          - slot_project
+          - memory_tight
+          - issue_unreadable
+          - retry
+          - lado_mode_off
           type: string
       required:
       - id
@@ -22786,16 +23331,46 @@ components:
       required:
       - disabledModels
       type: object
+    UpdateLadoDispatchSettingsRequest:
+      properties:
+        holdOnMemoryTight:
+          type: boolean
+        maxConcurrent:
+          maximum: 8
+          minimum: 1
+          type: integer
+        maxRunMinutes:
+          enum:
+          - 0
+          - 60
+          - 120
+          - 240
+          - 480
+          - 720
+          - 1440
+          type: integer
+      required:
+      - maxConcurrent
+      - maxRunMinutes
+      - holdOnMemoryTight
+      type: object
     UpdateLadoProjectSettingsRequest:
       properties:
         ladoMode:
-          description: Put the project's workers under LADO's worker gate. Changing
-            it needs AO_LADO_DEV=on until LADO's dispatcher exists.
+          description: Put the project's workers under LADO's worker gate. Turning
+            it on refuses while tracker intake is on; turning it off needs a human-presence
+            proof, and queued work then waits while running workers go on.
           type:
           - "null"
           - boolean
-      required:
-      - ladoMode
+        maxConcurrent:
+          description: How many executions run at once in the project. It changes
+            without a presence proof.
+          maximum: 8
+          minimum: 1
+          type:
+          - "null"
+          - integer
       type: object
     UpdateLadoRuleRequest:
       properties:

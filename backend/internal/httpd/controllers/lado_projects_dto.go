@@ -10,11 +10,14 @@ type LadoProjectIDParam struct {
 
 // LadoProjectSettingsResponse is a project's LADO settings.
 type LadoProjectSettingsResponse struct {
-	ProjectID string `json:"projectId"`
-	LadoMode  bool   `json:"ladoMode" description:"Whether the project's workers are under LADO's worker gate."`
+	ProjectID     string `json:"projectId"`
+	LadoMode      bool   `json:"ladoMode" description:"Whether the project's workers are under LADO's worker gate."`
+	MaxConcurrent int    `json:"maxConcurrent" description:"How many executions run at once in the project, 1 to 8."`
 }
 
-// UpdateLadoProjectSettingsRequest changes a project's LADO settings.
+// UpdateLadoProjectSettingsRequest changes a project's LADO settings. It
+// needs ladoMode, maxConcurrent or both; an omitted field keeps its value.
 type UpdateLadoProjectSettingsRequest struct {
-	LadoMode *bool `json:"ladoMode" description:"Put the project's workers under LADO's worker gate. Changing it needs AO_LADO_DEV=on until LADO's dispatcher exists."`
+	LadoMode      *bool `json:"ladoMode,omitempty" description:"Put the project's workers under LADO's worker gate. Turning it on refuses while tracker intake is on; turning it off needs a human-presence proof, and queued work then waits while running workers go on."`
+	MaxConcurrent *int  `json:"maxConcurrent,omitempty" minimum:"1" maximum:"8" description:"How many executions run at once in the project. It changes without a presence proof."`
 }

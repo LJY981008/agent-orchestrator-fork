@@ -233,6 +233,8 @@ type fakeStore struct {
 	linkErr    error
 	waitWrites int
 	taskReads  int
+	// settingsEvents are the audit events of the stored dispatch settings.
+	settingsEvents []domain.LadoAuditEvent
 }
 
 func (f *fakeStore) add(entries ...domain.LadoQueueEntry) {
@@ -488,6 +490,38 @@ func (f *fakeStore) LinkLadoExecution(_ context.Context, id domain.LadoQueueEntr
 	// The linked session runs and takes a slot from now on.
 	f.running[project]++
 	return nil
+}
+
+// A dispatch reads none of the views below; views_test.go reads them from the
+// real store, and stores the settings here to see their audit events.
+
+func (f *fakeStore) ListLadoQueue(context.Context, *domain.ProjectID) ([]domain.LadoQueueItem, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LadoExecution(context.Context, domain.SessionID) (domain.LadoExecution, bool, error) {
+	return domain.LadoExecution{}, false, nil
+}
+
+func (f *fakeStore) LadoPlanRevision(context.Context, domain.LadoPlanRevisionID) (domain.LadoPlanRevision, bool, error) {
+	return domain.LadoPlanRevision{}, false, nil
+}
+
+func (f *fakeStore) ListLadoPlanApprovals(context.Context, domain.LadoTaskID) ([]domain.LadoPlanApproval, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LadoPolicySnapshot(context.Context, domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error) {
+	return domain.LadoPolicySnapshot{}, false, nil
+}
+
+func (f *fakeStore) SetLadoDispatchSettings(_ context.Context, settings domain.LadoDispatchSettings, event domain.LadoAuditEvent) (domain.LadoDispatchSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	settings.UpdatedAt = event.At
+	f.settings = settings
+	f.settingsEvents = append(f.settingsEvents, event)
+	return settings, nil
 }
 
 // fakeTrackerClient stands for the tracker client a real task service reads

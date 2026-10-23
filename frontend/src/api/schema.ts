@@ -1306,6 +1306,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/dispatch-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the dispatch settings: the cap on running executions, their maximum run time and the memory hold */
+        get: operations["getLadoDispatchSettings"];
+        /** Replace the dispatch settings; needs no human-presence proof */
+        put: operations["updateLadoDispatchSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/effective": {
         parameters: {
             query?: never;
@@ -1315,6 +1333,23 @@ export interface paths {
         };
         /** Resolve the rules for a project, or for a task at its latest plan revision */
         get: operations["getLadoEffective"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/executions/{sessionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the execution a worker session runs: its task, plan, rule snapshot, base and run */
+        get: operations["getLadoExecution"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1400,8 +1435,25 @@ export interface paths {
         };
         /** Get a project's LADO settings */
         get: operations["getLadoProjectSettings"];
-        /** Change a project's LADO settings; turning LADO mode off needs a human-presence proof */
+        /** Change a project's LADO mode or its cap on running executions; turning LADO mode off needs a human-presence proof */
         put: operations["updateLadoProjectSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/queue": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the approved plans waiting for the dispatcher, in the order it takes them */
+        get: operations["listLadoQueue"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -6164,6 +6216,22 @@ export interface components {
             /** @enum {string} */
             provider: "github" | "gitlab";
         };
+        LadoDispatchSettingsResponse: {
+            /** @description Keep queued work waiting while memory pressure is tight. */
+            holdOnMemoryTight: boolean;
+            /** @description How many executions run at once across projects. Each project has its own cap too. */
+            maxConcurrent: number;
+            /**
+             * @description How long an execution may run before LADO stops it; 0 means no limit.
+             * @enum {integer}
+             */
+            maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
+            /**
+             * Format: date-time
+             * @description When the settings last changed; omitted while the defaults apply.
+             */
+            updatedAt?: null | string;
+        };
         LadoEffectiveAgentResponse: {
             /** @description Empty when nobody chose an agent. */
             harness: string;
@@ -6223,6 +6291,86 @@ export interface components {
              */
             task: "inherit" | "force_on" | "force_off";
             version: number;
+        };
+        LadoExecutionBaseResponse: {
+            /** @description How many commits the base moved between the two; omitted when unknown. */
+            commitsAhead?: null | number;
+            /** @description The commit the worker's base named when LADO started it. */
+            dispatchSha?: string;
+            /** @description The commit the plan's base_ref named when LADO pinned the plan. */
+            planSha?: string;
+        };
+        LadoExecutionPRResponse: {
+            /** @description Closed without a merge. */
+            closed: boolean;
+            merged: boolean;
+            number: number;
+            url: string;
+        };
+        LadoExecutionPlanResponse: {
+            /** Format: date-time */
+            approvedAt: string;
+            number: number;
+            revisionId: string;
+            /** @description Hash of the approved plan file. */
+            sha256: string;
+        };
+        LadoExecutionResponse: {
+            /** @description The attempt that started the worker, from 1. */
+            attempt: number;
+            base: components["schemas"]["LadoExecutionBaseResponse"];
+            /**
+             * Format: date-time
+             * @description When LADO stops the run; omitted without a limit.
+             */
+            deadlineAt?: null | string;
+            plan: components["schemas"]["LadoExecutionPlanResponse"];
+            /** @description The newest PR of the worker session; omitted while it has none. */
+            pr?: components["schemas"]["LadoExecutionPRResponse"];
+            sessionEnded: boolean;
+            sessionId: string;
+            snapshot: components["schemas"]["LadoExecutionSnapshotResponse"];
+            /** Format: date-time */
+            startedAt: string;
+            task: components["schemas"]["LadoExecutionTaskResponse"];
+            /**
+             * Format: date-time
+             * @description When LADO stopped the run at its deadline.
+             */
+            timedOutAt?: null | string;
+        };
+        LadoExecutionRuleResponse: {
+            id: string;
+            /** @description The rule's name when the plan was approved. A built-in rule keeps its English seed name, which the app translates. */
+            name: string;
+            version: number;
+        };
+        LadoExecutionSnapshotResponse: {
+            /** @description The agent harness the worker runs, such as claude-code. */
+            agent: string;
+            model?: string;
+            /**
+             * @description The highest mode a turn of the worker may use.
+             * @enum {string}
+             */
+            permissionCeiling: "accept-edits" | "auto" | "bypass-permissions";
+            /**
+             * @description The mode the worker started with.
+             * @enum {string}
+             */
+            permissionMode: "accept-edits" | "auto" | "bypass-permissions";
+            /** @description The rules text in the worker's system prompt; empty when no rule adds any. */
+            prompt: string;
+            /** @description The rules that were on, by id. */
+            rules: components["schemas"]["LadoExecutionRuleResponse"][];
+            sha256: string;
+        };
+        LadoExecutionTaskResponse: {
+            id: string;
+            issueRef: string;
+            issueUrl: string;
+            /** @description The issue's title as LADO last read it. */
+            title: string;
         };
         LadoImpactProjectResponse: {
             id: string;
@@ -6413,7 +6561,44 @@ export interface components {
         LadoProjectSettingsResponse: {
             /** @description Whether the project's workers are under LADO's worker gate. */
             ladoMode: boolean;
+            /** @description How many executions run at once in the project, 1 to 8. */
+            maxConcurrent: number;
             projectId: string;
+        };
+        LadoQueueItemResponse: {
+            /** @description Attempts to start the worker so far. LADO gives up after three; waiting for a slot, memory or the issue is not an attempt. */
+            attempts: number;
+            /**
+             * Format: date-time
+             * @description When the plan was approved.
+             */
+            enqueuedAt: string;
+            /** @description Why the last attempt failed, without secrets. */
+            error?: string;
+            id: string;
+            issueRef: string;
+            /**
+             * Format: date-time
+             * @description When LADO looks at the entry again; omitted once that is due.
+             */
+            nextAttemptAt?: null | string;
+            projectId: string;
+            /**
+             * @description Why the entry waits, needs review or is blocked, for the app to translate.
+             * @enum {string}
+             */
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off";
+            /**
+             * @description Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker.
+             * @enum {string}
+             */
+            state: "queued" | "waiting" | "dispatching" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
+            taskId: string;
+            /** @description The issue's title as LADO last read it. */
+            title: string;
+        };
+        LadoQueueResponse: {
+            entries: components["schemas"]["LadoQueueItemResponse"][];
         };
         LadoRepositoryFailureResponse: {
             problem: string;
@@ -6540,6 +6725,28 @@ export interface components {
             /** @description What git or ssh printed, when there is one to show. */
             problemDetail?: string;
         };
+        LadoTaskExecutionResponse: {
+            /**
+             * Format: date-time
+             * @description When LADO stops the run; omitted without a limit.
+             */
+            deadlineAt?: null | string;
+            /** @description The plan revision the worker runs. */
+            planRevisionId: string;
+            /** @description That revision's number; omitted once a newer revision is pinned. GET /api/v1/lado/executions/{sessionId} always has it. */
+            planRevisionNumber?: number;
+            /** @description Hash of the rule snapshot the worker runs under; omitted for the run of an older approval. GET /api/v1/lado/executions/{sessionId} always has it. */
+            policySha256?: string;
+            /** @description The newest PR of the worker session; omitted while it has none. */
+            pr?: components["schemas"]["LadoExecutionPRResponse"];
+            /** @description The worker session ended. While it lives, the task cannot be approved again. */
+            sessionEnded: boolean;
+            sessionId: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** @description LADO stopped the run at its deadline. */
+            timedOut: boolean;
+        };
         LadoTaskIssueResponse: {
             number: number;
             /** Format: date-time */
@@ -6571,6 +6778,24 @@ export interface components {
              */
             requestedAt?: null | string;
         };
+        LadoTaskQueueResponse: {
+            /** @description Attempts to start the worker so far; LADO gives up after three. */
+            attempts: number;
+            /** @description Why starting the worker failed, without secrets. */
+            error?: string;
+            /**
+             * Format: date-time
+             * @description When LADO looks at the entry again; omitted once that is due.
+             */
+            nextAttemptAt?: null | string;
+            /**
+             * @description Why the entry waits, needs review or is blocked.
+             * @enum {string}
+             */
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off";
+            /** @enum {string} */
+            state: "queued" | "waiting" | "dispatching" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
+        };
         LadoTaskResponse: {
             /** @description Agent chosen for the task's execution. */
             agent?: string;
@@ -6578,19 +6803,28 @@ export interface components {
             cancelledAt?: null | string;
             /** Format: date-time */
             createdAt: string;
+            /** @description The newest execution; omitted before the first worker started. */
+            execution?: components["schemas"]["LadoTaskExecutionResponse"];
             id: string;
             issue: components["schemas"]["LadoTaskIssueResponse"];
             /** @description Model chosen for the task's execution. */
             model?: string;
             plan: components["schemas"]["LadoTaskPlanResponse"];
             projectId: string;
+            /** @description The queue entry of the newest approval; omitted without one. */
+            queue?: components["schemas"]["LadoTaskQueueResponse"];
             /** @description Canonical id of the repository that holds the issue, such as github:owner/repo. */
             repository: string;
             /**
-             * @description Derived task state. review_required: the rules changed since the approval; blocked: the approval's rule snapshot holds a blocking problem.
+             * @description Derived task state. review_required: the plan needs a new approval; blocked: the plan or the setup must change first; queued: the approved plan waits for the dispatcher; dispatching: LADO starts its worker; running: the worker session lives or its PR is open; failed: the worker did not start, timed out or ended without a PR; completed: the PR merged; closed_unmerged: the PR or the issue closed without a merge. approved is no longer sent.
              * @enum {string}
              */
-            state: "draft" | "planned" | "review_required" | "blocked" | "approved" | "cancelled" | "closed_unmerged";
+            state: "draft" | "planned" | "review_required" | "blocked" | "approved" | "queued" | "dispatching" | "running" | "failed" | "completed" | "cancelled" | "closed_unmerged";
+            /**
+             * @description Why the task needs review, is blocked or failed, or what its queued plan waits for, for the app to translate.
+             * @enum {string}
+             */
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off";
         };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];
@@ -8112,9 +8346,17 @@ export interface components {
         UpdateHarnessDefaultRequest: {
             disabledModels: null | string[];
         };
+        UpdateLadoDispatchSettingsRequest: {
+            holdOnMemoryTight: boolean;
+            maxConcurrent: number;
+            /** @enum {integer} */
+            maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
+        };
         UpdateLadoProjectSettingsRequest: {
-            /** @description Put the project's workers under LADO's worker gate. Changing it needs AO_LADO_DEV=on until LADO's dispatcher exists. */
-            ladoMode: null | boolean;
+            /** @description Put the project's workers under LADO's worker gate. Turning it on refuses while tracker intake is on; turning it off needs a human-presence proof, and queued work then waits while running workers go on. */
+            ladoMode?: null | boolean;
+            /** @description How many executions run at once in the project. It changes without a presence proof. */
+            maxConcurrent?: null | number;
         };
         UpdateLadoRuleRequest: {
             /** @description Archive or unarchive the rule. */
@@ -12678,6 +12920,95 @@ export interface operations {
             };
         };
     };
+    getLadoDispatchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDispatchSettingsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoDispatchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoDispatchSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDispatchSettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getLadoEffective: {
         parameters: {
             query?: {
@@ -12721,6 +13052,56 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoExecution: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO session id of the worker. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoExecutionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13121,6 +13502,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoQueue: {
+        parameters: {
+            query?: {
+                /** @description Project whose entries are listed; every project's when omitted. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoQueueResponse"];
                 };
             };
             /** @description Internal Server Error */

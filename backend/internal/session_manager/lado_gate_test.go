@@ -337,3 +337,26 @@ func TestStartInterfaceTransitionAsksTheLadoGate(t *testing.T) {
 		t.Fatalf("mode after a refusal = %q, want tui", mode)
 	}
 }
+
+// LADO's dispatcher resolves a worker's base through the session manager's
+// workspace, as a spawn does.
+func TestResolveDefaultBranchAsksTheWorkspace(t *testing.T) {
+	st := newFakeStore()
+	target := ports.WorkspaceDefaultBranch{Remote: "upstream", Branch: "release", BaseRef: "refs/remotes/upstream/release"}
+	ws := &fakeWorkspace{resolved: map[string]ports.WorkspaceDefaultBranch{"/work/app": target}}
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}})
+
+	got, err := m.ResolveDefaultBranch(context.Background(), "/work/app", "upstream/release")
+	if err != nil || got != target {
+		t.Fatalf("ResolveDefaultBranch = %+v, %v; want %+v", got, err, target)
+	}
+	if want := []resolveDefaultBranchCall{{repoPath: "/work/app", configuredBranch: "upstream/release"}}; !reflect.DeepEqual(ws.resolves, want) {
+		t.Fatalf("workspace asked %+v, want %+v", ws.resolves, want)
+	}
+
+	// A workspace that cannot resolve branches says so.
+	plain := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: struct{ ports.Workspace }{ws}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}})
+	if _, err := plain.ResolveDefaultBranch(context.Background(), "/work/app", ""); !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
+		t.Fatalf("ResolveDefaultBranch without the capability = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
+	}
+}

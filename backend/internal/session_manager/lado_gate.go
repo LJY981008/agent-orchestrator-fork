@@ -1,8 +1,9 @@
 package sessionmanager
 
 // LADO fork: the worker gate's hook points in the session manager
-// (docs/LJY-PRD/TDD.md §6), and the LADO section of a session's standing
-// instructions (§5.1, §6.4).
+// (docs/LJY-PRD/TDD.md §6), the LADO section of a session's standing
+// instructions (§5.1, §6.4), and the branch a worker starts from, which LADO's
+// dispatcher checks and records (§5.3).
 
 import (
 	"context"
@@ -37,6 +38,18 @@ func (m *Manager) ladoPromptSection(ctx context.Context, kind domain.SessionKind
 		return "", nil
 	}
 	return m.ladoPrompt(ctx, kind, projectID, sessionID)
+}
+
+// ResolveDefaultBranch resolves the branch a repository's worktrees start
+// from, given the branch its project configures ("" for the repository's own
+// default), the way a spawn resolves it. A workspace that cannot resolve
+// branches reports ports.ErrWorkspaceDefaultBranchUnresolved.
+func (m *Manager) ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	refresher, ok := m.workspace.(ports.WorkspaceDefaultBranchRefresher)
+	if !ok {
+		return ports.WorkspaceDefaultBranch{}, ports.ErrWorkspaceDefaultBranchUnresolved
+	}
+	return refresher.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
 }
 
 func (m *Manager) authorizeLadoSpawn(ctx context.Context, cfg ports.SpawnConfig) error {

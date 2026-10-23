@@ -27,6 +27,7 @@ type LadoController struct {
 	Connections LadoConnectionService
 	Tasks       LadoTaskService
 	Rules       LadoRuleService
+	Queue       LadoQueueService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
@@ -62,6 +63,10 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Delete("/lado/rules/{ruleId}", c.deleteRule)
 	r.Put("/lado/bindings", c.setBinding)
 	r.Get("/lado/effective", c.getEffective)
+	r.Get("/lado/queue", c.listQueue)
+	r.Get("/lado/executions/{sessionId}", c.getExecution)
+	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
+	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {
@@ -92,8 +97,9 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	settings, err := c.Projects.UpdateSettings(r.Context(), ladoProjectID(r), ladoproject.UpdateInput{
-		LadoMode: req.LadoMode,
-		Presence: c.presenceCheck(r, body),
+		LadoMode:      req.LadoMode,
+		MaxConcurrent: req.MaxConcurrent,
+		Presence:      c.presenceCheck(r, body),
 	})
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -107,5 +113,5 @@ func ladoProjectID(r *http.Request) domain.ProjectID {
 }
 
 func ladoProjectSettingsResponse(settings domain.LadoProjectSettings) LadoProjectSettingsResponse {
-	return LadoProjectSettingsResponse{ProjectID: string(settings.ProjectID), LadoMode: settings.LadoMode}
+	return LadoProjectSettingsResponse{ProjectID: string(settings.ProjectID), LadoMode: settings.LadoMode, MaxConcurrent: settings.MaxConcurrent}
 }
