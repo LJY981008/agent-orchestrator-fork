@@ -228,7 +228,7 @@ These replace v1's M0 gates. "W" marks gates that must also pass on a real Windo
 | D9 | Releases from the fork; PostHog key removed and telemetry off by default | TDD §11 |
 | D10 | Fixes that help upstream become upstream PR candidates | TDD §12 |
 | D11 | Local harness is adopted into one LADO-managed location (back up, copy, remove original); CRUD after approval; repo-tracked files change through git | [adr/0005](adr/0005-local-harness-adoption.md), HARNESS §9 |
-| D12 | Build in 8 steps by dependency, one branch and PR each; fork defaults split into PRs (1a, 1c; 1b dropped after measurement); the rules core comes before the queue. Agreed 2026-10-19 | TDD §15 |
+| D12 | Build in 9 steps by dependency, one branch and PR each; fork defaults split into PRs (1a, 1c; 1b dropped after measurement); the rules core comes before the queue. Agreed 2026-10-19; step 9, fork releases, added 2026-10-23 | TDD §15 |
 | D13 | Work items are issues on the project's connected GitHub or GitLab repository: LADO creates one from the developer's request or imports existing ones. The proposal step and `lado_proposals` are removed. A project connects with a per-host access token and SSH, and is cloned through AO's clone flow when no local checkout exists. Decided 2026-10-19 | [adr/0006](adr/0006-issues-as-work-items.md), TDD §5.1 |
 
 ## 10. Traceability

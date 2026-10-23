@@ -6,7 +6,7 @@ LADO is a fork of [Orchestrator.inc's Agent Orchestrator](https://github.com/Orc
 
 - **Work items are issues.** A task is an issue on the project's GitHub or GitLab repository. You create it from the New Task composer or import open issues; LADO tracks the issue and never edits it behind your back.
 - **A worker starts only from a plan you approved.** The project's orchestrator writes a plan for the issue. You review it, ask for changes, and approve one exact revision in the desktop app. An agent cannot approve its own work.
-- **Rules decide what agents may do** (coming): global, project and task rules with protected gates, frozen into a snapshot when work is queued.
+- **Rules decide what agents may do**: global, project and task rules with protected gates, fixed into a snapshot with each plan approval. Workers receive them from step 6, the queue.
 - **Verification before integration** (coming): required checks, LADO's own validators and an integration approval before anything merges.
 
 LADO is built as additions to AO, not a rewrite: new code lives in new files inside AO's layers, and upstream files get only small hook lines, so upstream changes keep merging in.
@@ -28,6 +28,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Planned |
 | 7 | Adopting your local agent setup (CLAUDE.md, hooks, skills, MCP) into one managed place | Planned |
 | 8 | Verification, evidence and integration approval | Planned |
+| 9 | Releases of this fork: a workflow that builds the desktop app (Windows first) and publishes it where the app looks for updates, and the checks that need a real Windows install | Planned |
 
 Until step 6, a project in LADO mode cannot start workers, so changing LADO mode is a developer setting (below).
 
