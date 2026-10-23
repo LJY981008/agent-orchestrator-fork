@@ -137,8 +137,10 @@ type fakePolicy struct {
 	mu       sync.Mutex
 	sha      string
 	blocking bool
-	// rules are the rule versions each snapshot used.
-	rules []domain.LadoPolicySnapshotRule
+	// rules are the rule versions each snapshot used, and content each
+	// snapshot's content; nil content gives a fixed one.
+	rules   []domain.LadoPolicySnapshotRule
+	content []byte
 	// currentErr fails CurrentSHA256 and CurrentSHA256s.
 	currentErr error
 	// resolved are the revisions Snapshot resolved the rules for.
@@ -159,10 +161,14 @@ func (p *fakePolicy) Snapshot(_ context.Context, _ domain.LadoTask, rev domain.L
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.resolved = append(p.resolved, rev.ID)
+	content := p.content
+	if content == nil {
+		content = []byte(`{"compiler":"lado-policy/1"}`)
+	}
 	return domain.LadoPolicySnapshot{
 		ID:       domain.LadoPolicySnapshotID(fmt.Sprintf("lado-snapshot-%d", len(p.resolved))),
 		SHA256:   p.sha,
-		Content:  []byte(`{"compiler":"lado-policy/1"}`),
+		Content:  content,
 		Blocking: p.blocking,
 		Rules:    p.rules,
 	}, nil
@@ -213,6 +219,7 @@ type planFixture struct {
 	task          domain.LadoTask
 	native        string
 	nonces        int
+	leases        int
 }
 
 func newPlanFixture(t *testing.T) *planFixture {
@@ -331,6 +338,54 @@ func (pf *planFixture) planned(t *testing.T) domain.LadoPlanRevision {
 	return rev
 }
 
+// claim leases the task's open queue entry for an hour of wall-clock time,
+// as the dispatcher does: task states read leases against the wall clock.
+func (pf *planFixture) claim(t *testing.T) domain.LadoQueueEntry {
+	t.Helper()
+	now := time.Now().UTC()
+	claimed, err := pf.store.ClaimLadoQueueEntries(context.Background(), now, now.Add(time.Hour), 1, func() string {
+		pf.leases++
+		return fmt.Sprintf("lease-%d", pf.leases)
+	})
+	if err != nil || len(claimed) != 1 || claimed[0].TaskID != pf.task.ID {
+		t.Fatalf("ClaimLadoQueueEntries = %+v, %v; want the task's entry", claimed, err)
+	}
+	return claimed[0]
+}
+
+// run starts a worker session for a leased entry and links it as the
+// entry's execution, as the dispatcher does, and returns the session.
+func (pf *planFixture) run(t *testing.T, entry domain.LadoQueueEntry) domain.SessionID {
+	t.Helper()
+	ctx := context.Background()
+	session, err := pf.store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "demo", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+		ClientRequestID: domain.LadoClientRequestID(entry.ID, entry.AttemptCount), ClientRequestHash: strings.Repeat("e", 64),
+		CreatedAt: pf.now, UpdatedAt: pf.now,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if err := pf.store.LinkLadoExecution(ctx, entry.ID, entry.LeaseToken, domain.LadoExecution{SessionID: session.ID, StartedAt: pf.now}); err != nil {
+		t.Fatalf("LinkLadoExecution: %v", err)
+	}
+	return session.ID
+}
+
+// end marks a worker session ended, as AO does once its agent exits.
+func (pf *planFixture) end(t *testing.T, id domain.SessionID) {
+	t.Helper()
+	ctx := context.Background()
+	rec, ok, err := pf.store.GetSession(ctx, id)
+	if err != nil || !ok {
+		t.Fatalf("GetSession %s = %v, %v", id, ok, err)
+	}
+	rec.IsTerminated = true
+	if err := pf.store.UpdateSession(ctx, rec); err != nil {
+		t.Fatalf("end session %s: %v", id, err)
+	}
+}
+
 // count returns the rows of a table.
 func (pf *planFixture) count(t *testing.T, table string) int {
 	t.Helper()
@@ -406,6 +461,14 @@ func (pf *planFixture) wantState(t *testing.T, want domain.LadoTaskState) {
 			t.Fatalf("%s shows the task as %q, want %q", read, got, want)
 		}
 	}
+}
+
+func apiDetails(err error) map[string]any {
+	var apiErr *apierr.Error
+	if errors.As(err, &apiErr) {
+		return apiErr.Details
+	}
+	return nil
 }
 
 func apiKind(err error) apierr.Kind {
@@ -582,16 +645,19 @@ func TestApprovePlanBindsTheExactRevision(t *testing.T) {
 	if approval.RevisionID != rev.ID || approval.SHA256 != rev.SHA256 || approval.ProofNonce != proof.Nonce {
 		t.Fatalf("approval = %+v", approval)
 	}
-	if task := pf.latest(t); task.State() != domain.LadoTaskApproved {
-		t.Fatalf("state = %q, want approved", task.State())
+	if task := pf.latest(t); task.State() != domain.LadoTaskQueued {
+		t.Fatalf("state = %q, want queued", task.State())
 	}
 	if broken, err := pf.store.VerifyLadoAuditChain(ctx); err != nil || broken != 0 {
 		t.Fatalf("audit chain = (%d, %v)", broken, err)
 	}
-	// Gate 10: a used proof cannot approve again.
-	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, proof); apiCode(err) != "LADO_PRESENCE_REPLAYED" {
+	// Gate 10: a used proof cannot approve again, even where approving the
+	// revision again is allowed: here once the rules changed.
+	pf.policy.set(policyB, false)
+	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyB, proof); apiCode(err) != "LADO_PRESENCE_REPLAYED" {
 		t.Fatalf("a replayed proof = %v, want LADO_PRESENCE_REPLAYED", err)
 	}
+	pf.policy.set(policyA, false)
 
 	// Gate 2: editing the plan after approval makes a new revision, and the
 	// old approval cannot be used for it.
@@ -624,7 +690,7 @@ func TestApprovePlanStoresTheRuleSnapshot(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	if task.Plan.Approval.ID != approval.ID || task.Plan.Snapshot.SHA256 != policyA || task.Plan.Snapshot.Blocking ||
-		task.Plan.PolicySHA256 != policyA || task.State() != domain.LadoTaskApproved {
+		task.Plan.PolicySHA256 != policyA || task.State() != domain.LadoTaskQueued {
 		t.Fatalf("plan = %+v, state %q; want the approval with the rules' snapshot", task.Plan, task.State())
 	}
 	stored, ok, err := pf.store.LadoPolicySnapshot(ctx, approval.ID)
@@ -722,20 +788,20 @@ func TestTaskStateFollowsRuleChanges(t *testing.T) {
 	if _, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); err != nil {
 		t.Fatalf("ApprovePlan: %v", err)
 	}
-	pf.wantState(t, domain.LadoTaskApproved)
+	pf.wantState(t, domain.LadoTaskQueued)
 
 	pf.policy.set(policyB, false)
 	pf.wantState(t, domain.LadoTaskReviewRequired)
-	if stored := pf.latest(t); stored.State() != domain.LadoTaskApproved || stored.Plan.PolicySHA256 != "" {
+	if stored := pf.latest(t); stored.State() != domain.LadoTaskQueued || stored.Plan.PolicySHA256 != "" {
 		t.Fatalf("the store's task = %+v, want no current rule hash: the service fills it", stored.Plan)
 	}
 	pf.policy.set(policyA, false)
-	pf.wantState(t, domain.LadoTaskApproved)
+	pf.wantState(t, domain.LadoTaskQueued)
 
 	// Rules LADO cannot resolve show no change.
 	pf.policy.set(policyB, false)
 	pf.policy.currentErr = errors.New("the pinned plan is gone")
-	pf.wantState(t, domain.LadoTaskApproved)
+	pf.wantState(t, domain.LadoTaskQueued)
 	pf.policy.currentErr = nil
 
 	// An approval whose snapshot holds a blocking problem stands, and the
@@ -747,6 +813,190 @@ func TestTaskStateFollowsRuleChanges(t *testing.T) {
 	pf.wantState(t, domain.LadoTaskBlocked)
 	if events := pf.approvalEvents(t); events[len(events)-1]["blocking"] != true {
 		t.Fatalf("approval event = %v, want blocking", events[len(events)-1])
+	}
+}
+
+func TestApprovePlanQueuesTheTask(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+
+	approval, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyA, pf.proof(rev.ID))
+	if err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+	snapshot, ok, err := pf.store.LadoPolicySnapshot(ctx, approval.ID)
+	if err != nil || !ok {
+		t.Fatalf("LadoPolicySnapshot = (%v, %v)", ok, err)
+	}
+	task := pf.latest(t)
+	first := task.Queue
+	if first.ID == "" || first.TaskID != task.ID || first.ProjectID != "demo" || first.PlanApprovalID != approval.ID ||
+		first.PolicySnapshotID != snapshot.ID || !first.EnqueuedAt.Equal(pf.now) || task.State() != domain.LadoTaskQueued {
+		t.Fatalf("queue entry = %+v, state %q; want the approval's entry, queued", first, task.State())
+	}
+	if events := pf.approvalEvents(t); len(events) != 1 || events[0]["queueEntry"] != string(first.ID) {
+		t.Fatalf("approval events = %v, want the queue entry %s", events, first.ID)
+	}
+	if queue, err := pf.store.ListLadoQueue(ctx, nil); err != nil || len(queue) != 1 || queue[0].Entry.ID != first.ID {
+		t.Fatalf("queue = %+v, %v; want the entry", queue, err)
+	}
+
+	// Approving again, here under changed rules, queues the new approval and
+	// supersedes the first entry.
+	pf.policy.set(policyB, false)
+	pf.now = pf.now.Add(time.Minute)
+	again, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policyB, pf.proof(rev.ID))
+	if err != nil {
+		t.Fatalf("approve again: %v", err)
+	}
+	task = pf.latest(t)
+	if task.Queue.ID == first.ID || task.Queue.PlanApprovalID != again.ID || task.State() != domain.LadoTaskQueued {
+		t.Fatalf("queue entry = %+v, state %q; want the second approval's entry, queued", task.Queue, task.State())
+	}
+	var superseded time.Time
+	if err := pf.raw.QueryRow(`SELECT superseded_at FROM lado_queue_entries WHERE id = ?`, string(first.ID)).Scan(&superseded); err != nil || !superseded.Equal(pf.now) {
+		t.Fatalf("first entry superseded at %v (%v), want %v", superseded, err, pf.now)
+	}
+	if n := pf.count(t, "lado_queue_entries"); n != 2 {
+		t.Fatalf("%d queue entries, want both kept", n)
+	}
+}
+
+// LADO runs one worker per task: the queued revision cannot be approved
+// twice, nothing can be approved while a worker's session lives or once its
+// work merged, and a task that needs review or failed is approved again.
+func TestApprovalAgainFollowsTheTaskState(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	rev := pf.planned(t)
+	approve := func(t *testing.T, rev domain.LadoPlanRevision, policy string) error {
+		t.Helper()
+		pf.now = pf.now.Add(time.Minute)
+		_, err := pf.svc.ApprovePlan(ctx, rev.ID, rev.SHA256, policy, pf.proof(rev.ID))
+		return err
+	}
+	refused := func(t *testing.T, err error, code string, state domain.LadoTaskState) {
+		t.Helper()
+		details := apiDetails(err)
+		if apiCode(err) != code || apiKind(err) != apierr.KindConflict || details["taskId"] != string(pf.task.ID) || details["state"] != string(state) {
+			t.Fatalf("approval = %v (details %v), want 409 %s in state %s", err, details, code, state)
+		}
+	}
+	wantState := func(t *testing.T, want domain.LadoTaskState) domain.LadoTask {
+		t.Helper()
+		task, err := pf.svc.Get(ctx, pf.task.ID)
+		if err != nil || task.State() != want {
+			t.Fatalf("state = %q (%s), %v; want %q", task.State(), task.StateReason(), err, want)
+		}
+		return task
+	}
+	if err := approve(t, rev, policyA); err != nil {
+		t.Fatalf("ApprovePlan: %v", err)
+	}
+
+	// Queued and dispatching: the same revision is approved already.
+	refused(t, approve(t, rev, policyA), "LADO_TASK_ALREADY_QUEUED", domain.LadoTaskQueued)
+	entry := pf.claim(t)
+	wantState(t, domain.LadoTaskDispatching)
+	refused(t, approve(t, rev, policyA), "LADO_TASK_ALREADY_QUEUED", domain.LadoTaskDispatching)
+
+	// Failed: approved again, which queues it.
+	if ok, err := pf.store.FailLadoQueueEntry(ctx, entry.ID, entry.LeaseToken, "spawn failed", pf.now); err != nil || !ok {
+		t.Fatalf("FailLadoQueueEntry = %v, %v", ok, err)
+	}
+	wantState(t, domain.LadoTaskFailed)
+	if err := approve(t, rev, policyA); err != nil {
+		t.Fatalf("approving a failed task again: %v", err)
+	}
+	wantState(t, domain.LadoTaskQueued)
+
+	// Review required: approved again under the new rules.
+	pf.policy.set(policyB, false)
+	wantState(t, domain.LadoTaskReviewRequired)
+	if err := approve(t, rev, policyB); err != nil {
+		t.Fatalf("approving a task that needs review again: %v", err)
+	}
+	queued := wantState(t, domain.LadoTaskQueued).Queue
+
+	// A newer revision of a queued task is approved, and its entry
+	// supersedes the queued one.
+	pf.now = pf.now.Add(time.Minute)
+	pf.writePlan(strings.Replace(pf.planFile("issue"), "risk: low", "risk: medium", 1), domain.ArtifactVersionSourceUser)
+	pf.svc.WatchPlans(ctx)
+	second := pf.latest(t).Plan.Latest
+	if second.ID == rev.ID {
+		t.Fatal("the edit pinned no new revision")
+	}
+	if err := approve(t, second, policyB); err != nil {
+		t.Fatalf("approving the newer revision: %v", err)
+	}
+	if task := wantState(t, domain.LadoTaskQueued); task.Queue.ID == queued.ID || task.Plan.Approval.RevisionID != second.ID {
+		t.Fatalf("queue entry = %+v, want a new one for revision %s", task.Queue, second.ID)
+	}
+	var superseded int
+	if err := pf.raw.QueryRow(`SELECT COUNT(*) FROM lado_queue_entries WHERE id = ? AND superseded_at IS NOT NULL`, string(queued.ID)).Scan(&superseded); err != nil || superseded != 1 {
+		t.Fatalf("the queued entry superseded = %d (%v), want it superseded", superseded, err)
+	}
+
+	// Running: no approval at all, not even of a newer revision.
+	entry = pf.claim(t)
+	session := pf.run(t, entry)
+	wantState(t, domain.LadoTaskRunning)
+	refused(t, approve(t, second, policyB), "LADO_TASK_RUNNING", domain.LadoTaskRunning)
+	pf.now = pf.now.Add(time.Minute)
+	pf.writePlan(strings.Replace(pf.planFile("issue"), "risk: low", "risk: high", 1), domain.ArtifactVersionSourceUser)
+	pf.svc.WatchPlans(ctx)
+	third := pf.latest(t).Plan.Latest
+	refused(t, approve(t, third, policyB), "LADO_TASK_RUNNING", domain.LadoTaskRunning)
+
+	// A run that timed out, or whose PR closed unmerged, refuses approvals
+	// while its session lives, and is approved again once it ended.
+	if ok, err := pf.store.MarkLadoExecutionTimedOut(ctx, session, pf.now); err != nil || !ok {
+		t.Fatalf("MarkLadoExecutionTimedOut = %v, %v", ok, err)
+	}
+	wantState(t, domain.LadoTaskFailed)
+	refused(t, approve(t, third, policyB), "LADO_TASK_RUNNING", domain.LadoTaskFailed)
+	pf.end(t, session)
+	if err := approve(t, third, policyB); err != nil {
+		t.Fatalf("approving after a timed-out run ended: %v", err)
+	}
+	wantState(t, domain.LadoTaskQueued)
+	rejected := pf.run(t, pf.claim(t))
+	if err := pf.store.WritePR(ctx, domain.PullRequest{URL: "https://github.com/acme/demo/pull/8", SessionID: rejected, Number: 8, Closed: true, UpdatedAt: pf.now}, nil, nil); err != nil {
+		t.Fatalf("WritePR: %v", err)
+	}
+	wantState(t, domain.LadoTaskClosedUnmerged)
+	refused(t, approve(t, third, policyB), "LADO_TASK_RUNNING", domain.LadoTaskClosedUnmerged)
+	pf.end(t, rejected)
+	if err := approve(t, third, policyB); err != nil {
+		t.Fatalf("approving after a rejected run ended: %v", err)
+	}
+	wantState(t, domain.LadoTaskQueued)
+
+	// The next run's merged work refuses any approval, also once its
+	// session ended.
+	merged := pf.run(t, pf.claim(t))
+	if err := pf.store.WritePR(ctx, domain.PullRequest{URL: "https://github.com/acme/demo/pull/9", SessionID: merged, Number: 9, Merged: true, UpdatedAt: pf.now}, nil, nil); err != nil {
+		t.Fatalf("WritePR: %v", err)
+	}
+	wantState(t, domain.LadoTaskCompleted)
+	refused(t, approve(t, third, policyB), "LADO_TASK_RUNNING", domain.LadoTaskCompleted)
+	pf.end(t, merged)
+	refused(t, approve(t, third, policyB), "LADO_TASK_RUNNING", domain.LadoTaskCompleted)
+
+	// Once the merge closes the issue, the task still shows its merged work,
+	// and the closed issue refuses plans and approvals.
+	pf.tracker.edit(pf.native, func(issue *domain.Issue) { issue.State = domain.IssueDone })
+	wantState(t, domain.LadoTaskCompleted)
+	if err := approve(t, third, policyB); apiCode(err) != "LADO_ISSUE_CLOSED" {
+		t.Fatalf("approving with the issue closed = %v, want LADO_ISSUE_CLOSED", err)
+	}
+	if _, err := pf.svc.RequestPlan(ctx, PlanRequestInput{TaskID: pf.task.ID}); apiCode(err) != "LADO_ISSUE_CLOSED" {
+		t.Fatalf("a plan request with the issue closed = %v, want LADO_ISSUE_CLOSED", err)
+	}
+	if n := pf.count(t, "lado_plan_approvals"); n != 6 {
+		t.Fatalf("%d approvals stored, want the six that were allowed", n)
 	}
 }
 
@@ -803,8 +1053,8 @@ func TestReviewRequiredTaskCanBeApprovedAgain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if again.RevisionID != rev.ID || task.Plan.Approval.ID != again.ID || task.Plan.Snapshot.SHA256 != policyB || task.State() != domain.LadoTaskApproved {
-		t.Fatalf("after approving again: plan %+v, state %q; want approved under policyB", task.Plan, task.State())
+	if again.RevisionID != rev.ID || task.Plan.Approval.ID != again.ID || task.Plan.Snapshot.SHA256 != policyB || task.State() != domain.LadoTaskQueued {
+		t.Fatalf("after approving again: plan %+v, state %q; want queued under policyB", task.Plan, task.State())
 	}
 	if n := pf.count(t, "lado_plan_approvals"); n != 2 {
 		t.Fatalf("%d approvals, want both kept", n)
@@ -949,7 +1199,7 @@ func TestPlansNeedAnOpenTaskInALadoProject(t *testing.T) {
 func TestPromptSourceAddsTheSectionOnlyInLadoMode(t *testing.T) {
 	pf := newPlanFixture(t)
 	ctx := context.Background()
-	source := PromptSource{Settings: pf.store}
+	source := PromptSource{Settings: pf.store, Sessions: pf.store, Policies: pf.store}
 	section, err := source.OrchestratorSection(ctx, "demo")
 	if err != nil || !strings.Contains(section, "## LADO project") || !strings.Contains(section, "Do not run `ao spawn`") {
 		t.Fatalf("section in LADO mode = %q, %v", section, err)
@@ -961,7 +1211,7 @@ func TestPromptSourceAddsTheSectionOnlyInLadoMode(t *testing.T) {
 		t.Fatalf("orchestrator's section = %q, %v; want the LADO section", got, err)
 	}
 	if got, err := source.Section(ctx, domain.KindWorker, "demo", "demo-1"); err != nil || got != "" {
-		t.Fatalf("worker's section = %q, %v; want none", got, err)
+		t.Fatalf("section of a worker LADO did not dispatch = %q, %v; want none", got, err)
 	}
 }
 

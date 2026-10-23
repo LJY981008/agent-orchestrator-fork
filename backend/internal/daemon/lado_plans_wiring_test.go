@@ -70,3 +70,15 @@ func TestLadoOrchestratorsSendTellsRetryableFailuresApart(t *testing.T) {
 		}
 	}
 }
+
+func TestLadoDevPresenceReadsAOToggleValues(t *testing.T) {
+	cases := map[string]bool{
+		"": false, "on": true, "ON": true, " true ": true, "1": true, "yes": true,
+		"off": false, "0": false, "no": false, "maybe": false,
+	}
+	for raw, want := range cases {
+		if got := ladoDevPresenceOn(raw); got != want {
+			t.Errorf("ladoDevPresenceOn(%q) = %v, want %v", raw, got, want)
+		}
+	}
+}

@@ -1310,7 +1310,7 @@ func TestLadoDispatchSettingsDefaultsAndUpdate(t *testing.T) {
 	if err := s.SetLadoProjectMaxConcurrent(ctx, "mer", 2, capEvent); err != nil {
 		t.Fatalf("SetLadoProjectMaxConcurrent again: %v", err)
 	}
-	if settings, err := s.LadoProjectSettings(ctx, "mer"); err != nil || capOf("mer") != 2 || !settings.LadoMode {
+	if settings, err := s.LadoProjectSettings(ctx, "mer"); err != nil || capOf("mer") != 2 || !settings.LadoMode || settings.MaxConcurrent != 2 {
 		t.Fatalf("after changing the cap: cap %d, settings %+v (%v), want 2 with LADO mode on", capOf("mer"), settings, err)
 	}
 	// The table refuses a cap outside 1 to 8, and the event goes with it.

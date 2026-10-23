@@ -62,6 +62,7 @@ type Store interface {
 	ListLadoPlanRevisions(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanRevision, error)
 	ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanApproval, error)
 	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot, entry *domain.LadoQueueEntry) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
+	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
 }
 
 // Projects reads AO's project registry.
@@ -80,6 +81,12 @@ type Policy interface {
 	// CurrentSHA256s is CurrentSHA256 for many tasks, reading the rules
 	// once. A task it cannot resolve is left out.
 	CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error)
+}
+
+// Killer stops the session of a running execution. LADO's dispatcher
+// implements it through AO's session service.
+type Killer interface {
+	Stop(ctx context.Context, sessionID domain.SessionID) error
 }
 
 // ProjectRepo is one repository of a project whose tracker can hold the
@@ -123,6 +130,9 @@ type Deps struct {
 	// Policy fixes the rules in each approval and tells whether they changed
 	// since. Without it no plan can be approved.
 	Policy Policy
+	// Killer stops the worker of a task that is cancelled while it runs.
+	// Without it the worker runs on.
+	Killer Killer
 }
 
 // Service creates, imports and tracks tasks.
@@ -471,7 +481,10 @@ func (s *Service) UpdatePreferences(ctx context.Context, id domain.LadoTaskID, a
 	return s.withPolicy(ctx, updated), nil
 }
 
-// Cancel cancels a task. It never closes or edits the issue.
+// Cancel cancels a task and its open queue entries, then stops the session
+// of its execution while that still lives. It never closes or edits the
+// issue. The cancellation stands when the session cannot be stopped; a worker
+// that a dispatch in flight starts after it is the dispatcher's to stop.
 func (s *Service) Cancel(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, error) {
 	cancelled, ok, err := s.deps.Store.CancelLadoTask(ctx, id, s.deps.Clock().UTC())
 	if err != nil {
@@ -479,6 +492,12 @@ func (s *Service) Cancel(ctx context.Context, id domain.LadoTaskID) (domain.Lado
 	}
 	if !ok {
 		return domain.LadoTask{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "Unknown task")
+	}
+	if execution := cancelled.Execution; execution.SessionID != "" && !execution.SessionTerminated && s.deps.Killer != nil {
+		// The cancellation is stored, so the stop goes on without the request.
+		if err := s.deps.Killer.Stop(context.WithoutCancel(ctx), execution.SessionID); err != nil {
+			s.deps.Log.Warn("LADO could not stop the worker of a cancelled task", "task", id, "session", execution.SessionID, "err", err)
+		}
 	}
 	return s.withPolicy(ctx, cancelled), nil
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -18,6 +19,7 @@ type Store interface {
 	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 	SetLadoMode(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time) (domain.LadoProjectSettings, error)
 	SetLadoModeWithProof(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoProjectSettings, error)
+	SetLadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID, n int, event domain.LadoAuditEvent) error
 }
 
 // Projects reads AO's project registry.
@@ -29,10 +31,6 @@ type Projects interface {
 type Deps struct {
 	Store    Store
 	Projects Projects
-	// ModeSwitch lets the API change a project's LADO mode. It stays off outside
-	// development until LADO's dispatcher exists (build step 6), because a
-	// project in LADO mode cannot start any worker before then.
-	ModeSwitch bool
 	// Clock stamps changes; nil uses time.Now.
 	Clock func() time.Time
 }
@@ -50,9 +48,13 @@ func New(deps Deps) *Service {
 	return &Service{deps: deps}
 }
 
-// UpdateInput is a settings change. LadoMode is required.
+// UpdateInput is a settings change. It needs LadoMode, MaxConcurrent or both;
+// a nil field keeps its value.
 type UpdateInput struct {
 	LadoMode *bool
+	// MaxConcurrent caps the executions that run at once in the project, 1
+	// to domain.LadoMaxConcurrent.
+	MaxConcurrent *int
 	// Presence checks the request's human-presence proof for an action. The
 	// service calls it only when the change turns LADO mode off, the one
 	// settings change that needs presence from step 4b
@@ -68,11 +70,18 @@ func (s *Service) Settings(ctx context.Context, projectID domain.ProjectID) (dom
 	return s.current(ctx, projectID)
 }
 
-// UpdateSettings changes the project's LADO mode. Sending the current value
-// changes nothing and needs no mode switch.
+// UpdateSettings changes the project's LADO mode, its cap on running
+// executions, or both. The mode goes first, so a refused mode change leaves
+// the cap as it was; a cap that fails to save after it leaves the new mode.
+// Sending a current value changes nothing. The cap changes without presence,
+// audited as the API's.
 func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID, in UpdateInput) (domain.LadoProjectSettings, error) {
-	if in.LadoMode == nil {
-		return domain.LadoProjectSettings{}, apierr.Invalid("LADO_MODE_REQUIRED", "ladoMode is required", nil)
+	if in.LadoMode == nil && in.MaxConcurrent == nil {
+		return domain.LadoProjectSettings{}, apierr.Invalid("LADO_SETTINGS_EMPTY", "Send ladoMode, maxConcurrent or both.", nil)
+	}
+	if n := in.MaxConcurrent; n != nil && (*n < 1 || *n > domain.LadoMaxConcurrent) {
+		return domain.LadoProjectSettings{}, apierr.Invalid("LADO_DISPATCH_SETTINGS_INVALID",
+			fmt.Sprintf("maxConcurrent must be 1 to %d, got %d", domain.LadoMaxConcurrent, *n), map[string]any{"min": 1, "max": domain.LadoMaxConcurrent})
 	}
 	project, err := s.project(ctx, projectID)
 	if err != nil {
@@ -82,19 +91,27 @@ func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID
 	if err != nil {
 		return domain.LadoProjectSettings{}, err
 	}
-	if current.LadoMode == *in.LadoMode {
-		return current, nil
+	if in.LadoMode != nil && *in.LadoMode != current.LadoMode {
+		if current, err = s.setMode(ctx, project, *in.LadoMode, in); err != nil {
+			return domain.LadoProjectSettings{}, err
+		}
 	}
-	if !s.deps.ModeSwitch {
-		return domain.LadoProjectSettings{}, apierr.Conflict("LADO_MODE_UNAVAILABLE",
-			"LADO mode cannot be changed yet: a project in LADO mode cannot start workers until LADO's dispatcher exists. Set AO_LADO_DEV=on on the daemon to try it.", nil)
+	if in.MaxConcurrent != nil && *in.MaxConcurrent != current.MaxConcurrent {
+		return s.setMaxConcurrent(ctx, projectID, current.MaxConcurrent, *in.MaxConcurrent)
 	}
-	if *in.LadoMode && project.Config.TrackerIntake.Enabled {
+	return current, nil
+}
+
+// setMode turns LADO mode on or off. Turning it on refuses while tracker
+// intake is on, because LADO projects take issues by import.
+func (s *Service) setMode(ctx context.Context, project domain.ProjectRecord, on bool, in UpdateInput) (domain.LadoProjectSettings, error) {
+	projectID := domain.ProjectID(project.ID)
+	if !on {
+		return s.turnOff(ctx, projectID, in)
+	}
+	if project.Config.TrackerIntake.Enabled {
 		return domain.LadoProjectSettings{}, apierr.Conflict("LADO_TRACKER_INTAKE_ENABLED",
 			"Turn off tracker intake for this project first: LADO projects take issues by import.", nil)
-	}
-	if !*in.LadoMode {
-		return s.turnOff(ctx, projectID, in)
 	}
 	updated, err := s.deps.Store.SetLadoMode(ctx, projectID, true, s.deps.Clock())
 	if err != nil {
@@ -135,6 +152,24 @@ func (s *Service) turnOff(ctx context.Context, projectID domain.ProjectID, in Up
 		return domain.LadoProjectSettings{}, apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
 	}
 	return updated, nil
+}
+
+// setMaxConcurrent stores the project's cap with its audit event. Nothing
+// verifies who sent the change, so the event's actor is "api".
+func (s *Service) setMaxConcurrent(ctx context.Context, projectID domain.ProjectID, from, to int) (domain.LadoProjectSettings, error) {
+	now := s.deps.Clock().UTC()
+	payload, _ := json.Marshal(map[string]any{"from": from, "to": to})
+	if err := s.deps.Store.SetLadoProjectMaxConcurrent(ctx, projectID, to, domain.LadoAuditEvent{
+		At:          now,
+		Actor:       "api",
+		Action:      "project.max_concurrent_changed",
+		SubjectKind: "project",
+		SubjectID:   string(projectID),
+		Payload:     payload,
+	}); err != nil {
+		return domain.LadoProjectSettings{}, apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
+	}
+	return s.current(ctx, projectID)
 }
 
 func (s *Service) project(ctx context.Context, projectID domain.ProjectID) (domain.ProjectRecord, error) {

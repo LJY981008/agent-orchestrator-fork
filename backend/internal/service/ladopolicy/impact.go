@@ -40,11 +40,14 @@ func noImpact() Impact {
 }
 
 // impact compares the rules before and after a change for every LADO project
-// that is not archived, and for every live task of those projects that is
-// approved or blocked: its approval is valid and its snapshot is what the
-// rules give it now. A task needing review already, or whose issue closed,
-// has nothing to lose. A task whose pinned plan cannot be read is left out
-// and logged, so one missing pin does not stop rule changes.
+// that is not archived, and for every live task of those projects whose
+// valid approval is not dispatched yet and whose snapshot is what the rules
+// give it now: a queued, dispatching, blocked or failed task, or one that
+// needs review for another reason than the rules. A task whose rules changed
+// already, whose issue closed, or whose approval's worker runs or ran (its
+// execution keeps the snapshot) has nothing to lose. A task whose pinned plan
+// cannot be read is left out and logged, so one missing pin does not stop
+// rule changes.
 func (s *Service) impact(ctx context.Context, before, after []domain.LadoRule) (Impact, error) {
 	impact := noImpact()
 	ids, err := s.deps.Store.ListLadoModeProjectIDs(ctx)
@@ -86,7 +89,7 @@ func (s *Service) impact(ctx context.Context, before, after []domain.LadoRule) (
 		}
 		in.Rules = before
 		task.Plan.PolicySHA256 = Resolve(in).SHA256
-		if state := task.State(); state != domain.LadoTaskApproved && state != domain.LadoTaskBlocked {
+		if task.Plan.RulesChanged() || !awaitsDispatch(task) {
 			continue
 		}
 		in.Rules = after
@@ -96,6 +99,18 @@ func (s *Service) impact(ctx context.Context, before, after []domain.LadoRule) (
 		impact.Tasks = append(impact.Tasks, ImpactTask{ID: task.ID, ProjectID: task.ProjectID, Title: task.Issue.Title, IssueRef: task.IssueRef})
 	}
 	return impact, nil
+}
+
+// awaitsDispatch reports whether the task's valid approval still waits for
+// its worker: the task is not running, done or closed, and no execution of
+// this approval exists, such as one that failed.
+func awaitsDispatch(task domain.LadoTask) bool {
+	switch task.State() {
+	case domain.LadoTaskQueued, domain.LadoTaskDispatching, domain.LadoTaskBlocked, domain.LadoTaskFailed, domain.LadoTaskReviewRequired:
+	default:
+		return false
+	}
+	return task.Execution.SessionID == "" || task.Execution.PlanApprovalID != task.Plan.Approval.ID
 }
 
 // changes reports whether the rules after a change give in another snapshot

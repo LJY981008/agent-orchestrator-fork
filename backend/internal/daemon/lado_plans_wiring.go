@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -31,7 +32,7 @@ const ladoDevPresenceEnv = "AO_LADO_DEV_PRESENCE"
 // daemon that made up its own shares it with nobody, so its approvals fail
 // closed.
 func newLadoPresence(token string, fromApp bool, log *slog.Logger) *ladopresence.Verifier {
-	dev := ladoDevMode(os.Getenv(ladoDevPresenceEnv))
+	dev := ladoDevPresenceOn(os.Getenv(ladoDevPresenceEnv))
 	if dev {
 		log.Warn("LADO dev presence: approvals are accepted without the desktop app's confirmation", "env", ladoDevPresenceEnv)
 	}
@@ -39,6 +40,15 @@ func newLadoPresence(token string, fromApp bool, log *slog.Logger) *ladopresence
 		log.Info("LADO approvals need the AO desktop app: this daemon did not get its token from the app")
 	}
 	return ladopresence.New(token, fromApp, dev, nil)
+}
+
+// ladoDevPresenceOn accepts the values AO's own toggles accept for "on".
+func ladoDevPresenceOn(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "on", "true", "1", "yes":
+		return true
+	}
+	return false
 }
 
 // ladoWorkDeps are the AO parts LADO's plans use. A missing part leaves the

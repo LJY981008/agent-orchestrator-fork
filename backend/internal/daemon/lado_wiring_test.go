@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"reflect"
@@ -34,20 +35,7 @@ func (f *fakeSessionLifecycle) SetWorkGate(ports.WorkGate) {}
 
 func (f *fakeSessionLifecycle) SetLadoPrompt(sessionmanager.LadoPromptSection) {}
 
-func TestLadoDevModeReadsAOToggleValues(t *testing.T) {
-	cases := map[string]bool{
-		"": false, "on": true, "ON": true, " true ": true, "1": true, "yes": true,
-		"off": false, "0": false, "no": false, "maybe": false,
-	}
-	for raw, want := range cases {
-		if got := ladoDevMode(raw); got != want {
-			t.Errorf("ladoDevMode(%q) = %v, want %v", raw, got, want)
-		}
-	}
-}
-
 func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
-	t.Setenv(ladoDevEnv, "on")
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: "/tmp/mer", RegisteredAt: time.Now().UTC().Truncate(time.Second)}); err != nil {
@@ -55,7 +43,7 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	}
 	sessions, chat := &ladoGateSink{}, &ladoGateSink{}
 
-	projects := wireLado(store, sessions, chat, slog.New(slog.DiscardHandler))
+	projects := wireLado(store, sessions, chat)
 
 	if sessions.gate == nil || sessions.gate != chat.gate {
 		t.Fatalf("session manager gate %v, chat gate %v; want one gate on both", sessions.gate, chat.gate)
@@ -86,21 +74,81 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	}
 }
 
-func TestWireLadoKeepsTheModeSwitchOffByDefault(t *testing.T) {
-	t.Setenv(ladoDevEnv, "")
+// LADO mode changes without a development flag: on at once, off only with
+// presence.
+func TestWireLadoChangesLadoModeWithoutADevFlag(t *testing.T) {
+	t.Setenv("AO_LADO_DEV", "")
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: "/tmp/mer", RegisteredAt: time.Now().UTC().Truncate(time.Second)}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
 
-	projects := wireLado(store, &ladoGateSink{}, &ladoGateSink{}, slog.New(slog.DiscardHandler))
+	projects := wireLado(store, &ladoGateSink{}, &ladoGateSink{})
 
-	on := true
-	_, err := projects.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{LadoMode: &on})
+	on, off := true, false
+	if settings, err := projects.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{LadoMode: &on}); err != nil || !settings.LadoMode {
+		t.Fatalf("turn LADO mode on = %+v, %v; want it on", settings, err)
+	}
+	_, err := projects.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{LadoMode: &off})
 	var apiErr *apierr.Error
-	if !errors.As(err, &apiErr) || apiErr.Code != "LADO_MODE_UNAVAILABLE" {
-		t.Fatalf("turn LADO mode on without %s = %v, want LADO_MODE_UNAVAILABLE", ladoDevEnv, err)
+	if !errors.As(err, &apiErr) || apiErr.Code != "LADO_PRESENCE_REQUIRED" {
+		t.Fatalf("turn LADO mode off without presence = %v, want LADO_PRESENCE_REQUIRED", err)
+	}
+}
+
+// A worker LADO dispatched gets the rules text of its queue entry's snapshot,
+// found through the client request id its session was started with.
+func TestWireLadoGivesADispatchedWorkerItsRules(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: "/tmp/mer", RegisteredAt: at}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	issue, plan := strings.Repeat("1", 64), strings.Repeat("2", 64)
+	if _, err := store.CreateLadoTask(ctx, domain.LadoTask{
+		ID: "lado-task-1", ProjectID: "mer", Repo: domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/demo"},
+		IssueRef: "github:acme/demo#12", CreatedAt: at, UpdatedAt: at,
+		Issue: domain.LadoObservedIssue{Title: "Add login", State: domain.IssueOpen, SnapshotSHA256: issue, ObservedAt: at},
+	}); err != nil {
+		t.Fatalf("CreateLadoTask: %v", err)
+	}
+	if _, err := store.CreateLadoPlanRequest(ctx, domain.LadoPlanRequest{ID: "req-1", TaskID: "lado-task-1", SessionID: "mer-orchestrator-1", IssueSnapshotSHA256: issue, RequestedAt: at}); err != nil {
+		t.Fatalf("CreateLadoPlanRequest: %v", err)
+	}
+	rev, _, err := store.PinLadoPlanRevision(ctx, domain.LadoPlanRevision{
+		ID: "lado-plan-1", TaskID: "lado-task-1", RequestID: "req-1", SessionID: "mer-orchestrator-1", Path: domain.LadoPlanPath("lado-task-1"),
+		ArtifactVersion: 1, Source: "agent", SHA256: plan, BaseRef: "main", IssueSnapshotSHA256: issue, CreatedAt: at,
+	})
+	if err != nil {
+		t.Fatalf("PinLadoPlanRevision: %v", err)
+	}
+	rules := "## LADO rules\n\nWrite commit messages in Korean."
+	content, err := json.Marshal(map[string]string{"permissionCeiling": "auto", "prompt": rules})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := domain.LadoPolicySnapshot{ID: "lado-snapshot-1", SHA256: strings.Repeat("3", 64), Content: content}
+	proof := domain.LadoPresenceProof{Nonce: "AAAAAAAAAAAAAAAAAAAAAA", Action: domain.LadoPresencePlanApprove, SubjectID: string(rev.ID), ExpiresAt: at.Add(time.Minute), UsedAt: at}
+	event := domain.LadoAuditEvent{At: at, Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: string(rev.ID), Payload: []byte("{}")}
+	if _, _, err := store.ApproveLadoPlan(ctx, domain.LadoPlanApproval{ID: "approval-1", RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: plan, ApprovedAt: at},
+		proof, event, &snapshot, &domain.LadoQueueEntry{ID: "lado-queue-1"}); err != nil {
+		t.Fatalf("ApproveLadoPlan: %v", err)
+	}
+	worker, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, ClientRequestID: domain.LadoClientRequestID("lado-queue-1", 1),
+		ClientRequestHash: domain.LadoDispatchHash(plan, snapshot.SHA256), CreatedAt: at, UpdatedAt: at,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	sessions := &ladoGateSink{}
+
+	wireLado(store, sessions, &ladoGateSink{})
+
+	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID); err != nil || section != rules {
+		t.Fatalf("LADO prompt section for the dispatched worker = %q, %v; want the snapshot's rules", section, err)
 	}
 }
 

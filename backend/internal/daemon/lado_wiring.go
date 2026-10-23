@@ -5,8 +5,6 @@ package daemon
 import (
 	"context"
 	"log/slog"
-	"os"
-	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -22,11 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// ladoDevEnv turns on LADO features that are not ready for daily use. Today
-// that is changing a project's LADO mode: until LADO's dispatcher exists (build
-// step 6), a project in LADO mode cannot start any worker.
-const ladoDevEnv = "AO_LADO_DEV"
-
 // ladoGateTarget is a component that delivers messages or starts sessions.
 type ladoGateTarget interface {
 	SetWorkGate(ports.WorkGate)
@@ -40,20 +33,18 @@ type ladoSessionTarget interface {
 }
 
 // wireLado installs one worker gate on the session manager and the chat
-// service, and LADO's section of a session's standing instructions, and
-// returns LADO's project settings service for the API. The daemon calls it
-// right after the session manager is built, before automations, tracker
-// intake or the API can spawn or send, and before sessions restore.
-func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget, log *slog.Logger) *ladoproject.Service {
+// service, and LADO's section of a session's standing instructions: an
+// orchestrator's in a LADO project, and the rules text of a worker LADO
+// dispatched. It returns LADO's project settings service for the API. The
+// daemon calls it right after the session manager is built, before
+// automations, tracker intake or the API can spawn or send, and before
+// sessions restore.
+func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget) *ladoproject.Service {
 	gate := ladogate.New(store, store, store, store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
-	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store}.Section)
-	devMode := ladoDevMode(os.Getenv(ladoDevEnv))
-	if devMode {
-		log.Warn("LADO dev mode: project LADO mode can be changed", "env", ladoDevEnv)
-	}
-	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store, ModeSwitch: devMode})
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store}.Section)
+	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 
 // wireLadoWork builds LADO's repository connections, its rules with the
@@ -125,13 +116,4 @@ func (c ladoCloner) Clone(ctx context.Context, in ladoconnect.CloneRequest) (dom
 		return "", err
 	}
 	return project.ID, nil
-}
-
-// ladoDevMode accepts the values AO's own toggles accept for "on".
-func ladoDevMode(raw string) bool {
-	switch strings.ToLower(strings.TrimSpace(raw)) {
-	case "on", "true", "1", "yes":
-		return true
-	}
-	return false
 }
