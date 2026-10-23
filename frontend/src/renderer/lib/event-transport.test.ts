@@ -660,6 +660,91 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// LADO fork: a run started or timed out. Its panel, its task's lanes and
+	// board card, and the task's open view refresh; the sidebar does not.
+	it("refreshes the run and its task on lado_execution events", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 49,
+				projectId: "proj-1",
+				sessionId: "proj-1-7",
+				type: "session_updated",
+				payload: { kind: "lado_execution", sessionId: "proj-1-7", taskId: "lado-task-1", projectId: "proj-1" },
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			for (const queryKey of [
+				["lado", "execution", "proj-1-7"],
+				["lado", "tasks", "proj-1"],
+				["lado", "task", "lado-task-1"],
+			]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "tasks", "proj-2"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// LADO fork: a queue entry changes with its task, so the queue refreshes too.
+	it("refreshes the LADO queue on lado_task events", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 50,
+				projectId: "proj-1",
+				type: "session_updated",
+				payload: { kind: "lado_task", taskId: "lado-task-1", projectId: "proj-1" },
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["lado", "queue"] }, { cancelRefetch: false });
+			// A task change is not a run's.
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "execution"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// LADO fork: a run's task reads running, completed or failed from its
+	// session and PR, which LADO's own tables do not record, so those AO
+	// events refresh the project's LADO tasks and the session's run as well
+	// as the sidebar. A live session's activity moves no LADO task.
+	it.each([
+		["a PR change", "pr_updated", { url: "https://github.com/acme/demo/pull/3", session: "proj-1-7", state: "merged" }, true],
+		["a session's end", "session_updated", { id: "proj-1-7", activity: "exited", isTerminated: true }, true],
+		["a live session's activity", "session_updated", { id: "proj-1-7", activity: "active", isTerminated: false }, false],
+	] as const)("refreshes LADO tasks and the run for %s", (_name, type, payload, refreshes) => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit(type, JSON.stringify({
+				seq: 51,
+				projectId: "proj-1",
+				sessionId: "proj-1-7",
+				type,
+				payload,
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			const calls = vi.mocked(queryClient.invalidateQueries).mock.calls.map(([filters]) => filters?.queryKey);
+			expect(calls).toContainEqual(["workspaces"]);
+			for (const queryKey of [["lado", "tasks", "proj-1"], ["lado", "execution", "proj-1-7"]]) {
+				if (refreshes) expect(calls).toContainEqual(queryKey);
+				else expect(calls).not.toContainEqual(queryKey);
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
 		vi.useFakeTimers();
 		const queryClient = new QueryClient();

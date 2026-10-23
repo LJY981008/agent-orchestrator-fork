@@ -1,7 +1,8 @@
-// LADO fork: plan approval and permission ceiling changes through the human
-// at the desktop app (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
-// Any local process can call the daemon's loopback API, so these must come
-// from here. The renderer names a plan revision, or the ceiling and a mode;
+// LADO fork: plan approval, permission ceiling changes and turning LADO mode
+// off, through the human at the desktop app
+// (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md). Any local
+// process can call the daemon's loopback API, so these must come from here.
+// The renderer names a plan revision, the ceiling and a mode, or a project;
 // main reads the subject from the daemon itself, so the renderer cannot
 // misstate it, shows a native confirmation naming it, and on confirm signs
 // and sends the request. An approval also signs the hash of the rules that
@@ -15,10 +16,13 @@ import {
 	LADO_CEILING_MODES,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
+	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoCeilingMode,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
 	type LadoPresenceFailure,
+	type LadoPresenceModeResult,
+	type LadoPresenceProjectSettings,
 	type LadoPresenceRule,
 	type LadoPresenceRuleChangeResult,
 } from "../shared/lado-presence";
@@ -34,11 +38,14 @@ const KEY_LABEL = "lado-presence-v1";
 const PROOF_LIFETIME_SECONDS = 60;
 const REQUEST_TIMEOUT_MS = 10_000;
 const REVISION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+// AO's project id alphabet (backend/internal/service/project), within a
+// folder name's length; AO also refuses "..".
+const PROJECT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 // The one rule whose change needs the human (docs/LJY-PRD/HARNESS.md §14).
 const CEILING_RULE_ID = "agent.permission.ceiling";
-// Line breaks or direction overrides in an issue title could fake the
-// dialog's revision and sha256 lines.
+// Line breaks or direction overrides in an issue title or a project name
+// could fake the dialog's other lines.
 const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g;
 
 type Failure = LadoPresenceFailure;
@@ -125,6 +132,13 @@ export function registerLadoPresenceIpc(deps: LadoPresenceDeps): void {
 			return await changeRule(deps, event.sender, input);
 		} catch (error) {
 			return failure(undefined, error instanceof Error && error.message ? error.message : "The rule change failed.");
+		}
+	});
+	deps.ipcMain.handle(LADO_PRESENCE_SET_LADO_MODE_CHANNEL, async (event: IpcMainInvokeEvent, input: unknown) => {
+		try {
+			return await setLadoMode(deps, event.sender, input);
+		} catch (error) {
+			return failure(undefined, error instanceof Error && error.message ? error.message : "Turning LADO mode off failed.");
 		}
 	});
 }
@@ -234,6 +248,53 @@ async function changeRule(
 	const changed = record(record(sent.body)?.rule);
 	if (!changed) return failure(undefined, "The change was sent, but the AO daemon's answer could not be read.");
 	return { status: "changed", rule: changed as LadoPresenceRule };
+}
+
+// Turning LADO mode off lets the project's workers start without an approved
+// plan, so only the human may do it. Turning it on needs no confirmation: the
+// renderer sends that to the daemon itself, and this channel refuses it.
+async function setLadoMode(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceModeResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can turn LADO mode off.");
+	}
+	// The project id and the mode are all the renderer gives; anything else it sends is ignored.
+	const request = record(input);
+	const projectId = request?.projectId;
+	if (typeof projectId !== "string" || !PROJECT_ID.test(projectId) || projectId.includes("..")) {
+		return failure("LADO_PROJECT_ID_INVALID", "Invalid project id.");
+	}
+	if (request?.ladoMode !== false) {
+		return failure("LADO_MODE_CHANGE_INVALID", "Only turning LADO mode off is confirmed here. Turn it on from the app.");
+	}
+	const settingsPath = `/api/v1/lado/projects/${encodeURIComponent(projectId)}/settings`;
+	const read = await callDaemon(deps, settingsPath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const settings = projectSettings(read.body, projectId);
+	if (!settings) return failure(undefined, "The AO daemon's answer about this project's LADO settings could not be read.");
+	// Nothing would change, so there is nothing to confirm.
+	if (!settings.ladoMode) return { status: "changed", settings };
+	const projectPath = `/api/v1/projects/${encodeURIComponent(projectId)}`;
+	const project = await callDaemon(deps, projectPath, { method: "GET", headers: { accept: "application/json" } });
+	if (!project.ok) return project.failure;
+	const name = projectName(project.body, projectId);
+	if (name === null) return failure(undefined, "The AO daemon's answer about this project could not be read.");
+	const t = await translator(deps);
+	const title = t("lado.presence.modeOffTitle", { project: name });
+	if (!(await confirm(deps, t, title, t("lado.presence.modeOffDetail", { id: projectId }), t("lado.presence.turnOff")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon checks the proof against exactly these bytes.
+	const body = JSON.stringify({ ladoMode: false });
+	const sent = await callDaemon(deps, settingsPath, signed(deps, "PUT", settingsPath, body));
+	if (!sent.ok) return sent.failure;
+	const changed = projectSettings(sent.body, projectId);
+	if (!changed) return failure(undefined, "LADO mode was turned off, but the AO daemon's answer could not be read.");
+	return { status: "changed", settings: changed };
 }
 
 // A request carrying a fresh proof. Signed after the confirmation, which can
@@ -351,6 +412,27 @@ function rulesSubject(body: unknown, taskId: string): RulesSubject | null {
 		ceiling,
 		blocking: problems.filter((problem) => record(problem)?.severity === "blocking").length,
 	};
+}
+
+// The project's LADO settings, from LadoProjectSettingsResponse.
+function projectSettings(body: unknown, projectId: string): LadoPresenceProjectSettings | null {
+	const settings = record(body);
+	if (
+		settings?.projectId !== projectId ||
+		typeof settings.ladoMode !== "boolean" ||
+		typeof settings.maxConcurrent !== "number"
+	) {
+		return null;
+	}
+	return settings as LadoPresenceProjectSettings;
+}
+
+// The name the dialog shows, from ProjectGetResponse; a project without one
+// shows its id.
+function projectName(body: unknown, projectId: string): string | null {
+	const project = record(record(body)?.project);
+	if (project?.id !== projectId || typeof project.name !== "string") return null;
+	return oneLine(project.name) || projectId;
 }
 
 // The change's base version and current mode; a missing mode reads as null.

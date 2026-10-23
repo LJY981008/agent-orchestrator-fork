@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createFullAppI18n } from "../i18n/all-messages";
 import { APP_LOCALES } from "../../shared/ui-locale";
 import { LadoApiError } from "./lado";
-import { ladoErrorText, ladoPolicyProblemText } from "./lado-errors";
+import { ladoErrorText, ladoPolicyProblemText, ladoReasonText } from "./lado-errors";
 
 // Every code the rules routes and the approval send (backend/internal/service/ladopolicy,
 // ladotask and httpd/controllers/lado_rules.go).
@@ -115,5 +115,116 @@ describe("LADO rule errors", () => {
 		).toBe("LADO could not read the project's agent rules file docs/agents.md: file is larger than 4 MiB");
 		// A code from a newer daemon shows as is.
 		expect(ladoPolicyProblemText(en, { code: "LADO_SOMETHING_NEW" })).toBe("LADO_SOMETHING_NEW");
+	});
+});
+
+// Every code the queue, run and dispatch settings routes, the gate's run
+// checks and the mode switch send (backend/internal/service/ladotask,
+// ladoproject, ladoqueue, ladogate), and the desktop app's own refusal.
+const queueCodes = [
+	"LADO_APPROVAL_ABOVE_CEILING",
+	"LADO_EXECUTION_FIXED",
+	"LADO_TASK_ALREADY_QUEUED",
+	"LADO_TASK_RUNNING",
+	"LADO_DISPATCH_SETTINGS_INVALID",
+	"LADO_SETTINGS_EMPTY",
+	"LADO_EXECUTION_NOT_FOUND",
+	"LADO_TRACKER_INTAKE_ENABLED",
+	"LADO_PROJECT_ID_INVALID",
+	"LADO_QUEUE_LOAD_FAILED",
+	"LADO_EXECUTION_LOAD_FAILED",
+	"LADO_DISPATCH_SETTINGS_LOAD_FAILED",
+	"LADO_DISPATCH_SETTINGS_UPDATE_FAILED",
+	"LADO_SETTINGS_UPDATE_FAILED",
+];
+
+// Every reason a task's stateReason or a queue entry's reason carries
+// (backend/internal/domain/lado_queue.go).
+const reasons = [
+	"rules_changed",
+	"issue_edited",
+	"plan_superseded",
+	"approved_before_queue",
+	"blocking_snapshot",
+	"base_ref_mismatch",
+	"agent_unsupported",
+	"attempts_exhausted",
+	"timed_out",
+	"ended_without_pr",
+	"slot_global",
+	"slot_project",
+	"memory_tight",
+	"issue_unreadable",
+	"retry",
+	"lado_mode_off",
+];
+
+// LADO fork: the queue's and the runs' errors and reasons in the developer's language.
+describe("LADO queue errors and reasons", () => {
+	it("translates the queue, run and dispatch settings codes", () => {
+		const daemon = "The daemon's English text";
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const code of queueCodes) {
+				const text = ladoErrorText(t, new LadoApiError(daemon, code, { min: 1, max: 8, ceiling: "auto" }));
+				expect(text, `${locale} ${code}`).not.toBe(daemon);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\./);
+				expect(text, `${locale} ${code}`).not.toMatch(/{{/);
+			}
+		}
+
+		const en = createFullAppI18n("en").t;
+		const ko = createFullAppI18n("ko").t;
+		// The ceiling reads as AO's project settings name the mode.
+		expect(
+			ladoErrorText(en, new LadoApiError(daemon, "LADO_APPROVAL_ABOVE_CEILING", { sessionId: "demo-7", mode: "default", ceiling: "auto" })),
+		).toBe("This worker runs an approved task: its permission mode cannot go above the permission ceiling, Auto.");
+		expect(
+			ladoErrorText(ko, new LadoApiError(daemon, "LADO_APPROVAL_ABOVE_CEILING", { sessionId: "demo-7", mode: "default", ceiling: "accept-edits" })),
+		).toBe("승인한 작업을 실행하는 워커입니다. 권한 모드는 권한 상한을 넘을 수 없습니다(상한: 편집 수락).");
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_DISPATCH_SETTINGS_INVALID", { min: 1, max: 8, runMinutes: [0, 60] }))).toBe(
+			"Choose 1 to 8 concurrent runs and a maximum run time from the list.",
+		);
+		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_TASK_ALREADY_QUEUED", { taskId: "lado-task-1", state: "queued" }))).toBe(
+			"이 계획은 승인되어 워커를 기다리고 있습니다. 새 리비전만 이 승인을 대신할 수 있습니다.",
+		);
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_PROJECT_ID_INVALID"))).toBe(en("lado.error.projectNotFound"));
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_QUEUE_LOAD_FAILED"))).toBe(en("lado.error.internal"));
+	});
+
+	it("words every reason in every language", () => {
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const reason of reasons) {
+				const text = ladoReasonText(t, reason);
+				expect(text, `${locale} ${reason}`).not.toBe(reason);
+				expect(text, `${locale} ${reason}`).not.toMatch(/^lado\./);
+				expect(text.length, `${locale} ${reason}`).toBeGreaterThan(0);
+			}
+		}
+
+		const en = createFullAppI18n("en").t;
+		const ko = createFullAppI18n("ko").t;
+		// Also when the queue entry was cancelled or replaced, not only before step 6.
+		expect(ladoReasonText(en, "approved_before_queue")).toBe("Not in the queue — approve again to queue it");
+		expect(ladoReasonText(ko, "approved_before_queue")).toBe("대기열에 없음 — 다시 승인하면 대기열에 듭니다");
+		expect(ladoReasonText(ko, "slot_project")).toBe("이 프로젝트의 빈 실행 자리를 기다리는 중");
+		expect(ladoReasonText(en, "timed_out")).toBe("Stopped at the maximum run time");
+		// No reason reads empty; one from a newer daemon shows as is.
+		expect(ladoReasonText(en, undefined)).toBe("");
+		expect(ladoReasonText(en, "something_new")).toBe("something_new");
+	});
+
+	it("names the run states in every language", () => {
+		const states = ["queued", "dispatching", "running", "failed", "completed"] as const;
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const state of states) {
+				const key = `lado.task.state.${state}` as const;
+				expect(t(key), `${locale} ${state}`).not.toBe(key);
+			}
+		}
+		const ko = createFullAppI18n("ko").t;
+		expect(states.map((state) => ko(`lado.task.state.${state}` as const))).toEqual(["대기 중", "시작하는 중", "실행 중", "실패", "완료"]);
 	});
 });

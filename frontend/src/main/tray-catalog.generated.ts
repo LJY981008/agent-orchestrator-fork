@@ -22,7 +22,10 @@ export const TRAY_MESSAGE_KEYS = [
 	"lado.presence.change",
 	"lado.presence.mode.acceptEdits",
 	"lado.presence.mode.auto",
-	"lado.presence.mode.bypassPermissions"
+	"lado.presence.mode.bypassPermissions",
+	"lado.presence.modeOffTitle",
+	"lado.presence.modeOffDetail",
+	"lado.presence.turnOff"
 ] as const;
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
@@ -49,7 +52,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "Change",
 		"lado.presence.mode.acceptEdits": "Accept edits",
 		"lado.presence.mode.auto": "Auto",
-		"lado.presence.mode.bypassPermissions": "Bypass permissions"
+		"lado.presence.mode.bypassPermissions": "Bypass permissions",
+		"lado.presence.modeOffTitle": "Turn off LADO mode for {{project}}?",
+		"lado.presence.modeOffDetail": "Project id: {{id}}\n\nQueued tasks wait until it is on again; running workers keep running.",
+		"lado.presence.turnOff": "Turn off"
 	},
 	"zh-CN": {
 		"tray.untitledSession": "未命名会话",
@@ -72,7 +78,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "更改",
 		"lado.presence.mode.acceptEdits": "接受编辑",
 		"lado.presence.mode.auto": "自动",
-		"lado.presence.mode.bypassPermissions": "绕过权限"
+		"lado.presence.mode.bypassPermissions": "绕过权限",
+		"lado.presence.modeOffTitle": "关闭 {{project}} 的 LADO 模式？",
+		"lado.presence.modeOffDetail": "项目 ID：{{id}}\n\n队列中的任务会等到 LADO 模式重新开启；正在运行的 worker 会继续运行。",
+		"lado.presence.turnOff": "关闭"
 	},
 	"ja": {
 		"tray.untitledSession": "無題のセッション",
@@ -95,7 +104,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "変更",
 		"lado.presence.mode.acceptEdits": "編集を受け入れる",
 		"lado.presence.mode.auto": "自動",
-		"lado.presence.mode.bypassPermissions": "権限をバイパス"
+		"lado.presence.mode.bypassPermissions": "権限をバイパス",
+		"lado.presence.modeOffTitle": "{{project}} の LADO モードをオフにしますか？",
+		"lado.presence.modeOffDetail": "プロジェクト ID: {{id}}\n\nキューのタスクは再びオンになるまで待ち、実行中のワーカーはそのまま動き続けます。",
+		"lado.presence.turnOff": "オフにする"
 	},
 	"ko": {
 		"tray.untitledSession": "제목 없는 세션",
@@ -118,7 +130,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "변경",
 		"lado.presence.mode.acceptEdits": "편집 수락",
 		"lado.presence.mode.auto": "자동",
-		"lado.presence.mode.bypassPermissions": "권한 우회"
+		"lado.presence.mode.bypassPermissions": "권한 우회",
+		"lado.presence.modeOffTitle": "{{project}} 프로젝트의 LADO 모드를 끌까요?",
+		"lado.presence.modeOffDetail": "프로젝트 id: {{id}}\n\n대기열의 작업은 LADO 모드를 다시 켤 때까지 기다리고, 실행 중인 워커는 계속 실행됩니다.",
+		"lado.presence.turnOff": "끄기"
 	},
 	"es": {
 		"tray.untitledSession": "Sesión sin título",
@@ -141,7 +156,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "Cambiar",
 		"lado.presence.mode.acceptEdits": "Aceptar ediciones",
 		"lado.presence.mode.auto": "Automático",
-		"lado.presence.mode.bypassPermissions": "Omitir permisos"
+		"lado.presence.mode.bypassPermissions": "Omitir permisos",
+		"lado.presence.modeOffTitle": "¿Desactivar el modo LADO en {{project}}?",
+		"lado.presence.modeOffDetail": "ID del proyecto: {{id}}\n\nLas tareas en cola esperan hasta que se vuelva a activar; los workers en ejecución siguen funcionando.",
+		"lado.presence.turnOff": "Desactivar"
 	},
 	"fr": {
 		"tray.untitledSession": "Session sans titre",
@@ -164,7 +182,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "Modifier",
 		"lado.presence.mode.acceptEdits": "Accepter les modifications",
 		"lado.presence.mode.auto": "Automatique",
-		"lado.presence.mode.bypassPermissions": "Contourner les permissions"
+		"lado.presence.mode.bypassPermissions": "Contourner les permissions",
+		"lado.presence.modeOffTitle": "Désactiver le mode LADO pour {{project}} ?",
+		"lado.presence.modeOffDetail": "ID du projet : {{id}}\n\nLes tâches en file attendent sa réactivation ; les workers en cours continuent de tourner.",
+		"lado.presence.turnOff": "Désactiver"
 	},
 	"de": {
 		"tray.untitledSession": "Unbenannte Sitzung",
@@ -187,7 +208,10 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "Ändern",
 		"lado.presence.mode.acceptEdits": "Änderungen akzeptieren",
 		"lado.presence.mode.auto": "Auto",
-		"lado.presence.mode.bypassPermissions": "Berechtigungen umgehen"
+		"lado.presence.mode.bypassPermissions": "Berechtigungen umgehen",
+		"lado.presence.modeOffTitle": "LADO-Modus für {{project}} ausschalten?",
+		"lado.presence.modeOffDetail": "Projekt-ID: {{id}}\n\nAufgaben in der Warteschlange warten, bis er wieder an ist; laufende Worker laufen weiter.",
+		"lado.presence.turnOff": "Ausschalten"
 	},
 	"pt-BR": {
 		"tray.untitledSession": "Sessão sem título",
@@ -210,6 +234,9 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.change": "Alterar",
 		"lado.presence.mode.acceptEdits": "Aceitar edições",
 		"lado.presence.mode.auto": "Automático",
-		"lado.presence.mode.bypassPermissions": "Ignorar permissões"
+		"lado.presence.mode.bypassPermissions": "Ignorar permissões",
+		"lado.presence.modeOffTitle": "Desativar o modo LADO em {{project}}?",
+		"lado.presence.modeOffDetail": "ID do projeto: {{id}}\n\nAs tarefas na fila aguardam até que ele seja reativado; os workers em execução continuam rodando.",
+		"lado.presence.turnOff": "Desativar"
 	}
 };

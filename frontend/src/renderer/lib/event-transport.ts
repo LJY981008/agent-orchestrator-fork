@@ -362,7 +362,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							if (typeof payload.taskId === "string" && payload.taskId) pendingLadoTasks.add(payload.taskId);
 							ladoOnly = true;
 						}
-						if (ladoEvents.note(payload)) ladoOnly = true;
+						if (ladoEvents.note(payload, decoded)) ladoOnly = true;
 						if (
 							typeof payload?.reviewId === "string" &&
 							payload.reviewId &&
