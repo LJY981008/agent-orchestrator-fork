@@ -653,5 +653,6 @@ Each item is its own branch and PR in the fork (`AGENTS.md`: one issue per PR). 
 6. Approved queue and dispatcher (§5.3), with dispatch grants in the gate, turn-setting clamps (§6.4) and explicit permission modes (§6.5).
 7. Local setup adoption (HARNESS §9, HAR-010 to HAR-015).
 8. Verification, evidence and integration approval (§7, §8). Steps 7 and 8 do not depend on each other.
+9. Fork releases, added on 2026-10-23 as the last step because no other step depends on them: a release workflow that builds the desktop app, Windows first, and publishes it as a GitHub Release on this fork, where the app already looks for updates (§11); a version scheme that keeps rising across upstream syncs; and the acceptance gates that need a real Windows install (PRD §8, gates 11 and 12), deferred on 2026-10-20.
 
 The first proposal had seven steps. It left keep-daemon and login start (§10) out of every step, and put the rules system (its step 6) after the approval and queue steps that need its snapshot.
