@@ -1,0 +1,236 @@
+-- name: InsertLadoQueueEntry :exec
+INSERT INTO lado_queue_entries (
+    id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at
+) VALUES (?, ?, ?, ?, ?, ?);
+
+-- name: SupersedeOpenLadoQueueEntries :execrows
+UPDATE lado_queue_entries
+SET superseded_at = ?
+WHERE task_id = ?
+  AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = '';
+
+-- name: GetLadoQueueEntry :one
+SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
+    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
+    waiting_reason, review_required_reason, blocked_reason, error_message,
+    dispatched_session_id, failed_at, superseded_at, cancelled_at
+FROM lado_queue_entries
+WHERE id = ?;
+
+-- name: ListLadoQueueEntriesForTask :many
+SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
+    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
+    waiting_reason, review_required_reason, blocked_reason, error_message,
+    dispatched_session_id, failed_at, superseded_at, cancelled_at
+FROM lado_queue_entries
+WHERE task_id = ?
+ORDER BY enqueued_at DESC, id DESC;
+
+-- name: ListLadoQueueEntriesForTasks :many
+SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
+    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
+    waiting_reason, review_required_reason, blocked_reason, error_message,
+    dispatched_session_id, failed_at, superseded_at, cancelled_at
+FROM lado_queue_entries
+WHERE task_id IN (sqlc.slice('task_ids'))
+ORDER BY task_id, enqueued_at DESC, id DESC;
+
+-- name: ListLadoQueueEntries :many
+SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
+    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
+    waiting_reason, review_required_reason, blocked_reason, error_message,
+    dispatched_session_id, failed_at, superseded_at, cancelled_at
+FROM lado_queue_entries
+WHERE project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL
+ORDER BY enqueued_at, id;
+
+-- name: CancelOpenLadoQueueEntriesForTask :execrows
+UPDATE lado_queue_entries
+SET cancelled_at = ?
+WHERE task_id = ?
+  AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = '';
+
+-- name: ListClaimableLadoQueueEntries :many
+-- Open entries whose lease is empty or expired and whose wait is over, in
+-- projects with LADO mode on, oldest first.
+SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
+    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
+    waiting_reason, review_required_reason, blocked_reason, error_message,
+    dispatched_session_id, failed_at, superseded_at, cancelled_at
+FROM lado_queue_entries
+WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND (lease_token IS NULL OR lease_expires_at <= sqlc.arg(now))
+  AND (next_attempt_at IS NULL OR next_attempt_at <= sqlc.arg(now))
+  AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+ORDER BY enqueued_at, id
+LIMIT sqlc.arg(max_entries);
+
+-- name: ClaimLadoQueueEntry :execrows
+-- Compare-and-set: leases the entry only while it is still claimable. Each
+-- claim counts one attempt.
+UPDATE lado_queue_entries
+SET lease_token = sqlc.arg(lease_token),
+    claimed_at = sqlc.arg(now),
+    lease_expires_at = sqlc.arg(lease_expires_at),
+    attempt_count = attempt_count + 1,
+    waiting_reason = ''
+WHERE id = sqlc.arg(id)
+  AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND (lease_token IS NULL OR lease_expires_at <= sqlc.arg(now))
+  AND (next_attempt_at IS NULL OR next_attempt_at <= sqlc.arg(now))
+  AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1);
+
+-- name: ReleaseLadoQueueEntry :execrows
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    next_attempt_at = sqlc.narg(next_attempt_at),
+    waiting_reason = sqlc.arg(waiting_reason)
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
+-- name: HoldLadoQueueEntry :execrows
+-- A hold is not an attempt: it gives back the attempt its claim counted.
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    attempt_count = attempt_count - 1,
+    waiting_reason = sqlc.arg(waiting_reason),
+    next_attempt_at = sqlc.narg(next_attempt_at)
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
+-- name: MarkLadoQueueEntryReviewRequired :execrows
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    review_required_reason = sqlc.arg(reason)
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
+-- name: MarkLadoQueueEntryBlocked :execrows
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    blocked_reason = sqlc.arg(reason)
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
+-- name: FailLadoQueueEntry :execrows
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    failed_at = sqlc.arg(failed_at),
+    error_message = sqlc.arg(error_message)
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
+-- name: SetLadoQueueEntryDispatched :execrows
+UPDATE lado_queue_entries
+SET dispatched_session_id = sqlc.arg(dispatched_session_id),
+    lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
+-- name: ListLeasedLadoQueueEntries :many
+SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
+    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
+    waiting_reason, review_required_reason, blocked_reason, error_message,
+    dispatched_session_id, failed_at, superseded_at, cancelled_at
+FROM lado_queue_entries
+WHERE lease_token IS NOT NULL
+ORDER BY claimed_at, id;
+
+-- name: InsertLadoExecution :exec
+INSERT INTO lado_executions (
+    session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+-- name: GetLadoExecution :one
+SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
+FROM lado_executions
+WHERE session_id = ?;
+
+-- name: GetLadoExecutionByEntry :one
+SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
+FROM lado_executions
+WHERE queue_entry_id = ?;
+
+-- name: ListLadoExecutionsForTasks :many
+SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
+FROM lado_executions
+WHERE task_id IN (sqlc.slice('task_ids'))
+ORDER BY task_id, started_at DESC, session_id DESC;
+
+-- name: CountLiveLadoExecutionsByProject :many
+SELECT t.project_id, COUNT(*) AS live
+FROM lado_executions e
+JOIN sessions s ON s.id = e.session_id
+JOIN lado_tasks t ON t.id = e.task_id
+WHERE s.is_terminated = 0
+GROUP BY t.project_id
+ORDER BY t.project_id;
+
+-- name: CountActiveLadoLeasesByProject :many
+SELECT project_id, COUNT(*) AS leased
+FROM lado_queue_entries
+WHERE lease_token IS NOT NULL AND lease_expires_at > sqlc.arg(now)
+GROUP BY project_id
+ORDER BY project_id;
+
+-- name: ListLadoExecutionsPastDeadline :many
+-- Executions past their deadline whose session still runs. A NULL deadline
+-- means no limit.
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+FROM lado_executions e
+JOIN sessions s ON s.id = e.session_id
+WHERE e.deadline_at <= sqlc.arg(now)
+  AND e.timed_out_at IS NULL
+  AND s.is_terminated = 0
+ORDER BY e.deadline_at, e.session_id;
+
+-- name: MarkLadoExecutionTimedOut :execrows
+UPDATE lado_executions
+SET timed_out_at = ?
+WHERE session_id = ? AND timed_out_at IS NULL;
+
+-- name: GetLadoDispatchSettings :one
+SELECT id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at
+FROM lado_dispatch_settings
+WHERE id = 1;
+
+-- name: UpsertLadoDispatchSettings :exec
+INSERT INTO lado_dispatch_settings (id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at)
+VALUES (1, ?, ?, ?, ?)
+ON CONFLICT (id) DO UPDATE SET
+    max_concurrent = excluded.max_concurrent,
+    max_run_minutes = excluded.max_run_minutes,
+    hold_on_memory_tight = excluded.hold_on_memory_tight,
+    updated_at = excluded.updated_at;
+
+-- name: GetLadoProjectMaxConcurrent :one
+SELECT max_concurrent
+FROM lado_project_settings
+WHERE project_id = ?;
+
+-- name: SetLadoProjectMaxConcurrent :execrows
+UPDATE lado_project_settings
+SET max_concurrent = ?,
+    updated_at = ?
+WHERE project_id = ?;
+
+-- name: UpsertLadoProjectMaxConcurrent :exec
+-- A project without a settings row gets one with LADO mode off.
+INSERT INTO lado_project_settings (project_id, lado_mode, max_concurrent, updated_at)
+VALUES (?, 0, ?, ?)
+ON CONFLICT (project_id) DO UPDATE SET max_concurrent = excluded.max_concurrent, updated_at = excluded.updated_at;
