@@ -40,15 +40,15 @@ type ladoSessionTarget interface {
 }
 
 // wireLado installs one worker gate on the session manager and the chat
-// service, and LADO's section of an orchestrator's standing instructions, and
+// service, and LADO's section of a session's standing instructions, and
 // returns LADO's project settings service for the API. The daemon calls it
 // right after the session manager is built, before automations, tracker
 // intake or the API can spawn or send, and before sessions restore.
 func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget, log *slog.Logger) *ladoproject.Service {
-	gate := ladogate.New(store, store)
+	gate := ladogate.New(store, store, store, store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
-	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store}.OrchestratorSection)
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store}.Section)
 	devMode := ladoDevMode(os.Getenv(ladoDevEnv))
 	if devMode {
 		log.Warn("LADO dev mode: project LADO mode can be changed", "env", ladoDevEnv)

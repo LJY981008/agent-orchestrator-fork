@@ -11,6 +11,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -498,6 +499,35 @@ func (s *Store) LadoDispatchGrant(ctx context.Context, entryID domain.LadoQueueE
 		// neither dispatched, stopped, superseded nor cancelled since.
 		Active: entry.State(now) == domain.LadoQueueDispatching && entry.AttemptCount == attempt,
 	}, nil
+}
+
+// LadoEntryPolicyByClientRequest returns the permission ceiling and the rules
+// text of the rule snapshot of the entry a client request id
+// "lado:<entry>/<attempt>" names. The entry is found before its execution is
+// linked, while the worker still starts. Any other id, and an unknown entry,
+// report false.
+func (s *Store) LadoEntryPolicyByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoEntryPolicy, bool, error) {
+	entryID, _, ok := domain.ParseLadoClientRequestID(clientRequestID)
+	if !ok {
+		return domain.LadoEntryPolicy{}, false, nil
+	}
+	raw, err := s.qr.GetLadoQueueEntrySnapshot(ctx, string(entryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.LadoEntryPolicy{}, false, nil
+	}
+	if err != nil {
+		return domain.LadoEntryPolicy{}, false, fmt.Errorf("read LADO entry policy: %w", err)
+	}
+	// The two fields of the snapshot content (ladopolicy.SnapshotContent)
+	// that an execution keeps.
+	var content struct {
+		PermissionCeiling domain.PermissionMode `json:"permissionCeiling"`
+		Prompt            string                `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(raw), &content); err != nil {
+		return domain.LadoEntryPolicy{}, false, fmt.Errorf("decode LADO entry policy: %w", err)
+	}
+	return domain.LadoEntryPolicy{Ceiling: content.PermissionCeiling, Prompt: content.Prompt}, true, nil
 }
 
 // LadoDispatchSettings returns the dispatch settings, or

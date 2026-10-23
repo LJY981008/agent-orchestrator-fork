@@ -280,6 +280,15 @@ type LadoDispatchGrant struct {
 	Active    bool
 }
 
+// LadoEntryPolicy is what an execution keeps from the rule snapshot of its
+// queue entry for as long as it runs: the permission ceiling its turns may not
+// rise above, and the rules text for the worker's system prompt (empty when
+// no rule adds any).
+type LadoEntryPolicy struct {
+	Ceiling PermissionMode
+	Prompt  string
+}
+
 // ladoClientRequestPrefix starts the client request id of every worker the
 // dispatcher spawns.
 const ladoClientRequestPrefix = "lado:"

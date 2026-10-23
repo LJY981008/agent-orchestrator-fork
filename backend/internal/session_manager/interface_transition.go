@@ -162,6 +162,10 @@ func (m *Manager) StartInterfaceTransition(
 	policy domain.SessionInterfaceTransitionPolicy,
 	historyPolicy domain.SessionInterfaceTransitionHistoryPolicy,
 ) (domain.SessionInterfaceTransition, error) {
+	// LADO fork: a LADO execution keeps its approved interface (lado_gate.go).
+	if err := m.authorizeLadoExecutionChange(ctx, id); err != nil {
+		return domain.SessionInterfaceTransition{}, err
+	}
 	if !target.Valid() {
 		return domain.SessionInterfaceTransition{}, fmt.Errorf("target mode %q is invalid", target)
 	}

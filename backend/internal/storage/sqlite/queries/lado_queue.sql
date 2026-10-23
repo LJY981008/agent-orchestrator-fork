@@ -148,6 +148,13 @@ JOIN lado_plan_revisions r ON r.id = a.revision_id
 JOIN lado_policy_snapshots p ON p.id = e.policy_snapshot_id
 WHERE e.id = ?;
 
+-- name: GetLadoQueueEntrySnapshot :one
+-- The rule snapshot JSON of an entry.
+SELECT p.snapshot_json
+FROM lado_queue_entries e
+JOIN lado_policy_snapshots p ON p.id = e.policy_snapshot_id
+WHERE e.id = ?;
+
 -- name: ListOpenLadoQueueEntriesWithIssues :many
 -- The queue view: open entries, of one project or of all when project_id is
 -- NULL, with their task's issue, in the order the dispatcher takes them.

@@ -367,6 +367,21 @@ func (q *Queries) GetLadoQueueEntryPlan(ctx context.Context, id string) (GetLado
 	return i, err
 }
 
+const getLadoQueueEntrySnapshot = `-- name: GetLadoQueueEntrySnapshot :one
+SELECT p.snapshot_json
+FROM lado_queue_entries e
+JOIN lado_policy_snapshots p ON p.id = e.policy_snapshot_id
+WHERE e.id = ?
+`
+
+// The rule snapshot JSON of an entry.
+func (q *Queries) GetLadoQueueEntrySnapshot(ctx context.Context, id string) (string, error) {
+	row := q.db.QueryRowContext(ctx, getLadoQueueEntrySnapshot, id)
+	var snapshot_json string
+	err := row.Scan(&snapshot_json)
+	return snapshot_json, err
+}
+
 const holdLadoQueueEntry = `-- name: HoldLadoQueueEntry :execrows
 UPDATE lado_queue_entries
 SET lease_token = NULL,

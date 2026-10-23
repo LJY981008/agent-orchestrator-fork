@@ -158,3 +158,13 @@ func (p PromptSource) OrchestratorSection(ctx context.Context, projectID domain.
 	}
 	return orchestratorSection, nil
 }
+
+// Section is the session manager's LADO section of a session's standing
+// instructions (sessionmanager.LadoPromptSection): OrchestratorSection for an
+// orchestrator, and none for any other session.
+func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, _ domain.SessionID) (string, error) {
+	if kind != domain.KindOrchestrator {
+		return "", nil
+	}
+	return p.OrchestratorSection(ctx, projectID)
+}

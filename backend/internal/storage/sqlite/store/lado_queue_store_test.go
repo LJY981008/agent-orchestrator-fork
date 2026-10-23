@@ -1097,6 +1097,58 @@ func TestLadoDispatchGrant(t *testing.T) {
 	}
 }
 
+// TestLadoEntryPolicyByClientRequest reads the ceiling and the rules text an
+// execution keeps from the entry its client request id names, before any
+// execution row exists.
+func TestLadoEntryPolicyByClientRequest(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedLadoTaskWithPlan(t, s)
+	approve := func(approval, content string, rev domain.LadoPlanRevision, at time.Time) {
+		t.Helper()
+		id := domain.LadoPlanApprovalID(approval)
+		snapshot := ladoPolicySnapshot("lado-snapshot-"+strings.TrimPrefix(approval, "lado-approval-"), content, false)
+		if _, _, err := s.ApproveLadoPlan(ctx,
+			domain.LadoPlanApproval{ID: id, RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: rev.SHA256, ApprovedAt: at},
+			ladoProof("nonce-"+approval, string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot,
+			&domain.LadoQueueEntry{ID: ladoQueueEntryFor(id)}); err != nil {
+			t.Fatalf("ApproveLadoPlan %s: %v", approval, err)
+		}
+	}
+	rev := mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a')))
+	approve("lado-approval-1", `{"agent":{"harness":"codex","model":"","permissionMode":"accept-edits"},`+
+		`"permissionCeiling":"auto","prompt":"Write commit messages in Korean."}`, rev, ladoQueueAt)
+	// A newer approval supersedes the first entry, which still names its
+	// snapshot: a worker it started runs under it.
+	approve("lado-approval-2", `{"permissionCeiling":"accept-edits","prompt":""}`, rev, ladoQueueAt.Add(time.Hour))
+	// A snapshot whose content is not an object cannot be read.
+	approve("lado-approval-3", `[]`, rev, ladoQueueAt.Add(2*time.Hour))
+
+	withRules := domain.LadoEntryPolicy{Ceiling: domain.PermissionModeAuto, Prompt: "Write commit messages in Korean."}
+	for _, c := range []struct {
+		id   string
+		want domain.LadoEntryPolicy
+	}{
+		{domain.LadoClientRequestID("lado-queue-1", 1), withRules},
+		{domain.LadoClientRequestID("lado-queue-1", 3), withRules},
+		{domain.LadoClientRequestID("lado-queue-2", 1), domain.LadoEntryPolicy{Ceiling: domain.PermissionModeAcceptEdits}},
+	} {
+		got, found, err := s.LadoEntryPolicyByClientRequest(ctx, c.id)
+		if err != nil || !found || got != c.want {
+			t.Fatalf("policy of %q = (%+v, %v, %v), want %+v", c.id, got, found, err, c.want)
+		}
+	}
+	for _, id := range []string{"", "lado-queue-1", "lado:lado-queue-1", "lado:lado-queue-1/0", "task-1", domain.LadoClientRequestID("lado-queue-missing", 1)} {
+		got, found, err := s.LadoEntryPolicyByClientRequest(ctx, id)
+		if err != nil || found || got != (domain.LadoEntryPolicy{}) {
+			t.Fatalf("policy of %q = (%+v, %v, %v), want not found", id, got, found, err)
+		}
+	}
+	if _, found, err := s.LadoEntryPolicyByClientRequest(ctx, domain.LadoClientRequestID("lado-queue-3", 1)); err == nil || found {
+		t.Fatalf("policy of an unreadable snapshot = (found %v, %v), want an error", found, err)
+	}
+}
+
 func TestLadoExecutionsPastDeadline(t *testing.T) {
 	s, _ := openLadoQueueStore(t)
 	ctx := context.Background()

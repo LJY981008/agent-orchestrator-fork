@@ -2258,6 +2258,11 @@ func (s *Service) SetConfigOption(
 	if err != nil {
 		return nil, err
 	}
+	// LADO fork: the provider applies an approval mode before AO records it,
+	// so the gate decides first (lado_gate.go).
+	if err := s.authorizeLadoConfigOption(ctx, id, record.Harness, configID, value); err != nil {
+		return nil, err
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return nil, err
@@ -2438,6 +2443,11 @@ func (s *Service) SetTurnSettings(
 	settings domain.ConversationSettings,
 ) (domain.ConversationSettings, error) {
 	if _, err := s.requireChatSession(ctx, id); err != nil {
+		return domain.ConversationSettings{}, err
+	}
+	// LADO fork: an execution's approval stays at its ceiling (lado_gate.go).
+	settings, err := s.clampLadoTurnSettings(ctx, id, settings)
+	if err != nil {
 		return domain.ConversationSettings{}, err
 	}
 	controller, release, err := s.workingController(ctx, id)

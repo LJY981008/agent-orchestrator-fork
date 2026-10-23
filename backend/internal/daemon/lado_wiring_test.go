@@ -72,8 +72,17 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	if sessions.prompt == nil {
 		t.Fatal("wireLado installed no LADO prompt section")
 	}
-	if section, err := sessions.prompt(ctx, "mer"); err != nil || !strings.Contains(section, "## LADO project") {
+	if section, err := sessions.prompt(ctx, domain.KindOrchestrator, "mer", "mer-orchestrator-1"); err != nil || !strings.Contains(section, "## LADO project") {
 		t.Fatalf("LADO prompt section for a LADO project = %q, %v", section, err)
+	}
+	// A worker that LADO did not dispatch gets no LADO section, and its spawn
+	// with an id shaped like a dispatch has no grant.
+	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", "mer-1"); err != nil || section != "" {
+		t.Fatalf("LADO prompt section for a worker = %q, %v", section, err)
+	}
+	err = sessions.gate.AuthorizeSpawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, ClientRequestID: "lado:lado-queue-1/1", ClientRequestHash: "h"})
+	if !errors.As(err, &apiErr) || apiErr.Code != "LADO_TASK_REQUIRED" {
+		t.Fatalf("worker spawn without a grant = %v, want LADO_TASK_REQUIRED", err)
 	}
 }
 

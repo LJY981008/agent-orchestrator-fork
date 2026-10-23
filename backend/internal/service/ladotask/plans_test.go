@@ -957,6 +957,12 @@ func TestPromptSourceAddsTheSectionOnlyInLadoMode(t *testing.T) {
 	if section, err := source.OrchestratorSection(ctx, "other"); err != nil || section != "" {
 		t.Fatalf("section outside LADO = %q, %v", section, err)
 	}
+	if got, err := source.Section(ctx, domain.KindOrchestrator, "demo", "demo-orchestrator-1"); err != nil || got != section {
+		t.Fatalf("orchestrator's section = %q, %v; want the LADO section", got, err)
+	}
+	if got, err := source.Section(ctx, domain.KindWorker, "demo", "demo-1"); err != nil || got != "" {
+		t.Fatalf("worker's section = %q, %v; want none", got, err)
+	}
 }
 
 func TestRenderIssueFileFencesEveryText(t *testing.T) {

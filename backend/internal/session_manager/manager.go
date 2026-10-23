@@ -5748,8 +5748,8 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		}
 	}
 	// LADO fork: an orchestrator in a LADO project plans instead of spawning
-	// workers (lado_gate.go).
-	ladoSection, err := m.ladoPromptSection(ctx, kind, projectID)
+	// workers, and a worker LADO dispatched gets its rules (lado_gate.go).
+	ladoSection, err := m.ladoPromptSection(ctx, kind, projectID, sessionID)
 	if err != nil {
 		return "", err
 	}
