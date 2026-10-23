@@ -496,3 +496,19 @@ test("a plan whose base is not the workers' base says so instead of pointing at 
 	expect(within(dialog).getByText("The plan's base is not the branch workers start from")).toHaveAttribute("role", "status");
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
 });
+
+test("work that closed without a merge shows the run and takes no decisions", async () => {
+	mockApproved(approvedTask({
+		state: "closed_unmerged",
+		execution: { ...execution, sessionEnded: true, pr: { url: "https://github.com/acme/demo/pull/45", number: 45, merged: false, closed: true } },
+	}));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(run).toHaveTextContent("Closed without merge");
+	expect(within(run).getByRole("button", { name: "Open session" })).toBeInTheDocument();
+	expect(within(run).getByRole("link", { name: "Open PR #45" })).toBeInTheDocument();
+	for (const name of ["Approve plan", "Request changes"]) expect(within(dialog).queryByRole("button", { name })).not.toBeInTheDocument();
+});

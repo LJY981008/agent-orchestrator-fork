@@ -239,10 +239,10 @@ export function ladoTimeUntil(isoDate: string, locale: string, now: number = Dat
 	const seconds = Math.max(0, Math.ceil((at - now) / 1000));
 	if (seconds < 60) return format.format(seconds, "second");
 	const minutes = Math.ceil(seconds / 60);
-	if (minutes < 90) return format.format(minutes, "minute");
-	const hours = Math.round(minutes / 60);
-	if (hours < 36) return format.format(hours, "hour");
-	return format.format(Math.round(hours / 24), "day");
+	if (minutes < 60) return format.format(minutes, "minute");
+	// LADO's waits and run limits end within a day (the longest limit is 24
+	// hours), so whole hours are the largest unit.
+	return format.format(Math.round(minutes / 60), "hour");
 }
 
 // One map per task list, shared by every board card that reads the list.

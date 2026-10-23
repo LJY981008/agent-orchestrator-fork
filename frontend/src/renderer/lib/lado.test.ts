@@ -9,6 +9,7 @@ import {
 	fetchLadoExecution,
 	fetchLadoQueue,
 	LadoApiError,
+	ladoTimeUntil,
 	setLadoMode,
 	updateLadoDispatchSettings,
 	updateLadoProjectSettings,
@@ -270,5 +271,32 @@ describe("setLadoMode", () => {
 			params: { path: { projectId: "demo" } },
 			body: { ladoMode: false },
 		});
+	});
+});
+
+describe("ladoTimeUntil", () => {
+	const now = Date.parse("2026-10-23T10:00:00Z");
+	const at = (ms: number) => new Date(now + ms).toISOString();
+
+	it("says when a wait or a run limit ends, in whole units up to hours", () => {
+		const cases: [number, string][] = [
+			[30_000, "in 30 sec."],
+			[59_500, "in 1 min."],
+			[120_000, "in 2 min."],
+			[59 * 60_000, "in 59 min."],
+			[60 * 60_000, "in 1 hr."],
+			// Between whole hours the nearest one, so an hour and a half left is never "in 1 hr.".
+			[89 * 60_000, "in 1 hr."],
+			[90 * 60_000, "in 2 hr."],
+			[5 * 3_600_000, "in 5 hr."],
+			[24 * 3_600_000, "in 24 hr."],
+		];
+		for (const [ms, text] of cases) expect(ladoTimeUntil(at(ms), "en", now), String(ms)).toBe(text);
+	});
+
+	it("says now once the moment passed, and nothing for a time that does not parse", () => {
+		expect(ladoTimeUntil(at(-5_000), "en", now)).toBe("now");
+		expect(ladoTimeUntil(at(0), "ko", now)).toBe("지금");
+		expect(ladoTimeUntil("soon", "en", now)).toBeNull();
 	});
 });
