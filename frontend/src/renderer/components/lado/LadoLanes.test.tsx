@@ -123,14 +123,19 @@ const revision: NonNullable<lado.LadoTask["plan"]["latest"]> = {
 test("approved tasks wait in the Queued lane", async () => {
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
 		task,
-		{ ...task, id: "lado-task-approved", state: "approved", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, issue: { ...task.issue, title: "Ship it" } },
+		{ ...task, id: "lado-task-approved", state: "queued", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, queue: { state: "queued", attempts: 0 }, issue: { ...task.issue, title: "Ship it" } },
 	]);
 	renderLane();
 
 	const queued = await screen.findByTestId("lado-queued-lane");
 	await within(queued).findByText("Ship it");
-	expect(within(queued).getByText("Queued")).toBeInTheDocument();
-	expect(within(queued).getByTestId("lado-task-state")).toHaveTextContent("Approved");
+	expect(within(queued).getByText("Queued", { selector: "span.text-xs" })).toBeInTheDocument();
+	const state = within(queued).getByTestId("lado-task-state");
+	expect(state).toHaveTextContent("Queued");
+	// Approved and in line: nothing waits for the human.
+	expect(state.previousElementSibling).toHaveClass("bg-[var(--color-status-ready)]");
+	// Nothing tried yet and nothing to wait for: no second line.
+	expect(within(queued).queryByTestId("lado-task-reason")).not.toBeInTheDocument();
 	expect(within(screen.getByTestId("lado-plan-lane")).queryByText("Ship it")).not.toBeInTheDocument();
 });
 
@@ -139,7 +144,7 @@ test("shows rules that need review and blocked tasks in the Plan lane", async ()
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
 		{ ...task, id: "lado-task-review", state: "review_required", plan: approvedPlan, issue: { ...task.issue, title: "Rules changed" } },
 		{ ...task, id: "lado-task-blocked", state: "blocked", plan: approvedPlan, createdAt: "2026-10-19T08:00:00Z", issue: { ...task.issue, title: "Blocked run" } },
-		{ ...task, id: "lado-task-approved", state: "approved", plan: approvedPlan, createdAt: "2026-10-19T07:00:00Z", issue: { ...task.issue, title: "Ship it" } },
+		{ ...task, id: "lado-task-approved", state: "queued", plan: approvedPlan, createdAt: "2026-10-19T07:00:00Z", issue: { ...task.issue, title: "Ship it" } },
 	]);
 	renderLane();
 
@@ -154,6 +159,123 @@ test("shows rules that need review and blocked tasks in the Plan lane", async ()
 	}
 	const queued = screen.getByTestId("lado-queued-lane");
 	expect(within(queued).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-approved"]);
+});
+
+test("a starting task stays in Queued in the working color, and a failed run comes back to Plan", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-starting", state: "dispatching", plan: approvedPlan, queue: { state: "dispatching", attempts: 2 }, issue: { ...task.issue, title: "Starting" } },
+		{
+			...task,
+			id: "lado-task-failed",
+			state: "failed",
+			stateReason: "timed_out",
+			plan: approvedPlan,
+			createdAt: "2026-10-19T08:00:00Z",
+			execution: { sessionId: "demo-7", planRevisionId: revision.id, startedAt: "2026-10-19T08:30:00Z", sessionEnded: true, timedOut: true },
+			issue: { ...task.issue, title: "Timed out" },
+		},
+	]);
+	renderLane();
+
+	const queued = await screen.findByTestId("lado-queued-lane");
+	const starting = (await within(queued).findByText("Starting", { selector: "span.text-sm-md" })).closest("[data-testid='lado-task-card']") as HTMLElement;
+	expect(within(starting).getByTestId("lado-task-state")).toHaveTextContent("Starting");
+	expect(within(starting).getByTestId("lado-task-state").previousElementSibling).toHaveClass("bg-[var(--color-status-working)]");
+	expect(within(starting).getByTestId("lado-task-reason")).toHaveTextContent("Attempt 2 of 3");
+
+	const plan = screen.getByTestId("lado-plan-lane");
+	const failed = within(plan).getByText("Timed out").closest("[data-testid='lado-task-card']") as HTMLElement;
+	expect(within(failed).getByTestId("lado-task-state")).toHaveTextContent("Failed");
+	expect(within(failed).getByTestId("lado-task-state").previousElementSibling).toHaveClass("bg-[var(--color-status-needs-you)]");
+	expect(within(failed).getByTestId("lado-task-reason")).toHaveTextContent("Stopped at the maximum run time");
+});
+
+test("the second line says what a queued task waits for and which attempt starts it", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	const cases: [string, lado.LadoTask["stateReason"], lado.LadoTaskQueue, string][] = [
+		["slot", "slot_global", { state: "waiting", attempts: 0, reason: "slot_global" }, "Waiting for a free run slot"],
+		["project slot", "slot_project", { state: "waiting", attempts: 0, reason: "slot_project", nextAttemptAt: new Date(Date.now() + 15_000).toISOString() }, "Waiting for a free run slot in this project"],
+		["memory", "memory_tight", { state: "waiting", attempts: 0, reason: "memory_tight" }, "Waiting while memory is tight"],
+		["issue", "issue_unreadable", { state: "waiting", attempts: 0, reason: "issue_unreadable", nextAttemptAt: new Date(Date.now() + 60_000).toISOString() }, "Waiting to read the issue again"],
+		["mode off", "lado_mode_off", { state: "waiting", attempts: 0, reason: "lado_mode_off" }, "Waiting until LADO mode is on"],
+		["retry", "retry", { state: "waiting", attempts: 1, reason: "retry", nextAttemptAt: new Date(Date.now() + 120_000).toISOString() }, "Trying again in 2 min. · Attempt 1 of 3"],
+		["retry due", "retry", { state: "waiting", attempts: 2, reason: "retry" }, "Waiting to try again · Attempt 2 of 3"],
+		["held after a try", "slot_global", { state: "waiting", attempts: 1, reason: "slot_global" }, "Waiting for a free run slot · Attempt 1 of 3"],
+	];
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue(cases.map(([name, stateReason, queue], index) => ({
+		...task,
+		id: `lado-task-${index}`,
+		state: "queued",
+		stateReason,
+		queue,
+		plan: approvedPlan,
+		createdAt: `2026-10-19T0${9 - index}:00:00Z`,
+		issue: { ...task.issue, title: name },
+	})));
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-queued-lane");
+	await within(lane).findByText("slot");
+	for (const [name, , , line] of cases) {
+		const card = within(lane).getByText(name).closest("[data-testid='lado-task-card']") as HTMLElement;
+		expect(within(card).getByTestId("lado-task-state"), name).toHaveTextContent("Queued");
+		// The time of a project slot or an issue read is the next look, not a retry.
+		expect(within(card).getByTestId("lado-task-reason"), name).toHaveTextContent(line);
+	}
+});
+
+test("the second line says why an approval needs the human again", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	const cases: [string, lado.LadoTask["state"], lado.LadoTask["stateReason"], string, string | null][] = [
+		["rules", "review_required", "rules_changed", "Rules need review", null],
+		["issue", "review_required", "issue_edited", "Needs approval again", "The issue changed since the plan was made"],
+		["before queue", "review_required", "approved_before_queue", "Needs approval again", "Not in the queue — approve again to queue it"],
+		["base", "blocked", "base_ref_mismatch", "Blocked", "The plan's base is not the branch workers start from"],
+		["no start", "failed", "attempts_exhausted", "Failed", "The worker did not start after 3 attempts"],
+	];
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue(cases.map(([name, state, stateReason], index) => ({
+		...task,
+		id: `lado-task-${index}`,
+		state,
+		stateReason,
+		plan: approvedPlan,
+		createdAt: `2026-10-19T0${9 - index}:00:00Z`,
+		issue: { ...task.issue, title: name },
+	})));
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-plan-lane");
+	await within(lane).findByText("rules");
+	for (const [name, , , label, line] of cases) {
+		const card = within(lane).getByText(name).closest("[data-testid='lado-task-card']") as HTMLElement;
+		expect(within(card).getByTestId("lado-task-state"), name).toHaveTextContent(label);
+		expect(within(card).getByTestId("lado-task-state").previousElementSibling, name).toHaveClass("bg-[var(--color-status-needs-you)]");
+		if (line) expect(within(card).getByTestId("lado-task-reason"), name).toHaveTextContent(line);
+		else expect(within(card).queryByTestId("lado-task-reason"), name).not.toBeInTheDocument();
+	}
+});
+
+test("a task whose worker started leaves the lanes; its session card carries it", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	const execution: lado.LadoTaskExecution = { sessionId: "demo-7", planRevisionId: revision.id, startedAt: "2026-10-19T08:30:00Z", sessionEnded: false, timedOut: false };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-running", state: "running", plan: approvedPlan, execution, issue: { ...task.issue, title: "Running" } },
+		{ ...task, id: "lado-task-merged", state: "completed", plan: approvedPlan, execution: { ...execution, sessionId: "demo-8", sessionEnded: true }, issue: { ...task.issue, title: "Merged" } },
+		{ ...task, id: "lado-task-unmerged", state: "closed_unmerged", plan: approvedPlan, execution: { ...execution, sessionId: "demo-9", sessionEnded: true }, issue: { ...task.issue, title: "Closed PR", state: "done" } },
+		// Closed before any run: still the human's to cancel.
+		{ ...task, id: "lado-task-closed", state: "closed_unmerged", createdAt: "2026-10-19T08:00:00Z", issue: { ...task.issue, title: "Closed issue", state: "done" } },
+		{ ...task, id: "lado-task-queued", state: "queued", plan: approvedPlan, createdAt: "2026-10-19T07:00:00Z", issue: { ...task.issue, title: "Next" } },
+	]);
+	renderLane();
+
+	const plan = await screen.findByTestId("lado-plan-lane");
+	await within(plan).findByText("Closed issue");
+	const queued = screen.getByTestId("lado-queued-lane");
+	expect(within(plan).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-closed"]);
+	expect(within(queued).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-queued"]);
+	expect(within(plan).getByText("1")).toBeInTheDocument();
+	for (const title of ["Running", "Merged", "Closed PR"]) expect(screen.queryByText(title), title).not.toBeInTheDocument();
 });
 
 test("shows plan requested for a task whose rules need review", async () => {

@@ -6,8 +6,16 @@ import * as lado from "../../lib/lado";
 import { TooltipProvider } from "../ui/tooltip";
 import { LadoTaskDialog } from "./LadoTaskDialog";
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+
+vi.mock("@tanstack/react-router", async (original) => ({
+	...await original<typeof import("@tanstack/react-router")>(),
+	useNavigate: () => navigate,
+}));
+
 vi.mock("../../lib/lado", async (original) => ({
 	...await original<typeof import("../../lib/lado")>(),
+	fetchLadoTasks: vi.fn(),
 	fetchLadoTaskView: vi.fn(),
 	fetchLadoPlan: vi.fn(),
 	requestLadoPlan: vi.fn(),
@@ -107,12 +115,12 @@ function rules(snapshotSha256: string, fields: Partial<lado.LadoEffective> = {})
 
 const approval: lado.LadoPlanApproval = { id: "a-1", revisionId: "lado-plan-1", taskId: "lado-task-1", sha256: revision.sha256, approvedAt: "2026-10-20T10:00:00Z" };
 
-function renderDialog() {
+function renderDialog(onOpenChange: (open: boolean) => void = () => undefined) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(
 		<QueryClientProvider client={client}>
 			<TooltipProvider delayDuration={0}>
-				<LadoTaskDialog projectId="demo" taskId="lado-task-1" repositories={[]} onOpenChange={() => undefined} />
+				<LadoTaskDialog projectId="demo" taskId="lado-task-1" repositories={[]} onOpenChange={onOpenChange} />
 			</TooltipProvider>
 		</QueryClientProvider>,
 	);
@@ -125,6 +133,7 @@ beforeEach(() => {
 	});
 	vi.mocked(lado.fetchLadoEffective).mockResolvedValue(rules("e".repeat(64)));
 	vi.mocked(lado.fetchLadoRules).mockResolvedValue([]);
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -341,5 +350,149 @@ test("an older revision says why it cannot be approved", async () => {
 	fireEvent.click(within(dialog).getByRole("combobox", { name: "Plan" }));
 	fireEvent.click(await screen.findByRole("option", { name: "Revision 1" }));
 	expect(await within(dialog).findByText("A newer version of this plan exists. Review and approve that one.")).toBeInTheDocument();
+	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
+});
+
+// An approved task, as the view and the project's task list send it.
+function approvedTask(fields: Partial<lado.LadoTask>): lado.LadoTask {
+	return { ...task, state: "queued", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, ...fields };
+}
+
+const execution: lado.LadoTaskExecution = {
+	sessionId: "demo-7",
+	planRevisionId: revision.id,
+	planRevisionNumber: 1,
+	policySha256: "e".repeat(64),
+	startedAt: "2026-10-20T11:00:00Z",
+	sessionEnded: false,
+	timedOut: false,
+};
+
+/** The view as it opened, and the task as the project's task list has it now. */
+function mockApproved(viewTask: lado.LadoTask, listed: lado.LadoTask = viewTask) {
+	const approved = planned({ approved: true, task: viewTask });
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(approved));
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(approved);
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([listed]);
+}
+
+test("a running task shows its run with the session and PR, from the project's task list", async () => {
+	const onOpenChange = vi.fn();
+	// The view opened before the worker started; the list follows the run.
+	mockApproved(approvedTask({}), approvedTask({
+		state: "running",
+		execution: { ...execution, pr: { url: "https://github.com/acme/demo/pull/45", number: 45, merged: false, closed: false } },
+	}));
+	renderDialog(onOpenChange);
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(run).toHaveTextContent("Running");
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-working)]");
+	expect(within(run).getByRole("link", { name: "Open PR #45" })).toHaveAttribute("href", "https://github.com/acme/demo/pull/45");
+	expect(within(run).getByText("PR #45")).toBeInTheDocument();
+	// Approved and running: nothing to approve, no queue to show.
+	expect(within(dialog).queryByRole("button", { name: "Approve plan" })).not.toBeInTheDocument();
+	expect(within(dialog).queryByTestId("lado-queue-status")).not.toBeInTheDocument();
+	expect(within(dialog).getByText("Approved")).toBeInTheDocument();
+
+	fireEvent.click(within(run).getByRole("button", { name: "Open session" }));
+	expect(onOpenChange).toHaveBeenCalledWith(false);
+	expect(navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-7" } });
+});
+
+test("a failed run says why and can be approved again", async () => {
+	mockApproved(approvedTask({ state: "failed", stateReason: "timed_out", execution: { ...execution, sessionEnded: true, timedOut: true } }));
+	vi.mocked(lado.approveLadoPlan).mockResolvedValue(approval);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(run).toHaveTextContent("Failed");
+	expect(run).toHaveTextContent("Stopped at the maximum run time");
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-needs-you)]");
+	expect(within(run).getByRole("button", { name: "Open session" })).toBeInTheDocument();
+	expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
+	const approve = within(dialog).getByRole("button", { name: "Approve plan" });
+	await waitFor(() => expect(approve).toBeEnabled());
+	fireEvent.click(approve);
+	await waitFor(() => expect(lado.approveLadoPlan).toHaveBeenCalledWith("lado-plan-1", revision.sha256, "e".repeat(64)));
+});
+
+test("a task that failed before any worker started says why, with no session to open", async () => {
+	mockApproved(approvedTask({ state: "failed", stateReason: "attempts_exhausted", queue: { state: "failed", attempts: 3, error: "LADO_SPAWN_FAILED: no agent" } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(run).toHaveTextContent("Failed");
+	expect(run).toHaveTextContent("The worker did not start after 3 attempts");
+	expect(within(run).queryByRole("button", { name: "Open session" })).not.toBeInTheDocument();
+	await within(dialog).findByTestId("lado-plan");
+	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeEnabled();
+});
+
+test("a failed task whose worker still runs cannot be approved, and says why", async () => {
+	mockApproved(approvedTask({ state: "failed", stateReason: "timed_out", execution: { ...execution, timedOut: true } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	await within(dialog).findByTestId("lado-run-status");
+	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
+	expect(
+		within(dialog).getByText("This task's worker still runs, or its work merged. LADO runs one worker per task, so no plan can be approved now."),
+	).toHaveAttribute("role", "status");
+});
+
+test("a queued task shows where it waits instead of the approve button", async () => {
+	mockApproved(approvedTask({ stateReason: "slot_global", queue: { state: "waiting", attempts: 1, reason: "slot_global" } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	const queue = await within(dialog).findByTestId("lado-queue-status");
+	expect(queue).toHaveTextContent("Queued");
+	expect(queue).toHaveTextContent("Waiting for a free run slot · Attempt 1 of 3");
+	expect(within(dialog).queryByRole("button", { name: "Approve plan" })).not.toBeInTheDocument();
+	expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
+	// No run yet.
+	expect(within(dialog).queryByTestId("lado-run-status")).not.toBeInTheDocument();
+});
+
+test("a starting task shows that LADO starts its worker", async () => {
+	// The older run of a task approved again stays its newest execution.
+	mockApproved(approvedTask({ state: "dispatching", queue: { state: "dispatching", attempts: 1 }, execution: { ...execution, sessionEnded: true } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	const queue = await within(dialog).findByTestId("lado-queue-status");
+	expect(queue).toHaveTextContent("Starting");
+	expect(queue.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-working)]");
+	expect(within(dialog).queryByRole("button", { name: "Approve plan" })).not.toBeInTheDocument();
+	expect(within(dialog).queryByTestId("lado-run-status")).not.toBeInTheDocument();
+});
+
+test("an approval that was never queued says so and can be approved again", async () => {
+	mockApproved(approvedTask({ state: "review_required", stateReason: "approved_before_queue" }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	expect(within(dialog).getByText("Not in the queue — approve again to queue it")).toHaveAttribute("role", "status");
+	// Not a rules review.
+	expect(within(dialog).queryByText("The rules changed since this plan was approved. Check the Rules tab, then approve again.")).not.toBeInTheDocument();
+	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeEnabled();
+});
+
+test("a plan whose base is not the workers' base says so instead of pointing at the rules", async () => {
+	mockApproved(approvedTask({ state: "blocked", stateReason: "base_ref_mismatch" }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	expect(within(dialog).getByText("The plan's base is not the branch workers start from")).toHaveAttribute("role", "status");
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
 });

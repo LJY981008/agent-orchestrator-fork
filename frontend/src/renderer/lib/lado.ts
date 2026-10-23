@@ -225,6 +225,40 @@ export function ladoIssueLabel(number: number, repositoryRef: string, repositori
 	return `${name}#${number}`;
 }
 
+/** How many times LADO tries to start a task's worker before the task fails. */
+export const LADO_MAX_ATTEMPTS = 3;
+
+/**
+ * When a future moment comes, in the developer's language ("in 2 min.");
+ * "now" once it has passed. Null for a time that does not parse.
+ */
+export function ladoTimeUntil(isoDate: string, locale: string, now: number = Date.now()): string | null {
+	const at = Date.parse(isoDate);
+	if (!Number.isFinite(at)) return null;
+	const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
+	const seconds = Math.max(0, Math.ceil((at - now) / 1000));
+	if (seconds < 60) return format.format(seconds, "second");
+	const minutes = Math.ceil(seconds / 60);
+	if (minutes < 90) return format.format(minutes, "minute");
+	const hours = Math.round(minutes / 60);
+	if (hours < 36) return format.format(hours, "hour");
+	return format.format(Math.round(hours / 24), "day");
+}
+
+// One map per task list, shared by every board card that reads the list.
+const tasksBySession = new WeakMap<readonly LadoTask[], Map<string, LadoTask>>();
+
+/** The task whose newest execution runs in the session, if LADO started it. */
+export function ladoTaskForSession(tasks: readonly LadoTask[], sessionId: string): LadoTask | undefined {
+	let bySession = tasksBySession.get(tasks);
+	if (!bySession) {
+		bySession = new Map();
+		for (const task of tasks) if (task.execution) bySession.set(task.execution.sessionId, task);
+		tasksBySession.set(tasks, bySession);
+	}
+	return bySession.get(sessionId);
+}
+
 export async function importLadoTasks(projectId: string, issueRefs: string[]): Promise<LadoImportResult> {
 	const { data, error } = await apiClient.POST("/api/v1/lado/tasks/imports", {
 		body: { projectId, issueRefs },
