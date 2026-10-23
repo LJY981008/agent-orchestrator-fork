@@ -15,6 +15,7 @@
 ## 절차
 
 0. 시작 전에 앞 단계 엔트리들(같은 체인의 S01~직전)의 `## 비교/회고` 와 그 안의 "다음 단계 메모"를 읽고, 이 단계에 해당하는 것을 따른다(러너는 직전 커밋 요약만 넘겨 준다).
+0-1. S03 뒤로 실패하는 테스트 6개를 이 단계에서 고친다(승인이 항목을 만들고 상태가 approved 대신 queued 가 되면서 생긴 것): ladotask `TestApprovePlanBindsTheExactRevision`·`TestApprovePlanStoresTheRuleSnapshot`·`TestTaskStateFollowsRuleChanges`·`TestReviewRequiredTaskCanBeApprovedAgain`, ladopolicy `TestDisablingKeepsHistoryAndSnapshots`·`TestImpactListsApprovedTasks`. 기대값을 새 상태에 맞추되, 영향 목록은 필터를 고쳐서(아래 2-1) 통과시킨다. G3 가 이 패키지들을 전부 돌린다.
 1. `ApprovePlan`: 기존 검사·스냅숏 뒤 `domain.LadoQueueEntry{ID: "lado-queue-"+NewID(), TaskID, ProjectID: task.ProjectID, EnqueuedAt: now}` 를 만들어 `Store.ApproveLadoPlan(..., &snapshot, &entry)` 로 넘긴다. 감사 payload 에 `queueEntry` 를 더한다.
 2. 승인 규칙(`openTask` 또는 승인 검사): 최신 리비전의 승인을 다시 하는 것은 review_required 와 failed 에서 허용, blocked 는 지금처럼 UI 만 막는다(데몬은 거절하지 않음 — 5단계 그대로). queued·dispatching 에서 **같은 리비전**을 다시 승인하면 409 `LADO_TASK_ALREADY_QUEUED`(details `{taskId, state}`), 새 리비전 승인은 허용(앞 항목 superseded). running·completed 에서는 **어떤 승인도** 409 `LADO_TASK_RUNNING`(details `{taskId, state}`) — 워커가 두 개 뜨지 않게(S02 메모). `openTask` 의 닫힌 이슈 판정은 `State() == ClosedUnmerged` 가 아니라 `task.Issue.State` 를 직접 본다(실행이 있으면 이슈가 닫혀도 running·completed 이기 때문).
 2-1. `service/ladopolicy/impact.go` 의 승인된 태스크 필터(`Approved`·`Blocked` 만 보던 곳, 약 89행): 이제 승인된 태스크는 queued·dispatching·blocked·failed·review_required 다. 뜻은 "유효한 승인이 있고 아직 디스패치되지 않은 태스크"(실행 뒤에는 스냅숏이 고정) — 상태 목록을 고치거나 그 뜻으로 판정한다. 테스트 고정값이 아니라 필터를 고친다(S02 메모).

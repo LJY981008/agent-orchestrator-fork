@@ -22,7 +22,8 @@ LADO 프로젝트에서 워커를 띄울 유일한 길(디스패처가 지금 �
 3. `AuthorizeConfigMode(ctx, target, mode)`: 실행이고 mode 가 `default` 이거나 상한보다 높으면 409 `LADO_APPROVAL_ABOVE_CEILING`, details `{sessionId, mode, ceiling}`. `AuthorizeExecutionChange(ctx, target)`: 실행이면 409 `LADO_EXECUTION_FIXED`, details `{sessionId}`. 둘 다 실행이 아니면 nil, 읽기 오류는 거부.
 4. 훅: chat `SetTurnSettings` 는 게이트가 있으면 `ClampTurnSettings` 결과로 저장한다(오류면 그대로 반환). `SetConfigOption` 은 선택이 승인 모드로 풀리는 경우(`settingsFromConfigOptions` 가 `ApprovalMode` 를 정하는 경로 — 코드를 읽고 provider 호출 **전**에 그 모드를 알아내는 가장 작은 방법을 고른다)에만 `AuthorizeConfigMode`. `SwitchAgent`·`StartInterfaceTransition` 은 맨 앞에서 `AuthorizeExecutionChange`. 게이트가 nil 이면 업스트림 동작 그대로.
 5. 프롬프트 훅: `LadoPromptSection` 타입을 `func(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) string` 로. `buildSystemPrompt` 의 호출부는 이미 kind·sessionID 를 갖고 있다. `ladoPromptSection` 의 "오케스트레이터만" 조건을 지우고 전부 소스에 맡긴다(소스가 kind 로 가른다). 복구·재개·에이전트 전환 재조립 경로는 모두 `buildSystemPrompt` 를 다시 부르므로 따로 고칠 것이 없다 — 테스트로 확인한다.
-6. 커밋 메시지 예: `feat(lado): dispatch grant, turn-setting cap and fixed executions in the worker gate`.
+6. ladotask(`TestApprovePlanBindsTheExactRevision`·`TestApprovePlanStoresTheRuleSnapshot`·`TestTaskStateFollowsRuleChanges`·`TestReviewRequiredTaskCanBeApprovedAgain`)와 ladopolicy(`TestDisablingKeepsHistoryAndSnapshots`·`TestImpactListsApprovedTasks`)의 실패 6개는 S03 의 승인 시그니처 변경에서 온 것이고 S06 이 고친다. 이 단계에서는 건드리지 않는다.
+7. 커밋 메시지 예: `feat(lado): dispatch grant, turn-setting cap and fixed executions in the worker gate`.
 
 ## 마무리 (모든 단계 공통)
 
@@ -53,8 +54,8 @@ LADO 프로젝트에서 워커를 띄울 유일한 길(디스패처가 지금 �
 - [ ] S05-G2: store·session_manager·chat 훅 테스트
   CHECK: bash .claude/gate/lado-queue.sh go-tests ./internal/storage/sqlite/store/ TestLadoEntryPolicyByClientRequest && bash .claude/gate/lado-queue.sh go-tests ./internal/session_manager/ TestSwitchAgentAsksTheLadoGate TestStartInterfaceTransitionAsksTheLadoGate TestWorkerSystemPromptAsksForTheLadoSection && bash .claude/gate/lado-queue.sh go-tests ./internal/service/chat/ TestSetTurnSettingsUsesTheLadoCap TestSetConfigOptionAsksTheLadoGate
   EXPECT: GO_TESTS_OK 2/2
-- [ ] S05-G3: 게이트·LADO 관련 패키지 전체 통과
-  CHECK: bash .claude/gate/lado-queue.sh go-pkg ./internal/service/ladogate/ ./internal/service/ladotask/ ./internal/daemon/
+- [ ] S05-G3: 게이트·데몬 패키지 전체 통과(ladotask·ladopolicy 는 S03 이 남긴 실패 6개를 S06 이 고치므로 여기서 돌리지 않는다 — 컴파일은 G6 이 본다)
+  CHECK: bash .claude/gate/lado-queue.sh go-pkg ./internal/service/ladogate/ ./internal/daemon/
   EXPECT: GO_PKG_OK
 - [ ] S05-G4: session_manager 와 chat 의 LADO 테스트가 race 로 통과
   CHECK: cd backend && go test -race -count=1 -run 'Lado' ./internal/session_manager/ ./internal/service/chat/ && echo S05_HOOKS_RACE_OK
