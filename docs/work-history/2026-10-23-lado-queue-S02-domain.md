@@ -67,12 +67,38 @@
 
 ## Before — 수행 전 실측
 
-(이 단계의 세션이 채운다)
+- 시작 HEAD: `6152b694a`(`docs(lado): record S01`), 트리 깨끗, `defs-unchanged` → `DEFS_UNCHANGED`. 환경 umask 0022·TZ=UTC·LANG=C.UTF-8, go1.27.1.
+- 도메인: `lado_queue.go` 없음. `LadoTask` 에 `Queue`·`Execution` 없음, `State()` 는 5단계 순서(cancelled → closed_unmerged → review_required(규칙 변경) → blocked(차단 스냅숏) → approved → planned → draft), `StateAt`·`StateReason` 없음.
+- 기준선 모두 ok: `go test -count=1 ./internal/domain/`, `ladotask`·`ladopolicy`·`ladoproject` 전체, `-run 'Lado'` 의 `storage/sqlite/store`·`httpd/controllers`·`daemon`.
+- `approved` 상태에 기대는 곳: 프로덕션 `service/ladopolicy/impact.go:89`(규칙 변경 영향 필터), DTO enum `httpd/controllers/lado_tasks_dto.go:35`, 다른 패키지 테스트 8개(After).
+- 테스트 먼저(RED): 필수 테스트 6개와 기존 상태 테스트 갱신을 쓰고 돌림 → 빌드 실패(`undefined: domain.LadoQueueEntry` 등). API 를 빈 본문으로 두고 다시 → 7개 FAIL(`State = "approved", want "queued"`, `LadoClientRequestID = "", want lado:lado-queue-7f3a/2`, `defaults = {MaxConcurrent:0 ...}` 등 — 기능이 없어서 실패).
 
 ## After — 수행 후 실측
 
-(이 단계의 세션이 채운다)
+- 코드 커밋 `3092b53c9` `feat(lado): queue and execution domain types and task states` — 5 파일, +982 −26.
+  - `domain/lado_queue.go`(새): `LadoQueueEntryID`, `LadoQueueEntry`(0006 의 열 전부, NULL 은 zero time, `DispatchedSessionID SessionID`), `LadoQueueState` 9개와 `State(now)`(절차 2의 우선순위; 리스는 `LeaseExpiresAt.After(now)`, 대기는 `WaitingReason != "" || NextAttemptAt.After(now)` — S01 claim 쿼리의 `<= now` 와 맞물림), 이유 상수(review 4·blocked 3·waiting 6 = 플랜 §3 문자열 그대로, 실패 3 `attempts_exhausted`·`timed_out`·`ended_without_pr`), `LadoExecution`(열 전부 + 읽기 사실 `SessionTerminated`·`PR LadoExecutionPR{URL, Number, Merged, Closed}`, `BaseCommitsAhead *int` — 도메인의 다른 nullable 정수와 같은 꼴), `LadoDispatchSettings`·`DefaultLadoDispatchSettings()`(2·480·true)·`Validate()`, `LadoMaxConcurrent = 8`, `LadoRunMinuteChoices`, `LadoDispatchGrant`, `LadoClientRequestID`·`ParseLadoClientRequestID`(`lado:` 접두, 빈 항목 id 거부, 시도는 `strconv.Itoa` 왕복이 같은 1 이상 — 부호·앞자리 0·두 번째 슬래시 거부)·`LadoDispatchHash`, `ErrLadoLeaseLost`.
+  - `domain/lado_task.go`: `Queue`·`Execution`, 상태 상수 5개, `LadoTaskApproved` 는 남기고 주석으로 이유, `State()` = `StateAt(time.Now())`, `StateReason()`. 둘 다 내부 `stateAt(now)` 하나에서 나와 상태와 이유가 어긋나지 않는다.
+  - 테스트: `lado_queue_test.go`(새 3개 — 항목 상태는 모든 사실을 켠 항목에서 이기는 사실을 하나씩 지우며 9단계 순서 전체를 확인), `lado_task_test.go`(새 3개 + 도우미 `queuedLadoTask`·`dispatchedLadoTask`·`approveLadoTaskAgain`; `TestLadoTaskStateFollowsRuleSnapshots` 를 새 순서로 — 스냅숏 있는 승인은 항목이 있어 `approved` → `queued`, 스냅숏 없는 승인 → `review_required`), `lado_plan_test.go` 의 `TestLadoTaskStateFollowsItsPlans`(유효 승인 → `queued`, 승인이 무효면 항목이 있어도 `planned`).
+- `Validate()`: 도메인은 apierr 를 쓰지 않는다(`AgentConfig.Validate`·`ProjectConfig.Validate` 꼴) → sentinel `ErrLadoDispatchSettingsInvalid` 를 `%w` 로 감싼 문장(`invalid dispatch settings: maxConcurrent must be 1 to 8, got 9`). 서비스(S06·S09)가 `apierr.Invalid("LADO_DISPATCH_SETTINGS_INVALID", err.Error(), nil)` 로 바꾼다. 프로젝트 상한(S06)은 `domain.LadoMaxConcurrent` 로 같은 범위를 본다.
+- 확인: `go test -count=1 ./internal/domain/` ok, `gofmt -l` 없음, `go vet` ok, golangci-lint v2.13.2 `./internal/domain/...` 0 issues. 독립 리뷰 서브에이전트 1회 — 지적 중 둘을 반영(회고 1·2, 테스트 추가), `retry` 주석 정정(S07 은 정책 읽기 오류에 `retry` 로 hold 한다).
+- 다른 패키지의 의도된 깨짐(엔트리: "컴파일만 깨지지 않게"): 아래 8개가 `approved` 를 기대하다 `review_required`(`approved_before_queue`)를 받는다 — 승인이 아직 항목을 쓰지 않으므로(S03 store, S06 서비스). 나머지는 ok: `ladoconnect`·`ladogate`·`ladopresence`·`ladoproject` 전체, `-run 'Lado'` 의 `storage/sqlite`·`httpd/controllers`·`daemon`·`session_manager`·`service/chat`.
+  - store(S03-G2 가 돈다): `TestLadoTaskReadsCarryPlanState`(`lado_plan_store_test.go:213`), `TestLadoTaskReadsCarryTheRuleSnapshot`(`:581`).
+  - ladotask(S06): `TestApprovePlanBindsTheExactRevision`(`plans_test.go:586`), `TestApprovePlanStoresTheRuleSnapshot`(`:628`), `TestTaskStateFollowsRuleChanges`(`:725`), `TestReviewRequiredTaskCanBeApprovedAgain`(`:807`).
+  - ladopolicy(S06): `TestDisablingKeepsHistoryAndSnapshots`(`service_test.go:900`), `TestImpactListsApprovedTasks`(`:1251`) — 이것은 테스트가 아니라 프로덕션 필터 `impact.go:89` 탓(회고 메모).
+- 게이트(HEAD `3092b53c9`): `GATES=6 MET=6 UNMET=0`. 이 엔트리 커밋 뒤 같은 명령으로 다시 돌려 증거를 새 HEAD 에 묶는다.
 
 ## 비교/회고
 
-(이 단계의 세션이 채운다)
+- 범위대로 끝났다. 엔트리에 없던 이름: 실패 이유 상수 3개(`StateReason` 이 돌려주는 문자열), `LadoMaxConcurrent`·`LadoRunMinuteChoices`, `ErrLadoDispatchSettingsInvalid`.
+- 플랜 §3 의 9단계 순서를 따르되, 문장이 정하지 않은 경우를 다음처럼 정하고 테스트로 고정했다.
+  1. 실행은 최신 승인의 것이거나, 아직 돌거나(running) 머지됐을(completed) 때만 센다. 머지 없이 끝난 옛 승인의 실행은 기록일 뿐이라, 실패 뒤 다시 승인한 태스크가 새 항목대로 Queued 로 보인다(플랜 §6 재승인 허용, §10 "Failed … enables Approve plan again"). 문자 그대로("실행이 있으면")면 새 실행이 생길 때까지 Failed 에 머문다.
+  2. 실패한 실행(시간 초과, PR 없이 종료) + 닫힌 이슈 → closed_unmerged. TDD §3.2 "Failed … and the task is not closed" 와 결정 k "the issue closed while no execution runs" 를 엔트리 문장("실행이 있으면 … failed")보다 앞세웠다. 돌거나 머지된 실행은 그대로 이슈보다 먼저다(필수 테스트 "completed 가 이긴다").
+  3. 항목의 사실(review·blocked·failed·dispatching·queued)은 최신 승인이 유효할 때만 센다 — 5단계의 "규칙 사실은 유효한 승인에만" 과 같은 규칙. 새 리비전이 고정되면 항목이 남아도 Planned 다. 문자 그대로면 상한이 찬 동안 낡은 항목 때문에 Queued 에 머물고, blocked 항목은 UI 가 승인을 막아(S06) 새 리비전을 승인할 수 없다. 그래서 `plan_superseded` 는 태스크 상태에는 나오지 않고 항목(대기열 화면)에만 남는다.
+  4. 유효한 승인의 항목이 없거나, 다른 승인의 것이거나, superseded·cancelled 이면 review_required(`approved_before_queue`). cancelled 는 디스패처가 닫힌 이슈 때문에 항목을 취소한 뒤 이슈가 다시 열린 경우로, 다시 승인하면 대기열에 든다.
+  5. dispatched 항목인데 읽기에 실행이 없으면 running(store 가 한 트랜잭션으로 연결하므로 생기지 않을 방어). 항목의 review·blocked·failed 는 원시 열이 아니라 `Queue.State(now)` 로 본다(S01 쿼리가 열린 항목에만 표시하므로 열은 서로 배타).
+- `StateReason()` 은 `time.Now()` 를 읽는다. 상태와 이유가 시계 때문에 어긋나지 않는다(리스 중인 항목의 waiting_reason 은 claim 이 비운다). 주입된 시계가 필요한 단계가 생기면 그때 `StateReasonAt` 를 더한다.
+- 다음 단계 메모:
+  - S03: 태스크 읽기의 `Queue` 는 `PlanApprovalID == Plan.Approval.ID` 인 항목(도메인은 다른 것을 무시), `Execution` 은 `PlanApprovalID` 를 반드시 채운다(위 1이 본다). PR 은 URL 이 비면 "PR 없음". 위 store 테스트 2개는 기대값을 `queued`(스냅숏 + 항목) 또는 `review_required`(스냅숏 없음)로 고친다. 태스크를 돌려주는 다른 store 메서드(`SetLadoTaskPreferences`·`CancelLadoTask` 등)도 Queue·Execution 을 채우지 않으면 승인된 태스크가 `approved_before_queue` 로 보인다.
+  - S06: `ladopolicy/impact.go:89` 의 필터(`Approved`·`Blocked` 만)를 고친다 — 이제 승인된 태스크는 queued·dispatching·blocked·failed·review_required 다. 원래 뜻은 "유효한 승인의 스냅숏이 아직 지금 규칙과 맞는, 아직 디스패치되지 않은 태스크"(실행 뒤에는 스냅숏이 고정). 테스트 고정값이 아니라 필터를 고칠 것. `openTask`(`plans.go:467`)는 닫힌 이슈를 `State() == ClosedUnmerged` 로만 알아채는데, 실행이 돌거나 머지된 태스크는 이슈가 닫혀도 running·completed 다 — `Issue.State` 를 직접 볼 것. 같은 리비전 재승인만 막으면 Running 중 새 리비전 승인이 두 번째 워커를 띄울 수 있다(S07 검사 1 은 통과) — queued·dispatching·running·completed 에서는 승인 자체를 거절하는 편이 안전하다.
+  - S09: DTO `state` enum(`lado_tasks_dto.go:35`)에 새 상태 5개, 이유는 `StateReason()`.
+  - S10: `approved_before_queue` 문구는 "6단계 전 승인" 이 아니라 "대기열에 없음 — 다시 승인하면 대기열에 듦" 뜻으로(위 4).
