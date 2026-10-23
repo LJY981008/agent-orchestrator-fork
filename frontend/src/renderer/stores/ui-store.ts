@@ -29,6 +29,7 @@ export type GlobalSettingsSection =
 	| "harness"
 	| "agents"
 	| "rules"
+	| "runs"
 	| "billing"
 	| "remoteHosts"
 	| "coder"
@@ -41,8 +42,9 @@ export type GlobalSettingsSection =
 	| "help";
 
 /** Project settings pages: the project form sections plus the cues manager. */
-// LADO fork: "rules" is a local LADO project's rules (components/lado/LadoProjectRulesSection.tsx).
-export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions" | "rules";
+// LADO fork: "lado" is a local project's LADO mode and cap (components/lado/LadoProjectSection.tsx),
+// "rules" a local LADO project's rules (components/lado/LadoProjectRulesSection.tsx).
+export type ProjectSettingsSection = ProjectFormSection | "environment" | "scripts" | "cues" | "repositories" | "instructions" | "lado" | "rules";
 
 /** Which failure a "Show diagnostics" shortcut is about: the job it produced,
  * if any, and the error the user saw. */

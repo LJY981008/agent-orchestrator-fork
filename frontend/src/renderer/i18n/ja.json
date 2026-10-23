@@ -3591,5 +3591,19 @@
 	"lado.task.state.completed": "完了",
 	"lado.presence.modeOffTitle": "{{project}} の LADO モードをオフにしますか？",
 	"lado.presence.modeOffDetail": "プロジェクト ID: {{id}}\n\nキューのタスクは再びオンになるまで待ち、実行中のワーカーはそのまま動き続けます。",
-	"lado.presence.turnOff": "オフにする"
+	"lado.presence.turnOff": "オフにする",
+	"lado.runs.title": "実行",
+	"lado.runs.note": "LADO モードがオンのプロジェクトで承認したタスクにだけ適用されます。",
+	"lado.runs.maxConcurrent": "同時実行数",
+	"lado.runs.maxRunTime": "最大実行時間",
+	"lado.runs.maxRunTimeOff": "オフ",
+	"lado.runs.hours_one": "{{count}} 時間",
+	"lado.runs.hours_other": "{{count}} 時間",
+	"lado.runs.holdOnMemoryTight": "メモリが逼迫しているときは待つ",
+	"lado.runs.holdOnMemoryTightHint": "コンピューターのメモリが逼迫している間、キューのタスクは開始を待ちます。",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "LADO モード",
+	"lado.project.modeHint": "オンにすると、このプロジェクトのワーカーは承認した計画からのみ開始します。",
+	"lado.project.maxConcurrent": "このプロジェクトの同時実行数",
+	"lado.project.maxConcurrentInvalid": "同時実行数は {{min}}〜{{max}} から選んでください。"
 }

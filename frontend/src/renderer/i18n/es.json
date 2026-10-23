@@ -3643,5 +3643,20 @@
 	"lado.task.state.completed": "Completado",
 	"lado.presence.modeOffTitle": "¿Desactivar el modo LADO en {{project}}?",
 	"lado.presence.modeOffDetail": "ID del proyecto: {{id}}\n\nLas tareas en cola esperan hasta que se vuelva a activar; los workers en ejecución siguen funcionando.",
-	"lado.presence.turnOff": "Desactivar"
+	"lado.presence.turnOff": "Desactivar",
+	"lado.runs.title": "Ejecuciones",
+	"lado.runs.note": "Solo se aplican a las tareas aprobadas de los proyectos con el modo LADO activado.",
+	"lado.runs.maxConcurrent": "Ejecuciones simultáneas",
+	"lado.runs.maxRunTime": "Tiempo máximo de ejecución",
+	"lado.runs.maxRunTimeOff": "Desactivado",
+	"lado.runs.hours_one": "{{count}} hora",
+	"lado.runs.hours_other": "{{count}} horas",
+	"lado.runs.hours_many": "{{count}} horas",
+	"lado.runs.holdOnMemoryTight": "Esperar mientras la memoria está justa",
+	"lado.runs.holdOnMemoryTightHint": "Las tareas en cola esperan para empezar mientras el equipo tiene poca memoria.",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "Modo LADO",
+	"lado.project.modeHint": "Si está activado, los workers de este proyecto solo empiezan a partir de planes que aprobaste.",
+	"lado.project.maxConcurrent": "Ejecuciones simultáneas en este proyecto",
+	"lado.project.maxConcurrentInvalid": "Elige de {{min}} a {{max}} ejecuciones simultáneas."
 }

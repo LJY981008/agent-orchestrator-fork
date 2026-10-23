@@ -24,6 +24,9 @@ vi.mock("./settings/HarnessSettingsSection", () => ({
 vi.mock("./settings/RulesSection", () => ({
 	RulesSection: () => <div data-testid="rules-section" />,
 }));
+vi.mock("./settings/RunsSection", () => ({
+	RunsSection: () => <div data-testid="runs-section" />,
+}));
 
 // The real section reads the cloud gate and /me; here it only marks where the
 // General page places it.

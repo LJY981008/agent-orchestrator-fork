@@ -3643,5 +3643,20 @@
 	"lado.task.state.completed": "Terminé",
 	"lado.presence.modeOffTitle": "Désactiver le mode LADO pour {{project}} ?",
 	"lado.presence.modeOffDetail": "ID du projet : {{id}}\n\nLes tâches en file attendent sa réactivation ; les workers en cours continuent de tourner.",
-	"lado.presence.turnOff": "Désactiver"
+	"lado.presence.turnOff": "Désactiver",
+	"lado.runs.title": "Exécutions",
+	"lado.runs.note": "Ces réglages ne s'appliquent qu'aux tâches approuvées des projets en mode LADO.",
+	"lado.runs.maxConcurrent": "Exécutions simultanées",
+	"lado.runs.maxRunTime": "Durée maximale d'exécution",
+	"lado.runs.maxRunTimeOff": "Désactivée",
+	"lado.runs.hours_one": "{{count}} heure",
+	"lado.runs.hours_other": "{{count}} heures",
+	"lado.runs.hours_many": "{{count}} heures",
+	"lado.runs.holdOnMemoryTight": "Attendre tant que la mémoire est saturée",
+	"lado.runs.holdOnMemoryTightHint": "Les tâches en file attendent pour démarrer tant que l'ordinateur manque de mémoire.",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "Mode LADO",
+	"lado.project.modeHint": "Quand ce mode est activé, les workers de ce projet ne démarrent qu'à partir de plans que vous avez approuvés.",
+	"lado.project.maxConcurrent": "Exécutions simultanées dans ce projet",
+	"lado.project.maxConcurrentInvalid": "Choisissez de {{min}} à {{max}} exécutions simultanées."
 }

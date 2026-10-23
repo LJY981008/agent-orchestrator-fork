@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Globe2, Keyboard, RefreshCw, ScrollText, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Gauge, Globe2, Keyboard, RefreshCw, ScrollText, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -15,6 +15,7 @@ import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
 import { RulesSection } from "./RulesSection";
+import { RunsSection } from "./RunsSection";
 import { SettingsSection } from "./SettingsSection";
 import { StayAwakeSection } from "./StayAwakeSection";
 
@@ -89,6 +90,13 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: ScrollText,
 		label: (t) => t("lado.rules.title"),
 		render: (_t, titleHidden) => <RulesSection titleHidden={titleHidden} />,
+	},
+	{
+		// LADO fork: how many approved tasks run at once and for how long (docs/LJY-PRD/TDD.md §5.3).
+		id: "runs",
+		icon: Gauge,
+		label: (t) => t("lado.runs.title"),
+		render: (_t, titleHidden) => <RunsSection titleHidden={titleHidden} />,
 	},
 	{
 		id: "billing",

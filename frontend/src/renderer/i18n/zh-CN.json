@@ -3573,5 +3573,19 @@
 	"lado.task.state.completed": "已完成",
 	"lado.presence.modeOffTitle": "关闭 {{project}} 的 LADO 模式？",
 	"lado.presence.modeOffDetail": "项目 ID：{{id}}\n\n队列中的任务会等到 LADO 模式重新开启；正在运行的 worker 会继续运行。",
-	"lado.presence.turnOff": "关闭"
+	"lado.presence.turnOff": "关闭",
+	"lado.runs.title": "运行",
+	"lado.runs.note": "仅适用于已开启 LADO 模式的项目中已批准的任务。",
+	"lado.runs.maxConcurrent": "并发运行数",
+	"lado.runs.maxRunTime": "最长运行时间",
+	"lado.runs.maxRunTimeOff": "关闭",
+	"lado.runs.hours_one": "{{count}} 小时",
+	"lado.runs.hours_other": "{{count}} 小时",
+	"lado.runs.holdOnMemoryTight": "内存紧张时等待",
+	"lado.runs.holdOnMemoryTightHint": "电脑内存紧张期间，队列中的任务会等待，暂不启动。",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "LADO 模式",
+	"lado.project.modeHint": "开启后，此项目的 worker 只会按你批准的计划启动。",
+	"lado.project.maxConcurrent": "此项目的并发运行数",
+	"lado.project.maxConcurrentInvalid": "请将并发运行数设为 {{min}} 到 {{max}}。"
 }

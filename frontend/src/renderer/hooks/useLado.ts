@@ -42,19 +42,24 @@ import {
 	type LadoDispatchSettingsInput,
 } from "../lib/lado";
 
-/**
- * Whether a project is in LADO mode, and whether that is known yet. Pass no
- * project id for projects LADO never governs (remote hosts, cloud,
- * standalone); they read as off at once.
- */
-export function useLadoModeState(projectId: string | undefined): { ladoMode: boolean; known: boolean } {
-	const query = useQuery({
+/** A project's LADO settings: its mode and how many of its executions run at once. */
+export function useLadoProjectSettings(projectId: string | undefined) {
+	return useQuery({
 		queryKey: ladoProjectSettingsQueryKey(projectId ?? ""),
 		queryFn: () => fetchLadoProjectSettings(projectId ?? ""),
 		enabled: Boolean(projectId),
 		staleTime: 30_000,
 		retry: false,
 	});
+}
+
+/**
+ * Whether a project is in LADO mode, and whether that is known yet. Pass no
+ * project id for projects LADO never governs (remote hosts, cloud,
+ * standalone); they read as off at once.
+ */
+export function useLadoModeState(projectId: string | undefined): { ladoMode: boolean; known: boolean } {
+	const query = useLadoProjectSettings(projectId);
 	return { ladoMode: query.data?.ladoMode === true, known: !projectId || query.isFetched };
 }
 

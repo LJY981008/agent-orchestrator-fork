@@ -3591,5 +3591,19 @@
 	"lado.task.state.completed": "Abgeschlossen",
 	"lado.presence.modeOffTitle": "LADO-Modus für {{project}} ausschalten?",
 	"lado.presence.modeOffDetail": "Projekt-ID: {{id}}\n\nAufgaben in der Warteschlange warten, bis er wieder an ist; laufende Worker laufen weiter.",
-	"lado.presence.turnOff": "Ausschalten"
+	"lado.presence.turnOff": "Ausschalten",
+	"lado.runs.title": "Läufe",
+	"lado.runs.note": "Gilt nur für freigegebene Aufgaben in Projekten mit aktivem LADO-Modus.",
+	"lado.runs.maxConcurrent": "Gleichzeitige Läufe",
+	"lado.runs.maxRunTime": "Maximale Laufzeit",
+	"lado.runs.maxRunTimeOff": "Aus",
+	"lado.runs.hours_one": "{{count}} Stunde",
+	"lado.runs.hours_other": "{{count}} Stunden",
+	"lado.runs.holdOnMemoryTight": "Warten, solange der Speicher knapp ist",
+	"lado.runs.holdOnMemoryTightHint": "Aufgaben in der Warteschlange warten mit dem Start, solange der Computer wenig Speicher hat.",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "LADO-Modus",
+	"lado.project.modeHint": "Wenn aktiviert, starten die Worker dieses Projekts nur aus Plänen, die du freigegeben hast.",
+	"lado.project.maxConcurrent": "Gleichzeitige Läufe in diesem Projekt",
+	"lado.project.maxConcurrentInvalid": "Wähle {{min}} bis {{max}} gleichzeitige Läufe."
 }

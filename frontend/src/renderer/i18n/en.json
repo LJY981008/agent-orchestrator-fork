@@ -3572,5 +3572,19 @@
 	"lado.task.state.completed": "Completed",
 	"lado.presence.modeOffTitle": "Turn off LADO mode for {{project}}?",
 	"lado.presence.modeOffDetail": "Project id: {{id}}\n\nQueued tasks wait until it is on again; running workers keep running.",
-	"lado.presence.turnOff": "Turn off"
+	"lado.presence.turnOff": "Turn off",
+	"lado.runs.title": "Runs",
+	"lado.runs.note": "These apply only to approved tasks in projects with LADO mode on.",
+	"lado.runs.maxConcurrent": "Concurrent runs",
+	"lado.runs.maxRunTime": "Maximum run time",
+	"lado.runs.maxRunTimeOff": "Off",
+	"lado.runs.hours_one": "{{count}} hour",
+	"lado.runs.hours_other": "{{count}} hours",
+	"lado.runs.holdOnMemoryTight": "Wait while memory is tight",
+	"lado.runs.holdOnMemoryTightHint": "Queued tasks wait to start while the computer is low on memory.",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "LADO mode",
+	"lado.project.modeHint": "When on, this project's workers start only from plans you approved.",
+	"lado.project.maxConcurrent": "Concurrent runs in this project",
+	"lado.project.maxConcurrentInvalid": "Choose {{min}} to {{max}} concurrent runs."
 }

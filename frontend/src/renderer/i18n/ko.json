@@ -3591,5 +3591,19 @@
 	"lado.task.state.completed": "완료",
 	"lado.presence.modeOffTitle": "{{project}} 프로젝트의 LADO 모드를 끌까요?",
 	"lado.presence.modeOffDetail": "프로젝트 id: {{id}}\n\n대기열의 작업은 LADO 모드를 다시 켤 때까지 기다리고, 실행 중인 워커는 계속 실행됩니다.",
-	"lado.presence.turnOff": "끄기"
+	"lado.presence.turnOff": "끄기",
+	"lado.runs.title": "실행",
+	"lado.runs.note": "LADO 모드가 켜진 프로젝트에서 승인한 작업에만 적용됩니다.",
+	"lado.runs.maxConcurrent": "동시 실행",
+	"lado.runs.maxRunTime": "최대 실행 시간",
+	"lado.runs.maxRunTimeOff": "끔",
+	"lado.runs.hours_one": "{{count}}시간",
+	"lado.runs.hours_other": "{{count}}시간",
+	"lado.runs.holdOnMemoryTight": "메모리가 부족하면 기다리기",
+	"lado.runs.holdOnMemoryTightHint": "컴퓨터의 메모리가 부족한 동안 대기열의 작업은 시작하지 않고 기다립니다.",
+	"lado.project.title": "LADO",
+	"lado.project.mode": "LADO 모드",
+	"lado.project.modeHint": "켜면 이 프로젝트의 워커는 승인한 계획으로만 시작합니다.",
+	"lado.project.maxConcurrent": "이 프로젝트의 동시 실행",
+	"lado.project.maxConcurrentInvalid": "동시 실행은 {{min}}~{{max}} 사이에서 고르세요."
 }
