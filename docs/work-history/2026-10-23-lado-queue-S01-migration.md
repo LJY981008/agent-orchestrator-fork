@@ -66,12 +66,39 @@
 
 ## Before — 수행 전 실측
 
-(이 단계의 세션이 채운다: 시작 HEAD, 트리 상태, 먼저 쓴 테스트의 RED 결과)
+- 시작 HEAD: `1de13dad5ddbd5661f4728a7a6ceab1b17cc3ce8`(`docs(lado): plan step 6 as a 13-step chain`, 태그 `lado-step6-chain-def` 와 같음), 트리 깨끗, `defs-unchanged` → `DEFS_UNCHANGED`.
+- LADO 트랙 최고 버전 5(`0005_lado_rules.sql`), 대기열·실행·디스패치 설정 테이블·쿼리·gen 없음, `lado_project_settings` 는 `project_id, lado_mode, updated_at` 세 열.
+- 테스트를 먼저 쓰고 돌림(RED 확인):
+  - `TestLadoMigrateCreatesQueueTables` → `lado_goose_db_version = 5, want 0006 applied`
+  - `TestLadoQueueMigrationRoundTrip`(Down 확인용으로 함께 씀) → `read project settings: SQL logic error: no such column: max_concurrent (1)`
+  - 함께 정리한 기존 `TestLadoMigrateCreatesRuleTables` 는 PASS 유지.
 
 ## After — 수행 후 실측
 
-(커밋 해시와 내용, 직접 확인한 생성 SQL, 추가로 돌린 테스트)
+- 코드 커밋 `059f6bbab` `feat(lado): queue, execution and dispatch settings tables` — 7 파일, +1518 −30
+  - `migrations_lado/0006_lado_queue.sql`: 플랜 §2 SQL 그대로 + 머리 주석(TDD §4.2·§5.3, 세션 FK 없음, project_id 복사, 행 없음 = 기본값). Down 은 Up 역순: `ALTER TABLE lado_project_settings DROP COLUMN max_concurrent` → `lado_dispatch_settings` → `lado_executions` → `lado_queue_entries` DROP.
+  - `queries/lado_queue.sql`: 엔트리의 쿼리 29개 그대로(항목 7·디스패치 9·실행 8·설정 4·`UpsertLadoProjectMaxConcurrent` 1), ASCII 만. 열린 항목 조건은 부분 인덱스 `lado_queue_entries_open` 과 같은 6조건.
+  - `queries/lado_project_settings.sql`: `GetLadoProjectSettings`·`UpsertLadoProjectSettings` 의 SELECT/RETURNING 에 `max_concurrent` 추가(아래 회고).
+  - gen: `lado_queue.sql.go`(새), `models.go`(`LadoQueueEntry`·`LadoExecution`·`LadoDispatchSetting` 추가, `LadoProjectSetting` 에 `MaxConcurrent int64`), `lado_project_settings.sql.go`(Scan 에 열 추가). 다른 gen 파일 변화 없음.
+  - `lado_migrate_test.go`: `TestLadoMigrateCreatesQueueTables`, `TestLadoQueueMigrationRoundTrip`, 도우미 `tableExists`·`insertLadoSnapshotFixture`·`ladoMigrationProvider`(규칙 테스트의 같은 시드·테이블 확인을 도우미로 옮김).
+- SQLite 가 `ADD COLUMN ... NOT NULL DEFAULT 1 CHECK (max_concurrent BETWEEN 1 AND 8)` 를 받는다(테스트에서 0·9 갱신이 `CHECK constraint failed`). 열 자신의 CHECK 라 `DROP COLUMN` 도 된다(라운드트립 테스트). CHECK 를 빼고 서비스에서 검증할 필요 없음.
+- gen 을 직접 읽어 확인(오프셋 버그 없음): `LIMIT ?2`, `JOIN sessions s ON s.id = e.session_id` + `WHERE s.is_terminated = 0` + `GROUP BY t.project_id`, `ON CONFLICT (id) DO UPDATE SET` 네 열, `ON CONFLICT (project_id) DO UPDATE SET max_concurrent = excluded.max_concurrent, updated_at = excluded.updated_at`, `attempt_count = attempt_count + 1`·`- 1`, `IN (/*SLICE:task_ids*/?)` 모두 온전. 같은 이름 인자는 `?1`·`?2` 재사용으로 나온다(`ClaimLadoQueueEntry` 의 `Now`).
+- 첫 생성에서 `ListLadoQueueEntries(ctx, projectID interface{})` 가 나왔다(`sqlc.narg(project_id) IS NULL` 이 앞이라 열 문맥이 없음). 순서를 `project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL` 로 바꿔 `sql.NullString` 이 되게 했다.
+- 일회용 스모크 테스트(커밋 안 함, 실행 뒤 삭제)로 29개 쿼리를 실제 스키마에 돌림 — PASS: 설정 행 없음·모드 꺼짐이면 claimable 0·claim 0; claim CAS(리스 중 0행, 만료 뒤 재claim 1행, attempt 1→3); hold 는 attempt −1·리스 비움·대기 끝나기 전 claimable 0; release 는 attempt 유지, 낡은 토큰 0행; review/blocked/fail/dispatched 는 토큰 필요; 실행 insert·조회·`ListLadoExecutionsForTasks`(빈 슬라이스 0행); live 수는 세션 종료 뒤 0; 마감 지난 목록은 timed out 뒤 빠짐, `MarkLadoExecutionTimedOut` 두 번째 0행; supersede/cancel 은 열린 항목만; `ListLadoQueueEntries` NULL·`p`·없는 프로젝트 필터; 설정 upsert 두 번·cap 9 거부; 프로젝트 cap 기본 1, 행 없는 `Set` 0행, `Upsert` 가 모드 0 행 생성, 모드 변경이 cap 유지.
+- 추가 실행: `go test -count=1 ./internal/storage/sqlite/ ./internal/storage/sqlite/store/ ./internal/storage/sqlite/sqlitetest/` ok(32.5s·7.9s·0.5s), `golangci-lint run --path-mode=abs ./internal/storage/sqlite/...` 0 issues, `gofmt -l` 출력 없음.
+- 게이트(HEAD `059f6bbab`): `GATES=8 MET=8 UNMET=0`. 이 엔트리 커밋 뒤 같은 명령으로 다시 돌려 증거를 새 HEAD 에 묶는다(원장 `.claude/hooks/.state/gate-runs.jsonl`).
 
 ## 비교/회고
 
-(계획과 달라진 점, 다음 단계가 알아야 할 것)
+- 계획대로 끝났다. 쿼리는 엔트리 목록 그대로 29개, 추가 쿼리 없음.
+- 계획에 없던 수정 하나: `max_concurrent` 열이 생기면 sqlc 가 `GetLadoProjectSettings`·`UpsertLadoProjectSettings` 를 모델이 아닌 `...Row` 타입으로 바꿔 `store/lado_project_settings_store.go` 의 `ladoProjectSettingsFromGen(row gen.LadoProjectSetting)` 컴파일이 깨진다. store 대신 쿼리 두 개의 열 목록에 `max_concurrent` 를 더해 모델 타입을 유지했다(store·도메인 변경 없음). INSERT 는 그대로라 새 행은 기본값 1, 모드 변경은 cap 을 건드리지 않는다.
+- 버전 검사는 5단계 S01 의 규칙 테스트와 같이 "0006 적용(최고 ≥ 6)"으로 썼다. 파일 최고 = 원장 최고는 `TestOpenAppliesLadoTrackInItsOwnVersionTable` 이 본다. 0007 이 생겨도 이 테스트는 그대로 둔다.
+- "실제 Down" 을 확인하려고 `TestLadoQueueMigrationRoundTrip` 을 더했다(goose Provider `DownTo(5)` → 테이블·열 사라짐 → 0006 이전 모양의 프로젝트 행 → `Up` → 그 행의 cap 1). `-run 'Lado'` 에 걸리므로 G2 가 함께 돈다.
+- 리스는 `lease_token`·`claimed_at`·`lease_expires_at` 세 열을 함께 쓰고 함께 비운다(업스트림 `automation_runs` 와 같은 꼴). supersede/cancel 은 리스를 비우지 않으므로, 리스 중에 대체·취소된 항목도 `ListLeasedLadoQueueEntries` 에 나와 복구가 정리한다.
+- 다음 단계 메모:
+  - 시각 인자 타입: nullable 열과 비교하는 `now` 는 `sql.NullTime`(`ListClaimableLadoQueueEntries`·`ClaimLadoQueueEntry`·`CountActiveLadoLeasesByProject`·`ListLadoExecutionsPastDeadline`), 토큰은 `sql.NullString`. 모든 시각은 UTC 로 넘긴다(문자열 비교). `AS TIMESTAMP` CAST 는 쓰지 말 것(NUMERIC 친화라 `'2026-10-23 10:00:00+00:00'` 이 정수 2026 이 된다 — SQLite 3.45 에서 확인).
+  - `ClaimLadoQueueEntry` 는 `waiting_reason` 을 비우고 `next_attempt_at` 은 남긴다. `HoldLadoQueueEntry` 는 attempt −1(claim 이 센 1을 돌려줌).
+  - `CountLiveLadoExecutionsByProject` 의 프로젝트는 `lado_tasks.project_id`(문자열)다. `sessions` 행이 없는 실행은 살아 있지 않은 것으로 센다.
+  - `ListLadoExecutionsForTasks`·`GetLadoExecution` 은 `lado_executions` 열만 준다. S03 의 `SessionTerminated`·PR 사실은 S03 이 쿼리를 더하거나 따로 읽는다.
+  - `ListLadoQueueEntries` 는 상태 필터 없이 모든 항목(대체·취소·디스패치 포함)을 준다. 대기열 화면에 무엇을 보일지는 S04 `ListLadoQueue` 가 정한다.
+  - supersede/cancel 은 엔트리대로 열린 항목만 바꾼다. review required·blocked·failed 항목은 그대로 남는다(태스크 상태는 최신 승인의 항목만 본다).
