@@ -3,12 +3,17 @@ package store
 // LADO fork: the queue of approved plans and the executions it starts
 // (docs/LJY-PRD/TDD.md §3.1 and §5.3). Approving a plan queues it in the
 // approval's transaction (ApproveLadoPlan), and task reads carry the queue
-// entry of the newest approval and the newest execution.
+// entry of the newest approval and the newest execution. The dispatcher
+// claims, hands back, stops and links entries with the primitives below;
+// each write that names a lease token holds only while that token holds the
+// entry.
 
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
@@ -72,37 +77,533 @@ func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask)
 		return fmt.Errorf("read LADO executions: %w", err)
 	}
 	// Rows come newest first within each task.
-	newest := make(map[domain.LadoTaskID]domain.LadoExecution, len(rows))
-	sessions := make([]domain.SessionID, 0, len(rows))
+	executions := make([]domain.LadoExecution, 0, len(rows))
+	seen := make(map[domain.LadoTaskID]bool, len(rows))
 	for _, row := range rows {
 		id := domain.LadoTaskID(row.LadoExecution.TaskID)
-		if _, ok := newest[id]; ok {
+		if seen[id] {
 			continue
 		}
+		seen[id] = true
 		execution := ladoExecutionFromGen(row.LadoExecution)
 		execution.SessionTerminated = row.SessionTerminated
-		newest[id] = execution
+		executions = append(executions, execution)
+	}
+	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+		return err
+	}
+	newest := make(map[domain.LadoTaskID]domain.LadoExecution, len(executions))
+	for _, execution := range executions {
+		newest[execution.TaskID] = execution
+	}
+	for i := range tasks {
+		task := &tasks[i]
+		task.Queue = byApproval[task.Plan.Approval.ID]
+		task.Execution = newest[task.ID]
+	}
+	return nil
+}
+
+// fillLadoExecutionPRs sets each execution's newest PR, reading the PRs of
+// all their sessions at once.
+func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.LadoExecution) error {
+	sessions := make([]domain.SessionID, 0, len(executions))
+	for _, execution := range executions {
 		sessions = append(sessions, execution.SessionID)
 	}
 	prs, err := s.ListPRFactsForSessions(ctx, sessions)
 	if err != nil {
 		return fmt.Errorf("read LADO execution PRs: %w", err)
 	}
-	for i := range tasks {
-		task := &tasks[i]
-		task.Queue = byApproval[task.Plan.Approval.ID]
-		execution, ok := newest[task.ID]
-		if !ok {
-			continue
-		}
+	for i := range executions {
 		// Newest first, as the session list reads them.
-		if facts := prs[execution.SessionID]; len(facts) > 0 {
+		if facts := prs[executions[i].SessionID]; len(facts) > 0 {
 			pr := facts[0]
-			execution.PR = domain.LadoExecutionPR{URL: pr.URL, Number: pr.Number, Merged: pr.Merged, Closed: pr.Closed}
+			executions[i].PR = domain.LadoExecutionPR{URL: pr.URL, Number: pr.Number, Merged: pr.Merged, Closed: pr.Closed}
 		}
-		task.Execution = execution
 	}
 	return nil
+}
+
+// ClaimLadoQueueEntries leases up to limit entries until leaseUntil, oldest
+// first, in one transaction: open entries whose lease is empty or expired at
+// now and whose next attempt is due, in projects with LADO mode on. Each
+// claim takes a token from newToken, counts an attempt and clears the waiting
+// reason, and writes only while the entry is still claimable. It returns the
+// claimed entries as stored.
+func (s *Store) ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, newToken func() string) ([]domain.LadoQueueEntry, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	if !leaseUntil.After(now) {
+		return nil, errors.New("claim LADO queue entries: the lease must end after now")
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return nil, err
+	}
+	defer s.writeMu.Unlock()
+	var claimed []domain.LadoQueueEntry
+	err := s.inTx(ctx, "claim LADO queue entries", func(q *gen.Queries) error {
+		at := ladoNullTime(now)
+		rows, err := q.ListClaimableLadoQueueEntries(ctx, gen.ListClaimableLadoQueueEntriesParams{Now: at, MaxEntries: int64(limit)})
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			token := newToken()
+			if token == "" {
+				return errors.New("a lease token is required")
+			}
+			n, err := q.ClaimLadoQueueEntry(ctx, gen.ClaimLadoQueueEntryParams{
+				LeaseToken:     ladoNullString(token),
+				Now:            at,
+				LeaseExpiresAt: ladoNullTime(leaseUntil),
+				ID:             row.ID,
+			})
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				// No longer claimable: another writer got there first.
+				continue
+			}
+			stored, err := q.GetLadoQueueEntry(ctx, row.ID)
+			if err != nil {
+				return err
+			}
+			claimed = append(claimed, ladoQueueEntryFromGen(stored))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return claimed, nil
+}
+
+// ReleaseLadoQueueEntry hands a leased entry back to the queue: it clears the
+// lease and keeps the entry waiting with reason waiting until nextAttempt, or
+// due at once for a zero nextAttempt. The attempt the claim counted stays
+// counted. It reports false, changing nothing, when token no longer holds the
+// entry.
+func (s *Store) ReleaseLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token string, nextAttempt time.Time, waiting string) (bool, error) {
+	return s.writeLadoRow(ctx, "release LADO queue entry", func(q *gen.Queries) (int64, error) {
+		return q.ReleaseLadoQueueEntry(ctx, gen.ReleaseLadoQueueEntryParams{
+			NextAttemptAt: ladoNullTime(nextAttempt),
+			WaitingReason: waiting,
+			ID:            string(id),
+			LeaseToken:    ladoNullString(token),
+		})
+	})
+}
+
+// HoldLadoQueueEntry hands a leased entry back as ReleaseLadoQueueEntry does
+// and gives back the attempt its claim counted: waiting for a free slot, for
+// memory or for the issue is not an attempt.
+func (s *Store) HoldLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, waiting string, nextAttempt time.Time) (bool, error) {
+	return s.writeLadoRow(ctx, "hold LADO queue entry", func(q *gen.Queries) (int64, error) {
+		return q.HoldLadoQueueEntry(ctx, gen.HoldLadoQueueEntryParams{
+			WaitingReason: waiting,
+			NextAttemptAt: ladoNullTime(nextAttempt),
+			ID:            string(id),
+			LeaseToken:    ladoNullString(token),
+		})
+	})
+}
+
+// MarkLadoQueueEntryReviewRequired stops a leased entry for reason
+// (domain.LadoReview*) until the task is approved again, and clears the
+// lease. It reports false, changing nothing, when token no longer holds the
+// entry.
+func (s *Store) MarkLadoQueueEntryReviewRequired(ctx context.Context, id domain.LadoQueueEntryID, token, reason string) (bool, error) {
+	if reason == "" {
+		return false, errors.New("mark LADO queue entry review required: a reason is required")
+	}
+	return s.writeLadoRow(ctx, "mark LADO queue entry review required", func(q *gen.Queries) (int64, error) {
+		return q.MarkLadoQueueEntryReviewRequired(ctx, gen.MarkLadoQueueEntryReviewRequiredParams{
+			Reason:     reason,
+			ID:         string(id),
+			LeaseToken: ladoNullString(token),
+		})
+	})
+}
+
+// MarkLadoQueueEntryBlocked stops a leased entry for reason
+// (domain.LadoBlocked*) until the plan or the setup changes, and clears the
+// lease. It reports false, changing nothing, when token no longer holds the
+// entry.
+func (s *Store) MarkLadoQueueEntryBlocked(ctx context.Context, id domain.LadoQueueEntryID, token, reason string) (bool, error) {
+	if reason == "" {
+		return false, errors.New("mark LADO queue entry blocked: a reason is required")
+	}
+	return s.writeLadoRow(ctx, "mark LADO queue entry blocked", func(q *gen.Queries) (int64, error) {
+		return q.MarkLadoQueueEntryBlocked(ctx, gen.MarkLadoQueueEntryBlockedParams{
+			Reason:     reason,
+			ID:         string(id),
+			LeaseToken: ladoNullString(token),
+		})
+	})
+}
+
+// FailLadoQueueEntry records that a leased entry ran out of attempts at at,
+// with the last attempt's error, and clears the lease. It reports false,
+// changing nothing, when token no longer holds the entry.
+func (s *Store) FailLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, message string, at time.Time) (bool, error) {
+	if at.IsZero() {
+		return false, errors.New("fail LADO queue entry: a time is required")
+	}
+	return s.writeLadoRow(ctx, "fail LADO queue entry", func(q *gen.Queries) (int64, error) {
+		return q.FailLadoQueueEntry(ctx, gen.FailLadoQueueEntryParams{
+			FailedAt:     ladoNullTime(at),
+			ErrorMessage: message,
+			ID:           string(id),
+			LeaseToken:   ladoNullString(token),
+		})
+	})
+}
+
+// writeLadoRow runs one write statement under the write lock and reports
+// whether it changed a row.
+func (s *Store) writeLadoRow(ctx context.Context, what string, write func(*gen.Queries) (int64, error)) (bool, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.writeMu.Unlock()
+	n, err := write(s.qw)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", what, err)
+	}
+	return n > 0, nil
+}
+
+// LinkLadoExecution records that session exec.SessionID runs a leased entry:
+// one transaction stores the execution and marks the entry dispatched to the
+// session, which clears the lease. The execution takes the entry's task,
+// approval, rule snapshot and attempt, and the revision the approval names
+// with its base SHA; the caller gives the session, the base SHA at dispatch,
+// the commits ahead and the times. Only the token is checked, not when the
+// lease ends, so recovery can link the session of an expired lease nobody
+// claimed since. When token no longer holds the entry, nothing is written and
+// the error is domain.ErrLadoLeaseLost. Linking the entry's session again
+// changes nothing and returns nil, so a link that may have happened can be
+// repeated. An entry superseded or cancelled while leased is linked too: its
+// session exists, and stopping it is the caller's choice.
+func (s *Store) LinkLadoExecution(ctx context.Context, entryID domain.LadoQueueEntryID, token string, exec domain.LadoExecution) error {
+	if exec.SessionID == "" || exec.StartedAt.IsZero() {
+		return errors.New("link LADO execution: a session and a start time are required")
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	err := s.inTx(ctx, "link LADO execution", func(q *gen.Queries) error {
+		linked, err := q.GetLadoExecution(ctx, string(exec.SessionID))
+		switch {
+		case err == nil && linked.LadoExecution.QueueEntryID == string(entryID):
+			return nil
+		case err == nil:
+			return fmt.Errorf("session %s already runs queue entry %s", exec.SessionID, linked.LadoExecution.QueueEntryID)
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
+		}
+		row, err := q.GetLadoQueueEntryPlan(ctx, string(entryID))
+		if errors.Is(err, sql.ErrNoRows) {
+			return domain.ErrLadoLeaseLost
+		}
+		if err != nil {
+			return err
+		}
+		entry := row.LadoQueueEntry
+		if token == "" || entry.LeaseToken.String != token {
+			return domain.ErrLadoLeaseLost
+		}
+		var ahead sql.NullInt64
+		if exec.BaseCommitsAhead != nil {
+			ahead = sql.NullInt64{Int64: int64(*exec.BaseCommitsAhead), Valid: true}
+		}
+		if err := q.InsertLadoExecution(ctx, gen.InsertLadoExecutionParams{
+			SessionID:        string(exec.SessionID),
+			TaskID:           entry.TaskID,
+			QueueEntryID:     entry.ID,
+			PlanRevisionID:   row.PlanRevisionID,
+			PlanApprovalID:   entry.PlanApprovalID,
+			PolicySnapshotID: entry.PolicySnapshotID,
+			Attempt:          entry.AttemptCount,
+			PlanBaseSha:      row.PlanBaseSha,
+			DispatchBaseSha:  exec.DispatchBaseSHA,
+			BaseCommitsAhead: ahead,
+			StartedAt:        exec.StartedAt.UTC(),
+			DeadlineAt:       ladoNullTime(exec.DeadlineAt),
+		}); err != nil {
+			return err
+		}
+		n, err := q.SetLadoQueueEntryDispatched(ctx, gen.SetLadoQueueEntryDispatchedParams{
+			DispatchedSessionID: ladoNullString(string(exec.SessionID)),
+			ID:                  entry.ID,
+			LeaseToken:          entry.LeaseToken,
+		})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return domain.ErrLadoLeaseLost
+		}
+		return nil
+	})
+	return unwrapLadoSentinel(err)
+}
+
+// LeasedLadoQueueEntries returns every entry a lease token holds, expired or
+// not, by claim time: what a dispatcher was working on, for recovery.
+func (s *Store) LeasedLadoQueueEntries(ctx context.Context) ([]domain.LadoQueueEntry, error) {
+	rows, err := s.qr.ListLeasedLadoQueueEntries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list leased LADO queue entries: %w", err)
+	}
+	entries := make([]domain.LadoQueueEntry, 0, len(rows))
+	for _, row := range rows {
+		entries = append(entries, ladoQueueEntryFromGen(row))
+	}
+	return entries, nil
+}
+
+// CountLiveLadoExecutions counts what takes a run slot at now, in all and by
+// project: executions whose session still runs, and entries an unexpired
+// lease holds, which may be starting one. A session AO no longer has does not
+// run.
+func (s *Store) CountLiveLadoExecutions(ctx context.Context, now time.Time) (int, map[domain.ProjectID]int, error) {
+	// Leases first: a link between the two reads moves an entry from its
+	// lease to an execution, which then counts twice rather than not at all.
+	leases, err := s.qr.CountActiveLadoLeasesByProject(ctx, ladoNullTime(now))
+	if err != nil {
+		return 0, nil, fmt.Errorf("count LADO queue leases: %w", err)
+	}
+	live, err := s.qr.CountLiveLadoExecutionsByProject(ctx)
+	if err != nil {
+		return 0, nil, fmt.Errorf("count live LADO executions: %w", err)
+	}
+	total := 0
+	perProject := make(map[domain.ProjectID]int, len(leases)+len(live))
+	for _, row := range leases {
+		perProject[domain.ProjectID(row.ProjectID)] += int(row.Leased)
+		total += int(row.Leased)
+	}
+	for _, row := range live {
+		perProject[domain.ProjectID(row.ProjectID)] += int(row.Live)
+		total += int(row.Live)
+	}
+	return total, perProject, nil
+}
+
+// LadoExecutionsPastDeadline returns the executions whose deadline is at or
+// before now, whose session still runs and that were not marked timed out,
+// by deadline. An execution without a deadline never times out.
+func (s *Store) LadoExecutionsPastDeadline(ctx context.Context, now time.Time) ([]domain.LadoExecution, error) {
+	rows, err := s.qr.ListLadoExecutionsPastDeadline(ctx, ladoNullTime(now))
+	if err != nil {
+		return nil, fmt.Errorf("list LADO executions past their deadline: %w", err)
+	}
+	// The query keeps only sessions that still run.
+	executions := make([]domain.LadoExecution, 0, len(rows))
+	for _, row := range rows {
+		executions = append(executions, ladoExecutionFromGen(row))
+	}
+	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+		return nil, err
+	}
+	return executions, nil
+}
+
+// MarkLadoExecutionTimedOut records that LADO stopped an execution at its
+// deadline. It reports false for a session that is not an execution or was
+// marked before, whose first time stays.
+func (s *Store) MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.SessionID, at time.Time) (bool, error) {
+	if at.IsZero() {
+		return false, errors.New("mark LADO execution timed out: a time is required")
+	}
+	return s.writeLadoRow(ctx, "mark LADO execution timed out", func(q *gen.Queries) (int64, error) {
+		return q.MarkLadoExecutionTimedOut(ctx, gen.MarkLadoExecutionTimedOutParams{
+			TimedOutAt: ladoNullTime(at),
+			SessionID:  string(sessionID),
+		})
+	})
+}
+
+// LadoExecution returns the execution a session runs, with whether the
+// session ended and its newest PR. It reports false for a session that is not
+// an execution.
+func (s *Store) LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error) {
+	row, err := s.qr.GetLadoExecution(ctx, string(sessionID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.LadoExecution{}, false, nil
+	}
+	if err != nil {
+		return domain.LadoExecution{}, false, fmt.Errorf("read LADO execution: %w", err)
+	}
+	return s.ladoExecutionWithPR(ctx, row.LadoExecution, row.SessionTerminated)
+}
+
+// LadoExecutionByClientRequest returns the execution whose session has the
+// client request id "lado:<entry>/<attempt>": the entry's execution, when
+// that attempt started it. Any other id reports false.
+func (s *Store) LadoExecutionByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoExecution, bool, error) {
+	entryID, attempt, ok := domain.ParseLadoClientRequestID(clientRequestID)
+	if !ok {
+		return domain.LadoExecution{}, false, nil
+	}
+	row, err := s.qr.GetLadoExecutionByEntry(ctx, string(entryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.LadoExecution{}, false, nil
+	}
+	if err != nil {
+		return domain.LadoExecution{}, false, fmt.Errorf("read LADO execution: %w", err)
+	}
+	// The session of an earlier attempt, whose spawn failed, is not the
+	// execution.
+	if int(row.LadoExecution.Attempt) != attempt {
+		return domain.LadoExecution{}, false, nil
+	}
+	return s.ladoExecutionWithPR(ctx, row.LadoExecution, row.SessionTerminated)
+}
+
+// ladoExecutionWithPR converts one execution, with whether its session ended,
+// and reads its newest PR.
+func (s *Store) ladoExecutionWithPR(ctx context.Context, row gen.LadoExecution, terminated bool) (domain.LadoExecution, bool, error) {
+	executions := []domain.LadoExecution{ladoExecutionFromGen(row)}
+	executions[0].SessionTerminated = terminated
+	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+		return domain.LadoExecution{}, false, err
+	}
+	return executions[0], true, nil
+}
+
+// LadoDispatchGrant reads what the worker gate checks before a worker spawns
+// for an attempt of an entry: the entry's project, the dispatch hash of the
+// revision its approval names and of its rule snapshot, and whether the entry
+// is Dispatching at now for that attempt. An unknown entry has an empty
+// grant.
+func (s *Store) LadoDispatchGrant(ctx context.Context, entryID domain.LadoQueueEntryID, attempt int, now time.Time) (domain.LadoDispatchGrant, error) {
+	row, err := s.qr.GetLadoQueueEntryPlan(ctx, string(entryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.LadoDispatchGrant{}, nil
+	}
+	if err != nil {
+		return domain.LadoDispatchGrant{}, fmt.Errorf("read LADO dispatch grant: %w", err)
+	}
+	entry := ladoQueueEntryFromGen(row.LadoQueueEntry)
+	return domain.LadoDispatchGrant{
+		ProjectID: entry.ProjectID,
+		Hash:      domain.LadoDispatchHash(row.PlanSha256, row.SnapshotSha256),
+		// Dispatching: a lease that has not expired holds the entry, which was
+		// neither dispatched, stopped, superseded nor cancelled since.
+		Active: entry.State(now) == domain.LadoQueueDispatching && entry.AttemptCount == attempt,
+	}, nil
+}
+
+// LadoDispatchSettings returns the dispatch settings, or
+// domain.DefaultLadoDispatchSettings while none are stored.
+func (s *Store) LadoDispatchSettings(ctx context.Context) (domain.LadoDispatchSettings, error) {
+	row, err := s.qr.GetLadoDispatchSettings(ctx)
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.DefaultLadoDispatchSettings(), nil
+	}
+	if err != nil {
+		return domain.LadoDispatchSettings{}, fmt.Errorf("read LADO dispatch settings: %w", err)
+	}
+	return ladoDispatchSettingsFromGen(row), nil
+}
+
+// SetLadoDispatchSettings stores the dispatch settings and their audit event
+// in one transaction and returns them as stored; the change takes the event's
+// time. The caller validates the settings (LadoDispatchSettings.Validate);
+// the table refuses a cap outside 1 to 8.
+func (s *Store) SetLadoDispatchSettings(ctx context.Context, settings domain.LadoDispatchSettings, event domain.LadoAuditEvent) (domain.LadoDispatchSettings, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return domain.LadoDispatchSettings{}, err
+	}
+	defer s.writeMu.Unlock()
+	var stored domain.LadoDispatchSettings
+	err := s.inTx(ctx, "set LADO dispatch settings", func(q *gen.Queries) error {
+		if err := q.UpsertLadoDispatchSettings(ctx, gen.UpsertLadoDispatchSettingsParams{
+			MaxConcurrent:     int64(settings.MaxConcurrent),
+			MaxRunMinutes:     int64(settings.MaxRunMinutes),
+			HoldOnMemoryTight: boolInt(settings.HoldOnMemoryTight),
+			UpdatedAt:         event.At.UTC(),
+		}); err != nil {
+			return err
+		}
+		row, err := q.GetLadoDispatchSettings(ctx)
+		if err != nil {
+			return err
+		}
+		stored = ladoDispatchSettingsFromGen(row)
+		_, err = appendLadoAuditEventTx(ctx, q, event)
+		return err
+	})
+	if err != nil {
+		return domain.LadoDispatchSettings{}, err
+	}
+	return stored, nil
+}
+
+// LadoProjectMaxConcurrent returns how many executions may run at once in a
+// project: domain.LadoDefaultProjectMaxConcurrent until it sets a cap.
+func (s *Store) LadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID) (int, error) {
+	n, err := s.qr.GetLadoProjectMaxConcurrent(ctx, string(projectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return domain.LadoDefaultProjectMaxConcurrent, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read LADO project cap: %w", err)
+	}
+	return int(n), nil
+}
+
+// SetLadoProjectMaxConcurrent stores how many executions may run at once in a
+// project, with its audit event, in one transaction; the change takes the
+// event's time. A project without LADO settings gets them with LADO mode off.
+// The caller validates n; the table refuses one outside 1 to 8.
+func (s *Store) SetLadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID, n int, event domain.LadoAuditEvent) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "set LADO project cap", func(q *gen.Queries) error {
+		if err := q.UpsertLadoProjectMaxConcurrent(ctx, gen.UpsertLadoProjectMaxConcurrentParams{
+			ProjectID:     string(projectID),
+			MaxConcurrent: int64(n),
+			UpdatedAt:     event.At.UTC(),
+		}); err != nil {
+			return err
+		}
+		_, err := appendLadoAuditEventTx(ctx, q, event)
+		return err
+	})
+}
+
+// ListLadoQueue returns the queue view: the open entries of a project, or of
+// every project for a nil projectID, with their task's issue, in the order
+// the dispatcher takes them. An entry that left the queue (dispatched,
+// failed, stopped for review or blocked, superseded or cancelled) shows in
+// its task's state instead.
+func (s *Store) ListLadoQueue(ctx context.Context, projectID *domain.ProjectID) ([]domain.LadoQueueItem, error) {
+	var project sql.NullString
+	if projectID != nil {
+		project = sql.NullString{String: string(*projectID), Valid: true}
+	}
+	rows, err := s.qr.ListOpenLadoQueueEntriesWithIssues(ctx, project)
+	if err != nil {
+		return nil, fmt.Errorf("list LADO queue: %w", err)
+	}
+	items := make([]domain.LadoQueueItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, domain.LadoQueueItem{
+			Entry:    ladoQueueEntryFromGen(row.LadoQueueEntry),
+			IssueRef: domain.IssueID(row.IssueRef.String),
+			Title:    row.IssueTitle,
+		})
+	}
+	return items, nil
 }
 
 func ladoQueueEntryFromGen(row gen.LadoQueueEntry) domain.LadoQueueEntry {
@@ -151,5 +652,14 @@ func ladoExecutionFromGen(row gen.LadoExecution) domain.LadoExecution {
 		StartedAt:        row.StartedAt.UTC(),
 		DeadlineAt:       ladoTimeFromNull(row.DeadlineAt),
 		TimedOutAt:       ladoTimeFromNull(row.TimedOutAt),
+	}
+}
+
+func ladoDispatchSettingsFromGen(row gen.LadoDispatchSetting) domain.LadoDispatchSettings {
+	return domain.LadoDispatchSettings{
+		MaxConcurrent:     int(row.MaxConcurrent),
+		MaxRunMinutes:     int(row.MaxRunMinutes),
+		HoldOnMemoryTight: row.HoldOnMemoryTight == 1,
+		UpdatedAt:         row.UpdatedAt.UTC(),
 	}
 }

@@ -194,57 +194,75 @@ func (q *Queries) GetLadoDispatchSettings(ctx context.Context) (LadoDispatchSett
 }
 
 const getLadoExecution = `-- name: GetLadoExecution :one
-SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
-FROM lado_executions
-WHERE session_id = ?
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated
+FROM lado_executions e
+WHERE e.session_id = ?
 `
 
-func (q *Queries) GetLadoExecution(ctx context.Context, sessionID string) (LadoExecution, error) {
+type GetLadoExecutionRow struct {
+	LadoExecution     LadoExecution
+	SessionTerminated bool
+}
+
+// With whether the session ended, as in ListLadoExecutionsForTasks.
+func (q *Queries) GetLadoExecution(ctx context.Context, sessionID string) (GetLadoExecutionRow, error) {
 	row := q.db.QueryRowContext(ctx, getLadoExecution, sessionID)
-	var i LadoExecution
+	var i GetLadoExecutionRow
 	err := row.Scan(
-		&i.SessionID,
-		&i.TaskID,
-		&i.QueueEntryID,
-		&i.PlanRevisionID,
-		&i.PlanApprovalID,
-		&i.PolicySnapshotID,
-		&i.Attempt,
-		&i.PlanBaseSha,
-		&i.DispatchBaseSha,
-		&i.BaseCommitsAhead,
-		&i.StartedAt,
-		&i.DeadlineAt,
-		&i.TimedOutAt,
+		&i.LadoExecution.SessionID,
+		&i.LadoExecution.TaskID,
+		&i.LadoExecution.QueueEntryID,
+		&i.LadoExecution.PlanRevisionID,
+		&i.LadoExecution.PlanApprovalID,
+		&i.LadoExecution.PolicySnapshotID,
+		&i.LadoExecution.Attempt,
+		&i.LadoExecution.PlanBaseSha,
+		&i.LadoExecution.DispatchBaseSha,
+		&i.LadoExecution.BaseCommitsAhead,
+		&i.LadoExecution.StartedAt,
+		&i.LadoExecution.DeadlineAt,
+		&i.LadoExecution.TimedOutAt,
+		&i.SessionTerminated,
 	)
 	return i, err
 }
 
 const getLadoExecutionByEntry = `-- name: GetLadoExecutionByEntry :one
-SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
-FROM lado_executions
-WHERE queue_entry_id = ?
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated
+FROM lado_executions e
+WHERE e.queue_entry_id = ?
 `
 
-func (q *Queries) GetLadoExecutionByEntry(ctx context.Context, queueEntryID string) (LadoExecution, error) {
+type GetLadoExecutionByEntryRow struct {
+	LadoExecution     LadoExecution
+	SessionTerminated bool
+}
+
+// With whether the session ended, as in ListLadoExecutionsForTasks.
+func (q *Queries) GetLadoExecutionByEntry(ctx context.Context, queueEntryID string) (GetLadoExecutionByEntryRow, error) {
 	row := q.db.QueryRowContext(ctx, getLadoExecutionByEntry, queueEntryID)
-	var i LadoExecution
+	var i GetLadoExecutionByEntryRow
 	err := row.Scan(
-		&i.SessionID,
-		&i.TaskID,
-		&i.QueueEntryID,
-		&i.PlanRevisionID,
-		&i.PlanApprovalID,
-		&i.PolicySnapshotID,
-		&i.Attempt,
-		&i.PlanBaseSha,
-		&i.DispatchBaseSha,
-		&i.BaseCommitsAhead,
-		&i.StartedAt,
-		&i.DeadlineAt,
-		&i.TimedOutAt,
+		&i.LadoExecution.SessionID,
+		&i.LadoExecution.TaskID,
+		&i.LadoExecution.QueueEntryID,
+		&i.LadoExecution.PlanRevisionID,
+		&i.LadoExecution.PlanApprovalID,
+		&i.LadoExecution.PolicySnapshotID,
+		&i.LadoExecution.Attempt,
+		&i.LadoExecution.PlanBaseSha,
+		&i.LadoExecution.DispatchBaseSha,
+		&i.LadoExecution.BaseCommitsAhead,
+		&i.LadoExecution.StartedAt,
+		&i.LadoExecution.DeadlineAt,
+		&i.LadoExecution.TimedOutAt,
+		&i.SessionTerminated,
 	)
 	return i, err
 }
@@ -294,6 +312,57 @@ func (q *Queries) GetLadoQueueEntry(ctx context.Context, id string) (LadoQueueEn
 		&i.FailedAt,
 		&i.SupersededAt,
 		&i.CancelledAt,
+	)
+	return i, err
+}
+
+const getLadoQueueEntryPlan = `-- name: GetLadoQueueEntryPlan :one
+SELECT e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, r.id AS plan_revision_id, r.sha256 AS plan_sha256, r.base_sha AS plan_base_sha,
+    p.sha256 AS snapshot_sha256
+FROM lado_queue_entries e
+JOIN lado_plan_approvals a ON a.id = e.plan_approval_id
+JOIN lado_plan_revisions r ON r.id = a.revision_id
+JOIN lado_policy_snapshots p ON p.id = e.policy_snapshot_id
+WHERE e.id = ?
+`
+
+type GetLadoQueueEntryPlanRow struct {
+	LadoQueueEntry LadoQueueEntry
+	PlanRevisionID string
+	PlanSha256     string
+	PlanBaseSha    string
+	SnapshotSha256 string
+}
+
+// The entry with the revision its approval names, that revision's sha256 and
+// base SHA, and the sha256 of the entry's rule snapshot.
+func (q *Queries) GetLadoQueueEntryPlan(ctx context.Context, id string) (GetLadoQueueEntryPlanRow, error) {
+	row := q.db.QueryRowContext(ctx, getLadoQueueEntryPlan, id)
+	var i GetLadoQueueEntryPlanRow
+	err := row.Scan(
+		&i.LadoQueueEntry.ID,
+		&i.LadoQueueEntry.TaskID,
+		&i.LadoQueueEntry.ProjectID,
+		&i.LadoQueueEntry.PlanApprovalID,
+		&i.LadoQueueEntry.PolicySnapshotID,
+		&i.LadoQueueEntry.EnqueuedAt,
+		&i.LadoQueueEntry.AttemptCount,
+		&i.LadoQueueEntry.NextAttemptAt,
+		&i.LadoQueueEntry.LeaseToken,
+		&i.LadoQueueEntry.ClaimedAt,
+		&i.LadoQueueEntry.LeaseExpiresAt,
+		&i.LadoQueueEntry.WaitingReason,
+		&i.LadoQueueEntry.ReviewRequiredReason,
+		&i.LadoQueueEntry.BlockedReason,
+		&i.LadoQueueEntry.ErrorMessage,
+		&i.LadoQueueEntry.DispatchedSessionID,
+		&i.LadoQueueEntry.FailedAt,
+		&i.LadoQueueEntry.SupersededAt,
+		&i.LadoQueueEntry.CancelledAt,
+		&i.PlanRevisionID,
+		&i.PlanSha256,
+		&i.PlanBaseSha,
+		&i.SnapshotSha256,
 	)
 	return i, err
 }
@@ -785,6 +854,69 @@ func (q *Queries) ListLeasedLadoQueueEntries(ctx context.Context) ([]LadoQueueEn
 			&i.FailedAt,
 			&i.SupersededAt,
 			&i.CancelledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenLadoQueueEntriesWithIssues = `-- name: ListOpenLadoQueueEntriesWithIssues :many
+SELECT e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, t.issue_ref, t.issue_title
+FROM lado_queue_entries e
+JOIN lado_tasks t ON t.id = e.task_id
+WHERE (e.project_id = ?1 OR ?1 IS NULL)
+  AND e.dispatched_session_id IS NULL AND e.failed_at IS NULL AND e.superseded_at IS NULL
+  AND e.cancelled_at IS NULL AND e.review_required_reason = '' AND e.blocked_reason = ''
+ORDER BY e.enqueued_at, e.id
+`
+
+type ListOpenLadoQueueEntriesWithIssuesRow struct {
+	LadoQueueEntry LadoQueueEntry
+	IssueRef       sql.NullString
+	IssueTitle     string
+}
+
+// The queue view: open entries, of one project or of all when project_id is
+// NULL, with their task's issue, in the order the dispatcher takes them.
+func (q *Queries) ListOpenLadoQueueEntriesWithIssues(ctx context.Context, projectID sql.NullString) ([]ListOpenLadoQueueEntriesWithIssuesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listOpenLadoQueueEntriesWithIssues, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListOpenLadoQueueEntriesWithIssuesRow{}
+	for rows.Next() {
+		var i ListOpenLadoQueueEntriesWithIssuesRow
+		if err := rows.Scan(
+			&i.LadoQueueEntry.ID,
+			&i.LadoQueueEntry.TaskID,
+			&i.LadoQueueEntry.ProjectID,
+			&i.LadoQueueEntry.PlanApprovalID,
+			&i.LadoQueueEntry.PolicySnapshotID,
+			&i.LadoQueueEntry.EnqueuedAt,
+			&i.LadoQueueEntry.AttemptCount,
+			&i.LadoQueueEntry.NextAttemptAt,
+			&i.LadoQueueEntry.LeaseToken,
+			&i.LadoQueueEntry.ClaimedAt,
+			&i.LadoQueueEntry.LeaseExpiresAt,
+			&i.LadoQueueEntry.WaitingReason,
+			&i.LadoQueueEntry.ReviewRequiredReason,
+			&i.LadoQueueEntry.BlockedReason,
+			&i.LadoQueueEntry.ErrorMessage,
+			&i.LadoQueueEntry.DispatchedSessionID,
+			&i.LadoQueueEntry.FailedAt,
+			&i.LadoQueueEntry.SupersededAt,
+			&i.LadoQueueEntry.CancelledAt,
+			&i.IssueRef,
+			&i.IssueTitle,
 		); err != nil {
 			return nil, err
 		}

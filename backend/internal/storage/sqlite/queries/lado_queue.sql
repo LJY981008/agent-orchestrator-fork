@@ -137,6 +137,28 @@ SET dispatched_session_id = sqlc.arg(dispatched_session_id),
     lease_expires_at = NULL
 WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
 
+-- name: GetLadoQueueEntryPlan :one
+-- The entry with the revision its approval names, that revision's sha256 and
+-- base SHA, and the sha256 of the entry's rule snapshot.
+SELECT sqlc.embed(e), r.id AS plan_revision_id, r.sha256 AS plan_sha256, r.base_sha AS plan_base_sha,
+    p.sha256 AS snapshot_sha256
+FROM lado_queue_entries e
+JOIN lado_plan_approvals a ON a.id = e.plan_approval_id
+JOIN lado_plan_revisions r ON r.id = a.revision_id
+JOIN lado_policy_snapshots p ON p.id = e.policy_snapshot_id
+WHERE e.id = ?;
+
+-- name: ListOpenLadoQueueEntriesWithIssues :many
+-- The queue view: open entries, of one project or of all when project_id is
+-- NULL, with their task's issue, in the order the dispatcher takes them.
+SELECT sqlc.embed(e), t.issue_ref, t.issue_title
+FROM lado_queue_entries e
+JOIN lado_tasks t ON t.id = e.task_id
+WHERE (e.project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL)
+  AND e.dispatched_session_id IS NULL AND e.failed_at IS NULL AND e.superseded_at IS NULL
+  AND e.cancelled_at IS NULL AND e.review_required_reason = '' AND e.blocked_reason = ''
+ORDER BY e.enqueued_at, e.id;
+
 -- name: ListLeasedLadoQueueEntries :many
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
@@ -153,16 +175,22 @@ INSERT INTO lado_executions (
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetLadoExecution :one
-SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
-FROM lado_executions
-WHERE session_id = ?;
+-- With whether the session ended, as in ListLadoExecutionsForTasks.
+SELECT sqlc.embed(e),
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated
+FROM lado_executions e
+WHERE e.session_id = ?;
 
 -- name: GetLadoExecutionByEntry :one
-SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
-FROM lado_executions
-WHERE queue_entry_id = ?;
+-- With whether the session ended, as in ListLadoExecutionsForTasks.
+SELECT sqlc.embed(e),
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated
+FROM lado_executions e
+WHERE e.queue_entry_id = ?;
 
 -- name: ListLadoExecutionsForTasks :many
 -- With whether the session ended. An execution without a session row counts

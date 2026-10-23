@@ -434,6 +434,7 @@ func isSQLitePrimaryKey(err error) bool {
 // match it without the transaction's wrapping text.
 func unwrapLadoSentinel(err error) error {
 	for _, sentinel := range []error{
+		domain.ErrLadoLeaseLost,
 		domain.ErrLadoPresenceReplayed,
 		domain.ErrLadoPlanSuperseded,
 		domain.ErrLadoRuleChanged,

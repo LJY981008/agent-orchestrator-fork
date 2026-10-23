@@ -2,13 +2,16 @@ package store_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -506,4 +509,853 @@ func TestLadoQueueChangesPublishEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	expect("dispatch settings and project caps", nil...)
+}
+
+// ladoQueueAt is when the dispatch tests approve their first plan.
+var ladoQueueAt = ladoPlanAt.Add(time.Hour)
+
+// mustQueuedLadoTask creates task "lado-task-<key>" in project for issue
+// #<key>, titled "Task <key>", pins a plan for it and approves the plan at at,
+// which queues entry "lado-queue-<key>".
+func mustQueuedLadoTask(t *testing.T, s *sqlite.Store, key, project string, at time.Time) domain.LadoQueueEntryID {
+	t.Helper()
+	id := "lado-task-" + key
+	task := importedLadoTask(id, domain.IssueID("github:acme/demo#"+key))
+	task.ProjectID = domain.ProjectID(project)
+	task.Issue.Title = "Task " + key
+	mustCreateLadoTask(t, s, task)
+	mustLadoPlanRequest(t, s, "req-"+key, id, ladoPlanAt)
+	sum := sha256.Sum256([]byte(id))
+	rev := mustPin(t, s, ladoRevision("lado-plan-"+key, id, "req-"+key, 1, hex.EncodeToString(sum[:])))
+	mustQueueLadoPlan(t, s, "lado-approval-"+key, rev, at)
+	return domain.LadoQueueEntryID("lado-queue-" + key)
+}
+
+func mustLadoMode(t *testing.T, s *sqlite.Store, project string, on bool) {
+	t.Helper()
+	if _, err := s.SetLadoMode(context.Background(), domain.ProjectID(project), on, ladoQueueAt); err != nil {
+		t.Fatalf("SetLadoMode %s %v: %v", project, on, err)
+	}
+}
+
+// ladoTokens hands out the lease tokens "<prefix>-1", "<prefix>-2", ...
+func ladoTokens(prefix string) func() string {
+	n := 0
+	return func() string {
+		n++
+		return prefix + "-" + strconv.Itoa(n)
+	}
+}
+
+// mustClaimLadoQueue claims up to limit entries at now for two minutes and
+// checks that it got want, in that order.
+func mustClaimLadoQueue(t *testing.T, s *sqlite.Store, now time.Time, limit int, tokens func() string, want ...domain.LadoQueueEntryID) []domain.LadoQueueEntry {
+	t.Helper()
+	claimed, err := s.ClaimLadoQueueEntries(context.Background(), now, now.Add(2*time.Minute), limit, tokens)
+	if err != nil {
+		t.Fatalf("ClaimLadoQueueEntries at %s: %v", now, err)
+	}
+	got := make([]domain.LadoQueueEntryID, 0, len(claimed))
+	for _, entry := range claimed {
+		got = append(got, entry.ID)
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("claimed %v at %s, want %v", got, now, want)
+	}
+	return claimed
+}
+
+// storedLadoQueueEntry reads entry again, as its task carries it.
+func storedLadoQueueEntry(t *testing.T, s *sqlite.Store, entry domain.LadoQueueEntry) domain.LadoQueueEntry {
+	t.Helper()
+	task, ok, err := s.LadoTask(context.Background(), entry.TaskID)
+	if err != nil || !ok {
+		t.Fatalf("LadoTask %s = (%v, %v)", entry.TaskID, ok, err)
+	}
+	if task.Queue.ID != entry.ID {
+		t.Fatalf("task %s carries entry %q, want %s", entry.TaskID, task.Queue.ID, entry.ID)
+	}
+	return task.Queue
+}
+
+// unleased is entry without its lease.
+func unleased(entry domain.LadoQueueEntry) domain.LadoQueueEntry {
+	entry.LeaseToken, entry.ClaimedAt, entry.LeaseExpiresAt = "", time.Time{}, time.Time{}
+	return entry
+}
+
+func countLadoExecutions(t *testing.T, raw *sql.DB) int {
+	t.Helper()
+	var n int
+	if err := raw.QueryRow(`SELECT COUNT(*) FROM lado_executions`).Scan(&n); err != nil {
+		t.Fatalf("count executions: %v", err)
+	}
+	return n
+}
+
+func TestClaimLadoQueueEntriesLeasesOldestOpen(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	seedProject(t, s, "zed")
+	mustLadoMode(t, s, "mer", true)
+	at := ladoQueueAt
+	// zed's entry is the oldest, but zed has LADO mode off. A cancelled
+	// task's entry is not open.
+	zed := mustQueuedLadoTask(t, s, "1", "zed", at)
+	mustQueuedLadoTask(t, s, "2", "mer", at.Add(time.Minute))
+	if _, _, err := s.CancelLadoTask(ctx, "lado-task-2", at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	first := mustQueuedLadoTask(t, s, "3", "mer", at.Add(2*time.Minute))
+	second := mustQueuedLadoTask(t, s, "4", "mer", at.Add(3*time.Minute))
+	third := mustQueuedLadoTask(t, s, "5", "mer", at.Add(4*time.Minute))
+	fourth := mustQueuedLadoTask(t, s, "6", "mer", at.Add(5*time.Minute))
+	now := at.Add(time.Hour)
+	tokens := ladoTokens("token")
+
+	// Up to the limit, oldest first, each with its own token, counting an
+	// attempt; what the claim returns is what it stored.
+	claimed := mustClaimLadoQueue(t, s, now, 2, tokens, first, second)
+	for i, entry := range claimed {
+		if entry.LeaseToken != fmt.Sprintf("token-%d", i+1) || entry.AttemptCount != 1 || !entry.ClaimedAt.Equal(now) ||
+			!entry.LeaseExpiresAt.Equal(now.Add(2*time.Minute)) || entry.State(now) != domain.LadoQueueDispatching {
+			t.Fatalf("claimed entry %+v, want token-%d and attempt 1, leased at %s for two minutes", entry, i+1, now)
+		}
+		if stored := storedLadoQueueEntry(t, s, entry); !reflect.DeepEqual(stored, entry) {
+			t.Fatalf("stored entry %+v, want what the claim returned: %+v", stored, entry)
+		}
+	}
+	// A leased entry is not claimed twice.
+	claimed = append(claimed, mustClaimLadoQueue(t, s, now, 10, tokens, third, fourth)...)
+	mustClaimLadoQueue(t, s, now.Add(time.Minute), 10, tokens)
+
+	// An entry waits until its next attempt is due. One handed back without a
+	// wait is claimed again at once, and so is one whose lease expired, each
+	// with a new token and attempt.
+	if ok, err := s.ReleaseLadoQueueEntry(ctx, third, claimed[2].LeaseToken, now.Add(10*time.Minute), domain.LadoWaitingRetry); err != nil || !ok {
+		t.Fatalf("release %s = (%v, %v)", third, ok, err)
+	}
+	if ok, err := s.ReleaseLadoQueueEntry(ctx, fourth, claimed[3].LeaseToken, time.Time{}, ""); err != nil || !ok {
+		t.Fatalf("release %s = (%v, %v)", fourth, ok, err)
+	}
+	again := mustClaimLadoQueue(t, s, now.Add(time.Minute), 10, tokens, fourth)
+	if again[0].AttemptCount != 2 || again[0].LeaseToken != "token-5" {
+		t.Fatalf("claimed again as %+v, want attempt 2 with token-5", again[0])
+	}
+	// Recovery reads the leased entries, expired or not, by claim time.
+	leased, err := s.LeasedLadoQueueEntries(ctx)
+	if want := []domain.LadoQueueEntry{claimed[0], claimed[1], again[0]}; err != nil || !reflect.DeepEqual(leased, want) {
+		t.Fatalf("LeasedLadoQueueEntries = %+v (%v), want %+v", leased, err, want)
+	}
+	for _, entry := range mustClaimLadoQueue(t, s, now.Add(2*time.Minute), 10, tokens, first, second) {
+		if entry.AttemptCount != 2 || !entry.ClaimedAt.Equal(now.Add(2*time.Minute)) || entry.LeaseToken == claimed[0].LeaseToken || entry.LeaseToken == claimed[1].LeaseToken {
+			t.Fatalf("expired lease claimed again as %+v, want attempt 2 with a new token at %s", entry, now.Add(2*time.Minute))
+		}
+	}
+
+	// With LADO mode on, zed's entry is claimed. Once every lease has ended
+	// and the wait is over, all open entries come in order, and the claim
+	// clears the waiting reason.
+	mustLadoMode(t, s, "zed", true)
+	mustClaimLadoQueue(t, s, now.Add(2*time.Minute), 10, tokens, zed)
+	later := now.Add(10 * time.Minute)
+	attempts := map[domain.LadoQueueEntryID]int{zed: 2, first: 3, second: 3, third: 2, fourth: 3}
+	for _, entry := range mustClaimLadoQueue(t, s, later, 10, tokens, zed, first, second, third, fourth) {
+		if entry.AttemptCount != attempts[entry.ID] || entry.WaitingReason != "" {
+			t.Fatalf("claimed %+v, want attempt %d without a waiting reason", entry, attempts[entry.ID])
+		}
+	}
+
+	// A claim with no room takes nothing, and a lease must end after it
+	// starts.
+	if got, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(2*time.Hour), 0, tokens); err != nil || len(got) != 0 {
+		t.Fatalf("claim with limit 0 = (%v, %v), want nothing", got, err)
+	}
+	if _, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(time.Hour), 10, tokens); err == nil {
+		t.Fatal("a lease that ends as it starts was accepted")
+	}
+	mustClaimLadoQueue(t, s, later.Add(time.Hour), 10, tokens, zed, first, second, third, fourth)
+}
+
+func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	mustLadoMode(t, s, "mer", true)
+	ids := make([]domain.LadoQueueEntryID, 0, 5)
+	for i := 1; i <= 5; i++ {
+		ids = append(ids, mustQueuedLadoTask(t, s, strconv.Itoa(i), "mer", ladoQueueAt.Add(time.Duration(i)*time.Minute)))
+	}
+	now := ladoQueueAt.Add(time.Hour)
+	claimed := mustClaimLadoQueue(t, s, now, 5, ladoTokens("token"), ids...)
+	released, held, review, blocked, failed := claimed[0], claimed[1], claimed[2], claimed[3], claimed[4]
+	writes := map[string]func(entry domain.LadoQueueEntry, token string) (bool, error){
+		"release": func(e domain.LadoQueueEntry, token string) (bool, error) {
+			return s.ReleaseLadoQueueEntry(ctx, e.ID, token, now.Add(30*time.Second), domain.LadoWaitingRetry)
+		},
+		"hold": func(e domain.LadoQueueEntry, token string) (bool, error) {
+			return s.HoldLadoQueueEntry(ctx, e.ID, token, domain.LadoWaitingSlotProject, now.Add(15*time.Second))
+		},
+		"review": func(e domain.LadoQueueEntry, token string) (bool, error) {
+			return s.MarkLadoQueueEntryReviewRequired(ctx, e.ID, token, domain.LadoReviewIssueEdited)
+		},
+		"blocked": func(e domain.LadoQueueEntry, token string) (bool, error) {
+			return s.MarkLadoQueueEntryBlocked(ctx, e.ID, token, domain.LadoBlockedBaseRefMismatch)
+		},
+		"fail": func(e domain.LadoQueueEntry, token string) (bool, error) {
+			return s.FailLadoQueueEntry(ctx, e.ID, token, "spawn failed: the agent did not start", now)
+		},
+	}
+
+	// A token that does not hold the entry changes nothing: none, an unknown
+	// one, and another entry's.
+	for name, write := range writes {
+		for _, token := range []string{"", "token-9", held.LeaseToken} {
+			if ok, err := write(released, token); err != nil || ok {
+				t.Fatalf("%s with token %q = (%v, %v), want false", name, token, ok, err)
+			}
+		}
+	}
+	if got := storedLadoQueueEntry(t, s, released); !reflect.DeepEqual(got, released) {
+		t.Fatalf("entry after writes with the wrong token = %+v, want it as claimed: %+v", got, released)
+	}
+
+	// With its token, each write clears the lease. A release keeps the attempt
+	// the claim counted; a hold gives it back.
+	wantReleased := unleased(released)
+	wantReleased.NextAttemptAt, wantReleased.WaitingReason = now.Add(30*time.Second), domain.LadoWaitingRetry
+	wantHeld := unleased(held)
+	wantHeld.AttemptCount, wantHeld.NextAttemptAt, wantHeld.WaitingReason = 0, now.Add(15*time.Second), domain.LadoWaitingSlotProject
+	wantReview := unleased(review)
+	wantReview.ReviewRequiredReason = domain.LadoReviewIssueEdited
+	wantBlocked := unleased(blocked)
+	wantBlocked.BlockedReason = domain.LadoBlockedBaseRefMismatch
+	wantFailed := unleased(failed)
+	wantFailed.FailedAt, wantFailed.ErrorMessage = now, "spawn failed: the agent did not start"
+	for _, c := range []struct {
+		write       string
+		entry, want domain.LadoQueueEntry
+		state       domain.LadoQueueState
+	}{
+		{"release", released, wantReleased, domain.LadoQueueWaiting},
+		{"hold", held, wantHeld, domain.LadoQueueWaiting},
+		{"review", review, wantReview, domain.LadoQueueReviewRequired},
+		{"blocked", blocked, wantBlocked, domain.LadoQueueBlocked},
+		{"fail", failed, wantFailed, domain.LadoQueueFailed},
+	} {
+		if ok, err := writes[c.write](c.entry, c.entry.LeaseToken); err != nil || !ok {
+			t.Fatalf("%s = (%v, %v), want true", c.write, ok, err)
+		}
+		got := storedLadoQueueEntry(t, s, c.entry)
+		if !reflect.DeepEqual(got, c.want) || got.State(now) != c.state {
+			t.Fatalf("%s left %+v (%s), want %+v (%s)", c.write, got, got.State(now), c.want, c.state)
+		}
+		// The token is spent.
+		for name, write := range writes {
+			if ok, err := write(c.entry, c.entry.LeaseToken); err != nil || ok {
+				t.Fatalf("%s after %s = (%v, %v), want false", name, c.write, ok, err)
+			}
+		}
+		if got := storedLadoQueueEntry(t, s, c.entry); !reflect.DeepEqual(got, c.want) {
+			t.Fatalf("writes with the spent token after %s changed the entry to %+v", c.write, got)
+		}
+	}
+
+	// A mark needs its reason and a failure its time.
+	if _, err := s.MarkLadoQueueEntryReviewRequired(ctx, released.ID, "token-9", ""); err == nil {
+		t.Fatal("a review mark without a reason was accepted")
+	}
+	if _, err := s.MarkLadoQueueEntryBlocked(ctx, released.ID, "token-9", ""); err == nil {
+		t.Fatal("a blocked mark without a reason was accepted")
+	}
+	if _, err := s.FailLadoQueueEntry(ctx, released.ID, "token-9", "spawn failed", time.Time{}); err == nil {
+		t.Fatal("a failure without a time was accepted")
+	}
+
+	// Once their waits are over, the released and the held entry are claimed
+	// again; the stopped ones are not.
+	again := mustClaimLadoQueue(t, s, now.Add(time.Minute), 10, ladoTokens("again"), released.ID, held.ID)
+	if again[0].AttemptCount != 2 || again[1].AttemptCount != 1 {
+		t.Fatalf("claimed again with attempts %d and %d, want 2 after the release and 1 after the hold", again[0].AttemptCount, again[1].AttemptCount)
+	}
+}
+
+func TestLinkLadoExecutionAtomically(t *testing.T) {
+	s, raw := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	mustLadoMode(t, s, "mer", true)
+	first := mustQueuedLadoTask(t, s, "1", "mer", ladoQueueAt)
+	now := ladoQueueAt.Add(time.Hour)
+	entry := mustClaimLadoQueue(t, s, now, 1, ladoTokens("token"), first)[0]
+	session := mustLadoSession(t, s, "mer", false).ID
+	ahead := 3
+	exec := domain.LadoExecution{
+		SessionID: session, DispatchBaseSHA: strings.Repeat("d", 40), BaseCommitsAhead: &ahead,
+		StartedAt: now.Add(time.Second), DeadlineAt: now.Add(8 * time.Hour),
+		// The entry gives these, not the caller.
+		TaskID: "lado-task-9", QueueEntryID: "lado-queue-9", PlanRevisionID: "lado-plan-9", PlanApprovalID: "lado-approval-9",
+		PolicySnapshotID: "lado-snapshot-9", Attempt: 9, PlanBaseSHA: strings.Repeat("9", 40),
+	}
+
+	// Without the token that holds the entry, nothing is written.
+	for _, c := range []struct {
+		entry domain.LadoQueueEntryID
+		token string
+	}{{first, ""}, {first, "token-9"}, {"lado-queue-missing", entry.LeaseToken}} {
+		if err := s.LinkLadoExecution(ctx, c.entry, c.token, exec); !errors.Is(err, domain.ErrLadoLeaseLost) {
+			t.Fatalf("link %s with token %q = %v, want ErrLadoLeaseLost", c.entry, c.token, err)
+		}
+	}
+	if n, stored := countLadoExecutions(t, raw), storedLadoQueueEntry(t, s, entry); n != 0 || !reflect.DeepEqual(stored, entry) {
+		t.Fatalf("after refused links: %d executions and entry %+v, want none and the entry as claimed", n, stored)
+	}
+
+	// The execution, the entry's session and the cleared lease commit
+	// together.
+	if err := s.LinkLadoExecution(ctx, first, entry.LeaseToken, exec); err != nil {
+		t.Fatalf("LinkLadoExecution: %v", err)
+	}
+	want := domain.LadoExecution{
+		SessionID: session, TaskID: "lado-task-1", QueueEntryID: first, PlanRevisionID: "lado-plan-1",
+		PlanApprovalID: "lado-approval-1", PolicySnapshotID: "lado-snapshot-1", Attempt: 1,
+		PlanBaseSHA: strings.Repeat("c", 40), DispatchBaseSHA: exec.DispatchBaseSHA, BaseCommitsAhead: &ahead,
+		StartedAt: exec.StartedAt, DeadlineAt: exec.DeadlineAt,
+	}
+	dispatched := unleased(entry)
+	dispatched.DispatchedSessionID = session
+	checkLinked := func(step string) {
+		t.Helper()
+		got, ok, err := s.LadoExecution(ctx, session)
+		if err != nil || !ok || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: execution = %+v (%v, %v), want %+v", step, got, ok, err, want)
+		}
+		task, _, err := s.LadoTask(ctx, "lado-task-1")
+		if err != nil || !reflect.DeepEqual(task.Queue, dispatched) || !reflect.DeepEqual(task.Execution, want) || task.State() != domain.LadoTaskRunning {
+			t.Fatalf("%s: task queue %+v execution %+v state %q, want %+v, %+v and running", step, task.Queue, task.Execution, task.State(), dispatched, want)
+		}
+		if n := countLadoExecutions(t, raw); n != 1 {
+			t.Fatalf("%s: %d executions, want 1", step, n)
+		}
+	}
+	checkLinked("link")
+
+	// Linking the session again, as recovery may, keeps the execution as it
+	// is. Another session cannot take the entry.
+	again := exec
+	again.StartedAt, again.DispatchBaseSHA = now.Add(time.Hour), strings.Repeat("e", 40)
+	if err := s.LinkLadoExecution(ctx, first, entry.LeaseToken, again); err != nil {
+		t.Fatalf("linking the session again: %v", err)
+	}
+	other := exec
+	other.SessionID = mustLadoSession(t, s, "mer", false).ID
+	if err := s.LinkLadoExecution(ctx, first, entry.LeaseToken, other); !errors.Is(err, domain.ErrLadoLeaseLost) {
+		t.Fatalf("linking another session = %v, want ErrLadoLeaseLost", err)
+	}
+	checkLinked("link again")
+
+	// After a lease expired and another claim took the entry, only the new
+	// token links it.
+	second := mustQueuedLadoTask(t, s, "2", "mer", ladoQueueAt.Add(time.Minute))
+	stale := mustClaimLadoQueue(t, s, now, 1, ladoTokens("stale"), second)[0]
+	fresh := mustClaimLadoQueue(t, s, now.Add(2*time.Minute), 1, ladoTokens("fresh"), second)[0]
+	if err := s.LinkLadoExecution(ctx, second, stale.LeaseToken, other); !errors.Is(err, domain.ErrLadoLeaseLost) {
+		t.Fatalf("link with the expired claim's token = %v, want ErrLadoLeaseLost", err)
+	}
+	// When marking the entry fails, the execution is not kept either.
+	if _, err := raw.Exec(`CREATE TRIGGER test_refuse_dispatch BEFORE UPDATE OF dispatched_session_id ON lado_queue_entries
+		BEGIN SELECT RAISE(ABORT, 'dispatch refused'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.LinkLadoExecution(ctx, second, fresh.LeaseToken, other); err == nil || errors.Is(err, domain.ErrLadoLeaseLost) {
+		t.Fatalf("link with a refused dispatch = %v, want the refusal", err)
+	}
+	if _, ok, err := s.LadoExecution(ctx, other.SessionID); err != nil || ok || !reflect.DeepEqual(storedLadoQueueEntry(t, s, fresh), fresh) {
+		t.Fatalf("after a refused dispatch: execution kept %v (%v) and entry %+v, want no execution and the entry leased", ok, err, storedLadoQueueEntry(t, s, fresh))
+	}
+	if _, err := raw.Exec(`DROP TRIGGER test_refuse_dispatch`); err != nil {
+		t.Fatal(err)
+	}
+	// A session that runs another entry cannot run this one too.
+	if err := s.LinkLadoExecution(ctx, second, fresh.LeaseToken, exec); err == nil || errors.Is(err, domain.ErrLadoLeaseLost) {
+		t.Fatalf("linking a session that runs another entry = %v, want a refusal", err)
+	}
+	if err := s.LinkLadoExecution(ctx, second, fresh.LeaseToken, other); err != nil {
+		t.Fatalf("link with the new token: %v", err)
+	}
+	if got, _, err := s.LadoExecution(ctx, other.SessionID); err != nil || got.QueueEntryID != second || got.Attempt != 2 {
+		t.Fatalf("execution %+v (%v), want entry %s at attempt 2", got, err, second)
+	}
+
+	// An entry a newer approval superseded while leased still links: its
+	// session exists.
+	third := mustQueuedLadoTask(t, s, "3", "mer", ladoQueueAt.Add(2*time.Minute))
+	leased := mustClaimLadoQueue(t, s, now, 1, ladoTokens("leased"), third)[0]
+	rev, _, err := s.LadoPlanRevision(ctx, "lado-plan-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustQueueLadoPlan(t, s, "lado-approval-3b", rev, ladoQueueAt.Add(3*time.Hour))
+	late := exec
+	late.SessionID = mustLadoSession(t, s, "mer", false).ID
+	if err := s.LinkLadoExecution(ctx, third, leased.LeaseToken, late); err != nil {
+		t.Fatalf("link of a superseded entry: %v", err)
+	}
+	if row := ladoQueueRows(t, raw)[third]; !row.SupersededAt.Valid || row.DispatchedSessionID.String != string(late.SessionID) {
+		t.Fatalf("superseded entry after its link = %+v, want it superseded and dispatched", row)
+	}
+	if n := countLadoExecutions(t, raw); n != 3 {
+		t.Fatalf("%d executions, want 3", n)
+	}
+}
+
+func TestLadoExecutionByClientRequest(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	mustLadoMode(t, s, "mer", true)
+	id := mustQueuedLadoTask(t, s, "1", "mer", ladoQueueAt)
+	now := ladoQueueAt.Add(time.Hour)
+	// The first attempt's spawn failed; the second attempt's session ran and
+	// merged its PR.
+	first := mustClaimLadoQueue(t, s, now, 1, ladoTokens("token"), id)[0]
+	if ok, err := s.ReleaseLadoQueueEntry(ctx, id, first.LeaseToken, time.Time{}, domain.LadoWaitingRetry); err != nil || !ok {
+		t.Fatalf("release = (%v, %v)", ok, err)
+	}
+	second := mustClaimLadoQueue(t, s, now, 1, ladoTokens("again"), id)[0]
+	session := mustLadoSession(t, s, "mer", true).ID
+	if err := s.LinkLadoExecution(ctx, id, second.LeaseToken, domain.LadoExecution{SessionID: session, StartedAt: now}); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	pr := mustWriteLadoPR(t, s, session, 4, true, false, now.Add(time.Hour))
+	want, ok, err := s.LadoExecution(ctx, session)
+	if err != nil || !ok || want.Attempt != 2 || !want.SessionTerminated || want.PR != pr {
+		t.Fatalf("LadoExecution = %+v (%v, %v), want attempt 2 of an ended session with PR %+v", want, ok, err, pr)
+	}
+
+	got, ok, err := s.LadoExecutionByClientRequest(ctx, domain.LadoClientRequestID(id, 2))
+	if err != nil || !ok || !reflect.DeepEqual(got, want) {
+		t.Fatalf("LadoExecutionByClientRequest = %+v (%v, %v), want %+v", got, ok, err, want)
+	}
+	// The failed attempt's session is not the execution, and other ids name
+	// none.
+	for _, other := range []string{
+		domain.LadoClientRequestID(id, 1),
+		domain.LadoClientRequestID("lado-queue-missing", 2),
+		"lado:" + string(id),
+		string(session),
+		"",
+	} {
+		if got, ok, err := s.LadoExecutionByClientRequest(ctx, other); err != nil || ok {
+			t.Fatalf("LadoExecutionByClientRequest %q = %+v (%v, %v), want none", other, got, ok, err)
+		}
+	}
+	if got, ok, err := s.LadoExecution(ctx, "mer-unknown"); err != nil || ok {
+		t.Fatalf("LadoExecution of a session that is not an execution = %+v (%v, %v), want none", got, ok, err)
+	}
+}
+
+func TestCountLiveLadoExecutions(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	for _, project := range []string{"mer", "zed"} {
+		seedProject(t, s, project)
+		mustLadoMode(t, s, project, true)
+	}
+	now := ladoQueueAt.Add(time.Hour)
+	tokens := ladoTokens("token")
+	n := 0
+	// queue approves the next task, in project.
+	queue := func(project string) domain.LadoQueueEntryID {
+		n++
+		return mustQueuedLadoTask(t, s, strconv.Itoa(n), project, ladoQueueAt.Add(time.Duration(n)*time.Minute))
+	}
+	// run dispatches the next task in project to session.
+	run := func(project string, session domain.SessionID) {
+		id := queue(project)
+		entry := mustClaimLadoQueue(t, s, now, 1, tokens, id)[0]
+		if err := s.LinkLadoExecution(ctx, id, entry.LeaseToken, domain.LadoExecution{SessionID: session, StartedAt: now}); err != nil {
+			t.Fatalf("link %s: %v", id, err)
+		}
+	}
+	live := mustLadoSession(t, s, "mer", false)
+	run("mer", live.ID)
+	run("mer", mustLadoSession(t, s, "mer", true).ID)
+	// A session AO no longer has does not run.
+	run("mer", "mer-gone")
+	run("zed", mustLadoSession(t, s, "zed", false).ID)
+	// An entry leased now takes a slot. One whose lease expired does not, nor
+	// does one waiting in the queue.
+	mustClaimLadoQueue(t, s, now, 1, tokens, queue("mer"))
+	expired := queue("zed")
+	if claimed, err := s.ClaimLadoQueueEntries(ctx, now.Add(-10*time.Minute), now.Add(-8*time.Minute), 1, tokens); err != nil || len(claimed) != 1 || claimed[0].ID != expired {
+		t.Fatalf("claim of %s = (%+v, %v)", expired, claimed, err)
+	}
+	queue("zed")
+
+	check := func(step string, at time.Time, total int, want map[domain.ProjectID]int) {
+		t.Helper()
+		gotTotal, got, err := s.CountLiveLadoExecutions(ctx, at)
+		if err != nil || gotTotal != total || !reflect.DeepEqual(got, want) {
+			t.Fatalf("%s: CountLiveLadoExecutions = (%d, %v, %v), want (%d, %v)", step, gotTotal, got, err, total, want)
+		}
+	}
+	check("now", now, 3, map[domain.ProjectID]int{"mer": 2, "zed": 1})
+	live.IsTerminated = true
+	if err := s.UpdateSession(ctx, live); err != nil {
+		t.Fatalf("end session: %v", err)
+	}
+	check("after mer's live session ended", now, 2, map[domain.ProjectID]int{"mer": 1, "zed": 1})
+	check("when mer's lease ends", now.Add(2*time.Minute), 1, map[domain.ProjectID]int{"zed": 1})
+}
+
+func TestLadoDispatchGrant(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedLadoTaskWithPlan(t, s)
+	mustLadoMode(t, s, "mer", true)
+	approved := mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a')))
+	snapshot := ladoPolicySnapshot("lado-snapshot-1", `{"agent":"codex"}`, false)
+	if _, _, err := s.ApproveLadoPlan(ctx,
+		domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: approved.ID, TaskID: approved.TaskID, SHA256: approved.SHA256, ApprovedAt: ladoQueueAt},
+		ladoProof("nonce-1", string(approved.ID)), ladoApprovalEvent(string(approved.ID)), snapshot, &domain.LadoQueueEntry{ID: "lado-queue-1"}); err != nil {
+		t.Fatalf("ApproveLadoPlan: %v", err)
+	}
+	// A revision pinned since does not change the hash, which names what the
+	// approval approved.
+	newer := mustPin(t, s, ladoRevision("lado-plan-2", "lado-task-1", "req-1", 2, ladoSHA('b')))
+	now := ladoQueueAt.Add(time.Hour)
+	entry := mustClaimLadoQueue(t, s, now, 1, ladoTokens("token"), "lado-queue-1")[0]
+	grant := func(id domain.LadoQueueEntryID, attempt int, at time.Time) domain.LadoDispatchGrant {
+		t.Helper()
+		got, err := s.LadoDispatchGrant(ctx, id, attempt, at)
+		if err != nil {
+			t.Fatalf("LadoDispatchGrant %s/%d: %v", id, attempt, err)
+		}
+		return got
+	}
+	hash := domain.LadoDispatchHash(approved.SHA256, snapshot.SHA256)
+	active := domain.LadoDispatchGrant{ProjectID: "mer", Hash: hash, Active: true}
+	inactive := domain.LadoDispatchGrant{ProjectID: "mer", Hash: hash}
+	for _, c := range []struct {
+		name    string
+		attempt int
+		at      time.Time
+		want    domain.LadoDispatchGrant
+	}{
+		{"the leased attempt", 1, now, active},
+		{"before the lease ends", 1, now.Add(time.Minute), active},
+		{"another attempt", 2, now, inactive},
+		{"when the lease ends", 1, entry.LeaseExpiresAt, inactive},
+		{"after the lease ended", 1, now.Add(time.Hour), inactive},
+	} {
+		if got := grant("lado-queue-1", c.attempt, c.at); got != c.want {
+			t.Fatalf("%s: grant = %+v, want %+v", c.name, got, c.want)
+		}
+	}
+	if got := grant("lado-queue-missing", 1, now); got != (domain.LadoDispatchGrant{}) {
+		t.Fatalf("grant of an unknown entry = %+v, want none", got)
+	}
+
+	// A released entry has no grant until a claim takes it again, for the
+	// next attempt; a dispatched one has none.
+	if ok, err := s.ReleaseLadoQueueEntry(ctx, entry.ID, entry.LeaseToken, time.Time{}, domain.LadoWaitingRetry); err != nil || !ok {
+		t.Fatalf("release = (%v, %v)", ok, err)
+	}
+	if got := grant("lado-queue-1", 1, now); got != inactive {
+		t.Fatalf("grant of a released entry = %+v, want %+v", got, inactive)
+	}
+	entry = mustClaimLadoQueue(t, s, now, 1, ladoTokens("again"), "lado-queue-1")[0]
+	if got, old := grant("lado-queue-1", 2, now), grant("lado-queue-1", 1, now); got != active || old != inactive {
+		t.Fatalf("grants after the second claim = %+v for attempt 2 and %+v for attempt 1, want %+v and %+v", got, old, active, inactive)
+	}
+	if err := s.LinkLadoExecution(ctx, entry.ID, entry.LeaseToken, domain.LadoExecution{SessionID: mustLadoSession(t, s, "mer", false).ID, StartedAt: now}); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	if got := grant("lado-queue-1", 2, now); got != inactive {
+		t.Fatalf("grant of a dispatched entry = %+v, want %+v", got, inactive)
+	}
+
+	// Nor has a leased entry that a newer approval superseded or the task's
+	// cancellation cancelled.
+	mustQueueLadoPlan(t, s, "lado-approval-2", newer, ladoQueueAt.Add(2*time.Hour))
+	mustClaimLadoQueue(t, s, now, 1, ladoTokens("newer"), "lado-queue-2")
+	if got := grant("lado-queue-2", 1, now); !got.Active {
+		t.Fatalf("grant of the newer entry = %+v, want an active one", got)
+	}
+	mustQueueLadoPlan(t, s, "lado-approval-3", newer, ladoQueueAt.Add(3*time.Hour))
+	if got := grant("lado-queue-2", 1, now); got.Active {
+		t.Fatalf("grant of a superseded entry = %+v, want an inactive one", got)
+	}
+	mustClaimLadoQueue(t, s, now, 1, ladoTokens("last"), "lado-queue-3")
+	if _, _, err := s.CancelLadoTask(ctx, "lado-task-1", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := grant("lado-queue-3", 1, now); got.Active {
+		t.Fatalf("grant of a cancelled entry = %+v, want an inactive one", got)
+	}
+}
+
+func TestLadoExecutionsPastDeadline(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	mustLadoMode(t, s, "mer", true)
+	now := ladoQueueAt.Add(10 * time.Hour)
+	started := now.Add(-8 * time.Hour)
+	tokens := ladoTokens("token")
+	n := 0
+	// start dispatches the next task to a session, which can have ended, with
+	// deadline.
+	start := func(deadline time.Time, ended bool) domain.LadoExecution {
+		t.Helper()
+		n++
+		id := mustQueuedLadoTask(t, s, strconv.Itoa(n), "mer", ladoQueueAt.Add(time.Duration(n)*time.Minute))
+		entry := mustClaimLadoQueue(t, s, started, 1, tokens, id)[0]
+		session := mustLadoSession(t, s, "mer", ended).ID
+		if err := s.LinkLadoExecution(ctx, id, entry.LeaseToken, domain.LadoExecution{SessionID: session, StartedAt: started, DeadlineAt: deadline}); err != nil {
+			t.Fatalf("link %s: %v", id, err)
+		}
+		execution, ok, err := s.LadoExecution(ctx, session)
+		if err != nil || !ok {
+			t.Fatalf("LadoExecution %s = (%v, %v)", session, ok, err)
+		}
+		return execution
+	}
+	overdue := start(now.Add(-time.Minute), false)
+	due := start(now, false)
+	start(now.Add(time.Minute), false)
+	start(now.Add(-time.Minute), true)
+	start(time.Time{}, false)
+	marked := start(now.Add(-time.Hour), false)
+	if ok, err := s.MarkLadoExecutionTimedOut(ctx, marked.SessionID, now.Add(-time.Hour)); err != nil || !ok {
+		t.Fatalf("MarkLadoExecutionTimedOut = (%v, %v)", ok, err)
+	}
+	overdue.PR = mustWriteLadoPR(t, s, overdue.SessionID, 5, false, false, now.Add(-time.Hour))
+
+	// Only runs whose session lives, that have a deadline at or before now
+	// and were not stopped yet, by deadline, with their PR.
+	got, err := s.LadoExecutionsPastDeadline(ctx, now)
+	if err != nil || !reflect.DeepEqual(got, []domain.LadoExecution{overdue, due}) {
+		t.Fatalf("LadoExecutionsPastDeadline = %+v (%v), want %+v", got, err, []domain.LadoExecution{overdue, due})
+	}
+
+	// A time-out keeps its first time, and the run leaves the list.
+	for i, want := range []bool{true, false} {
+		if ok, err := s.MarkLadoExecutionTimedOut(ctx, overdue.SessionID, now.Add(time.Duration(i)*time.Minute)); err != nil || ok != want {
+			t.Fatalf("time-out %d = (%v, %v), want %v", i+1, ok, err, want)
+		}
+	}
+	if ok, err := s.MarkLadoExecutionTimedOut(ctx, "mer-unknown", now); err != nil || ok {
+		t.Fatalf("time-out of a session that is not an execution = (%v, %v), want false", ok, err)
+	}
+	if _, err := s.MarkLadoExecutionTimedOut(ctx, due.SessionID, time.Time{}); err == nil {
+		t.Fatal("a time-out without a time was accepted")
+	}
+	if got, err := s.LadoExecutionsPastDeadline(ctx, now); err != nil || !reflect.DeepEqual(got, []domain.LadoExecution{due}) {
+		t.Fatalf("after the time-out: %+v (%v), want %+v", got, err, []domain.LadoExecution{due})
+	}
+	stopped, _, err := s.LadoExecution(ctx, overdue.SessionID)
+	if err != nil || !stopped.TimedOutAt.Equal(now) {
+		t.Fatalf("timed-out execution = %+v (%v), want timed out at %s", stopped, err, now)
+	}
+	task, _, err := s.LadoTask(ctx, overdue.TaskID)
+	if err != nil || task.State() != domain.LadoTaskFailed || task.StateReason() != domain.LadoFailedTimedOut {
+		t.Fatalf("task state %q (%s) %v, want failed (timed_out)", task.State(), task.StateReason(), err)
+	}
+}
+
+func TestLadoDispatchSettingsDefaultsAndUpdate(t *testing.T) {
+	s, raw := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	if got, err := s.LadoDispatchSettings(ctx); err != nil || got != domain.DefaultLadoDispatchSettings() {
+		t.Fatalf("LadoDispatchSettings without a row = (%+v, %v), want the defaults", got, err)
+	}
+	countEvents := func() int {
+		t.Helper()
+		return countLadoRuleRows(t, raw).events
+	}
+	event := func(action string, at time.Time) domain.LadoAuditEvent {
+		return domain.LadoAuditEvent{At: at, Actor: "api", Action: action, SubjectKind: "dispatch_settings", SubjectID: "global", Payload: json.RawMessage(`{}`)}
+	}
+	at := ladoQueueAt
+
+	// Each change stores the settings and its audit event together and
+	// replaces the one before.
+	for i, settings := range []domain.LadoDispatchSettings{
+		{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: false},
+		{MaxConcurrent: 1, MaxRunMinutes: 0, HoldOnMemoryTight: true},
+	} {
+		changedAt := at.Add(time.Duration(i) * time.Hour)
+		stored, err := s.SetLadoDispatchSettings(ctx, settings, event("dispatch.settings_changed", changedAt))
+		want := settings
+		want.UpdatedAt = changedAt
+		if err != nil || stored != want {
+			t.Fatalf("SetLadoDispatchSettings %d = (%+v, %v), want %+v", i+1, stored, err, want)
+		}
+		if got, err := s.LadoDispatchSettings(ctx); err != nil || got != want {
+			t.Fatalf("LadoDispatchSettings after change %d = (%+v, %v), want %+v", i+1, got, err, want)
+		}
+		if n, action := countEvents(), latestLadoAuditAction(t, raw); n != i+1 || action != "dispatch.settings_changed" {
+			t.Fatalf("after change %d: %d audit events, the latest %q", i+1, n, action)
+		}
+	}
+	current, _ := s.LadoDispatchSettings(ctx)
+
+	// A change the table refuses, or one whose event has no time, keeps
+	// neither the settings nor the event.
+	for name, change := range map[string]struct {
+		settings domain.LadoDispatchSettings
+		at       time.Time
+	}{
+		"cap 9":         {domain.LadoDispatchSettings{MaxConcurrent: 9, MaxRunMinutes: 60}, at.Add(3 * time.Hour)},
+		"event no time": {domain.LadoDispatchSettings{MaxConcurrent: 4, MaxRunMinutes: 60}, time.Time{}},
+	} {
+		if _, err := s.SetLadoDispatchSettings(ctx, change.settings, event("dispatch.settings_changed", change.at)); err == nil {
+			t.Fatalf("%s: SetLadoDispatchSettings succeeded", name)
+		}
+		if got, _ := s.LadoDispatchSettings(ctx); got != current || countEvents() != 2 {
+			t.Fatalf("%s: settings %+v with %d audit events, want %+v with 2", name, got, countEvents(), current)
+		}
+	}
+	if broken, err := s.VerifyLadoAuditChain(ctx); err != nil || broken != 0 {
+		t.Fatalf("VerifyLadoAuditChain = (%d, %v)", broken, err)
+	}
+
+	// A project's cap is 1 until it sets one. Setting it gives a project
+	// without settings a row with LADO mode off, and the cap and the mode
+	// change apart.
+	capOf := func(project domain.ProjectID) int {
+		t.Helper()
+		n, err := s.LadoProjectMaxConcurrent(ctx, project)
+		if err != nil {
+			t.Fatalf("LadoProjectMaxConcurrent %s: %v", project, err)
+		}
+		return n
+	}
+	if got := capOf("mer"); got != 1 {
+		t.Fatalf("cap without settings = %d, want 1", got)
+	}
+	capEvent := event("project.max_concurrent_changed", at.Add(4*time.Hour))
+	capEvent.SubjectKind, capEvent.SubjectID = "project", "mer"
+	if err := s.SetLadoProjectMaxConcurrent(ctx, "mer", 3, capEvent); err != nil {
+		t.Fatalf("SetLadoProjectMaxConcurrent: %v", err)
+	}
+	settings, err := s.LadoProjectSettings(ctx, "mer")
+	if err != nil || capOf("mer") != 3 || settings.LadoMode || !settings.UpdatedAt.Equal(capEvent.At) {
+		t.Fatalf("after setting the cap: cap %d, settings %+v (%v), want 3 with LADO mode off at %s", capOf("mer"), settings, err, capEvent.At)
+	}
+	if n, action := countEvents(), latestLadoAuditAction(t, raw); n != 3 || action != "project.max_concurrent_changed" {
+		t.Fatalf("after setting the cap: %d audit events, the latest %q", n, action)
+	}
+	mustLadoMode(t, s, "mer", true)
+	if got := capOf("mer"); got != 3 {
+		t.Fatalf("cap after turning LADO mode on = %d, want 3", got)
+	}
+	capEvent.At = at.Add(5 * time.Hour)
+	if err := s.SetLadoProjectMaxConcurrent(ctx, "mer", 2, capEvent); err != nil {
+		t.Fatalf("SetLadoProjectMaxConcurrent again: %v", err)
+	}
+	if settings, err := s.LadoProjectSettings(ctx, "mer"); err != nil || capOf("mer") != 2 || !settings.LadoMode {
+		t.Fatalf("after changing the cap: cap %d, settings %+v (%v), want 2 with LADO mode on", capOf("mer"), settings, err)
+	}
+	// The table refuses a cap outside 1 to 8, and the event goes with it.
+	if err := s.SetLadoProjectMaxConcurrent(ctx, "mer", 0, capEvent); err == nil {
+		t.Fatal("cap 0 was accepted")
+	}
+	if got, n := capOf("mer"), countEvents(); got != 2 || n != 4 {
+		t.Fatalf("after a refused cap: cap %d with %d audit events, want 2 with 4", got, n)
+	}
+	if got := capOf("zed"); got != 1 {
+		t.Fatalf("another project's cap = %d, want 1", got)
+	}
+}
+
+func TestListLadoQueue(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	seedProject(t, s, "zed")
+	mustLadoMode(t, s, "mer", true)
+	at := ladoQueueAt
+	now := at.Add(time.Hour)
+	in := func(minutes int) time.Time { return at.Add(time.Duration(minutes) * time.Minute) }
+
+	// In mer: 2 stays leased, 3 is dispatched, 4 failed, 5 waits for a retry
+	// and 6 needs review; 1 is queued after them but enqueued first.
+	for i := 2; i <= 6; i++ {
+		mustQueuedLadoTask(t, s, strconv.Itoa(i), "mer", in(i))
+	}
+	claimed := mustClaimLadoQueue(t, s, now, 5, ladoTokens("token"), "lado-queue-2", "lado-queue-3", "lado-queue-4", "lado-queue-5", "lado-queue-6")
+	if err := s.LinkLadoExecution(ctx, claimed[1].ID, claimed[1].LeaseToken, domain.LadoExecution{SessionID: mustLadoSession(t, s, "mer", false).ID, StartedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for _, write := range []func() (bool, error){
+		func() (bool, error) {
+			return s.FailLadoQueueEntry(ctx, claimed[2].ID, claimed[2].LeaseToken, "spawn failed", now)
+		},
+		func() (bool, error) {
+			return s.ReleaseLadoQueueEntry(ctx, claimed[3].ID, claimed[3].LeaseToken, now.Add(time.Minute), domain.LadoWaitingRetry)
+		},
+		func() (bool, error) {
+			return s.MarkLadoQueueEntryReviewRequired(ctx, claimed[4].ID, claimed[4].LeaseToken, domain.LadoReviewRulesChanged)
+		},
+	} {
+		if ok, err := write(); err != nil || !ok {
+			t.Fatalf("write = (%v, %v)", ok, err)
+		}
+	}
+	mustQueuedLadoTask(t, s, "1", "mer", in(1))
+	// In zed, where LADO mode is off: 7 is queued, 8 was approved again and 9
+	// was cancelled.
+	mustQueuedLadoTask(t, s, "7", "zed", in(7))
+	mustQueuedLadoTask(t, s, "8", "zed", in(8))
+	rev, _, err := s.LadoPlanRevision(ctx, "lado-plan-8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustQueueLadoPlan(t, s, "lado-approval-8b", rev, in(10))
+	mustQueuedLadoTask(t, s, "9", "zed", in(9))
+	if _, _, err := s.CancelLadoTask(ctx, "lado-task-9", now); err != nil {
+		t.Fatal(err)
+	}
+
+	// item is entry key's row, read back through its task.
+	item := func(key, task string) domain.LadoQueueItem {
+		t.Helper()
+		got, _, err := s.LadoTask(ctx, domain.LadoTaskID("lado-task-"+task))
+		if err != nil || got.Queue.ID != domain.LadoQueueEntryID("lado-queue-"+key) {
+			t.Fatalf("task %s carries entry %q (%v), want lado-queue-%s", task, got.Queue.ID, err, key)
+		}
+		return domain.LadoQueueItem{Entry: got.Queue, IssueRef: domain.IssueID("github:acme/demo#" + task), Title: "Task " + task}
+	}
+	mer := []domain.LadoQueueItem{item("1", "1"), item("2", "2"), item("5", "5")}
+	zed := []domain.LadoQueueItem{item("7", "7"), item("8b", "8")}
+	states := map[domain.LadoQueueEntryID]domain.LadoQueueState{
+		"lado-queue-1": domain.LadoQueueQueued, "lado-queue-2": domain.LadoQueueDispatching, "lado-queue-5": domain.LadoQueueWaiting,
+		"lado-queue-7": domain.LadoQueueQueued, "lado-queue-8b": domain.LadoQueueQueued,
+	}
+	merID, zedID, otherID := domain.ProjectID("mer"), domain.ProjectID("zed"), domain.ProjectID("other")
+	for _, c := range []struct {
+		name    string
+		project *domain.ProjectID
+		want    []domain.LadoQueueItem
+	}{
+		{"every project", nil, append(slices.Clone(mer), zed...)},
+		{"mer", &merID, mer},
+		{"zed", &zedID, zed},
+		{"a project without entries", &otherID, []domain.LadoQueueItem{}},
+	} {
+		got, err := s.ListLadoQueue(ctx, c.project)
+		if err != nil || !reflect.DeepEqual(got, c.want) {
+			t.Fatalf("ListLadoQueue %s = %+v (%v), want %+v", c.name, got, err, c.want)
+		}
+		for _, item := range got {
+			if state := item.Entry.State(now); state != states[item.Entry.ID] {
+				t.Fatalf("ListLadoQueue %s: %s is %s, want %s", c.name, item.Entry.ID, state, states[item.Entry.ID])
+			}
+		}
+	}
 }

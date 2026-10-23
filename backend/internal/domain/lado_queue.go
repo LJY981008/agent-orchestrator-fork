@@ -61,6 +61,14 @@ type LadoQueueEntry struct {
 	CancelledAt  time.Time
 }
 
+// LadoQueueItem is one row of the queue view: an open entry with its task's
+// issue.
+type LadoQueueItem struct {
+	Entry    LadoQueueEntry
+	IssueRef IssueID
+	Title    string
+}
+
 // LadoQueueState is a queue entry's derived state. It is computed at read
 // time and never stored.
 type LadoQueueState string
@@ -231,6 +239,10 @@ type LadoDispatchSettings struct {
 // LadoMaxConcurrent is the highest cap on running executions, overall and per
 // project. The lowest is 1.
 const LadoMaxConcurrent = 8
+
+// LadoDefaultProjectMaxConcurrent is a project's cap on running executions
+// until it sets one.
+const LadoDefaultProjectMaxConcurrent = 1
 
 // LadoRunMinuteChoices are the maximum run times an execution may have, in
 // minutes: no limit, or 1, 2, 4, 8, 12 or 24 hours.
