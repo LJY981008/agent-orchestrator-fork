@@ -106,7 +106,7 @@ describe("LADO rule errors", () => {
 				{ code: "LADO_AGENT_CAPABILITY_UNSUPPORTED", rules: ["team.review"], details: { agent: "cursor", capability: "prompt" } },
 				{ agent: (harness) => (harness === "cursor" ? "Cursor" : harness) },
 			),
-		).toBe("Cursor cannot apply rule text, which these rules need.");
+		).toBe("Cursor cannot apply rule text, which these rules need: team.review.");
 		expect(
 			ladoPolicyProblemText(en, {
 				code: "LADO_AO_RULES_FILE_UNREADABLE",

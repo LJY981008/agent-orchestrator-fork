@@ -165,14 +165,31 @@ describe("rule presentation", () => {
 		).toBe("These rules cannot be on together: Commit messages in Korean, Commits in English.");
 	});
 
-	it("names the agent in capability problems", () => {
+	it("names the agent and the rules in capability problems", () => {
 		const en = createFullAppI18n("en").t;
-		const problem = (code: string, agent: string) => ({ code, severity: "blocking" as const, rules: [], details: { agent, capability: "prompt" } });
-		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_UNSUPPORTED", "cursor"))).toBe("Cursor cannot apply rule text, which these rules need.");
-		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_DEGRADED", "claude-code"))).toBe("Claude Code applies rule text only partly.");
+		const ko = createFullAppI18n("ko").t;
+		const problem = (code: string, agent: string) => ({
+			code,
+			severity: "blocking" as const,
+			rules: ["git.commit.message.korean", "team.review"],
+			details: { agent, capability: "prompt" },
+		});
+		const rules = [
+			{ ruleId: "git.commit.message.korean", name: "Commit messages in Korean" },
+			{ ruleId: "team.review", name: "Ask for a review" },
+		];
+		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_UNSUPPORTED", "cursor"), rules)).toBe(
+			"Cursor cannot apply rule text, which these rules need: Commit messages in Korean, Ask for a review.",
+		);
+		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_DEGRADED", "claude-code"), rules)).toBe(
+			"Claude Code applies rule text only partly for these rules: Commit messages in Korean, Ask for a review.",
+		);
 		// An agent the app does not know keeps its id.
-		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_UNVERIFIED", "my-agent"))).toBe(
-			"LADO has not verified that my-agent applies rule text, which these rules need.",
+		expect(ladoProblemText(en, problem("LADO_AGENT_CAPABILITY_UNVERIFIED", "my-agent"), rules)).toBe(
+			"LADO has not verified that my-agent applies rule text, which these rules need: Commit messages in Korean, Ask for a review.",
+		);
+		expect(ladoProblemText(ko, problem("LADO_AGENT_CAPABILITY_UNSUPPORTED", "cursor"), rules)).toBe(
+			"Cursor에서는 규칙 텍스트 적용을 지원하지 않습니다. 이 기능이 필요한 규칙: 한국어 커밋 메시지, Ask for a review.",
 		);
 	});
 });
