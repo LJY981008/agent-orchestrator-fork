@@ -12,6 +12,29 @@ import (
 	"time"
 )
 
+const cancelLadoQueueEntry = `-- name: CancelLadoQueueEntry :execrows
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    cancelled_at = ?1
+WHERE id = ?2 AND lease_token = ?3
+`
+
+type CancelLadoQueueEntryParams struct {
+	CancelledAt sql.NullTime
+	ID          string
+	LeaseToken  sql.NullString
+}
+
+func (q *Queries) CancelLadoQueueEntry(ctx context.Context, arg CancelLadoQueueEntryParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelLadoQueueEntry, arg.CancelledAt, arg.ID, arg.LeaseToken)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const cancelOpenLadoQueueEntriesForTask = `-- name: CancelOpenLadoQueueEntriesForTask :execrows
 UPDATE lado_queue_entries
 SET cancelled_at = ?

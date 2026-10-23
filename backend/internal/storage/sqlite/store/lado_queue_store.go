@@ -263,6 +263,22 @@ func (s *Store) FailLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntry
 	})
 }
 
+// CancelLadoQueueEntry cancels a leased entry at at, because its task's issue
+// closed, and clears the lease. It reports false, changing nothing, when
+// token no longer holds the entry.
+func (s *Store) CancelLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token string, at time.Time) (bool, error) {
+	if at.IsZero() {
+		return false, errors.New("cancel LADO queue entry: a time is required")
+	}
+	return s.writeLadoRow(ctx, "cancel LADO queue entry", func(q *gen.Queries) (int64, error) {
+		return q.CancelLadoQueueEntry(ctx, gen.CancelLadoQueueEntryParams{
+			CancelledAt: ladoNullTime(at),
+			ID:          string(id),
+			LeaseToken:  ladoNullString(token),
+		})
+	})
+}
+
 // writeLadoRow runs one write statement under the write lock and reports
 // whether it changed a row.
 func (s *Store) writeLadoRow(ctx context.Context, what string, write func(*gen.Queries) (int64, error)) (bool, error) {

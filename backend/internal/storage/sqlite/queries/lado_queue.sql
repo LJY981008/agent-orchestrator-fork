@@ -129,6 +129,14 @@ SET lease_token = NULL,
     error_message = sqlc.arg(error_message)
 WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
 
+-- name: CancelLadoQueueEntry :execrows
+UPDATE lado_queue_entries
+SET lease_token = NULL,
+    claimed_at = NULL,
+    lease_expires_at = NULL,
+    cancelled_at = sqlc.arg(cancelled_at)
+WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
+
 -- name: SetLadoQueueEntryDispatched :execrows
 UPDATE lado_queue_entries
 SET dispatched_session_id = sqlc.arg(dispatched_session_id),

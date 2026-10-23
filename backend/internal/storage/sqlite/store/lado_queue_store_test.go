@@ -683,13 +683,13 @@ func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 	ctx := context.Background()
 	seedProject(t, s, "mer")
 	mustLadoMode(t, s, "mer", true)
-	ids := make([]domain.LadoQueueEntryID, 0, 5)
-	for i := 1; i <= 5; i++ {
+	ids := make([]domain.LadoQueueEntryID, 0, 6)
+	for i := 1; i <= 6; i++ {
 		ids = append(ids, mustQueuedLadoTask(t, s, strconv.Itoa(i), "mer", ladoQueueAt.Add(time.Duration(i)*time.Minute)))
 	}
 	now := ladoQueueAt.Add(time.Hour)
-	claimed := mustClaimLadoQueue(t, s, now, 5, ladoTokens("token"), ids...)
-	released, held, review, blocked, failed := claimed[0], claimed[1], claimed[2], claimed[3], claimed[4]
+	claimed := mustClaimLadoQueue(t, s, now, 6, ladoTokens("token"), ids...)
+	released, held, review, blocked, failed, cancelled := claimed[0], claimed[1], claimed[2], claimed[3], claimed[4], claimed[5]
 	writes := map[string]func(entry domain.LadoQueueEntry, token string) (bool, error){
 		"release": func(e domain.LadoQueueEntry, token string) (bool, error) {
 			return s.ReleaseLadoQueueEntry(ctx, e.ID, token, now.Add(30*time.Second), domain.LadoWaitingRetry)
@@ -705,6 +705,9 @@ func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 		},
 		"fail": func(e domain.LadoQueueEntry, token string) (bool, error) {
 			return s.FailLadoQueueEntry(ctx, e.ID, token, "spawn failed: the agent did not start", now)
+		},
+		"cancel": func(e domain.LadoQueueEntry, token string) (bool, error) {
+			return s.CancelLadoQueueEntry(ctx, e.ID, token, now)
 		},
 	}
 
@@ -733,6 +736,8 @@ func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 	wantBlocked.BlockedReason = domain.LadoBlockedBaseRefMismatch
 	wantFailed := unleased(failed)
 	wantFailed.FailedAt, wantFailed.ErrorMessage = now, "spawn failed: the agent did not start"
+	wantCancelled := unleased(cancelled)
+	wantCancelled.CancelledAt = now
 	for _, c := range []struct {
 		write       string
 		entry, want domain.LadoQueueEntry
@@ -743,6 +748,7 @@ func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 		{"review", review, wantReview, domain.LadoQueueReviewRequired},
 		{"blocked", blocked, wantBlocked, domain.LadoQueueBlocked},
 		{"fail", failed, wantFailed, domain.LadoQueueFailed},
+		{"cancel", cancelled, wantCancelled, domain.LadoQueueCancelled},
 	} {
 		if ok, err := writes[c.write](c.entry, c.entry.LeaseToken); err != nil || !ok {
 			t.Fatalf("%s = (%v, %v), want true", c.write, ok, err)
@@ -762,7 +768,7 @@ func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 		}
 	}
 
-	// A mark needs its reason and a failure its time.
+	// A mark needs its reason, and a failure and a cancel their time.
 	if _, err := s.MarkLadoQueueEntryReviewRequired(ctx, released.ID, "token-9", ""); err == nil {
 		t.Fatal("a review mark without a reason was accepted")
 	}
@@ -771,6 +777,9 @@ func TestLadoQueueReleaseHoldAndMarks(t *testing.T) {
 	}
 	if _, err := s.FailLadoQueueEntry(ctx, released.ID, "token-9", "spawn failed", time.Time{}); err == nil {
 		t.Fatal("a failure without a time was accepted")
+	}
+	if _, err := s.CancelLadoQueueEntry(ctx, released.ID, "token-9", time.Time{}); err == nil {
+		t.Fatal("a cancel without a time was accepted")
 	}
 
 	// Once their waits are over, the released and the held entry are claimed
