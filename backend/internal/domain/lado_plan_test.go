@@ -220,7 +220,9 @@ func TestLadoTaskStateFollowsItsPlans(t *testing.T) {
 	open := domain.LadoTask{IssueRef: "github:acme/demo#1", Issue: domain.LadoObservedIssue{State: domain.IssueOpen}}
 	rev1 := domain.LadoPlanRevision{ID: "lado-plan-1", RequestID: "req-1", SHA256: strings.Repeat("a", 64)}
 	rev2 := domain.LadoPlanRevision{ID: "lado-plan-2", RequestID: "req-1", SHA256: strings.Repeat("b", 64)}
-	approvedRev1 := domain.LadoPlanApproval{RevisionID: rev1.ID, SHA256: rev1.SHA256}
+	approvedRev1 := domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: rev1.ID, SHA256: rev1.SHA256}
+	// The approval's queue entry counts only while the approval is valid.
+	open.Queue = domain.LadoQueueEntry{ID: "lado-queue-1", PlanApprovalID: approvedRev1.ID}
 	for _, tc := range []struct {
 		name string
 		plan domain.LadoTaskPlan
@@ -229,7 +231,7 @@ func TestLadoTaskStateFollowsItsPlans(t *testing.T) {
 		{"no plan", domain.LadoTaskPlan{}, domain.LadoTaskDraft},
 		{"requested, nothing written yet", domain.LadoTaskPlan{Request: domain.LadoPlanRequest{ID: "req-1"}}, domain.LadoTaskDraft},
 		{"a revision", domain.LadoTaskPlan{Latest: rev1}, domain.LadoTaskPlanned},
-		{"approved latest revision", domain.LadoTaskPlan{Latest: rev1, Approval: approvedRev1}, domain.LadoTaskApproved},
+		{"approved latest revision", domain.LadoTaskPlan{Latest: rev1, Approval: approvedRev1}, domain.LadoTaskQueued},
 		// Gate 2: an edit after approval is a new revision, and the old
 		// approval no longer counts.
 		{"edited after approval", domain.LadoTaskPlan{Latest: rev2, Approval: approvedRev1}, domain.LadoTaskPlanned},

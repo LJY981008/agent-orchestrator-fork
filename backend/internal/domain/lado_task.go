@@ -44,6 +44,10 @@ type LadoTask struct {
 	// Plan holds the facts about the task's plans that its state derives
 	// from. Store reads that list or get tasks fill it.
 	Plan LadoTaskPlan
+	// Queue is the queue entry of the newest approval, zero when it has none.
+	Queue LadoQueueEntry
+	// Execution is the task's newest execution, zero when it has none.
+	Execution LadoExecution
 }
 
 // LadoTaskPlan is what a task's state needs to know about its plans: the
@@ -99,40 +103,128 @@ type LadoObservedIssue struct {
 // computed at read time and never stored.
 type LadoTaskState string
 
-// Task states up to approval. Until the queue exists, Review required and
-// Blocked come from the approval's rule snapshot: the rules changed since the
-// approval, or the snapshot holds a blocking problem. Later build steps add
-// the queue and execution states.
+// Task states (docs/LJY-PRD/TDD.md §3.2).
 const (
 	LadoTaskDraft          LadoTaskState = "draft"
 	LadoTaskPlanned        LadoTaskState = "planned"
 	LadoTaskReviewRequired LadoTaskState = "review_required"
 	LadoTaskBlocked        LadoTaskState = "blocked"
+	// LadoTaskApproved stays for the API's state enum, but State no longer
+	// returns it: a valid approval now has its queue entry, so the task is
+	// Queued or later, and an approval given before the queue existed asks to
+	// be approved again (LadoReviewApprovedBeforeQueue).
 	LadoTaskApproved       LadoTaskState = "approved"
+	LadoTaskQueued         LadoTaskState = "queued"
+	LadoTaskDispatching    LadoTaskState = "dispatching"
+	LadoTaskRunning        LadoTaskState = "running"
+	LadoTaskFailed         LadoTaskState = "failed"
+	LadoTaskCompleted      LadoTaskState = "completed"
 	LadoTaskCancelled      LadoTaskState = "cancelled"
 	LadoTaskClosedUnmerged LadoTaskState = "closed_unmerged"
 )
 
-// State derives the task's state. A task without a plan revision is a Draft;
-// with one it is Planned until a valid approval covers its latest revision.
-// An approved task needs review once its rules changed since the approval,
-// and is Blocked while the approval's snapshot holds a blocking problem.
+// State derives the task's state now, as StateAt does.
 func (t LadoTask) State() LadoTaskState {
+	return t.StateAt(time.Now())
+}
+
+// StateAt derives the task's state at now. A cancelled task is Cancelled.
+// After dispatch its execution decides: Completed once the PR merged, Closed
+// unmerged once the PR closed without a merge, Failed when the run timed out
+// or its session ended without a PR, and Running otherwise. A failed run
+// leaves a task whose issue is closed Closed unmerged, and a run of an older
+// approval that ended without a merge no longer counts. Without an execution,
+// a closed issue makes the task Closed unmerged. A valid approval needs
+// review when the rules changed since it or its queue entry was marked so,
+// and is Blocked when its snapshot holds a blocking problem or the entry was
+// blocked; review wins over Blocked. An entry out of attempts is Failed, one
+// a lease holds is Dispatching, and one that waits is Queued. A valid
+// approval without an entry that can still run needs review too: approving
+// again queues the task. A task whose latest revision has no valid approval
+// is Planned, and one without a revision a Draft.
+func (t LadoTask) StateAt(now time.Time) LadoTaskState {
+	state, _ := t.stateAt(now)
+	return state
+}
+
+// StateReason returns the reason behind the task's state now: what needs
+// review (LadoReview*), what blocks it (LadoBlocked*), why it failed
+// (LadoFailed*), or why its queue entry waits (LadoWaiting*). Other states
+// have none.
+func (t LadoTask) StateReason() string {
+	_, reason := t.stateAt(time.Now())
+	return reason
+}
+
+func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
+	if !t.CancelledAt.IsZero() {
+		return LadoTaskCancelled, ""
+	}
+	closed := t.Issue.State == IssueDone || t.Issue.State == IssueCancelled
+	if e := t.Execution; e.SessionID != "" {
+		state, reason := e.taskState()
+		// A run of an older approval that ended without a merge is history:
+		// a task approved again after a failed run shows its new entry.
+		current := e.PlanApprovalID == t.Plan.Approval.ID || state == LadoTaskRunning || state == LadoTaskCompleted
+		if current && (state != LadoTaskFailed || !closed) {
+			return state, reason
+		}
+	}
+	if closed {
+		return LadoTaskClosedUnmerged, ""
+	}
+	// The approval's facts, its queue entry among them, count only while it
+	// covers the latest revision.
+	if !t.Plan.ApprovalValid() {
+		if t.Plan.Latest.ID != "" {
+			return LadoTaskPlanned, ""
+		}
+		return LadoTaskDraft, ""
+	}
+	// Task reads carry the newest approval's entry; another one is not this
+	// approval's.
+	var entryState LadoQueueState
+	if t.Queue.ID != "" && t.Queue.PlanApprovalID == t.Plan.Approval.ID {
+		entryState = t.Queue.State(now)
+	}
 	switch {
-	case !t.CancelledAt.IsZero():
-		return LadoTaskCancelled
-	case t.Issue.State == IssueDone || t.Issue.State == IssueCancelled:
-		return LadoTaskClosedUnmerged
-	case t.Plan.ApprovalValid() && t.Plan.RulesChanged():
-		return LadoTaskReviewRequired
-	case t.Plan.ApprovalValid() && t.Plan.Snapshot.Blocking:
-		return LadoTaskBlocked
-	case t.Plan.ApprovalValid():
-		return LadoTaskApproved
-	case t.Plan.Latest.ID != "":
-		return LadoTaskPlanned
+	case t.Plan.RulesChanged():
+		return LadoTaskReviewRequired, LadoReviewRulesChanged
+	case entryState == LadoQueueReviewRequired:
+		return LadoTaskReviewRequired, t.Queue.ReviewRequiredReason
+	case t.Plan.Snapshot.Blocking:
+		return LadoTaskBlocked, LadoBlockedSnapshot
+	case entryState == LadoQueueBlocked:
+		return LadoTaskBlocked, t.Queue.BlockedReason
+	case entryState == LadoQueueFailed:
+		return LadoTaskFailed, LadoFailedAttemptsExhausted
+	case entryState == LadoQueueDispatching:
+		return LadoTaskDispatching, ""
+	case entryState == LadoQueueQueued || entryState == LadoQueueWaiting:
+		return LadoTaskQueued, t.Queue.WaitingReason
+	case entryState == LadoQueueDispatched:
+		// Task reads carry a dispatched entry's execution; without it, the
+		// entry still says a session runs.
+		return LadoTaskRunning, ""
 	default:
-		return LadoTaskDraft
+		// No entry, or one that was superseded or cancelled.
+		return LadoTaskReviewRequired, LadoReviewApprovedBeforeQueue
+	}
+}
+
+// taskState is the state an execution gives its task.
+func (e LadoExecution) taskState() (LadoTaskState, string) {
+	switch {
+	case e.PR.Merged:
+		return LadoTaskCompleted, ""
+	case e.PR.Closed:
+		return LadoTaskClosedUnmerged, ""
+	case !e.TimedOutAt.IsZero():
+		return LadoTaskFailed, LadoFailedTimedOut
+	case e.SessionTerminated && e.PR.URL == "":
+		return LadoTaskFailed, LadoFailedEndedWithoutPR
+	default:
+		return LadoTaskRunning, ""
 	}
 }
 
