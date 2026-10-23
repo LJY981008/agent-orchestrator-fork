@@ -745,6 +745,29 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	// LADO fork: a PR that moves to another session leaves the run it came from.
+	it("refreshes both runs when a PR moves to another session", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("pr_session_changed", JSON.stringify({
+				seq: 54,
+				projectId: "proj-1",
+				sessionId: "proj-1-8",
+				type: "pr_session_changed",
+				payload: { url: "https://github.com/acme/demo/pull/3", fromSession: "proj-1-7", toSession: "proj-1-8" },
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			for (const queryKey of [["lado", "tasks", "proj-1"], ["lado", "execution", "proj-1-8"], ["lado", "execution", "proj-1-7"]]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("refreshes Settings and project pickers when their shared global catalog changes", () => {
 		vi.useFakeTimers();
 		const queryClient = new QueryClient();

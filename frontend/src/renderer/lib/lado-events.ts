@@ -16,7 +16,14 @@ import {
 } from "./lado";
 
 type LadoEventPayload =
-	| { kind?: unknown; projectId?: unknown; taskId?: unknown; sessionId?: unknown; isTerminated?: unknown }
+	| {
+			kind?: unknown;
+			projectId?: unknown;
+			taskId?: unknown;
+			sessionId?: unknown;
+			isTerminated?: unknown;
+			fromSession?: unknown;
+	  }
 	| undefined;
 /** The change event's own routing fields: its type, and the project and session it names. */
 type LadoEventEnvelope = { type?: unknown; projectId?: unknown; sessionId?: unknown } | undefined;
@@ -74,6 +81,8 @@ export function createLadoEventBatch() {
 				if (ended || (typeof event.type === "string" && prEventTypes.has(event.type))) {
 					executionProjects.add(event.projectId);
 					executions.add(event.sessionId);
+					// A PR that moved to another session also leaves its old run.
+					if (typeof payload?.fromSession === "string" && payload.fromSession) executions.add(payload.fromSession);
 				}
 			}
 			return false;
