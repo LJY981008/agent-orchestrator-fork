@@ -139,9 +139,11 @@ A mandatory rule that the agent cannot honor blocks dispatch with a diagnostic. 
 
 As built in step 5 (TDD §9), for a task: `permission_mode` is always required and `prompt` whenever the rules give the worker text. Claude Code and Codex support both. Every other agent is unsupported or unverified for at least one class, a blocking problem (`LADO_AGENT_CAPABILITY_UNSUPPORTED`, `LADO_AGENT_CAPABILITY_UNVERIFIED`), so a task with that agent shows Blocked once approved; a degraded class (fx's prompt) is a warning. Codex below `bypass-permissions` adds an info note that it asks before commits, pushes and network calls (TDD §6.6).
 
+As built in step 6, the dispatcher looks again right before it spawns (TDD §5.3, check 6): a snapshot with a blocking problem, an agent other than Claude Code and Codex, or a snapshot without a permission mode blocks the queue entry, and no worker starts.
+
 ## 8. Snapshot and change semantics
 
-- The snapshot is fixed at queue admission (TDD §5.2). It holds rule version ids, the binding behind each entry, setup item ids and content hashes, the AO build and its system-layer hash, the compiler version, required capabilities, the permission ceiling, and the canonical sha256.
+- The snapshot is fixed with the plan approval (TDD §5.2). The approval's queue entry points at it, and the dispatcher compares it with a fresh resolution before it spawns (TDD §5.3). It holds rule version ids, the binding behind each entry, setup item ids and content hashes, the AO build and its system-layer hash, the compiler version, required capabilities, the permission ceiling, and the canonical sha256.
 - The setup home for an execution is built from the snapshot's immutable blobs (§9.4). Editing an item later never changes a running agent.
 - A relevant change before dispatch (rule edit, toggle, setup item edit, drift) marks the queue entry Review required. LADO never re-resolves silently or swaps the snapshot.
 - Ordinary changes apply to the next run. An emergency change to a protected gate cancels affected runs and writes an audit event with who and why.
@@ -163,6 +165,12 @@ As built in step 5:
 - Each change writes its version, binding or archive state together with its audit event in one transaction. A new version needs the active one as its base (`baseVersion`; 409 `LADO_RULE_CHANGED` otherwise). Ordinary changes need no presence and are recorded with the actor `api`. The ceiling's mode needs a presence proof, recorded as `rule.protected_changed` by `human` (`human:dev-presence` under dev presence). A request that edits a rule and archives it writes two transactions.
 - Every change can run as a dry run first (`dryRun`), which writes nothing and lists its impact: the LADO projects whose rules change, and the approved tasks that would need a new approval. AI drafts (`RuleChangeProposal`, HAR-006) come later.
 - A rule a snapshot used is never deleted; archive it instead. Built-in rules are never deleted, and protected rules are never archived or bound.
+
+As built in step 6:
+
+- The queue entry written with the approval names its snapshot. At dispatch the rules are resolved again for the approved revision. Another hash sends the entry to Review required (`rules_changed`) and starts nothing, so the developer approves again, which writes a new snapshot; a blocking snapshot is Blocked at dispatch too (§7).
+- A running execution keeps its snapshot. The worker's system prompt takes the snapshot's rule text, found through the session's client request id, so restore and resume rebuild it from the snapshot (TDD §9). Its permission mode is the snapshot's, per-turn approvals and approval-mode options stay at or below the ceiling, and its agent and interface cannot change (TDD §6.4, §6.5). Rule changes reach only later runs.
+- Not built: cancelling affected runs on an emergency change to a protected gate, and revalidation by impact.
 
 ## 9. Local setup adoption (D11)
 
@@ -325,6 +333,13 @@ As built in step 5 (DESIGN.md decisions log, 2026-10-22):
 - Every change runs as a dry run first. When approved tasks would need a new approval, a dialog lists them and applies the change only on confirmation; Delete always asks, and for a rule a snapshot used says to archive it instead. Built-in rules offer no Delete.
 - Not yet: the Local setup and Conflicts parts (step 7), grouping by trigger (§4), the active snapshot on execution pages (step 6), and AI drafts (HAR-006).
 
+As built in step 6 (DESIGN.md decisions log, 2026-10-23):
+
+- **The active snapshot on every execution page.** The session view's inspector, on its summary tab, has a **LADO run** section for a session that is a LADO execution (`frontend/src/renderer/components/lado/LadoExecutionPanel.tsx`, in the `context` slot of `SessionInspector.tsx`, not in the inspector rail's frame). It reads `GET /lado/executions/{sessionId}` and shows the agent and model, the mode, the permission ceiling, the plan revision and when it was approved, the rules with the snapshot's hash, the base and how many commits it moved since the plan (hidden when 0 or unknown), the deadline or that the run stopped at it, and, collapsed, the rule text the worker got. A session that is not an execution shows nothing.
+- **Board.** A dispatched worker's session card has the line "LADO · plan r<n> · rules <7 hex>" (`frontend/src/renderer/components/lado/LadoSessionLine.tsx`), for the local projects in LADO mode. The lanes show the queue states and their reasons (TDD §3.3).
+- **Settings → Runs** (`frontend/src/renderer/components/settings/RunsSection.tsx`, after Rules): concurrent runs (1-8), maximum run time (off, 1, 2, 4, 8, 12 or 24 hours) and "Wait while memory is tight". A change saves all three at once; a failed save shows the daemon's message under that row and returns to the stored values.
+- **Project settings → LADO** (`frontend/src/renderer/components/lado/LadoProjectSection.tsx`), for every local project and before its Rules page: the LADO mode switch and the project's concurrent runs (1-8), which can change while the mode is off. Turning the mode off asks for the desktop app's confirmation, and the switch stays on while it asks and after a cancel (TDD §5.2).
+
 ## 13. Storage
 
 `lado_rules`, `lado_rule_versions`, `lado_rule_bindings`, `lado_policy_snapshots`, `lado_policy_snapshot_rules`, `lado_setup_adoptions`, `lado_setup_items`, `lado_setup_item_versions`, `lado_conflict_acceptances`. They follow TDD §4: separate migration track, `lado_` prefix, no foreign keys into upstream tables, audit in `lado_audit_events`. Step 5 created the first five (migration `0005_lado_rules.sql`); the setup and conflict tables come with step 7.
@@ -333,12 +348,12 @@ As built in step 5 (DESIGN.md decisions log, 2026-10-22):
 
 | Gate | Enforced at | Strength | Registered |
 |---|---|---|---|
-| `plan.approval.required` | Worker gate (TDD §6.2) | Prevents | Step 5, as a built-in protected rule that is always on. The worker gate has refused unapproved workers since step 3 |
+| `plan.approval.required` | Worker gate (TDD §6.2) | Prevents | Step 5, as a built-in protected rule that is always on. The worker gate has refused unapproved workers since step 3; from step 6 it lets through only the dispatcher's spawn for a queue entry it holds |
 | `integration.approval.required` | `lado/integration` required check and AO merge hook (TDD §7.1-7.2) | Prevents (T1) | Step 8 |
 | `git.protected_branch.no_direct_write` | GitHub ruleset for the remote; reflog check locally (TDD §7.3) | Prevents remotely, detects locally | Step 8 |
 | `test.command.must_pass` | Required checks or local runner (TDD §8.1-8.2) | Blocks integration | Step 8 |
 | `paths.protected` | Path validator on `base..head` (TDD §8.3) | Detects; blocks integration | Step 8 |
-| `agent.permission.ceiling` | Explicit mode, per-turn cap, Codex mapping (TDD §6.4-6.6) | Prevents, within the tool | Step 5, as a built-in protected rule at `auto` whose mode changes only with presence. Step 6 applies it to runs |
+| `agent.permission.ceiling` | Explicit mode, per-turn cap, Codex mapping (TDD §6.4-6.6) | Prevents, within the tool | Step 5, as a built-in protected rule at `auto` whose mode changes only with presence. Step 6 applies it to runs: the snapshot's mode at spawn, the per-turn cap, and the refusal of approval-mode options above it (TDD §6.4, §6.5) |
 | `setup.change.requires_presence` | Human-presence channel (§9.5) | Prevents | Step 7 |
 | `git.commit.message.korean` (optional, not protected by default) | Commit validator | Detects (heuristic) | Step 5, as a built-in rule that starts off and gives the worker prompt text only, so it is advisory. The validator comes with step 8 |
 
@@ -354,8 +369,8 @@ Each item names the tests that cover it, all in `service/ladopolicy` unless name
 4. Disabling keeps rule history and leaves existing snapshots unchanged. Step 5: `TestDisablingKeepsHistoryAndSnapshots`.
 5. The Korean commit rule blocks a clearly non-compliant commit in `base..head` and allows configured prefixes. Step 8, with the validator; step 5 has the rule's prompt text only.
 6. A natural-language change produces an approval preview, not an immediate change. Later, with HAR-006.
-7. A missing enforcement capability is reported and blocks dispatch. Step 5: `TestResolveCapabilities` and `TestEffectiveBlocksAnUnsupportedAgent` (a blocking problem naming the agent and the capability). Refusing the dispatch is step 6.
-8. Conflicting mandatory rules block dispatch with an actionable diagnostic. Step 5: `TestResolveConflicts` (a blocking `LADO_RULES_CONFLICT` naming both rules, once per pair). Refusing the dispatch is step 6.
+7. A missing enforcement capability is reported and blocks dispatch. Step 5: `TestResolveCapabilities` and `TestEffectiveBlocksAnUnsupportedAgent` (a blocking problem naming the agent and the capability). Step 6 refuses the dispatch: `service/ladoqueue` `TestUnsupportedAgentBlocksWithoutSpawning` (PRD gate 15).
+8. Conflicting mandatory rules block dispatch with an actionable diagnostic. Step 5: `TestResolveConflicts` (a blocking `LADO_RULES_CONFLICT` naming both rules, once per pair). Step 6 refuses the dispatch of a blocking snapshot: `service/ladoqueue` `TestDispatchStopsAtTheFirstFailingCheck`.
 9. Adoption writes the backup and manifest before removing anything; restore is byte-identical; credential files are untouched. Step 7.
 10. After adoption, AO sessions on both account and own-computer login see the adopted items, and the tools run directly do not. Step 7.
 11. AO's account linker no longer creates entries in `~/.claude` after adoption. Step 7.

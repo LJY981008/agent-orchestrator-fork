@@ -6,7 +6,7 @@ LADO is a fork of [Orchestrator.inc's Agent Orchestrator](https://github.com/Orc
 
 - **Work items are issues.** A task is an issue on the project's GitHub or GitLab repository. You create it from the New Task composer or import open issues; LADO tracks the issue and never edits it behind your back.
 - **A worker starts only from a plan you approved.** The project's orchestrator writes a plan for the issue. You review it, ask for changes, and approve one exact revision in the desktop app. An agent cannot approve its own work.
-- **Rules decide what agents may do**: global, project and task rules with protected gates, fixed into a snapshot with each plan approval. Workers receive them from step 6, the queue.
+- **Rules decide what agents may do**: global, project and task rules with protected gates, fixed into a snapshot with each plan approval. The worker gets that snapshot's rules in its instructions, runs within its permission ceiling, and keeps the agent it was approved with.
 - **Verification before integration** (coming): required checks, LADO's own validators and an integration approval before anything merges.
 
 LADO is built as additions to AO, not a rewrite: new code lives in new files inside AO's layers, and upstream files get only small hook lines, so upstream changes keep merging in.
@@ -25,31 +25,25 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | — | Korean as the desktop app's default language, with a reviewed Korean catalog | Merged |
 | 4b | Plan requests and revisions, plans written in issue comments, approvals confirmed in the desktop app, the Plan and Queued lanes, the task view | Merged |
 | 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | Merged |
-| 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Planned |
+| 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | In progress |
 | 7 | Adopting your local agent setup (CLAUDE.md, hooks, skills, MCP) into one managed place | Planned |
 | 8 | Verification, evidence and integration approval | Planned |
 | 9 | Releases of this fork: a workflow that builds the desktop app (Windows first) and publishes it where the app looks for updates, and the checks that need a real Windows install | Planned |
 
-Until step 6, a project in LADO mode cannot start workers, so changing LADO mode is a developer setting (below).
-
 ## Trying it
 
-Build and run AO from source as the [development guide](docs/development.md) describes. Then, with the daemon started with `AO_LADO_DEV=on`:
+Build and run AO from source as the [development guide](docs/development.md) describes. Then:
 
-1. Turn LADO mode on for a project. There is no switch in the app yet:
-
-   ```bash
-   curl -X PUT "http://127.0.0.1:<port>/api/v1/lado/projects/<project-id>/settings" \
-     -H 'content-type: application/json' -d '{"ladoMode":true}'
-   ```
-
-   The daemon's port is in `~/.ao/running.json`. Turning LADO mode off needs a human-presence proof; until the app has a switch for it, start the daemon with `AO_LADO_DEV_PRESENCE=1` as well to turn it off with the same call.
-2. Connect the repository from Add Project → Connect a repository: an access token for the host and the repository's SSH URL. LADO checks both, then links the project or clones it.
+1. Connect the repository from Add Project → Connect a repository: an access token for the host and the repository's SSH URL. LADO checks both, then links the project or clones it.
+2. Turn LADO mode on in the project's settings, on the **LADO** page. The same page sets how many of the project's tasks run at once (one by default). Turning LADO mode off asks you to confirm in the desktop app; queued tasks then wait until it is on again, and running workers keep running.
 3. Create a task from New Task, or import open issues. The board's Plan lane shows them.
 4. Open a task and choose Request a plan. If a comment on the issue already holds the plan, LADO's orchestrator follows it; Use as plan on a comment says so explicitly. Only comments by people who can work on the repository reach an agent.
 5. Review the plan, ask for changes, and approve it. The desktop app asks you to confirm and signs the approval itself; the task moves to the Queued lane.
+6. When a run slot is free, LADO checks the approval again (the plan, the issue, the rules and the base branch) and starts a worker in Chat with the approved plan, the issue as it was pinned and the approved rules. The task leaves the lanes; the worker's session card shows a LADO line, and the session's inspector shows the rules the run was approved with. If the issue changed since the plan was made, or the rules changed since the approval, the task asks for a new approval instead. A worker that does not start after three attempts, or that reaches the maximum run time, leaves the task Failed in the Plan lane, and the plan can be approved again.
 
-`AO_LADO_DEV_PRESENCE=1` lets approvals through without the desktop app's confirmation, for the renderer running in a browser during development. Never set it on a daemon you use for real work.
+**Settings → Runs** sets how many approved tasks run at once across projects (two by default), the maximum run time (8 hours by default; off, or 1 to 24 hours) and whether queued tasks wait while the computer is low on memory (on by default).
+
+`AO_LADO_DEV_PRESENCE=1` lets approvals, and turning LADO mode off, through without the desktop app's confirmation, for the renderer running in a browser during development. Never set it on a daemon you use for real work.
 
 ## Where things live
 
@@ -68,3 +62,5 @@ Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables
 - GitHub Enterprise is not supported, because AO's GitHub API base is fixed to api.github.com.
 - A Copilot orchestrator wraps every message in AO's "spawn a worker" directive, so LADO projects should use another agent as their orchestrator.
 - Approvals need the desktop app; there is no approval from the CLI or the mobile app, by design.
+- Only Claude Code and Codex run LADO tasks; a task with another agent shows Blocked. A LADO run stays in Chat with the agent it was approved with, and cannot switch either while it runs.
+- A plan's base must be the branch workers start from. If that branch moved on after the plan was made, the run records by how many commits, but still starts.
