@@ -19,7 +19,8 @@ func (m *Manager) SetWorkGate(gate ports.WorkGate) {
 
 // LadoPromptSection returns LADO's section of a session's standing
 // instructions, or "" when LADO adds none: an orchestrator's in a project in
-// LADO mode, and the rules text of a worker LADO dispatched.
+// LADO mode, and the rules text of a worker LADO dispatched. An error fails the
+// spawn or restore rather than starting the session without its section.
 type LadoPromptSection func(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error)
 
 // SetLadoPrompt installs LADO's section. The daemon calls it before any

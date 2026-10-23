@@ -398,6 +398,13 @@ func TestAuthorizeConfigModeAndExecutionChange(t *testing.T) {
 			t.Fatalf("AuthorizeExecutionChange(%s) = %v, want nil", target, err)
 		}
 	}
+	// An execution whose snapshot has no ceiling is refused by both.
+	if err := gate.AuthorizeConfigMode(ctx, "lado-2", domain.PermissionModeAcceptEdits); err == nil {
+		t.Fatal("AuthorizeConfigMode for an execution without a ceiling = nil, want an error")
+	}
+	if err := gate.AuthorizeExecutionChange(ctx, "lado-2"); err == nil {
+		t.Fatal("AuthorizeExecutionChange for an execution without a ceiling = nil, want an error")
+	}
 
 	readErr := errors.New("database is locked")
 	for name, unreadable := range map[string]*ladogate.Gate{
