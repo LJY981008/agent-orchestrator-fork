@@ -204,17 +204,13 @@ func TestLadoTaskReadsCarryPlanState(t *testing.T) {
 	if got := state("lado-task-1"); got != domain.LadoTaskPlanned {
 		t.Fatalf("state with a revision = %q, want planned", got)
 	}
-	if _, _, err := s.ApproveLadoPlan(ctx, domain.LadoPlanApproval{
-		ID: "lado-approval-1", RevisionID: rev.ID, TaskID: "lado-task-1", SHA256: rev.SHA256, ApprovedAt: ladoPlanAt.Add(time.Minute),
-	}, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil); err != nil {
-		t.Fatalf("ApproveLadoPlan: %v", err)
-	}
-	if got := state("lado-task-1"); got != domain.LadoTaskApproved {
-		t.Fatalf("state after approval = %q, want approved", got)
+	mustApproveLadoPlan(t, s, "lado-approval-1", rev, "nonce-1", ladoPolicySnapshot("lado-snapshot-1", `{}`, false))
+	if got := state("lado-task-1"); got != domain.LadoTaskQueued {
+		t.Fatalf("state after approval = %q, want queued", got)
 	}
 	updated, ok, err := s.SetLadoTaskPreferences(ctx, "lado-task-1", "codex", "", ladoPlanAt.Add(2*time.Minute))
-	if err != nil || !ok || updated.State() != domain.LadoTaskApproved {
-		t.Fatalf("SetLadoTaskPreferences state = %q (%v %v), want approved", updated.State(), ok, err)
+	if err != nil || !ok || updated.State() != domain.LadoTaskQueued {
+		t.Fatalf("SetLadoTaskPreferences state = %q (%v %v), want queued", updated.State(), ok, err)
 	}
 	// Gate 2: an edit after approval is a new revision; the old approval no
 	// longer counts.
@@ -237,7 +233,7 @@ func TestApproveLadoPlanRecordsProofAndAuditTogether(t *testing.T) {
 	seedLadoTaskWithPlan(t, s)
 	rev := mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a')))
 	approval := domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: rev.ID, TaskID: "lado-task-1", SHA256: rev.SHA256, ApprovedAt: ladoPlanAt.Add(time.Minute)}
-	stored, event, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil)
+	stored, event, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil, nil)
 	if err != nil {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
@@ -250,7 +246,7 @@ func TestApproveLadoPlanRecordsProofAndAuditTogether(t *testing.T) {
 
 	again := approval
 	again.ID = "lado-approval-2"
-	if _, _, err := s.ApproveLadoPlan(ctx, again, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil); !errors.Is(err, domain.ErrLadoPresenceReplayed) {
+	if _, _, err := s.ApproveLadoPlan(ctx, again, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil, nil); !errors.Is(err, domain.ErrLadoPresenceReplayed) {
 		t.Fatalf("a replayed nonce = %v, want ErrLadoPresenceReplayed", err)
 	}
 	if err := s.Close(); err != nil {
@@ -263,7 +259,7 @@ func TestApproveLadoPlanRecordsProofAndAuditTogether(t *testing.T) {
 		t.Fatalf("reopen: %v", err)
 	}
 	t.Cleanup(func() { _ = reopened.Close() })
-	if _, _, err := reopened.ApproveLadoPlan(ctx, again, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil); !errors.Is(err, domain.ErrLadoPresenceReplayed) {
+	if _, _, err := reopened.ApproveLadoPlan(ctx, again, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil, nil); !errors.Is(err, domain.ErrLadoPresenceReplayed) {
 		t.Fatalf("a nonce replayed after a restart = %v, want ErrLadoPresenceReplayed", err)
 	}
 	approvals, err := reopened.ListLadoPlanApprovals(ctx, "lado-task-1")
@@ -285,7 +281,7 @@ func TestApproveLadoPlanRefusesASupersededRevision(t *testing.T) {
 		"unknown revision": {ID: "a-3", RevisionID: "lado-plan-9", TaskID: "lado-task-1", SHA256: ladoSHA('b'), ApprovedAt: ladoPlanAt},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-"+name, string(approval.RevisionID)), ladoApprovalEvent(string(approval.RevisionID)), nil); !errors.Is(err, domain.ErrLadoPlanSuperseded) {
+			if _, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-"+name, string(approval.RevisionID)), ladoApprovalEvent(string(approval.RevisionID)), nil, nil); !errors.Is(err, domain.ErrLadoPlanSuperseded) {
 				t.Fatalf("ApproveLadoPlan = %v, want ErrLadoPlanSuperseded", err)
 			}
 		})
@@ -296,7 +292,7 @@ func TestApproveLadoPlanRefusesASupersededRevision(t *testing.T) {
 		t.Fatalf("refused approvals left %d rows", len(approvals))
 	}
 	ok := domain.LadoPlanApproval{ID: "a-4", RevisionID: "lado-plan-2", TaskID: "lado-task-1", SHA256: ladoSHA('b'), ApprovedAt: ladoPlanAt}
-	_, event, err := s.ApproveLadoPlan(ctx, ok, ladoProof("nonce-older revision", "lado-plan-2"), ladoApprovalEvent("lado-plan-2"), nil)
+	_, event, err := s.ApproveLadoPlan(ctx, ok, ladoProof("nonce-older revision", "lado-plan-2"), ladoApprovalEvent("lado-plan-2"), nil, nil)
 	if err != nil {
 		t.Fatalf("approving the latest revision with a nonce a refused call carried = %v, want success", err)
 	}
@@ -370,7 +366,7 @@ func TestLadoPlanChangesPublishTaskChangeEvents(t *testing.T) {
 	rev := mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a')))
 	expectEvents("revision", 1)
 	if _, _, err := s.ApproveLadoPlan(ctx, domain.LadoPlanApproval{ID: "a-1", RevisionID: rev.ID, TaskID: "lado-task-1", SHA256: rev.SHA256, ApprovedAt: ladoPlanAt},
-		ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil); err != nil {
+		ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	expectEvents("approval", 1)
@@ -394,12 +390,15 @@ func ladoPolicySnapshot(id, content string, blocking bool, rules ...domain.LadoR
 	}
 }
 
-// mustApproveLadoPlan approves rev a minute after it was pinned.
+// mustApproveLadoPlan approves rev a minute after it was pinned, with queue
+// entry "lado-queue-<n>" for approval "lado-approval-<n>", as the task
+// service does. The store queues it only with a snapshot.
 func mustApproveLadoPlan(t *testing.T, s *sqlite.Store, id string, rev domain.LadoPlanRevision, nonce string, snapshot *domain.LadoPolicySnapshot) domain.LadoPlanApproval {
 	t.Helper()
+	entry := &domain.LadoQueueEntry{ID: ladoQueueEntryFor(domain.LadoPlanApprovalID(id))}
 	approval, _, err := s.ApproveLadoPlan(context.Background(), domain.LadoPlanApproval{
 		ID: domain.LadoPlanApprovalID(id), RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: rev.SHA256, ApprovedAt: rev.CreatedAt.Add(time.Minute),
-	}, ladoProof(nonce, string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot)
+	}, ladoProof(nonce, string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot, entry)
 	if err != nil {
 		t.Fatalf("ApproveLadoPlan %s: %v", id, err)
 	}
@@ -485,7 +484,7 @@ func TestApproveLadoPlanRollsBackWhenTheSnapshotFails(t *testing.T) {
 		"reused snapshot id":   ladoPolicySnapshot("lado-snapshot-1", `{}`, false, rule),
 		"unknown rule version": unknownVersion,
 	} {
-		_, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-2", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot)
+		_, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-2", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot, nil)
 		if err == nil || errors.Is(err, domain.ErrLadoPresenceReplayed) || errors.Is(err, domain.ErrLadoPlanSuperseded) {
 			t.Fatalf("%s: ApproveLadoPlan = %v, want the snapshot's insert error", name, err)
 		}
@@ -495,7 +494,7 @@ func TestApproveLadoPlanRollsBackWhenTheSnapshotFails(t *testing.T) {
 	}
 
 	// The nonce was not used up, so the same approval succeeds with it.
-	_, event, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-2", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), ladoPolicySnapshot("lado-snapshot-2", `{}`, false, rule))
+	_, event, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-2", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), ladoPolicySnapshot("lado-snapshot-2", `{}`, false, rule), nil)
 	if err != nil {
 		t.Fatalf("ApproveLadoPlan after the failures = %v, want success", err)
 	}
@@ -526,7 +525,7 @@ func TestApproveLadoPlanRefusesARuleDeletedMeanwhile(t *testing.T) {
 	tables := []string{"lado_plan_approvals", "lado_presence_proofs", "lado_policy_snapshots", "lado_policy_snapshot_rules", "lado_audit_events"}
 	before := countLadoTables(t, raw, tables...)
 	approval := domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: rev.SHA256, ApprovedAt: ladoPlanAt.Add(time.Minute)}
-	_, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot)
+	_, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot, nil)
 	if !errors.Is(err, domain.ErrLadoRulesChanged) {
 		t.Fatalf("ApproveLadoPlan = %v, want ErrLadoRulesChanged", err)
 	}
@@ -537,7 +536,7 @@ func TestApproveLadoPlanRefusesARuleDeletedMeanwhile(t *testing.T) {
 
 	// The nonce was not used up: the approval goes through with the rules
 	// resolved again.
-	if _, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), ladoPolicySnapshot("lado-snapshot-1", `{}`, false, kept)); err != nil {
+	if _, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), ladoPolicySnapshot("lado-snapshot-1", `{}`, false, kept), nil); err != nil {
 		t.Fatalf("ApproveLadoPlan with the remaining rule = %v, want success", err)
 	}
 }
@@ -577,8 +576,8 @@ func TestLadoTaskReadsCarryTheRuleSnapshot(t *testing.T) {
 
 	first := ladoPolicySnapshot("lado-snapshot-1", `{"n":1}`, false)
 	mustApproveLadoPlan(t, s, "lado-approval-1", mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-1", 1, ladoSHA('a'))), "nonce-1", first)
-	if ref, state := read("lado-task-1"); ref != (domain.LadoPolicySnapshotRef{ID: first.ID, SHA256: first.SHA256}) || state != domain.LadoTaskApproved {
-		t.Fatalf("after the first approval: snapshot %+v state %q, want %s and approved", ref, state, first.ID)
+	if ref, state := read("lado-task-1"); ref != (domain.LadoPolicySnapshotRef{ID: first.ID, SHA256: first.SHA256}) || state != domain.LadoTaskQueued {
+		t.Fatalf("after the first approval: snapshot %+v state %q, want %s and queued", ref, state, first.ID)
 	}
 	blocking := ladoPolicySnapshot("lado-snapshot-2", `{"n":2}`, true)
 	mustApproveLadoPlan(t, s, "lado-approval-2", mustPin(t, s, ladoRevision("lado-plan-2", "lado-task-1", "req-1", 2, ladoSHA('b'))), "nonce-2", blocking)
@@ -586,10 +585,10 @@ func TestLadoTaskReadsCarryTheRuleSnapshot(t *testing.T) {
 		t.Fatalf("after a blocking approval: snapshot %+v state %q, want %s and blocked", ref, state, blocking.ID)
 	}
 	// The newest approval decides, and one given without rules has no
-	// snapshot even after approvals that had one.
+	// snapshot even after approvals that had one, and so no queue entry.
 	mustApproveLadoPlan(t, s, "lado-approval-3", mustPin(t, s, ladoRevision("lado-plan-3", "lado-task-1", "req-1", 3, ladoSHA('c'))), "nonce-3", nil)
-	if ref, state := read("lado-task-1"); ref != (domain.LadoPolicySnapshotRef{}) || state != domain.LadoTaskApproved {
-		t.Fatalf("after an approval without rules: snapshot %+v state %q, want none and approved", ref, state)
+	if ref, state := read("lado-task-1"); ref != (domain.LadoPolicySnapshotRef{}) || state != domain.LadoTaskReviewRequired {
+		t.Fatalf("after an approval without rules: snapshot %+v state %q, want none and review_required", ref, state)
 	}
 	if ref, _ := read("lado-task-2"); ref != (domain.LadoPolicySnapshotRef{}) {
 		t.Fatalf("task without approvals: snapshot %+v, want none", ref)

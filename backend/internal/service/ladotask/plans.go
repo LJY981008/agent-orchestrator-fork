@@ -290,7 +290,7 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		SubjectKind: "plan_revision",
 		SubjectID:   string(rev.ID),
 		Payload:     payload,
-	}, &snapshot)
+	}, &snapshot, nil)
 	switch {
 	case errors.Is(err, domain.ErrLadoPresenceReplayed):
 		return domain.LadoPlanApproval{}, ladopresence.Replayed()

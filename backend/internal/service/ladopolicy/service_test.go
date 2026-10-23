@@ -219,7 +219,7 @@ func (fx *serviceFixture) approve(t *testing.T, task domain.LadoTask, rev domain
 		domain.LadoPlanApproval{ID: id, RevisionID: rev.ID, TaskID: task.ID, SHA256: rev.SHA256, ProofNonce: proof.Nonce, ApprovedAt: fx.now},
 		proof,
 		domain.LadoAuditEvent{At: fx.now, Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: string(rev.ID), Payload: json.RawMessage(`{}`)},
-		&snapshot,
+		&snapshot, nil,
 	); err != nil {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}

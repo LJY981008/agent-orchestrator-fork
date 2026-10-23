@@ -338,6 +338,20 @@ func TestLadoMigrateCreatesQueueTables(t *testing.T) {
 			t.Fatalf("table %s missing after the LADO track", name)
 		}
 	}
+	// Entries and executions publish through ladoCDCTriggers; the settings
+	// tables publish nothing.
+	for _, name := range []string{"lado_cdc_queue_entries_insert", "lado_cdc_queue_entries_update", "lado_cdc_executions_insert", "lado_cdc_executions_update"} {
+		if !triggerExists(t, db, name) {
+			t.Fatalf("trigger %s missing after open", name)
+		}
+	}
+	var settingsTriggers int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('lado_dispatch_settings', 'lado_project_settings')`).Scan(&settingsTriggers); err != nil {
+		t.Fatalf("count settings triggers: %v", err)
+	}
+	if settingsTriggers != 0 {
+		t.Fatalf("settings tables have %d triggers, want none", settingsTriggers)
+	}
 
 	// A project's cap defaults to 1, and the added column keeps its CHECK.
 	mustExec(t, db, `INSERT INTO lado_project_settings (project_id, lado_mode, updated_at) VALUES ('p', 1, CURRENT_TIMESTAMP)`)

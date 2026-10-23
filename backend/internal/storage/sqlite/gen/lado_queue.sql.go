@@ -463,14 +463,23 @@ func (q *Queries) ListClaimableLadoQueueEntries(ctx context.Context, arg ListCla
 }
 
 const listLadoExecutionsForTasks = `-- name: ListLadoExecutionsForTasks :many
-SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
-FROM lado_executions
-WHERE task_id IN (/*SLICE:task_ids*/?)
-ORDER BY task_id, started_at DESC, session_id DESC
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated
+FROM lado_executions e
+WHERE e.task_id IN (/*SLICE:task_ids*/?)
+ORDER BY e.task_id, e.started_at DESC, e.session_id DESC
 `
 
-func (q *Queries) ListLadoExecutionsForTasks(ctx context.Context, taskIds []string) ([]LadoExecution, error) {
+type ListLadoExecutionsForTasksRow struct {
+	LadoExecution     LadoExecution
+	SessionTerminated bool
+}
+
+// With whether the session ended. An execution without a session row counts
+// as ended, as in CountLiveLadoExecutionsByProject.
+func (q *Queries) ListLadoExecutionsForTasks(ctx context.Context, taskIds []string) ([]ListLadoExecutionsForTasksRow, error) {
 	query := listLadoExecutionsForTasks
 	var queryParams []interface{}
 	if len(taskIds) > 0 {
@@ -486,23 +495,24 @@ func (q *Queries) ListLadoExecutionsForTasks(ctx context.Context, taskIds []stri
 		return nil, err
 	}
 	defer rows.Close()
-	items := []LadoExecution{}
+	items := []ListLadoExecutionsForTasksRow{}
 	for rows.Next() {
-		var i LadoExecution
+		var i ListLadoExecutionsForTasksRow
 		if err := rows.Scan(
-			&i.SessionID,
-			&i.TaskID,
-			&i.QueueEntryID,
-			&i.PlanRevisionID,
-			&i.PlanApprovalID,
-			&i.PolicySnapshotID,
-			&i.Attempt,
-			&i.PlanBaseSha,
-			&i.DispatchBaseSha,
-			&i.BaseCommitsAhead,
-			&i.StartedAt,
-			&i.DeadlineAt,
-			&i.TimedOutAt,
+			&i.LadoExecution.SessionID,
+			&i.LadoExecution.TaskID,
+			&i.LadoExecution.QueueEntryID,
+			&i.LadoExecution.PlanRevisionID,
+			&i.LadoExecution.PlanApprovalID,
+			&i.LadoExecution.PolicySnapshotID,
+			&i.LadoExecution.Attempt,
+			&i.LadoExecution.PlanBaseSha,
+			&i.LadoExecution.DispatchBaseSha,
+			&i.LadoExecution.BaseCommitsAhead,
+			&i.LadoExecution.StartedAt,
+			&i.LadoExecution.DeadlineAt,
+			&i.LadoExecution.TimedOutAt,
+			&i.SessionTerminated,
 		); err != nil {
 			return nil, err
 		}

@@ -231,17 +231,20 @@ func (s *Store) ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTas
 }
 
 // ApproveLadoPlan records an approval, the presence proof it used, the rule
-// snapshot it fixed and its audit event in one transaction
-// (docs/LJY-PRD/TDD.md §5.2). Inside the transaction it checks again that the
-// revision is still the task's latest with the approved sha256, so a revision
-// pinned meanwhile is not approved by mistake (domain.ErrLadoPlanSuperseded).
-// A proof whose nonce was used before is refused with
-// domain.ErrLadoPresenceReplayed. A nil snapshot stores the approval without
-// one; otherwise the snapshot takes the approval's id and time and is stored
-// with the rule versions it used, which must all still exist: the rules are
-// resolved before the transaction, so a rule deleted in between is refused
-// with domain.ErrLadoRulesChanged. When any part fails, nothing is kept.
-func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot) (domain.LadoPlanApproval, domain.LadoAuditEvent, error) {
+// snapshot it fixed, its queue entry and its audit event in one transaction
+// (docs/LJY-PRD/TDD.md §5.2 and §5.3). Inside the transaction it checks again
+// that the revision is still the task's latest with the approved sha256, so a
+// revision pinned meanwhile is not approved by mistake
+// (domain.ErrLadoPlanSuperseded). A proof whose nonce was used before is
+// refused with domain.ErrLadoPresenceReplayed. A nil snapshot stores the
+// approval without one; otherwise the snapshot takes the approval's id and
+// time and is stored with the rule versions it used, which must all still
+// exist: the rules are resolved before the transaction, so a rule deleted in
+// between is refused with domain.ErrLadoRulesChanged. The approval supersedes
+// the task's open queue entries and, with a snapshot, queues entry under the
+// approval's task, id and time, the task's project and the snapshot's id; a
+// nil snapshot or entry queues nothing. When any part fails, nothing is kept.
+func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot, entry *domain.LadoQueueEntry) (domain.LadoPlanApproval, domain.LadoAuditEvent, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return domain.LadoPlanApproval{}, domain.LadoAuditEvent{}, err
 	}
@@ -285,6 +288,9 @@ func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApp
 			if err := insertLadoPolicySnapshotTx(ctx, q, stored, *snapshot); err != nil {
 				return err
 			}
+		}
+		if err := queueLadoApprovalTx(ctx, q, stored, snapshot, entry); err != nil {
+			return err
 		}
 		appended, err = appendLadoAuditEventTx(ctx, q, event)
 		return err

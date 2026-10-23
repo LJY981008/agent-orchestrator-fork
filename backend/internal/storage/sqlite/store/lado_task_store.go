@@ -55,11 +55,25 @@ func (s *Store) LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.Lado
 	if err != nil {
 		return domain.LadoTask{}, false, fmt.Errorf("read LADO task: %w", err)
 	}
-	task := ladoTaskFromGen(row)
-	if task.Plan, err = s.ladoTaskPlan(ctx, task.ID); err != nil {
+	task, err := s.withLadoTaskFacts(ctx, ladoTaskFromGen(row))
+	if err != nil {
 		return domain.LadoTask{}, false, err
 	}
 	return task, true, nil
+}
+
+// withLadoTaskFacts reads what one task's state derives from: its plans, its
+// queue entry and its execution.
+func (s *Store) withLadoTaskFacts(ctx context.Context, task domain.LadoTask) (domain.LadoTask, error) {
+	var err error
+	if task.Plan, err = s.ladoTaskPlan(ctx, task.ID); err != nil {
+		return domain.LadoTask{}, err
+	}
+	tasks := []domain.LadoTask{task}
+	if err := s.fillLadoQueueFacts(ctx, tasks); err != nil {
+		return domain.LadoTask{}, err
+	}
+	return tasks[0], nil
 }
 
 // ListLadoTasks returns a project's tasks that have an issue, oldest first.
@@ -81,11 +95,15 @@ func (s *Store) ListLadoTasks(ctx context.Context, projectID domain.ProjectID, i
 		task.Plan = plans[task.ID]
 		tasks = append(tasks, task)
 	}
+	if err := s.fillLadoQueueFacts(ctx, tasks); err != nil {
+		return nil, err
+	}
 	return tasks, nil
 }
 
 // ListLiveLadoTasks returns every project's tasks that have an issue and are
-// not cancelled, with their plan facts, by project and oldest first.
+// not cancelled, with their plan and queue facts, by project and oldest
+// first.
 func (s *Store) ListLiveLadoTasks(ctx context.Context) ([]domain.LadoTask, error) {
 	rows, err := s.qr.ListLiveLadoTasks(ctx)
 	if err != nil {
@@ -104,6 +122,9 @@ func (s *Store) ListLiveLadoTasks(ctx context.Context) ([]domain.LadoTask, error
 		}
 		task.Plan = projectPlans[task.ID]
 		tasks = append(tasks, task)
+	}
+	if err := s.fillLadoQueueFacts(ctx, tasks); err != nil {
+		return nil, err
 	}
 	return tasks, nil
 }
@@ -211,15 +232,17 @@ func (s *Store) SetLadoTaskPreferences(ctx context.Context, id domain.LadoTaskID
 	if err != nil {
 		return domain.LadoTask{}, false, fmt.Errorf("set LADO task preferences: %w", err)
 	}
-	task := ladoTaskFromGen(row)
-	if task.Plan, err = s.ladoTaskPlan(ctx, task.ID); err != nil {
+	task, err := s.withLadoTaskFacts(ctx, ladoTaskFromGen(row))
+	if err != nil {
 		return domain.LadoTask{}, false, err
 	}
 	return task, true, nil
 }
 
-// CancelLadoTask cancels a task. Cancelling a cancelled task keeps the first
-// cancellation. It reports false for an unknown or pending task.
+// CancelLadoTask cancels a task and its open queue entries. Cancelling a
+// cancelled task keeps the first cancellation. A running execution goes on:
+// stopping its session is the task service's. It reports false for an
+// unknown or pending task.
 func (s *Store) CancelLadoTask(ctx context.Context, id domain.LadoTaskID, at time.Time) (domain.LadoTask, bool, error) {
 	if err := s.cancelLadoTask(ctx, id, at); err != nil {
 		return domain.LadoTask{}, false, err
@@ -236,14 +259,22 @@ func (s *Store) cancelLadoTask(ctx context.Context, id domain.LadoTaskID, at tim
 		return err
 	}
 	defer s.writeMu.Unlock()
-	if _, err := s.qw.CancelLadoTask(ctx, gen.CancelLadoTaskParams{
-		CancelledAt: ladoNullTime(at),
-		UpdatedAt:   at.UTC(),
-		ID:          string(id),
-	}); err != nil {
-		return fmt.Errorf("cancel LADO task: %w", err)
-	}
-	return nil
+	return s.inTx(ctx, "cancel LADO task", func(q *gen.Queries) error {
+		if _, err := q.CancelLadoTask(ctx, gen.CancelLadoTaskParams{
+			CancelledAt: ladoNullTime(at),
+			UpdatedAt:   at.UTC(),
+			ID:          string(id),
+		}); err != nil {
+			return err
+		}
+		// Also when the task was cancelled before: a cancelled task keeps no
+		// entry that could still dispatch.
+		_, err := q.CancelOpenLadoQueueEntriesForTask(ctx, gen.CancelOpenLadoQueueEntriesForTaskParams{
+			CancelledAt: ladoNullTime(at),
+			TaskID:      string(id),
+		})
+		return err
+	})
 }
 
 // DeletePendingLadoTask removes a task whose issue was never created. Tasks

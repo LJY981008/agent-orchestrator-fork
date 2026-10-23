@@ -184,7 +184,7 @@ func TestWireLadoWorkGivesTasksTheRules(t *testing.T) {
 	}
 	proof := domain.LadoPresenceProof{Nonce: "AAAAAAAAAAAAAAAAAAAAAA", Action: domain.LadoPresencePlanApprove, SubjectID: string(rev.ID), ExpiresAt: at.Add(time.Minute), UsedAt: at}
 	event := domain.LadoAuditEvent{At: at, Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: string(rev.ID), Payload: []byte("{}")}
-	if _, _, err := store.ApproveLadoPlan(ctx, domain.LadoPlanApproval{ID: "approval-1", RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: sum, ApprovedAt: at}, proof, event, nil); err != nil {
+	if _, _, err := store.ApproveLadoPlan(ctx, domain.LadoPlanApproval{ID: "approval-1", RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: sum, ApprovedAt: at}, proof, event, nil, nil); err != nil {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
 

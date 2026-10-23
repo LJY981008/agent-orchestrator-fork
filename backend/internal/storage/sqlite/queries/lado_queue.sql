@@ -165,11 +165,15 @@ FROM lado_executions
 WHERE queue_entry_id = ?;
 
 -- name: ListLadoExecutionsForTasks :many
-SELECT session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at, timed_out_at
-FROM lado_executions
-WHERE task_id IN (sqlc.slice('task_ids'))
-ORDER BY task_id, started_at DESC, session_id DESC;
+-- With whether the session ended. An execution without a session row counts
+-- as ended, as in CountLiveLadoExecutionsByProject.
+SELECT sqlc.embed(e),
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated
+FROM lado_executions e
+WHERE e.task_id IN (sqlc.slice('task_ids'))
+ORDER BY e.task_id, e.started_at DESC, e.session_id DESC;
 
 -- name: CountLiveLadoExecutionsByProject :many
 SELECT t.project_id, COUNT(*) AS live
