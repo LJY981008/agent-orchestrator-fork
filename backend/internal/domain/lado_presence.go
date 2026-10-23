@@ -22,10 +22,12 @@ type LadoPresenceProof struct {
 	UsedAt    time.Time
 }
 
-// Actions that need human presence in step 4b.
+// Actions that need human presence. LadoPresenceRuleChange is a change to
+// a protected rule's settings, such as the permission ceiling's mode.
 const (
 	LadoPresencePlanApprove = "plan.approve"
 	LadoPresenceModeOff     = "project.lado_mode_off"
+	LadoPresenceRuleChange  = "rule.protected_change"
 )
 
 // ErrLadoPresenceReplayed means the proof's nonce was already used.

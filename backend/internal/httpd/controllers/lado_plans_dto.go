@@ -128,11 +128,12 @@ type CreateLadoPlanRequestRequest struct {
 	Note            string `json:"note,omitempty" description:"What to change in the latest revision; makes this a change request."`
 }
 
-// ApproveLadoPlanRequest approves one revision. It needs a human-presence
-// proof in X-LADO-Presence, which the desktop app adds after the developer
-// confirms.
+// ApproveLadoPlanRequest approves one revision under the rules the developer
+// reviewed. It needs a human-presence proof in X-LADO-Presence, which the
+// desktop app adds after the developer confirms.
 type ApproveLadoPlanRequest struct {
-	SHA256 string `json:"sha256" description:"The revision's sha256 the developer reviewed."`
+	SHA256       string `json:"sha256" description:"The revision's sha256 the developer reviewed."`
+	PolicySHA256 string `json:"policySha256,omitempty" description:"The sha256 of the rule snapshot the developer reviewed for this approval. The service requires it and refuses the approval when the rules changed since."`
 }
 
 // LadoIssueTextResponse is a task's issue as read for the task view.

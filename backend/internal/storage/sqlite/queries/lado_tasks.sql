@@ -39,6 +39,14 @@ FROM lado_tasks
 WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
 ORDER BY issue_observed_at, id;
 
+-- name: ListLiveLadoTasks :many
+SELECT id, project_id, issue_repo, issue_ref, agent, model,
+    issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
+    created_at, updated_at, cancelled_at
+FROM lado_tasks
+WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
+ORDER BY project_id, created_at, id;
+
 -- name: ListLiveLadoTaskIssueRefs :many
 SELECT issue_ref
 FROM lado_tasks

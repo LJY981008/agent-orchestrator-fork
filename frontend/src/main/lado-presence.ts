@@ -1,18 +1,26 @@
-// LADO fork: plan approval through the human at the desktop app
-// (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md). Any local
-// process can call the daemon's loopback API, so an approval must come from
-// here. The renderer names a plan revision; main reads that revision from the
-// daemon itself, so the renderer cannot misstate the subject, shows a native
-// confirmation naming it, and on confirm signs and sends the approval. The
-// key is derived in memory from the per-launch desktop token and never leaves
-// main. backend/internal/service/ladopresence verifies the proof, and both
-// sides test the same fixed vector.
+// LADO fork: plan approval and permission ceiling changes through the human
+// at the desktop app (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
+// Any local process can call the daemon's loopback API, so these must come
+// from here. The renderer names a plan revision, or the ceiling and a mode;
+// main reads the subject from the daemon itself, so the renderer cannot
+// misstate it, shows a native confirmation naming it, and on confirm signs
+// and sends the request. An approval also signs the hash of the rules that
+// apply to the task right now. The key is derived in memory from the
+// per-launch desktop token and never leaves main.
+// backend/internal/service/ladopresence verifies the proof, and both sides
+// test the same fixed vector.
 import { createHash, createHmac, randomBytes as cryptoRandomBytes } from "node:crypto";
 import type { BaseWindow, Dialog, IpcMain, IpcMainInvokeEvent, MessageBoxOptions, WebContents } from "electron";
 import {
+	LADO_CEILING_MODES,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
+	type LadoCeilingMode,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
+	type LadoPresenceFailure,
+	type LadoPresenceRule,
+	type LadoPresenceRuleChangeResult,
 } from "../shared/lado-presence";
 import type { AppLocale } from "../shared/ui-locale";
 // Main's own catalog: the dialog's words never come from the renderer.
@@ -27,14 +35,35 @@ const PROOF_LIFETIME_SECONDS = 60;
 const REQUEST_TIMEOUT_MS = 10_000;
 const REVISION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
+// The one rule whose change needs the human (docs/LJY-PRD/HARNESS.md §14).
+const CEILING_RULE_ID = "agent.permission.ceiling";
 // Line breaks or direction overrides in an issue title could fake the
 // dialog's revision and sha256 lines.
 const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g;
 
-type Failure = Extract<LadoPresenceApproveResult, { status: "error" }>;
+type Failure = LadoPresenceFailure;
 type PresenceMessageKey = Extract<TrayMessageKey, `lado.presence.${string}`>;
+type Translate = (key: PresenceMessageKey, vars?: Record<string, string | number>) => string;
 type DaemonAnswer = { ok: true; body: unknown } | { ok: false; failure: Failure };
-type PlanSubject = { title: string; issue: string; revision: number; sha256: string; valid: boolean; latest: boolean };
+type PlanSubject = {
+	taskId: string;
+	title: string;
+	issue: string;
+	revision: number;
+	sha256: string;
+	valid: boolean;
+	latest: boolean;
+};
+// What the task's rules give right now, from LadoEffectiveResponse.
+type RulesSubject = { sha256: string; on: number; ceiling: LadoCeilingMode; blocking: number };
+// The permission ceiling as the daemon has it, from LadoRuleDetailResponse.
+type CeilingSubject = { rule: LadoPresenceRule; version: number; mode: LadoCeilingMode | null };
+
+const MODE_KEYS: Record<LadoCeilingMode, PresenceMessageKey> = {
+	"accept-edits": "lado.presence.mode.acceptEdits",
+	auto: "lado.presence.mode.auto",
+	"bypass-permissions": "lado.presence.mode.bypassPermissions",
+};
 
 export type LadoPresenceDeps = {
 	ipcMain: Pick<IpcMain, "handle">;
@@ -91,6 +120,13 @@ export function registerLadoPresenceIpc(deps: LadoPresenceDeps): void {
 			return failure(undefined, error instanceof Error && error.message ? error.message : "The approval failed.");
 		}
 	});
+	deps.ipcMain.handle(LADO_PRESENCE_CHANGE_RULE_CHANNEL, async (event: IpcMainInvokeEvent, input: unknown) => {
+		try {
+			return await changeRule(deps, event.sender, input);
+		} catch (error) {
+			return failure(undefined, error instanceof Error && error.message ? error.message : "The rule change failed.");
+		}
+	});
 }
 
 async function approvePlan(
@@ -119,40 +155,115 @@ async function approvePlan(
 	if (!plan.valid) {
 		return failure("LADO_PLAN_INVALID", "This plan has problems and cannot be approved. Ask for changes first.");
 	}
-	if (!(await confirm(deps, plan))) return { status: "cancelled" };
+	// The approval binds the rules as they apply to the task now; the daemon
+	// refuses it when they changed before it arrives.
+	const effectivePath = `/api/v1/lado/effective?taskId=${encodeURIComponent(plan.taskId)}`;
+	const effective = await callDaemon(deps, effectivePath, { method: "GET", headers: { accept: "application/json" } });
+	if (!effective.ok) return effective.failure;
+	const rules = rulesSubject(effective.body, plan.taskId);
+	if (!rules) return failure(undefined, "The AO daemon's answer about this task's rules could not be read.");
+	const t = await translator(deps);
+	const detail = [
+		t("lado.presence.approveDetail", {
+			task: plan.title,
+			issue: plan.issue,
+			revision: plan.revision,
+			sha: plan.sha256.slice(0, 12),
+		}),
+		[
+			t("lado.presence.approveRules", { on: rules.on, ceiling: t(MODE_KEYS[rules.ceiling]), sha: rules.sha256.slice(0, 12) }),
+			...(rules.blocking > 0 ? [t("lado.presence.approveRulesBlocking", { blocking: rules.blocking })] : []),
+		].join("\n"),
+	].join("\n\n");
+	if (!(await confirm(deps, t, t("lado.presence.approveTitle"), detail, t("lado.presence.approve")))) {
+		return { status: "cancelled" };
+	}
 
-	// Signed after the confirmation, which can stay open longer than a proof lives.
 	const approvePath = `${planPath}/approve`;
-	const body = JSON.stringify({ sha256: plan.sha256 });
-	const random = deps.randomBytes ?? ((size: number) => cryptoRandomBytes(size));
-	const nonce = Buffer.from(random(16)).toString("base64url");
-	const expires = Math.floor((deps.now ?? Date.now)() / 1000) + PROOF_LIFETIME_SECONDS;
-	const proof = signLadoPresence(ladoPresenceKey(deps.token()), "POST", approvePath, body, nonce, expires);
-	const sent = await callDaemon(deps, approvePath, {
-		method: "POST",
-		headers: { "content-type": "application/json", [LADO_PRESENCE_HEADER]: proof },
-		body,
-	});
+	const body = JSON.stringify({ sha256: plan.sha256, policySha256: rules.sha256 });
+	const sent = await callDaemon(deps, approvePath, signed(deps, "POST", approvePath, body));
 	if (!sent.ok) return sent.failure;
 	const approval = record(sent.body);
 	if (!approval) return failure(undefined, "The approval was sent, but the AO daemon's answer could not be read.");
 	return { status: "approved", approval: approval as LadoPresenceApproval };
 }
 
-async function confirm(deps: LadoPresenceDeps, plan: PlanSubject): Promise<boolean> {
+async function changeRule(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceRuleChangeResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can change a rule.");
+	}
+	// The rule id and the mode are all the renderer gives; anything else it sends is ignored.
+	const request = record(input);
+	const ruleId = request?.ruleId;
+	const mode = record(request?.ceiling)?.mode;
+	if (ruleId !== CEILING_RULE_ID) {
+		return failure("LADO_RULE_CEILING_INVALID", "Only the permission ceiling's mode changes here.");
+	}
+	if (!isCeilingMode(mode)) {
+		return failure("LADO_RULE_CEILING_INVALID", "Choose accept-edits, auto or bypass-permissions as the permission ceiling.");
+	}
+	const rulePath = `/api/v1/lado/rules/${encodeURIComponent(ruleId)}`;
+	const read = await callDaemon(deps, rulePath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const rule = record(record(read.body)?.rule);
+	if (rule?.id !== CEILING_RULE_ID || rule.protected !== true) {
+		return failure("LADO_RULE_CEILING_INVALID", "The AO daemon does not have this rule as the protected permission ceiling.");
+	}
+	const ceiling = ceilingSubject(rule);
+	if (!ceiling) return failure(undefined, "The AO daemon's answer about this rule could not be read.");
+	// Nothing would change, so there is nothing to confirm.
+	if (ceiling.mode === mode) return { status: "changed", rule: ceiling.rule };
+	const t = await translator(deps);
+	const detail = t("lado.presence.ceilingChangeDetail", {
+		// A ceiling without a valid mode blocks every task; setting one repairs it.
+		from: ceiling.mode ? t(MODE_KEYS[ceiling.mode]) : "—",
+		to: t(MODE_KEYS[mode]),
+	});
+	if (!(await confirm(deps, t, t("lado.presence.ruleChangeTitle"), detail, t("lado.presence.change")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon checks the proof against exactly these bytes.
+	const body = JSON.stringify({ baseVersion: ceiling.version, ceiling: { mode } });
+	const sent = await callDaemon(deps, rulePath, signed(deps, "PATCH", rulePath, body));
+	if (!sent.ok) return sent.failure;
+	const changed = record(record(sent.body)?.rule);
+	if (!changed) return failure(undefined, "The change was sent, but the AO daemon's answer could not be read.");
+	return { status: "changed", rule: changed as LadoPresenceRule };
+}
+
+// A request carrying a fresh proof. Signed after the confirmation, which can
+// stay open longer than a proof lives.
+function signed(deps: LadoPresenceDeps, method: string, path: string, body: string): RequestInit {
+	const random = deps.randomBytes ?? ((size: number) => cryptoRandomBytes(size));
+	const nonce = Buffer.from(random(16)).toString("base64url");
+	const expires = Math.floor((deps.now ?? Date.now)() / 1000) + PROOF_LIFETIME_SECONDS;
+	const proof = signLadoPresence(ladoPresenceKey(deps.token()), method, path, body, nonce, expires);
+	return { method, headers: { "content-type": "application/json", [LADO_PRESENCE_HEADER]: proof }, body };
+}
+
+// Main's catalog in the current language, read for each confirmation.
+async function translator(deps: LadoPresenceDeps): Promise<Translate> {
 	const catalog = trayCatalogs[await deps.locale()] ?? trayCatalogs.en;
-	const t = (key: PresenceMessageKey, vars?: Record<string, string | number>) =>
-		format(catalog[key] ?? trayCatalogs.en[key], vars);
+	return (key, vars) => format(catalog[key] ?? trayCatalogs.en[key], vars);
+}
+
+async function confirm(
+	deps: LadoPresenceDeps,
+	t: Translate,
+	message: string,
+	detail: string,
+	confirmLabel: string,
+): Promise<boolean> {
 	const options: MessageBoxOptions = {
 		type: "question",
-		message: t("lado.presence.approveTitle"),
-		detail: t("lado.presence.approveDetail", {
-			task: plan.title,
-			issue: plan.issue,
-			revision: plan.revision,
-			sha: plan.sha256.slice(0, 12),
-		}),
-		buttons: [t("lado.presence.cancel"), t("lado.presence.approve")],
+		message,
+		detail,
+		buttons: [t("lado.presence.cancel"), confirmLabel],
 		defaultId: 0,
 		cancelId: 0,
 		noLink: true,
@@ -192,14 +303,18 @@ async function callDaemon(deps: LadoPresenceDeps, path: string, init: RequestIni
 // What the dialog names and the approval binds to, from LadoPlanResponse.
 function planSubject(body: unknown, revisionId: string): PlanSubject | null {
 	const plan = record(body);
-	const issue = record(record(plan?.task)?.issue);
+	const task = record(plan?.task);
+	const issue = record(task?.issue);
 	const revision = record(plan?.revision);
-	if (!plan || !issue || !revision) return null;
+	if (!plan || !task || !issue || !revision) return null;
 	const { latest } = plan;
 	const { title, ref } = issue;
-	const { id, number: revisionNumber, sha256, valid } = revision;
+	const { id, number: revisionNumber, sha256, valid, taskId } = revision;
 	if (
 		id !== revisionId ||
+		typeof task.id !== "string" ||
+		task.id === "" ||
+		taskId !== task.id ||
 		typeof title !== "string" ||
 		typeof ref !== "string" ||
 		typeof revisionNumber !== "number" ||
@@ -210,7 +325,44 @@ function planSubject(body: unknown, revisionId: string): PlanSubject | null {
 	) {
 		return null;
 	}
-	return { title: oneLine(title), issue: oneLine(ref), revision: revisionNumber, sha256, valid, latest };
+	return { taskId: task.id, title: oneLine(title), issue: oneLine(ref), revision: revisionNumber, sha256, valid, latest };
+}
+
+// The rule snapshot's hash and what the dialog says about it.
+function rulesSubject(body: unknown, taskId: string): RulesSubject | null {
+	const effective = record(body);
+	const rules = effective?.rules;
+	const problems = effective?.problems;
+	const sha256 = effective?.snapshotSha256;
+	const ceiling = effective?.permissionCeiling;
+	if (
+		effective?.taskId !== taskId ||
+		typeof sha256 !== "string" ||
+		!SHA256_HEX.test(sha256) ||
+		!isCeilingMode(ceiling) ||
+		!Array.isArray(rules) ||
+		!Array.isArray(problems)
+	) {
+		return null;
+	}
+	return {
+		sha256,
+		on: rules.filter((rule) => record(rule)?.on === true).length,
+		ceiling,
+		blocking: problems.filter((problem) => record(problem)?.severity === "blocking").length,
+	};
+}
+
+// The change's base version and current mode; a missing mode reads as null.
+function ceilingSubject(rule: Record<string, unknown>): CeilingSubject | null {
+	const { version } = rule;
+	if (typeof version !== "number" || !Number.isSafeInteger(version) || version < 1) return null;
+	const mode = record(rule.ceiling)?.mode;
+	return { rule: rule as LadoPresenceRule, version, mode: isCeilingMode(mode) ? mode : null };
+}
+
+function isCeilingMode(value: unknown): value is LadoCeilingMode {
+	return typeof value === "string" && (LADO_CEILING_MODES as readonly string[]).includes(value);
 }
 
 // tray.ts's {{var}} formatting, which it does not export.

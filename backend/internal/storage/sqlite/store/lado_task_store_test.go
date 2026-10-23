@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -373,4 +374,55 @@ func TestLadoTaskChangesPublishChangeEvents(t *testing.T) {
 	ghost.ProjectID = "ghost"
 	mustCreateLadoTask(t, s, ghost)
 	expectEvents("task of a project that is not registered", 0)
+}
+
+func TestListLiveLadoTasksCarriesPlanFacts(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	seedProject(t, s, "zed")
+	mustCreateLadoTask(t, s, importedLadoTask("lado-task-1", "github:acme/demo#12"))
+	mustCreateLadoTask(t, s, importedLadoTask("lado-task-2", "github:acme/demo#13"))
+	other := importedLadoTask("lado-task-3", "github:acme/other#1")
+	// Older than mer's tasks, yet listed after them: tasks come by project.
+	other.ProjectID, other.CreatedAt = "zed", ladoTaskCreatedAt.Add(-time.Hour)
+	mustCreateLadoTask(t, s, other)
+	mustCreateLadoTask(t, s, pendingLadoTask("lado-task-4"))
+	for _, id := range []string{"lado-task-1", "lado-task-2", "lado-task-3"} {
+		mustLadoPlanRequest(t, s, "req-"+id, id, ladoPlanAt)
+	}
+	snapshot := ladoPolicySnapshot("lado-snapshot-1", `{}`, true)
+	mustApproveLadoPlan(t, s, "lado-approval-1", mustPin(t, s, ladoRevision("lado-plan-1", "lado-task-1", "req-lado-task-1", 1, ladoSHA('a'))), "nonce-1", snapshot)
+	mustPin(t, s, ladoRevision("lado-plan-2", "lado-task-2", "req-lado-task-2", 1, ladoSHA('b')))
+	mustPin(t, s, ladoRevision("lado-plan-3", "lado-task-3", "req-lado-task-3", 1, ladoSHA('c')))
+	if _, _, err := s.CancelLadoTask(ctx, "lado-task-2", ladoPlanAt.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+
+	live, err := s.ListLiveLadoTasks(ctx)
+	if err != nil {
+		t.Fatalf("ListLiveLadoTasks: %v", err)
+	}
+	if got := ladoTaskIDs(live); !reflect.DeepEqual(got, []domain.LadoTaskID{"lado-task-1", "lado-task-3"}) {
+		t.Fatalf("ListLiveLadoTasks = %v, want the live tasks with an issue, by project", got)
+	}
+	for _, task := range live {
+		single, ok, err := s.LadoTask(ctx, task.ID)
+		if err != nil || !ok {
+			t.Fatalf("LadoTask %s: %v %v", task.ID, ok, err)
+		}
+		if !reflect.DeepEqual(task.Plan, single.Plan) {
+			t.Fatalf("%s plan facts = %+v, want what LadoTask reads: %+v", task.ID, task.Plan, single.Plan)
+		}
+	}
+	approved := live[0]
+	if approved.Plan.Latest.ID != "lado-plan-1" || approved.Plan.Approval.ID != "lado-approval-1" || approved.State() != domain.LadoTaskBlocked ||
+		approved.Plan.Snapshot != (domain.LadoPolicySnapshotRef{ID: snapshot.ID, SHA256: snapshot.SHA256, Blocking: true}) {
+		t.Fatalf("approved task plan = %+v state %q, want its revision, approval and blocking snapshot", approved.Plan, approved.State())
+	}
+	planned := live[1]
+	if planned.ProjectID != "zed" || planned.Plan.Latest.ID != "lado-plan-3" || planned.Plan.Approval.ID != "" ||
+		planned.Plan.Snapshot != (domain.LadoPolicySnapshotRef{}) || planned.State() != domain.LadoTaskPlanned {
+		t.Fatalf("planned task = %+v state %q, want zed's revision without an approval", planned, planned.State())
+	}
 }

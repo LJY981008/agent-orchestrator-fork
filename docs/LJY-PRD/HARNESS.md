@@ -56,6 +56,15 @@ Examples for ordinary rules: Global OFF + Project FORCE_ON → ON. Global ON + P
 
 Repo-tracked files are loaded by the agent tool straight from the worktree, so LADO cannot switch them off per scope. They are listed as "loaded by the tool" and change through git.
 
+As built in step 5 (`service/ladopolicy`, TDD §9), for rules only; setup items join in step 7:
+
+- Rules are taken in creation order, archived ones left out. A protected rule is ON whatever its bindings say. Otherwise the nearest binding that is not INHERIT wins, Task over Project over Global, and only the bindings of the project and task being resolved count. A rule whose Global binding is not ON is OFF.
+- Triggers: step 5's rules have none, so each one applies to every LADO execution in its scope. Trigger evaluation (step 4 above) comes with the first trigger a rule needs, not as an "every run" trigger stored on each rule.
+- The permission ceiling is the mode of `agent.permission.ceiling` (§14). A missing or invalid one falls back to `accept-edits` and blocks. A task's run gets the plan's `permission_ceiling` when it is below the ceiling, and the ceiling otherwise; a plan above the ceiling is lowered to it with a warning.
+- The agent is the task's choice, else the project's worker; no agent blocks. Then the capability check (§7) and the conflict check run. The conflict check covers declared exclusions only: two ON rules where either names the other in `conflictsWith` block, once per pair. The other checks of §10 come with step 7.
+- Compiled: the prompt text of the ON rules with prompt enforcement, the workflow gates, the ceiling and the run's mode. Validators come with step 8, the setup home with step 7.
+- Problems are blocking, warning or info. Any blocking problem marks the snapshot (§8) as blocking.
+
 ## 5. Rule schema (example)
 
 ```yaml
@@ -92,6 +101,20 @@ bindings:
       git.commit.message.korean: FORCE_ON
 ```
 
+As stored in step 5 (`lado_rules`, `lado_rule_versions`, `lado_rule_bindings`; TDD §3.1):
+
+- The rule: a stable id (fixed for the built-ins, such as `plan.approval.required`; `lado-rule-<uuid>` for the developer's), whether it is built in and whether it is protected, and when it was created and archived.
+- Its versions, numbered from 1 and never changed: `name` (at most 120 characters), `category` (at most 40, may be empty), `instruction` (required, at most 8,000), `enforcement`, `config` (a JSON object; the ceiling's is `{"mode": ...}`), `conflictsWith` (at most 20 other rules, never itself or a protected rule), the actor and the time, and the sha256 of the canonical content. A rule the developer creates has `prompt` enforcement and an empty config.
+- Its bindings: Global `on` or `off`; Project and Task `force_on` or `force_off`. INHERIT is the absence of a row.
+
+The canonical content is JSON in this field order, with text trimmed, `conflictsWith` sorted without duplicates and `config` compacted. The optional built-in, for example:
+
+```json
+{"name":"Commit messages in Korean","category":"git","instruction":"Write Git commit subjects and bodies primarily in Korean. Conventional Commit prefixes such as feat, fix, docs, refactor, test and chore may stay in English.","enforcement":["prompt"],"config":{},"conflictsWith":[]}
+```
+
+`owner`, `triggers`, `default_enabled`, `validator` and `failure_action` are not stored yet: the Global binding takes the place of `default_enabled`, triggers wait for the first rule that needs one (§4), and validators come with step 8.
+
 ## 6. Enforcement classes and AO hook points
 
 | Class | Where LADO applies it | Strength (T1) | Limits |
@@ -114,6 +137,8 @@ Before admission LADO checks that the chosen agent can honor each mandatory rule
 
 A mandatory rule that the agent cannot honor blocks dispatch with a diagnostic. `UNSUPPORTED` is an explicit result, never a silent fallback.
 
+As built in step 5 (TDD §9), for a task: `permission_mode` is always required and `prompt` whenever the rules give the worker text. Claude Code and Codex support both. Every other agent is unsupported or unverified for at least one class, a blocking problem (`LADO_AGENT_CAPABILITY_UNSUPPORTED`, `LADO_AGENT_CAPABILITY_UNVERIFIED`), so a task with that agent shows Blocked once approved; a degraded class (fx's prompt) is a warning. Codex below `bypass-permissions` adds an info note that it asks before commits, pushes and network calls (TDD §6.6).
+
 ## 8. Snapshot and change semantics
 
 - The snapshot is fixed at queue admission (TDD §5.2). It holds rule version ids, the binding behind each entry, setup item ids and content hashes, the AO build and its system-layer hash, the compiler version, required capabilities, the permission ceiling, and the canonical sha256.
@@ -129,6 +154,15 @@ Write contract:
 2. The Global binding is ON or OFF. Project and Task bindings are INHERIT, FORCE_ON or FORCE_OFF.
 3. AI-proposed changes create a `RuleChangeProposal` (schema, target, old/new diff, conflicts, required capabilities, affected queued tasks). Nothing changes before approval.
 4. On approval, the version, binding change and audit event are written in one transaction, guarded by optimistic concurrency on the active version.
+
+As built in step 5:
+
+- The snapshot is fixed with the plan approval, in its transaction (TDD §5.2); step 6's queue entry will point at it. Its format is `lado-policy/1`, canonical JSON whose field order is the format: the compiler name, the AO build (the desktop app version), the project and task, the agent (harness, model, permission mode), the permission ceiling, every ON rule (rule id, version id and number, the version's sha256, name, protected, enforcement, strength, and the binding it came from), the kind, path and sha256 of AO's worker instructions, the compiled prompt, the workflow gates, the capability results and the problems. Setup items and the AO system layer's hash come with step 7. `lado_policy_snapshot_rules` lists the versions it used.
+- A change that gives an approved revision another hash marks the task Review required: a rule edit or toggle, an archive, the ceiling, the task's agent, AO's project instructions or the AO build. LADO never swaps the snapshot: the developer approves again, which writes a new snapshot, and the old one stays. The task's Rules tab compares the approved snapshot with now (rules added, removed or changed).
+- The active version is the one with the highest number. Bindings follow it: no binding names a version or a version policy.
+- Each change writes its version, binding or archive state together with its audit event in one transaction. A new version needs the active one as its base (`baseVersion`; 409 `LADO_RULE_CHANGED` otherwise). Ordinary changes need no presence and are recorded with the actor `api`. The ceiling's mode needs a presence proof, recorded as `rule.protected_changed` by `human` (`human:dev-presence` under dev presence). A request that edits a rule and archives it writes two transactions.
+- Every change can run as a dry run first (`dryRun`), which writes nothing and lists its impact: the LADO projects whose rules change, and the approved tasks that would need a new approval. AI drafts (`RuleChangeProposal`, HAR-006) come later.
+- A rule a snapshot used is never deleted; archive it instead. Built-in rules are never deleted, and protected rules are never archived or bound.
 
 ## 9. Local setup adoption (D11)
 
@@ -282,39 +316,50 @@ For "turn that off for project A", LADO resolves the rule unambiguously or asks 
 - Keep draft, saved, active and "effective for this run" visibly distinct.
 - Follow DESIGN.md: the settings modal composition (`DESIGN.md:282`), sentence case, the shared-list rule, and strings in the i18n files.
 
+As built in step 5 (DESIGN.md decisions log, 2026-10-22):
+
+- **Settings → Rules** (`frontend/src/renderer/components/settings/RulesSection.tsx`): a search over names, categories and instructions, with **New rule** at its end. A **Protected rules** card: Plan approval required reads "Always on", and Permission ceiling has a mode menu whose change the desktop app confirms. Then one card per category, in creation order with uncategorized rules last as "Other". Each row has the name, one line with the strength and how many projects and tasks override the rule, a Global switch, and a menu with Edit, History, Archive and Delete. Archived rules sit in a collapsed **Archived** card with Unarchive and Delete. The editor takes the name, category, instruction and the rules it conflicts with, and at creation whether the rule is on for every LADO project; History lists the versions with their content and actor.
+- **Project settings → Rules**, for local LADO projects only (`frontend/src/renderer/components/lado/LadoProjectRulesSection.tsx`): every rule with Inherit, On or Off, its effective state and where that comes from; protected rules read "Always on", and the ceiling shows its mode. A read-only **From AO project config** card lists AO's instructions with their sizes and read errors. **New rule for this project** creates a rule that is off at Global and forced on here.
+- **Task view**: the right pane has Plan and Rules tabs (`frontend/src/renderer/components/lado/LadoTaskRules.tsx`). Rules shows the agent and its mode, the problems by severity, the approved snapshot against now (a match, or the rules added, removed and changed), the task's overrides on the same rows as the project page, the AO instructions, and, collapsed, the rule text the worker will get. Approve is offered again for Review required and Blocked tasks.
+- **Board**: a Review required task reads "Rules need review" and a Blocked one "Blocked", both in the Plan lane with the attention tone.
+- Every change runs as a dry run first. When approved tasks would need a new approval, a dialog lists them and applies the change only on confirmation; Delete always asks, and for a rule a snapshot used says to archive it instead. Built-in rules offer no Delete.
+- Not yet: the Local setup and Conflicts parts (step 7), grouping by trigger (§4), the active snapshot on execution pages (step 6), and AI drafts (HAR-006).
+
 ## 13. Storage
 
-`lado_rules`, `lado_rule_versions`, `lado_rule_bindings`, `lado_policy_snapshots`, `lado_setup_adoptions`, `lado_setup_items`, `lado_setup_item_versions`, `lado_conflict_acceptances`. They follow TDD §4: separate migration track, `lado_` prefix, no foreign keys into upstream tables, audit in `lado_audit_events`.
+`lado_rules`, `lado_rule_versions`, `lado_rule_bindings`, `lado_policy_snapshots`, `lado_policy_snapshot_rules`, `lado_setup_adoptions`, `lado_setup_items`, `lado_setup_item_versions`, `lado_conflict_acceptances`. They follow TDD §4: separate migration track, `lado_` prefix, no foreign keys into upstream tables, audit in `lado_audit_events`. Step 5 created the first five (migration `0005_lado_rules.sql`); the setup and conflict tables come with step 7.
 
 ## 14. Protected gates
 
-| Gate | Enforced at | Strength |
-|---|---|---|
-| `plan.approval.required` | Worker gate (TDD §6.2) | Prevents |
-| `integration.approval.required` | `lado/integration` required check and AO merge hook (TDD §7.1-7.2) | Prevents (T1) |
-| `git.protected_branch.no_direct_write` | GitHub ruleset for the remote; reflog check locally (TDD §7.3) | Prevents remotely, detects locally |
-| `test.command.must_pass` | Required checks or local runner (TDD §8.1-8.2) | Blocks integration |
-| `paths.protected` | Path validator on `base..head` (TDD §8.3) | Detects; blocks integration |
-| `agent.permission.ceiling` | Explicit mode, per-turn cap, Codex mapping (TDD §6.4-6.6) | Prevents, within the tool |
-| `setup.change.requires_presence` | Human-presence channel (§9.5) | Prevents |
-| `git.commit.message.korean` (optional, not protected by default) | Commit validator | Detects (heuristic) |
+| Gate | Enforced at | Strength | Registered |
+|---|---|---|---|
+| `plan.approval.required` | Worker gate (TDD §6.2) | Prevents | Step 5, as a built-in protected rule that is always on. The worker gate has refused unapproved workers since step 3 |
+| `integration.approval.required` | `lado/integration` required check and AO merge hook (TDD §7.1-7.2) | Prevents (T1) | Step 8 |
+| `git.protected_branch.no_direct_write` | GitHub ruleset for the remote; reflog check locally (TDD §7.3) | Prevents remotely, detects locally | Step 8 |
+| `test.command.must_pass` | Required checks or local runner (TDD §8.1-8.2) | Blocks integration | Step 8 |
+| `paths.protected` | Path validator on `base..head` (TDD §8.3) | Detects; blocks integration | Step 8 |
+| `agent.permission.ceiling` | Explicit mode, per-turn cap, Codex mapping (TDD §6.4-6.6) | Prevents, within the tool | Step 5, as a built-in protected rule at `auto` whose mode changes only with presence. Step 6 applies it to runs |
+| `setup.change.requires_presence` | Human-presence channel (§9.5) | Prevents | Step 7 |
+| `git.commit.message.korean` (optional, not protected by default) | Commit validator | Detects (heuristic) | Step 5, as a built-in rule that starts off and gives the worker prompt text only, so it is advisory. The validator comes with step 8 |
 
-Validators are registered in code. AI cannot invent a validator that runs arbitrary shell.
+Validators are registered in code. AI cannot invent a validator that runs arbitrary shell. Step 5's built-in rules are seeded at daemon start (`service/ladopolicy` `EnsureBuiltins`, version 1 by `lado`). Only missing ones are seeded, so a stored built-in keeps its versions, its ceiling mode and its Global binding across restarts and upgrades.
 
 ## 15. Acceptance tests
 
-1. Global ON / Project OFF / Task ON resolves to ON.
-2. Project INHERIT follows a Global toggle.
-3. A protected gate rejects Task FORCE_OFF and AI-originated bypass.
-4. Disabling keeps rule history and leaves existing snapshots unchanged.
-5. The Korean commit rule blocks a clearly non-compliant commit in `base..head` and allows configured prefixes.
-6. A natural-language change produces an approval preview, not an immediate change.
-7. A missing enforcement capability is reported and blocks dispatch.
-8. Conflicting mandatory rules block dispatch with an actionable diagnostic.
-9. Adoption writes the backup and manifest before removing anything; restore is byte-identical; credential files are untouched.
-10. After adoption, AO sessions on both account and own-computer login see the adopted items, and the tools run directly do not.
-11. AO's account linker no longer creates entries in `~/.claude` after adoption.
-12. Editing a managed item after admission marks the entry Review required; the running session is unaffected.
-13. An adopted MCP server named `ao` is a blocking conflict.
-14. A repo-tracked CLAUDE.md is never moved; "Edit" creates a task.
-15. A new `~/.claude/settings.json` after adoption shows up as a new item and is not moved automatically.
+Each item names the tests that cover it, all in `service/ladopolicy` unless named otherwise, or the step that owns it.
+
+1. Global ON / Project OFF / Task ON resolves to ON. Step 5: `TestResolveBindings` (PRD gate 3).
+2. Project INHERIT follows a Global toggle. Step 5: `TestResolveBindings`.
+3. A protected gate rejects Task FORCE_OFF and AI-originated bypass. Step 5: `TestResolveBindings` (a protected gate stays on despite FORCE_OFF and Global off), `TestProtectedRulesRefuseBindingsArchiveAndDelete` (the API refuses FORCE_OFF, Global off, archiving, edits and deletion), `TestCeilingChangeNeedsPresence` (an API caller cannot raise the ceiling without the desktop app's confirmation). AI drafts do not exist yet (HAR-006); an agent calling the API meets the same refusals.
+4. Disabling keeps rule history and leaves existing snapshots unchanged. Step 5: `TestDisablingKeepsHistoryAndSnapshots`.
+5. The Korean commit rule blocks a clearly non-compliant commit in `base..head` and allows configured prefixes. Step 8, with the validator; step 5 has the rule's prompt text only.
+6. A natural-language change produces an approval preview, not an immediate change. Later, with HAR-006.
+7. A missing enforcement capability is reported and blocks dispatch. Step 5: `TestResolveCapabilities` and `TestEffectiveBlocksAnUnsupportedAgent` (a blocking problem naming the agent and the capability). Refusing the dispatch is step 6.
+8. Conflicting mandatory rules block dispatch with an actionable diagnostic. Step 5: `TestResolveConflicts` (a blocking `LADO_RULES_CONFLICT` naming both rules, once per pair). Refusing the dispatch is step 6.
+9. Adoption writes the backup and manifest before removing anything; restore is byte-identical; credential files are untouched. Step 7.
+10. After adoption, AO sessions on both account and own-computer login see the adopted items, and the tools run directly do not. Step 7.
+11. AO's account linker no longer creates entries in `~/.claude` after adoption. Step 7.
+12. Editing a managed item after admission marks the entry Review required; the running session is unaffected. Step 7, on step 6's queue.
+13. An adopted MCP server named `ao` is a blocking conflict. Step 7.
+14. A repo-tracked CLAUDE.md is never moved; "Edit" creates a task. Step 7.
+15. A new `~/.claude/settings.json` after adoption shows up as a new item and is not moved automatically. Step 7.

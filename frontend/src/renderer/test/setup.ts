@@ -445,6 +445,7 @@ if (typeof window !== "undefined") {
 			},
 			presence: {
 				approvePlan: async () => null,
+				changeRule: async () => null,
 			},
 		},
 	};

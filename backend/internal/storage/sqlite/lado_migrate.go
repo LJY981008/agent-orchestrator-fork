@@ -74,6 +74,16 @@ END`,
 		"WHEN OLD.delivered_at IS NOT NEW.delivered_at OR OLD.failed_at IS NOT NEW.failed_at"),
 	ladoPlanCDCTrigger("lado_cdc_plan_revisions_insert", "AFTER INSERT ON lado_plan_revisions", ""),
 	ladoPlanCDCTrigger("lado_cdc_plan_approvals_insert", "AFTER INSERT ON lado_plan_approvals", ""),
+	// Rules apply in every LADO project, so a rule, a new version or a Global
+	// binding publishes a lado_rules change in each project with LADO mode on.
+	// Versions never change, and their deletes follow the rule's.
+	ladoRulesCDCTrigger("lado_cdc_rules_insert", "AFTER INSERT ON lado_rules"),
+	ladoRulesCDCTrigger("lado_cdc_rules_update", "AFTER UPDATE ON lado_rules"),
+	ladoRulesCDCTrigger("lado_cdc_rules_delete", "AFTER DELETE ON lado_rules"),
+	ladoRulesCDCTrigger("lado_cdc_rule_versions_insert", "AFTER INSERT ON lado_rule_versions"),
+	ladoBindingCDCTrigger("lado_cdc_rule_bindings_insert", "AFTER INSERT ON lado_rule_bindings", "NEW"),
+	ladoBindingCDCTrigger("lado_cdc_rule_bindings_update", "AFTER UPDATE ON lado_rule_bindings", "NEW"),
+	ladoBindingCDCTrigger("lado_cdc_rule_bindings_delete", "AFTER DELETE ON lado_rule_bindings", "OLD"),
 }
 
 // ladoPlanCDCTrigger publishes a change of the task that NEW.task_id names,
@@ -92,6 +102,44 @@ BEGIN
     FROM lado_tasks
     JOIN projects ON projects.id = lado_tasks.project_id
     WHERE lado_tasks.id = NEW.task_id;
+END`
+}
+
+// ladoRulesChangeInsert writes one lado_rules change per project the FROM and
+// WHERE clauses that follow it select.
+const ladoRulesChangeInsert = `INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_rules', 'projectId', projects.id),
+        datetime('now')`
+
+// ladoRulesCDCTrigger publishes a rule change in every registered project
+// with LADO mode on.
+func ladoRulesCDCTrigger(name, event string) string {
+	return `CREATE TRIGGER ` + name + `
+` + event + `
+BEGIN
+    ` + ladoRulesChangeInsert + `
+    FROM projects
+    JOIN lado_project_settings ON lado_project_settings.project_id = projects.id
+    WHERE lado_project_settings.lado_mode = 1;
+END`
+}
+
+// ladoBindingCDCTrigger publishes the change of the binding that row names,
+// NEW or OLD for a delete: a Global binding in every registered project with
+// LADO mode on, a project binding in that project and a task binding in the
+// task's project.
+func ladoBindingCDCTrigger(name, event, row string) string {
+	return `CREATE TRIGGER ` + name + `
+` + event + `
+BEGIN
+    ` + ladoRulesChangeInsert + `
+    FROM projects
+    WHERE (` + row + `.scope = 'global' AND projects.id IN (
+            SELECT project_id FROM lado_project_settings WHERE lado_mode = 1))
+        OR (` + row + `.scope = 'project' AND projects.id = ` + row + `.scope_id)
+        OR (` + row + `.scope = 'task' AND projects.id = (
+            SELECT project_id FROM lado_tasks WHERE id = ` + row + `.scope_id));
 END`
 }
 

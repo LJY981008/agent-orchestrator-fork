@@ -3,6 +3,7 @@ package domain_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,6 +148,52 @@ func TestLadoTaskStatePrecedence(t *testing.T) {
 			}
 			if state := got.State(); state != tc.want {
 				t.Fatalf("State = %q, want %q", state, tc.want)
+			}
+		})
+	}
+}
+
+func TestLadoTaskStateFollowsRuleSnapshots(t *testing.T) {
+	rev1 := domain.LadoPlanRevision{ID: "lado-plan-1", RequestID: "req-1", SHA256: strings.Repeat("a", 64)}
+	rev2 := domain.LadoPlanRevision{ID: "lado-plan-2", RequestID: "req-1", SHA256: strings.Repeat("b", 64)}
+	approval := domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: rev1.ID, SHA256: rev1.SHA256}
+	rulesThen, rulesNow := strings.Repeat("c", 64), strings.Repeat("d", 64)
+	snapshot := domain.LadoPolicySnapshotRef{ID: "lado-snapshot-1", SHA256: rulesThen}
+	blocking := domain.LadoPolicySnapshotRef{ID: "lado-snapshot-1", SHA256: rulesThen, Blocking: true}
+	approved := func(snapshot domain.LadoPolicySnapshotRef, current string) domain.LadoTaskPlan {
+		return domain.LadoTaskPlan{Latest: rev1, Approval: approval, Snapshot: snapshot, PolicySHA256: current}
+	}
+	for _, tc := range []struct {
+		name      string
+		plan      domain.LadoTaskPlan
+		issue     domain.NormalizedIssueState
+		cancelled bool
+		want      domain.LadoTaskState
+	}{
+		{"rules as approved", approved(snapshot, rulesThen), domain.IssueOpen, false, domain.LadoTaskApproved},
+		{"rules changed since the approval", approved(snapshot, rulesNow), domain.IssueOpen, false, domain.LadoTaskReviewRequired},
+		{"approved before rules existed", approved(domain.LadoPolicySnapshotRef{}, rulesNow), domain.IssueOpen, false, domain.LadoTaskReviewRequired},
+		{"approved with a blocking problem", approved(blocking, rulesThen), domain.IssueOpen, false, domain.LadoTaskBlocked},
+		{"rules changed after a blocked approval", approved(blocking, rulesNow), domain.IssueOpen, false, domain.LadoTaskReviewRequired},
+		// The task service leaves the current hash empty when it could not
+		// compute it; the stored snapshot alone decides then.
+		{"current rules not computed", approved(snapshot, ""), domain.IssueOpen, false, domain.LadoTaskApproved},
+		{"current rules not computed, blocking snapshot", approved(blocking, ""), domain.IssueOpen, false, domain.LadoTaskBlocked},
+		{"approved before rules existed, current rules not computed", approved(domain.LadoPolicySnapshotRef{}, ""), domain.IssueOpen, false, domain.LadoTaskApproved},
+		// Rule facts count only for a valid approval.
+		{"edited after the approval", domain.LadoTaskPlan{Latest: rev2, Approval: approval, Snapshot: blocking, PolicySHA256: rulesNow}, domain.IssueOpen, false, domain.LadoTaskPlanned},
+		{"cancelled task whose rules changed", approved(snapshot, rulesNow), domain.IssueOpen, true, domain.LadoTaskCancelled},
+		{"cancelled task approved with a blocking problem", approved(blocking, rulesThen), domain.IssueOpen, true, domain.LadoTaskCancelled},
+		{"closed issue whose rules changed", approved(snapshot, rulesNow), domain.IssueDone, false, domain.LadoTaskClosedUnmerged},
+		{"closed issue approved with a blocking problem", approved(blocking, rulesThen), domain.IssueCancelled, false, domain.LadoTaskClosedUnmerged},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := domain.LadoTask{IssueRef: "github:acme/demo#1", Issue: domain.LadoObservedIssue{State: tc.issue}, Plan: tc.plan}
+			if tc.cancelled {
+				task.CancelledAt = time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+			}
+			if got := task.State(); got != tc.want {
+				t.Fatalf("State = %q, want %q", got, tc.want)
 			}
 		})
 	}

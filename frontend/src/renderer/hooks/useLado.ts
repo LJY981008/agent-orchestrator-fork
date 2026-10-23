@@ -1,22 +1,31 @@
-// LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans
-// and approvals.
+// LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
+// approvals and rules. Rule changes that can reach approved tasks go through
+// useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	approveLadoPlan,
 	cancelLadoTask,
 	createLadoTask,
+	deleteLadoRule,
+	fetchLadoEffective,
 	fetchLadoPlan,
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
 	fetchLadoProjectSettings,
+	fetchLadoRule,
+	fetchLadoRules,
 	fetchLadoTasks,
 	fetchLadoTaskView,
 	importLadoTasks,
+	invalidateLadoRuleQueries,
+	ladoEffectiveQueryKey,
 	ladoPlanQueryKey,
 	ladoPlanQueryRoot,
 	ladoProjectIssuesQueryKey,
 	ladoProjectRepositoriesQueryKey,
 	ladoProjectSettingsQueryKey,
+	ladoRuleQueryKey,
+	ladoRulesQueryKey,
 	ladoTasksQueryKey,
 	ladoTaskViewQueryKey,
 	requestLadoPlan,
@@ -148,14 +157,68 @@ export function useRequestLadoPlan(projectId: string, taskId: string) {
 	});
 }
 
-/** Resolves to null when the developer cancelled the desktop confirmation. */
+/**
+ * Resolves to null when the developer cancelled the desktop confirmation.
+ * policySha256 is the effective rules' snapshotSha256; the desktop app reads
+ * and shows the rules itself, so only a browser needs it.
+ */
 export function useApproveLadoPlan(projectId: string, taskId: string) {
 	const invalidate = useInvalidateLadoTask(projectId, taskId);
+	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (input: { revisionId: string; sha256: string }) => approveLadoPlan(input.revisionId, input.sha256),
+		mutationFn: (input: { revisionId: string; sha256: string; policySha256?: string }) =>
+			approveLadoPlan(input.revisionId, input.sha256, input.policySha256 ?? ""),
 		onSuccess: (approval) => {
-			if (approval) invalidate();
+			if (!approval) return;
+			invalidate();
+			// The task view compares the approved rules with the rules now.
+			void queryClient.invalidateQueries({ queryKey: ladoEffectiveQueryKey(projectId, taskId) });
 		},
+		retry: false,
+	});
+}
+
+/** Every rule, oldest first; archived ones only when asked. */
+export function useLadoRules(includeArchived = false, enabled = true) {
+	return useQuery({
+		queryKey: ladoRulesQueryKey(includeArchived),
+		queryFn: () => fetchLadoRules(includeArchived),
+		enabled,
+		retry: false,
+	});
+}
+
+/** One rule with its version history. */
+export function useLadoRule(ruleId: string | null) {
+	return useQuery({
+		queryKey: ladoRuleQueryKey(ruleId ?? ""),
+		queryFn: () => fetchLadoRule(ruleId ?? ""),
+		enabled: Boolean(ruleId),
+		retry: false,
+	});
+}
+
+/**
+ * The rules that apply to a project, or to one of its tasks when taskId is
+ * given. The task view refetches it when it opens: an AO project setting can
+ * change what applies without a rule change.
+ */
+export function useLadoEffective(projectId: string, taskId?: string | null, enabled = true) {
+	return useQuery({
+		queryKey: ladoEffectiveQueryKey(projectId, taskId ?? ""),
+		queryFn: () => fetchLadoEffective(projectId, taskId ?? undefined),
+		enabled: enabled && Boolean(projectId),
+		refetchOnMount: "always",
+		retry: false,
+	});
+}
+
+/** Deletes a user rule that no approval used, so no approval needs review because of it. */
+export function useDeleteLadoRule() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (ruleId: string) => deleteLadoRule(ruleId),
+		onSuccess: () => invalidateLadoRuleQueries(queryClient),
 		retry: false,
 	});
 }

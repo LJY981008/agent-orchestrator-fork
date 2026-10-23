@@ -6,6 +6,7 @@ import { aoBridge } from "../lib/bridge";
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudGate } from "../hooks/useCloudGate";
+import { useLadoMode } from "../hooks/useLado";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useRestoreFocusOnClose } from "../hooks/useRestoreFocusOnClose";
 import { ensureCodexAccounts } from "../hooks/useCodexAccountsQuery";
@@ -17,6 +18,7 @@ import { CloudProjectInstructionsSettings, CloudProjectRepositoriesSettings } fr
 import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
+import { LadoProjectRulesSection } from "./lado/LadoProjectRulesSection";
 import { topbarDragStyle } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -92,6 +94,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
+	// LADO fork: a local LADO project has a Rules page (docs/LJY-PRD/HARNESS.md §12).
+	const ladoProject = useLadoMode(localProjectScope && knownLocal && !cloudProject ? projectId : undefined);
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -113,6 +117,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	if (!remoteHostId && !isCloudProjectSettings) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
+		if (ladoProject) projectSections.push({ id: "rules", label: t("lado.rules.title"), icon: ScrollText });
 	}
 
 	const isProjectSettings = displaySettings?.scope === "project";
@@ -290,6 +295,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
 				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "rules") {
+				return <LadoProjectRulesSection projectId={displaySettings.projectId} />;
 			}
 			if (displaySettings?.scope === "project") {
 				return <ProjectSettingsForm projectId={displaySettings.projectId} hostId={remoteHostId} cloudOrgId={cloudOrgId} section={activeProjectSection as ProjectFormSection} onSaveState={setProjectSaveState} />;

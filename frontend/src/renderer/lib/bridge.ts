@@ -380,6 +380,7 @@ export const aoBridge: AoBridge =
 			},
 			presence: {
 				approvePlan: async () => null,
+				changeRule: async () => null,
 			},
 		},
 	} satisfies AoBridge);

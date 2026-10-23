@@ -1,6 +1,7 @@
 // LADO fork: the Plan and Queued lanes, LADO's tasks in front of the session
 // board (docs/LJY-PRD/TDD.md §3.3). Plan holds the tasks the human acts on
-// next (Draft, Planned); Queued holds the approved ones LADO acts on next. A
+// next (Draft, Planned, and approved tasks whose rules need review or block
+// the run); Queued holds the approved ones LADO acts on next. A
 // task card is not a session card: it stands for an issue that has no session
 // yet. DESIGN.md's decisions log records the lanes, the card and the task view.
 import type { TFunction } from "i18next";
@@ -142,6 +143,9 @@ type TaskStatusTone = "muted" | "attention" | "ready";
 /**
  * The card's one status line. A plan waiting for review is the human's next
  * decision, so it takes the needs-you color; an approved plan reads as ready.
+ * An approval whose rules changed since (review_required), or whose rules
+ * block the run (blocked), needs the human again, unless a new plan it waits
+ * for is requested.
  */
 export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; tone: TaskStatusTone } {
 	switch (task.state) {
@@ -149,6 +153,12 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
 			return { label: t("lado.task.state.closed"), tone: "muted" };
 		case "approved":
 			return { label: t("lado.task.state.approved"), tone: "ready" };
+		case "review_required":
+			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
+			return { label: t("lado.task.state.reviewRequired"), tone: "attention" };
+		case "blocked":
+			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
+			return { label: t("lado.task.state.blocked"), tone: "attention" };
 		case "planned":
 			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
 			return task.plan.latest?.valid

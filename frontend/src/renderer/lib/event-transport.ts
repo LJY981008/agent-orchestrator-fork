@@ -20,6 +20,7 @@ import { editorHandoffQueryKey, editorHandoffQueryRoot } from "../hooks/useEdito
 import { baseUrlForHost, connectedHosts, subscribeConnectedHosts } from "./host-clients";
 import { probeRemoteSse } from "./remote-sse-probe";
 import { ladoPlanQueryRoot, ladoProjectIssuesQueryKey, ladoQueryRoot, ladoTasksQueryKey, ladoTaskViewQueryKey } from "./lado";
+import { createLadoEventBatch } from "./lado-events";
 
 export type EventTransport = {
 	connect: () => () => void;
@@ -71,6 +72,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// LADO fork: projects whose issue-backed tasks changed, and the tasks.
 			const pendingLadoTaskProjects = new Set<string>();
 			const pendingLadoTasks = new Set<string>();
+			const ladoEvents = createLadoEventBatch();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -293,12 +295,13 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}
 				if (pendingLadoTasks.size > 0) invalidate(ladoPlanQueryRoot);
 				pendingLadoTasks.clear();
+				ladoEvents.flush(invalidate);
 			};
 			const refreshWorkspaces = (event?: Event) => {
 				if (disposed) return;
 				let conversationOnly = false;
 				let modelCatalogOnly = false;
-				let ladoTaskOnly = false;
+				let ladoOnly = false;
 				if (event === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
@@ -357,8 +360,9 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
 							pendingLadoTaskProjects.add(payload.projectId);
 							if (typeof payload.taskId === "string" && payload.taskId) pendingLadoTasks.add(payload.taskId);
-							ladoTaskOnly = true;
+							ladoOnly = true;
 						}
+						if (ladoEvents.note(payload)) ladoOnly = true;
 						if (
 							typeof payload?.reviewId === "string" &&
 							payload.reviewId &&
@@ -402,7 +406,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 						// cannot target a conversation cache precisely.
 					}
 				}
-				if (!conversationOnly && !modelCatalogOnly && !ladoTaskOnly) workspaceInvalidationPending = true;
+				if (!conversationOnly && !modelCatalogOnly && !ladoOnly) workspaceInvalidationPending = true;
 				// A busy stream must not postpone visible updates until traffic
 				// stops, and the first event after a quiet period must not wait out
 				// a full window either. Flush on the leading edge when the last

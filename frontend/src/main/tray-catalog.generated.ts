@@ -14,7 +14,15 @@ export const TRAY_MESSAGE_KEYS = [
 	"lado.presence.approveTitle",
 	"lado.presence.approveDetail",
 	"lado.presence.approve",
-	"lado.presence.cancel"
+	"lado.presence.cancel",
+	"lado.presence.approveRules",
+	"lado.presence.approveRulesBlocking",
+	"lado.presence.ruleChangeTitle",
+	"lado.presence.ceilingChangeDetail",
+	"lado.presence.change",
+	"lado.presence.mode.acceptEdits",
+	"lado.presence.mode.auto",
+	"lado.presence.mode.bypassPermissions"
 ] as const;
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
@@ -33,7 +41,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "Approve this plan?",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}, revision {{revision}}\nsha256 {{sha}}\n\nLADO starts work only from the plan you approve.",
 		"lado.presence.approve": "Approve",
-		"lado.presence.cancel": "Cancel"
+		"lado.presence.cancel": "Cancel",
+		"lado.presence.approveRules": "Rules: {{on}} on, permission ceiling {{ceiling}}\nrules sha256 {{sha}}",
+		"lado.presence.approveRulesBlocking": "Blocking problems: {{blocking}}. The task stays blocked until they are fixed.",
+		"lado.presence.ruleChangeTitle": "Change the permission ceiling?",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nNo LADO run goes above this mode. Tasks approved under the current rules need a new approval.",
+		"lado.presence.change": "Change",
+		"lado.presence.mode.acceptEdits": "Accept edits",
+		"lado.presence.mode.auto": "Auto",
+		"lado.presence.mode.bypassPermissions": "Bypass permissions"
 	},
 	"zh-CN": {
 		"tray.untitledSession": "未命名会话",
@@ -48,7 +64,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "批准此计划？",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}，修订 {{revision}}\nsha256 {{sha}}\n\nLADO 只会按你批准的计划开始工作。",
 		"lado.presence.approve": "批准",
-		"lado.presence.cancel": "取消"
+		"lado.presence.cancel": "取消",
+		"lado.presence.approveRules": "规则：{{on}} 条开启，权限上限 {{ceiling}}\n规则 sha256 {{sha}}",
+		"lado.presence.approveRulesBlocking": "阻塞问题：{{blocking}} 个。在解决之前，任务会保持阻塞。",
+		"lado.presence.ruleChangeTitle": "更改权限上限？",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nLADO 运行不会超过此模式。按当前规则批准的任务需要重新批准。",
+		"lado.presence.change": "更改",
+		"lado.presence.mode.acceptEdits": "接受编辑",
+		"lado.presence.mode.auto": "自动",
+		"lado.presence.mode.bypassPermissions": "绕过权限"
 	},
 	"ja": {
 		"tray.untitledSession": "無題のセッション",
@@ -63,7 +87,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "この計画を承認しますか？",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}、リビジョン {{revision}}\nsha256 {{sha}}\n\nLADO は承認した計画からのみ作業を始めます。",
 		"lado.presence.approve": "承認",
-		"lado.presence.cancel": "キャンセル"
+		"lado.presence.cancel": "キャンセル",
+		"lado.presence.approveRules": "ルール: {{on}} 件オン、権限の上限 {{ceiling}}\nルールの sha256 {{sha}}",
+		"lado.presence.approveRulesBlocking": "ブロックしている問題: {{blocking}} 件。解決するまでタスクはブロックされたままです。",
+		"lado.presence.ruleChangeTitle": "権限の上限を変更しますか？",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nLADO の実行はこのモードを超えません。現在のルールで承認されたタスクは、承認し直す必要があります。",
+		"lado.presence.change": "変更",
+		"lado.presence.mode.acceptEdits": "編集を受け入れる",
+		"lado.presence.mode.auto": "自動",
+		"lado.presence.mode.bypassPermissions": "権限をバイパス"
 	},
 	"ko": {
 		"tray.untitledSession": "제목 없는 세션",
@@ -78,7 +110,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "이 계획을 승인할까요?",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}, 리비전 {{revision}}\nsha256 {{sha}}\n\nLADO는 승인한 계획으로만 작업을 시작합니다.",
 		"lado.presence.approve": "승인",
-		"lado.presence.cancel": "취소"
+		"lado.presence.cancel": "취소",
+		"lado.presence.approveRules": "규칙: {{on}}개 켜짐, 권한 상한 {{ceiling}}\n규칙 sha256 {{sha}}",
+		"lado.presence.approveRulesBlocking": "차단 문제 {{blocking}}개: 해결할 때까지 작업은 차단됨 상태입니다.",
+		"lado.presence.ruleChangeTitle": "권한 상한을 바꿀까요?",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nLADO 실행은 이 모드를 넘지 않습니다. 현재 규칙으로 승인된 작업은 다시 승인해야 합니다.",
+		"lado.presence.change": "변경",
+		"lado.presence.mode.acceptEdits": "편집 수락",
+		"lado.presence.mode.auto": "자동",
+		"lado.presence.mode.bypassPermissions": "권한 우회"
 	},
 	"es": {
 		"tray.untitledSession": "Sesión sin título",
@@ -93,7 +133,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "¿Aprobar este plan?",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}, revisión {{revision}}\nsha256 {{sha}}\n\nLADO solo inicia trabajo a partir del plan que apruebes.",
 		"lado.presence.approve": "Aprobar",
-		"lado.presence.cancel": "Cancelar"
+		"lado.presence.cancel": "Cancelar",
+		"lado.presence.approveRules": "Reglas: {{on}} activas, permiso máximo {{ceiling}}\nsha256 de las reglas {{sha}}",
+		"lado.presence.approveRulesBlocking": "Problemas que bloquean: {{blocking}}. La tarea sigue bloqueada hasta que se resuelvan.",
+		"lado.presence.ruleChangeTitle": "¿Cambiar el permiso máximo?",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nNinguna ejecución de LADO supera este modo. Las tareas aprobadas con las reglas actuales necesitan una nueva aprobación.",
+		"lado.presence.change": "Cambiar",
+		"lado.presence.mode.acceptEdits": "Aceptar ediciones",
+		"lado.presence.mode.auto": "Automático",
+		"lado.presence.mode.bypassPermissions": "Omitir permisos"
 	},
 	"fr": {
 		"tray.untitledSession": "Session sans titre",
@@ -108,7 +156,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "Approuver ce plan ?",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}, révision {{revision}}\nsha256 {{sha}}\n\nLADO ne lance le travail qu'à partir du plan que vous approuvez.",
 		"lado.presence.approve": "Approuver",
-		"lado.presence.cancel": "Annuler"
+		"lado.presence.cancel": "Annuler",
+		"lado.presence.approveRules": "Règles : {{on}} actives, autorisation maximale {{ceiling}}\nsha256 des règles {{sha}}",
+		"lado.presence.approveRulesBlocking": "Problèmes bloquants : {{blocking}}. La tâche reste bloquée jusqu'à leur résolution.",
+		"lado.presence.ruleChangeTitle": "Modifier l'autorisation maximale ?",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nAucune exécution LADO ne dépasse ce mode. Les tâches approuvées selon les règles actuelles doivent être approuvées à nouveau.",
+		"lado.presence.change": "Modifier",
+		"lado.presence.mode.acceptEdits": "Accepter les modifications",
+		"lado.presence.mode.auto": "Automatique",
+		"lado.presence.mode.bypassPermissions": "Contourner les permissions"
 	},
 	"de": {
 		"tray.untitledSession": "Unbenannte Sitzung",
@@ -123,7 +179,15 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "Diesen Plan freigeben?",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}, Revision {{revision}}\nsha256 {{sha}}\n\nLADO startet Arbeit nur nach dem freigegebenen Plan.",
 		"lado.presence.approve": "Freigeben",
-		"lado.presence.cancel": "Abbrechen"
+		"lado.presence.cancel": "Abbrechen",
+		"lado.presence.approveRules": "Regeln: {{on}} an, höchste Berechtigung {{ceiling}}\nRegeln sha256 {{sha}}",
+		"lado.presence.approveRulesBlocking": "Blockierende Probleme: {{blocking}}. Die Aufgabe bleibt blockiert, bis sie behoben sind.",
+		"lado.presence.ruleChangeTitle": "Höchste Berechtigung ändern?",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nKein LADO-Lauf geht über diesen Modus hinaus. Aufgaben, die nach den aktuellen Regeln freigegeben wurden, brauchen eine neue Freigabe.",
+		"lado.presence.change": "Ändern",
+		"lado.presence.mode.acceptEdits": "Änderungen akzeptieren",
+		"lado.presence.mode.auto": "Auto",
+		"lado.presence.mode.bypassPermissions": "Berechtigungen umgehen"
 	},
 	"pt-BR": {
 		"tray.untitledSession": "Sessão sem título",
@@ -138,6 +202,14 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.approveTitle": "Aprovar este plano?",
 		"lado.presence.approveDetail": "{{task}}\n{{issue}}, revisão {{revision}}\nsha256 {{sha}}\n\nO LADO só inicia trabalho a partir do plano que você aprovar.",
 		"lado.presence.approve": "Aprovar",
-		"lado.presence.cancel": "Cancelar"
+		"lado.presence.cancel": "Cancelar",
+		"lado.presence.approveRules": "Regras: {{on}} ativas, permissão máxima {{ceiling}}\nsha256 das regras {{sha}}",
+		"lado.presence.approveRulesBlocking": "Problemas que bloqueiam: {{blocking}}. A tarefa fica bloqueada até que sejam resolvidos.",
+		"lado.presence.ruleChangeTitle": "Alterar a permissão máxima?",
+		"lado.presence.ceilingChangeDetail": "{{from}} → {{to}}\n\nNenhuma execução do LADO passa deste modo. Tarefas aprovadas com as regras atuais precisam de nova aprovação.",
+		"lado.presence.change": "Alterar",
+		"lado.presence.mode.acceptEdits": "Aceitar edições",
+		"lado.presence.mode.auto": "Automático",
+		"lado.presence.mode.bypassPermissions": "Ignorar permissões"
 	}
 };

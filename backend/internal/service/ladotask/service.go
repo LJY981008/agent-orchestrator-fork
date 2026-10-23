@@ -61,13 +61,25 @@ type Store interface {
 	LadoPlanRevision(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevision, bool, error)
 	ListLadoPlanRevisions(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanRevision, error)
 	ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanApproval, error)
-	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
+	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
 }
 
 // Projects reads AO's project registry.
 type Projects interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
+}
+
+// Policy resolves LADO's rules for a task (docs/LJY-PRD/HARNESS.md §8).
+type Policy interface {
+	// Snapshot fixes the rules for approving the task's plan revision.
+	Snapshot(ctx context.Context, task domain.LadoTask, rev domain.LadoPlanRevision) (domain.LadoPolicySnapshot, error)
+	// CurrentSHA256 is the snapshot hash the rules give the task's approved
+	// revision now.
+	CurrentSHA256(ctx context.Context, task domain.LadoTask) (string, error)
+	// CurrentSHA256s is CurrentSHA256 for many tasks, reading the rules
+	// once. A task it cannot resolve is left out.
+	CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error)
 }
 
 // ProjectRepo is one repository of a project whose tracker can hold the
@@ -108,6 +120,9 @@ type Deps struct {
 	// DeliveryTimeout is how long a request is retried; zero uses ten
 	// minutes.
 	DeliveryTimeout time.Duration
+	// Policy fixes the rules in each approval and tells whether they changed
+	// since. Without it no plan can be approved.
+	Policy Policy
 }
 
 // Service creates, imports and tracks tasks.
@@ -362,7 +377,7 @@ func (s *Service) List(ctx context.Context, projectID domain.ProjectID, includeC
 	if err != nil {
 		return nil, apierr.Internal("LADO_TASKS_LOAD_FAILED", "Failed to load tasks")
 	}
-	return tasks, nil
+	return s.withPolicies(ctx, tasks), nil
 }
 
 // Get returns a task after reading its issue again, as when the task view
@@ -375,11 +390,57 @@ func (s *Service) Get(ctx context.Context, id domain.LadoTaskID) (domain.LadoTas
 	if task.CancelledAt.IsZero() {
 		if err := s.observe(ctx, task); err != nil {
 			s.deps.Log.Debug("LADO could not refresh a task's issue", "task", id, "err", err)
-			return task, nil
+			return s.withPolicy(ctx, task), nil
 		}
-		return s.task(ctx, id)
+		if task, err = s.task(ctx, id); err != nil {
+			return domain.LadoTask{}, err
+		}
 	}
-	return task, nil
+	return s.withPolicy(ctx, task), nil
+}
+
+// withPolicy fills what the rules give the task's approved revision now, so
+// its state shows whether they changed since the approval. A task without a
+// valid approval needs nothing; a failure leaves the hash empty, which reads
+// as no change.
+func (s *Service) withPolicy(ctx context.Context, task domain.LadoTask) domain.LadoTask {
+	if s.deps.Policy == nil || !task.Plan.ApprovalValid() {
+		return task
+	}
+	sum, err := s.deps.Policy.CurrentSHA256(ctx, task)
+	if err != nil {
+		s.deps.Log.Debug("LADO could not resolve a task's rules", "task", task.ID, "err", err)
+		return task
+	}
+	task.Plan.PolicySHA256 = sum
+	return task
+}
+
+// withPolicies is withPolicy for a task list, which resolves the rules once
+// for all of its approved tasks.
+func (s *Service) withPolicies(ctx context.Context, tasks []domain.LadoTask) []domain.LadoTask {
+	if s.deps.Policy == nil {
+		return tasks
+	}
+	approved := make([]domain.LadoTask, 0, len(tasks))
+	for _, task := range tasks {
+		if task.Plan.ApprovalValid() {
+			approved = append(approved, task)
+		}
+	}
+	if len(approved) == 0 {
+		return tasks
+	}
+	sums, err := s.deps.Policy.CurrentSHA256s(ctx, approved)
+	if err != nil {
+		s.deps.Log.Debug("LADO could not resolve the rules of a task list", "err", err)
+		return tasks
+	}
+	// A task left out keeps an empty hash.
+	for i := range tasks {
+		tasks[i].Plan.PolicySHA256 = sums[tasks[i].ID]
+	}
+	return tasks
 }
 
 // UpdatePreferences changes a task's agent or model. A nil field keeps its
@@ -405,7 +466,9 @@ func (s *Service) UpdatePreferences(ctx context.Context, id domain.LadoTaskID, a
 	if !ok {
 		return domain.LadoTask{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "Unknown task")
 	}
-	return updated, nil
+	// The approval's rules name the agent and model, so a change may need
+	// review.
+	return s.withPolicy(ctx, updated), nil
 }
 
 // Cancel cancels a task. It never closes or edits the issue.
@@ -417,7 +480,7 @@ func (s *Service) Cancel(ctx context.Context, id domain.LadoTaskID) (domain.Lado
 	if !ok {
 		return domain.LadoTask{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "Unknown task")
 	}
-	return cancelled, nil
+	return s.withPolicy(ctx, cancelled), nil
 }
 
 // link records a created issue on its pending task.

@@ -318,6 +318,53 @@ func (q *Queries) ListLiveLadoTaskIssueRefs(ctx context.Context) ([]sql.NullStri
 	return items, nil
 }
 
+const listLiveLadoTasks = `-- name: ListLiveLadoTasks :many
+SELECT id, project_id, issue_repo, issue_ref, agent, model,
+    issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
+    created_at, updated_at, cancelled_at
+FROM lado_tasks
+WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
+ORDER BY project_id, created_at, id
+`
+
+func (q *Queries) ListLiveLadoTasks(ctx context.Context) ([]LadoTask, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveLadoTasks)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoTask{}
+	for rows.Next() {
+		var i LadoTask
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.IssueRepo,
+			&i.IssueRef,
+			&i.Agent,
+			&i.Model,
+			&i.IssueTitle,
+			&i.IssueState,
+			&i.IssueURL,
+			&i.IssueSnapshotSha256,
+			&i.IssueObservedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CancelledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingLadoTasks = `-- name: ListPendingLadoTasks :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,

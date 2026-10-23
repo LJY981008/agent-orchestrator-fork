@@ -47,8 +47,8 @@ type LadoTask struct {
 }
 
 // LadoTaskPlan is what a task's state needs to know about its plans: the
-// newest plan request, the newest revision and the revision the newest
-// approval covers.
+// newest plan request, the newest revision, the revision the newest approval
+// covers, and the rules of that approval then and now.
 type LadoTaskPlan struct {
 	Request LadoPlanRequest
 	Latest  LadoPlanRevision
@@ -56,6 +56,18 @@ type LadoTaskPlan struct {
 	// valid only while it covers the latest revision with that revision's
 	// sha256 (docs/LJY-PRD/TDD.md §3.2).
 	Approval LadoPlanApproval
+	// Snapshot is the rule snapshot of the newest approval. It is empty for
+	// an approval given before LADO had rules.
+	Snapshot LadoPolicySnapshotRef
+	// PolicySHA256 is the snapshot hash the rules give the approved revision
+	// now. The task service fills it; empty means it was not computed.
+	PolicySHA256 string
+}
+
+// RulesChanged reports whether the rules now differ from the ones the newest
+// approval fixed. Without a current hash it reports no change.
+func (p LadoTaskPlan) RulesChanged() bool {
+	return p.PolicySHA256 != "" && p.Snapshot.SHA256 != p.PolicySHA256
 }
 
 // ApprovalValid reports whether the newest approval covers the latest
@@ -87,11 +99,15 @@ type LadoObservedIssue struct {
 // computed at read time and never stored.
 type LadoTaskState string
 
-// Task states up to approval. Later build steps add the queue and execution
-// states.
+// Task states up to approval. Until the queue exists, Review required and
+// Blocked come from the approval's rule snapshot: the rules changed since the
+// approval, or the snapshot holds a blocking problem. Later build steps add
+// the queue and execution states.
 const (
 	LadoTaskDraft          LadoTaskState = "draft"
 	LadoTaskPlanned        LadoTaskState = "planned"
+	LadoTaskReviewRequired LadoTaskState = "review_required"
+	LadoTaskBlocked        LadoTaskState = "blocked"
 	LadoTaskApproved       LadoTaskState = "approved"
 	LadoTaskCancelled      LadoTaskState = "cancelled"
 	LadoTaskClosedUnmerged LadoTaskState = "closed_unmerged"
@@ -99,12 +115,18 @@ const (
 
 // State derives the task's state. A task without a plan revision is a Draft;
 // with one it is Planned until a valid approval covers its latest revision.
+// An approved task needs review once its rules changed since the approval,
+// and is Blocked while the approval's snapshot holds a blocking problem.
 func (t LadoTask) State() LadoTaskState {
 	switch {
 	case !t.CancelledAt.IsZero():
 		return LadoTaskCancelled
 	case t.Issue.State == IssueDone || t.Issue.State == IssueCancelled:
 		return LadoTaskClosedUnmerged
+	case t.Plan.ApprovalValid() && t.Plan.RulesChanged():
+		return LadoTaskReviewRequired
+	case t.Plan.ApprovalValid() && t.Plan.Snapshot.Blocking:
+		return LadoTaskBlocked
 	case t.Plan.ApprovalValid():
 		return LadoTaskApproved
 	case t.Plan.Latest.ID != "":

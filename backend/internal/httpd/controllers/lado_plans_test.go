@@ -11,6 +11,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
@@ -177,6 +178,30 @@ func TestLadoAPI_ApprovePlanNeedsPresence(t *testing.T) {
 				t.Fatalf("the service was called %d times without a valid proof", svc.calls)
 			}
 		})
+	}
+}
+
+func TestLadoAPI_ApprovePlanPassesThePolicySHA(t *testing.T) {
+	path := "/api/v1/lado/plans/lado-plan-1/approve"
+	plan, rules := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	svc := &fakeLadoTaskService{task: sampleLadoTask(), approval: domain.LadoPlanApproval{ID: "a-1", RevisionID: "lado-plan-1", TaskID: "lado-task-1", SHA256: plan, ApprovedAt: presenceNow}}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoTasks: svc, LadoPresence: presenceVerifier()})
+
+	approveBody := `{"sha256":"` + plan + `","policySha256":"` + rules + `"}`
+	if body, status := signedRequest(t, srv, "POST", path, approveBody, approveBody); status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", status, body)
+	}
+	if svc.gotRevision != "lado-plan-1" || svc.gotSHA != plan || svc.gotPolicySHA != rules {
+		t.Fatalf("service got revision %q sha %q policy %q, want both hashes from the body", svc.gotRevision, svc.gotSHA, svc.gotPolicySHA)
+	}
+
+	// Without the field the service gets an empty hash and decides; its
+	// refusal reaches the app as sent.
+	svc.err = apierr.Invalid("LADO_POLICY_SHA_REQUIRED", "Send the sha256 of the rule snapshot you reviewed with the approval.", nil)
+	planOnly := `{"sha256":"` + plan + `"}`
+	body, status := signedRequest(t, srv, "POST", path, planOnly, planOnly)
+	if status != http.StatusBadRequest || !strings.Contains(string(body), "LADO_POLICY_SHA_REQUIRED") || svc.gotPolicySHA != "" {
+		t.Fatalf("status = %d, body %s, service got policy %q; want 400 LADO_POLICY_SHA_REQUIRED from the service", status, body, svc.gotPolicySHA)
 	}
 }
 

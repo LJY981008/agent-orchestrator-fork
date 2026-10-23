@@ -63,6 +63,30 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoIssueTextResponse":            "LadoIssueTextResponse",
 	"ControllersLadoIssueCommentResponse":         "LadoIssueCommentResponse",
 	"ControllersLadoTaskViewResponse":             "LadoTaskViewResponse",
+	"ControllersLadoRuleIDParam":                  "LadoRuleIDParam",
+	"ControllersListLadoRulesQuery":               "ListLadoRulesQuery",
+	"ControllersLadoEffectiveQuery":               "LadoEffectiveQuery",
+	"ControllersLadoRuleCeiling":                  "LadoRuleCeiling",
+	"ControllersLadoRuleOverrideResponse":         "LadoRuleOverrideResponse",
+	"ControllersLadoRuleResponse":                 "LadoRuleResponse",
+	"ControllersLadoRuleListResponse":             "LadoRuleListResponse",
+	"ControllersLadoRuleVersionResponse":          "LadoRuleVersionResponse",
+	"ControllersLadoRuleDetailResponse":           "LadoRuleDetailResponse",
+	"ControllersLadoImpactProjectResponse":        "LadoImpactProjectResponse",
+	"ControllersLadoImpactTaskResponse":           "LadoImpactTaskResponse",
+	"ControllersLadoRuleImpactResponse":           "LadoRuleImpactResponse",
+	"ControllersLadoRuleChangeResponse":           "LadoRuleChangeResponse",
+	"ControllersCreateLadoRuleRequest":            "CreateLadoRuleRequest",
+	"ControllersUpdateLadoRuleRequest":            "UpdateLadoRuleRequest",
+	"ControllersSetLadoBindingRequest":            "SetLadoBindingRequest",
+	"ControllersLadoEffectiveAgentResponse":       "LadoEffectiveAgentResponse",
+	"ControllersLadoRuleSourceResponse":           "LadoRuleSourceResponse",
+	"ControllersLadoEffectiveRuleResponse":        "LadoEffectiveRuleResponse",
+	"ControllersLadoAORuleResponse":               "LadoAORuleResponse",
+	"ControllersLadoCapabilityResponse":           "LadoCapabilityResponse",
+	"ControllersLadoPolicyProblemResponse":        "LadoPolicyProblemResponse",
+	"ControllersLadoApprovedRulesResponse":        "LadoApprovedRulesResponse",
+	"ControllersLadoEffectiveResponse":            "LadoEffectiveResponse",
 }
 
 func ladoOperations() []operation {
@@ -70,6 +94,7 @@ func ladoOperations() []operation {
 	taskID := []any{controllers.LadoTaskIDParam{}}
 	revisionID := []any{controllers.LadoPlanIDParam{}}
 	credentialHost := []any{controllers.LadoCredentialHostParam{}}
+	ruleID := []any{controllers.LadoRuleIDParam{}}
 	return []operation{
 		{
 			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/settings", id: "getLadoProjectSettings", tag: "lado",
@@ -201,6 +226,49 @@ func ladoOperations() []operation {
 			pathParams: []any{controllers.LadoPlanIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			reqBody:    controllers.ApproveLadoPlanRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoPlanApprovalResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/rules", id: "listLadoRules", tag: "lado",
+			summary:    "List the rules with their active versions and bindings",
+			pathParams: []any{controllers.ListLadoRulesQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoRuleListResponse{}, http.StatusBadRequest),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/rules", id: "createLadoRule", tag: "lado",
+			summary: "Create a user rule, or show what creating it reaches with dryRun",
+			reqBody: controllers.CreateLadoRuleRequest{},
+			resps:   ladoResps(http.StatusOK, controllers.LadoRuleChangeResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/rules/{ruleId}", id: "getLadoRule", tag: "lado",
+			summary:    "Get a rule with its versions",
+			pathParams: ruleID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoRuleDetailResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/lado/rules/{ruleId}", id: "updateLadoRule", tag: "lado",
+			summary:    "Edit, archive or unarchive a rule, or show what the change reaches with dryRun; the permission ceiling's mode needs a human-presence proof",
+			pathParams: []any{controllers.LadoRuleIDParam{}, controllers.LadoPresenceHeaderParam{}},
+			reqBody:    controllers.UpdateLadoRuleRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoRuleChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/lado/rules/{ruleId}", id: "deleteLadoRule", tag: "lado",
+			summary:    "Delete a user rule no approval used",
+			pathParams: ruleID,
+			resps:      ladoResps(http.StatusNoContent, nil, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/bindings", id: "setLadoBinding", tag: "lado",
+			summary: "Turn a rule on or off at Global, or force it for a project or task, or show what that reaches with dryRun",
+			reqBody: controllers.SetLadoBindingRequest{},
+			resps:   ladoResps(http.StatusOK, controllers.LadoRuleChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/effective", id: "getLadoEffective", tag: "lado",
+			summary:    "Resolve the rules for a project, or for a task at its latest plan revision",
+			pathParams: []any{controllers.LadoEffectiveQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoEffectiveResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
 		},
 	}
 }

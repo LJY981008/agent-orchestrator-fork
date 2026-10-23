@@ -32,7 +32,7 @@ type LadoTaskResponse struct {
 	ProjectID string `json:"projectId"`
 	// Repository is the canonical id of the repository that holds the issue.
 	Repository  string                `json:"repository" description:"Canonical id of the repository that holds the issue, such as github:owner/repo."`
-	State       string                `json:"state" enum:"draft,planned,approved,cancelled,closed_unmerged" description:"Derived task state."`
+	State       string                `json:"state" enum:"draft,planned,review_required,blocked,approved,cancelled,closed_unmerged" description:"Derived task state. review_required: the rules changed since the approval; blocked: the approval's rule snapshot holds a blocking problem."`
 	Issue       LadoTaskIssueResponse `json:"issue"`
 	Agent       string                `json:"agent,omitempty" description:"Agent chosen for the task's execution."`
 	Model       string                `json:"model,omitempty" description:"Model chosen for the task's execution."`
