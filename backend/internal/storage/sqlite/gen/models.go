@@ -427,6 +427,19 @@ type LadoAuditEvent struct {
 	PrevSha256  string
 }
 
+type LadoConflictAcceptance struct {
+	ID            string
+	Code          string
+	ItemID        string
+	Detail        string
+	ContentSha256 string
+	Scope         string
+	ScopeID       string
+	Actor         string
+	CreatedAt     time.Time
+	RevokedAt     sql.NullTime
+}
+
 type LadoDispatchSetting struct {
 	ID                int64
 	MaxConcurrent     int64
@@ -507,6 +520,11 @@ type LadoPolicySnapshotRule struct {
 	RuleVersionID string
 }
 
+type LadoPolicySnapshotSetup struct {
+	SnapshotID    string
+	ItemVersionID string
+}
+
 type LadoPresenceProof struct {
 	Nonce     string
 	Action    string
@@ -574,6 +592,51 @@ type LadoRuleVersion struct {
 	Sha256          string
 	Actor           string
 	CreatedAt       time.Time
+}
+
+type LadoSetupAdoption struct {
+	ID             string
+	CreatedAt      time.Time
+	Actor          string
+	Os             string
+	PlanSha256     string
+	ManifestSha256 string
+	State          string
+	ErrorMessage   string
+	RestoredAt     sql.NullTime
+	RestoreReport  string
+}
+
+type LadoSetupBinding struct {
+	ItemID    string
+	Scope     string
+	ScopeID   string
+	State     string
+	UpdatedAt time.Time
+}
+
+type LadoSetupItem struct {
+	ID         string
+	Tool       string
+	Kind       string
+	Name       string
+	OriginPath string
+	AdoptionID sql.NullString
+	CreatedAt  time.Time
+	DeletedAt  sql.NullTime
+	RestoredAt sql.NullTime
+}
+
+type LadoSetupItemVersion struct {
+	ID          string
+	ItemID      string
+	Version     int64
+	ContentKind string
+	Sha256      string
+	SizeBytes   int64
+	Executable  int64
+	Actor       string
+	CreatedAt   time.Time
 }
 
 type LadoTask struct {
