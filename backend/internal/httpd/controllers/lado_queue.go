@@ -194,6 +194,10 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 	for _, rule := range snapshot.Rules {
 		rules = append(rules, LadoExecutionRuleResponse{ID: string(rule.RuleID), Name: rule.Name, Version: rule.Version})
 	}
+	setup := make([]LadoExecutionSetupItemResponse, 0, len(snapshot.Setup))
+	for _, it := range snapshot.Setup {
+		setup = append(setup, LadoExecutionSetupItemResponse{ItemID: string(it.ItemID), Tool: string(it.Tool), Kind: string(it.Kind), Name: it.Name, Version: it.Version})
+	}
 	return LadoExecutionResponse{
 		SessionID: string(exec.SessionID),
 		Task: LadoExecutionTaskResponse{
@@ -216,6 +220,7 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 			PermissionCeiling: string(snapshot.PermissionCeiling),
 			Rules:             rules,
 			Prompt:            snapshot.Prompt,
+			Setup:             setup,
 		},
 		Base:         LadoExecutionBaseResponse{PlanSHA: exec.PlanBaseSHA, DispatchSHA: exec.DispatchBaseSHA, CommitsAhead: exec.BaseCommitsAhead},
 		Attempt:      exec.Attempt,

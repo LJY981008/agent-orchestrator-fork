@@ -66,6 +66,9 @@ type ladoWorkDeps struct {
 	branches ladoqueue.Branches
 	// memory reads memory pressure: the daemon's usage memory reader.
 	memory ladoqueue.Memory
+	// setup is what LADO's local setup uses: the tool folders and the
+	// session hooks.
+	setup ladoSetupDeps
 }
 
 // ladoOrchestratorSpawner is AO's session service.

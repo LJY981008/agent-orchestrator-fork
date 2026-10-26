@@ -129,6 +129,17 @@ func (s *Service) setupOf(ctx context.Context, in Input, change *SetupChange) (S
 	return setup, nil
 }
 
+// Ceiling is the rules' permission ceiling, which the setup conflict checks
+// compare a default permission mode with. The ceiling rule is protected and
+// always on, so every scope has the same one.
+func (s *Service) Ceiling(ctx context.Context) (domain.PermissionMode, error) {
+	rules, err := s.rules(ctx)
+	if err != nil {
+		return "", err
+	}
+	return rulesCeiling(rules), nil
+}
+
 // rulesCeiling is the permission ceiling Resolve finds in the rules.
 func rulesCeiling(rules []domain.LadoRule) domain.PermissionMode {
 	r := Resolution{Entries: resolveEntries(Input{Rules: rules})}

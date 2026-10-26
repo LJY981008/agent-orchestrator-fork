@@ -184,20 +184,9 @@ func (s *Service) restoreTarget(ctx context.Context, id domain.LadoSetupAdoption
 	if !adoption.RestoredAt.IsZero() {
 		return restoreTarget{}, alreadyRestored(id)
 	}
-	dir := backupDir(s.deps.StateDir, id)
-	data, err := readRegularNoLink(filepath.Join(dir, "manifest.json"))
+	dir, m, err := s.readBackupManifest(adoption)
 	if err != nil {
 		return restoreTarget{}, s.backupUnreadable(id, err)
-	}
-	if sha256Hex(data) != adoption.ManifestSHA256 {
-		return restoreTarget{}, s.backupUnreadable(id, errors.New("the backup manifest is not the one the adoption recorded"))
-	}
-	var m backupManifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return restoreTarget{}, s.backupUnreadable(id, err)
-	}
-	if m.Format != backupFormat || m.AdoptionID != id {
-		return restoreTarget{}, s.backupUnreadable(id, fmt.Errorf("the backup manifest is %q of %s", m.Format, m.AdoptionID))
 	}
 	items, err := s.deps.Store.ListLadoSetupItemsForAdoption(ctx, id)
 	if err != nil {
@@ -224,6 +213,27 @@ func (s *Service) restoreTarget(ctx context.Context, id domain.LadoSetupAdoption
 		return restoreTarget{}, s.backupUnreadable(id, fmt.Errorf("the backup has no original of %d of the adoption's items", len(recorded)))
 	}
 	return t, nil
+}
+
+// readBackupManifest reads an adoption's backup folder and manifest, which
+// must be the one the adoption recorded.
+func (s *Service) readBackupManifest(adoption domain.LadoSetupAdoption) (string, backupManifest, error) {
+	dir := backupDir(s.deps.StateDir, adoption.ID)
+	data, err := readRegularNoLink(filepath.Join(dir, "manifest.json"))
+	if err != nil {
+		return "", backupManifest{}, err
+	}
+	if sha256Hex(data) != adoption.ManifestSHA256 {
+		return "", backupManifest{}, errors.New("the backup manifest is not the one the adoption recorded")
+	}
+	var m backupManifest
+	if err := json.Unmarshal(data, &m); err != nil {
+		return "", backupManifest{}, err
+	}
+	if m.Format != backupFormat || m.AdoptionID != adoption.ID {
+		return "", backupManifest{}, fmt.Errorf("the backup manifest is %q of %s", m.Format, m.AdoptionID)
+	}
+	return dir, m, nil
 }
 
 // confirmRestore checks what holds the restore back, then takes the desktop

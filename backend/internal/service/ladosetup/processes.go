@@ -31,6 +31,10 @@ type ToolProcess struct {
 	Tool domain.LadoSetupTool
 }
 
+// Program is the base name of the process's program. The app shows it in
+// place of the command line, which can carry secrets.
+func (p ToolProcess) Program() string { return programName(p.Command) }
+
 // Running is what runs Claude Code or Codex now.
 type Running struct {
 	Sessions  []LiveSession

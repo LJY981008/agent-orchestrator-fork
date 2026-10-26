@@ -4022,6 +4022,854 @@ paths:
         with dryRun; the permission ceiling's mode needs a human-presence proof
       tags:
       - lado
+  /api/v1/lado/setup/adoptions:
+    post:
+      operationId: adoptLadoSetup
+      parameters:
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AdoptLadoSetupRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupAdoptResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Preview an adoption of local setup with dryRun, or adopt the previewed
+        plan with a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/setup/adoptions/{adoptionId}:
+    get:
+      operationId: getLadoSetupAdoption
+      parameters:
+      - description: LADO setup adoption id.
+        in: path
+        name: adoptionId
+        required: true
+        schema:
+          description: LADO setup adoption id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupAdoptionDetailResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Get an adoption with its items, its backup and its restore's report
+      tags:
+      - lado
+  /api/v1/lado/setup/adoptions/{adoptionId}/restore:
+    post:
+      operationId: restoreLadoSetupAdoption
+      parameters:
+      - description: LADO setup adoption id.
+        in: path
+        name: adoptionId
+        required: true
+        schema:
+          description: LADO setup adoption id.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupRestoreResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Put back what an adoption removed; needs a human-presence proof from
+        the AO desktop app
+      tags:
+      - lado
+  /api/v1/lado/setup/bindings:
+    put:
+      operationId: setLadoSetupBinding
+      parameters:
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLadoSetupBindingRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Turn a managed setup item on or off at Global, for a project or for
+        a task; turning on code or wider access needs a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/setup/conflicts:
+    get:
+      operationId: listLadoSetupConflicts
+      parameters:
+      - description: Project to resolve; without projectId and taskId the view is
+          Global.
+        in: query
+        name: projectId
+        schema:
+          description: Project to resolve; without projectId and taskId the view is
+            Global.
+          type: string
+      - description: Task to resolve, whose project then applies. With projectId too,
+          the task must be in that project.
+        in: query
+        name: taskId
+        schema:
+          description: Task to resolve, whose project then applies. With projectId
+            too, the task must be in that project.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupConflictListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the setup conflicts and their acceptances at Global, for a project
+        or for a task
+      tags:
+      - lado
+  /api/v1/lado/setup/conflicts/acceptances:
+    post:
+      operationId: acceptLadoSetupConflict
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptLadoSetupConflictRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Accept a setup conflict warning for an item's current content in a
+        scope, or show it with dryRun
+      tags:
+      - lado
+  /api/v1/lado/setup/conflicts/acceptances/{acceptanceId}:
+    delete:
+      operationId: revokeLadoSetupConflictAcceptance
+      parameters:
+      - description: LADO setup conflict acceptance id.
+        in: path
+        name: acceptanceId
+        required: true
+        schema:
+          description: LADO setup conflict acceptance id.
+          type: string
+      - description: Show the change and what it reaches without making it.
+        in: query
+        name: dryRun
+        schema:
+          description: Show the change and what it reaches without making it.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Revoke a setup conflict acceptance, or show it with dryRun
+      tags:
+      - lado
+  /api/v1/lado/setup/inventory:
+    get:
+      operationId: getLadoSetupInventory
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupInventoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the local Claude Code and Codex setup, the managed items, drift
+        and adoptions, from the last scan
+      tags:
+      - lado
+  /api/v1/lado/setup/items:
+    get:
+      operationId: listLadoSetupItems
+      parameters:
+      - description: Project to resolve; without projectId and taskId the view is
+          Global.
+        in: query
+        name: projectId
+        schema:
+          description: Project to resolve; without projectId and taskId the view is
+            Global.
+          type: string
+      - description: Task to resolve, whose project then applies. With projectId too,
+          the task must be in that project.
+        in: query
+        name: taskId
+        schema:
+          description: Task to resolve, whose project then applies. With projectId
+            too, the task must be in that project.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupItemListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the managed setup items of both tools as they resolve at Global,
+        for a project or for a task
+      tags:
+      - lado
+    post:
+      operationId: createLadoSetupItem
+      parameters:
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLadoSetupItemRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Make a managed setup item, or show it with dryRun; a hook script or
+        an MCP server needs a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/setup/items/{itemId}:
+    delete:
+      operationId: deleteLadoSetupItem
+      parameters:
+      - description: LADO setup item id.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          description: LADO setup item id.
+          type: string
+      - description: Show the change and what it reaches without making it.
+        in: query
+        name: dryRun
+        schema:
+          description: Show the change and what it reaches without making it.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Delete a managed setup item, or show what it reaches with dryRun; its
+        versions stay readable
+      tags:
+      - lado
+    get:
+      operationId: getLadoSetupItem
+      parameters:
+      - description: LADO setup item id.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          description: LADO setup item id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupItemDetailResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Get a managed setup item with the content of every version
+      tags:
+      - lado
+    patch:
+      operationId: updateLadoSetupItem
+      parameters:
+      - description: LADO setup item id.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          description: LADO setup item id.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoSetupItemRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Edit a text item, or show the edit with dryRun; content that can run
+        code or widen access needs a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/setup/items/{itemId}/drift:
+    post:
+      operationId: resolveLadoSetupDrift
+      parameters:
+      - description: LADO setup item id.
+        in: path
+        name: itemId
+        required: true
+        schema:
+          description: LADO setup item id.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveLadoSetupDriftRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupChangeResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Keep a managed copy's drift as a new version or revert the copy; keeping
+        code or wider access needs a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/setup/scan:
+    post:
+      operationId: scanLadoSetup
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSetupInventoryResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Scan the local setup again and list it
+      tags:
+      - lado
   /api/v1/lado/tasks:
     get:
       operationId: listLadoTasks
@@ -13394,6 +14242,33 @@ components:
       - code
       - message
       type: object
+    AcceptLadoSetupConflictRequest:
+      properties:
+        code:
+          description: A warning's code; blocking and info results cannot be accepted.
+          type: string
+        detail:
+          description: The result's detail.
+          type: string
+        dryRun:
+          description: Show the change without making it.
+          type: boolean
+        itemId:
+          type: string
+        scope:
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          description: The project or task id; empty at global.
+          type: string
+      required:
+      - itemId
+      - code
+      - scope
+      type: object
     AcknowledgeSessionInterfaceTransitionNoticeResponse:
       properties:
         ok:
@@ -13434,6 +14309,21 @@ components:
           - string
       required:
       - path
+      type: object
+    AdoptLadoSetupRequest:
+      properties:
+        dryRun:
+          description: Preview the adoption without making it; needs no presence proof.
+          type: boolean
+        entries:
+          items:
+            $ref: '#/components/schemas/LadoSetupAdoptEntryRequest'
+          type: array
+        planSha256:
+          description: The preview's planSha256; an adoption refuses another one.
+          type: string
+      required:
+      - entries
       type: object
     AgentAccountActivity:
       properties:
@@ -16911,6 +17801,37 @@ components:
       - instruction
       - scope
       type: object
+    CreateLadoSetupItemRequest:
+      properties:
+        content:
+          description: A string with the text for a file or a one-file skill's SKILL.md;
+            the value itself for a setting or an MCP server.
+        dryRun:
+          description: Show the change without making it; needs no presence proof.
+          type: boolean
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - mcp_server
+          type: string
+        name:
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - tool
+      - kind
+      - name
+      - content
+      type: object
     CreateLadoTaskRequest:
       properties:
         agent:
@@ -17917,11 +18838,20 @@ components:
       type: object
     LadoApprovedRulesResponse:
       properties:
+        accepted:
+          description: The setup warnings accepted at the approval.
+          items:
+            $ref: '#/components/schemas/LadoSetupAcceptedConflictResponse'
+          type: array
         added:
           description: Rules on now but not at the approval.
           items:
             type: string
           type: array
+        aoSystemSha256:
+          description: The AO system layer at the approval; empty when it fixed no
+            local setup.
+          type: string
         approvedAt:
           format: date-time
           type: string
@@ -17944,6 +18874,27 @@ components:
         revision:
           description: The approved plan revision's number.
           type: integer
+        setup:
+          description: The setup items on at the approval.
+          items:
+            $ref: '#/components/schemas/LadoSnapshotSetupItemResponse'
+          type: array
+        setupAdded:
+          description: Setup items on now but not at the approval.
+          items:
+            type: string
+          type: array
+        setupChanged:
+          description: Setup items on in both with another version or binding, or
+            with other plugins installed for an enabledPlugins setting.
+          items:
+            type: string
+          type: array
+        setupRemoved:
+          description: Setup items on at the approval but not now; setup names them.
+          items:
+            type: string
+          type: array
         snapshotSha256:
           description: Hash of the rule snapshot fixed in the approval.
           type: string
@@ -17956,6 +18907,12 @@ components:
       - added
       - removed
       - changed
+      - setupAdded
+      - setupRemoved
+      - setupChanged
+      - setup
+      - aoSystemSha256
+      - accepted
       type: object
     LadoCapabilityResponse:
       properties:
@@ -18147,6 +19104,10 @@ components:
           items:
             $ref: '#/components/schemas/LadoEffectiveRuleResponse'
           type: array
+        setup:
+          $ref: '#/components/schemas/LadoEffectiveSetupResponse'
+          description: The local setup of the agent's tool, which the snapshot fixes
+            with the rules.
         snapshotSha256:
           description: Hash of the rule snapshot; an approval sends it as policySha256.
           type: string
@@ -18166,6 +19127,7 @@ components:
       - problems
       - blocking
       - snapshotSha256
+      - setup
       type: object
     LadoEffectiveRuleResponse:
       properties:
@@ -18229,6 +19191,35 @@ components:
       - project
       - task
       - source
+      type: object
+    LadoEffectiveSetupResponse:
+      properties:
+        accepted:
+          description: The warnings an acceptance covers.
+          items:
+            $ref: '#/components/schemas/LadoSetupAcceptedConflictResponse'
+          type: array
+        aoSystemSha256:
+          description: Hash of what AO adds to every session; empty when LADO resolved
+            no local setup.
+          type: string
+        conflicts:
+          description: The conflicts of the on items that no acceptance covers; problems
+            holds them too.
+          items:
+            $ref: '#/components/schemas/LadoPolicyProblemResponse'
+          type: array
+        items:
+          description: The managed items of the agent's tool, on or off; empty without
+            an agent LADO manages setup for.
+          items:
+            $ref: '#/components/schemas/LadoSetupItemStateResponse'
+          type: array
+      required:
+      - items
+      - aoSystemSha256
+      - conflicts
+      - accepted
       type: object
     LadoExecutionBaseResponse:
       properties:
@@ -18340,6 +19331,37 @@ components:
       - name
       - version
       type: object
+    LadoExecutionSetupItemResponse:
+      properties:
+        itemId:
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        name:
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+        version:
+          type: integer
+      required:
+      - itemId
+      - tool
+      - kind
+      - name
+      - version
+      type: object
     LadoExecutionSnapshotResponse:
       properties:
         agent:
@@ -18370,6 +19392,12 @@ components:
           items:
             $ref: '#/components/schemas/LadoExecutionRuleResponse'
           type: array
+        setup:
+          description: The local setup items that were on, the versions the worker's
+            session gets.
+          items:
+            $ref: '#/components/schemas/LadoExecutionSetupItemResponse'
+          type: array
         sha256:
           type: string
       required:
@@ -18379,6 +19407,7 @@ components:
       - permissionCeiling
       - rules
       - prompt
+      - setup
       type: object
     LadoExecutionTaskResponse:
       properties:
@@ -19241,6 +20270,1294 @@ components:
           type: string
       required:
       - ok
+      type: object
+    LadoSetupAcceptanceResponse:
+      properties:
+        actor:
+          type: string
+        code:
+          type: string
+        contentSha256:
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        detail:
+          type: string
+        id:
+          description: Empty in a dry run, for an acceptance not given yet.
+          type: string
+        itemId:
+          type: string
+        revokedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        scope:
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          type: string
+      required:
+      - id
+      - code
+      - itemId
+      - detail
+      - contentSha256
+      - scope
+      - scopeId
+      - actor
+      - createdAt
+      type: object
+    LadoSetupAcceptedConflictResponse:
+      properties:
+        acceptanceId:
+          type: string
+        code:
+          type: string
+        detail:
+          type: string
+        itemId:
+          type: string
+      required:
+      - code
+      - itemId
+      - detail
+      - acceptanceId
+      type: object
+    LadoSetupAdoptEntryRequest:
+      properties:
+        action:
+          enum:
+          - move
+          - keep
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        name:
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - tool
+      - kind
+      - name
+      - action
+      type: object
+    LadoSetupAdoptResponse:
+      properties:
+        adoptionId:
+          description: Empty for a preview.
+          type: string
+        applied:
+          description: False for a preview, which changes nothing.
+          type: boolean
+        items:
+          items:
+            $ref: '#/components/schemas/LadoSetupAdoptedItemResponse'
+          type: array
+        preview:
+          $ref: '#/components/schemas/LadoSetupAdoptionPreviewResponse'
+        state:
+          description: completed for an adoption made; empty for a preview.
+          type: string
+        verification:
+          items:
+            $ref: '#/components/schemas/LadoSetupVerifyCheckResponse'
+          type: array
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - preview
+      - applied
+      - adoptionId
+      - state
+      - items
+      - verification
+      - warnings
+      type: object
+    LadoSetupAdoptedItemResponse:
+      properties:
+        itemId:
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        managedPath:
+          type: string
+        name:
+          type: string
+        sha256:
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+        versionId:
+          type: string
+      required:
+      - itemId
+      - versionId
+      - tool
+      - kind
+      - name
+      - managedPath
+      - sha256
+      type: object
+    LadoSetupAdoptionDetailResponse:
+      properties:
+        adoption:
+          $ref: '#/components/schemas/LadoSetupAdoptionResponse'
+        backup:
+          description: The originals the backup holds, in backup order; empty when
+            it is unreadable.
+          items:
+            $ref: '#/components/schemas/LadoSetupBackupEntryResponse'
+          type: array
+        backupReadable:
+          description: False when the backup's manifest cannot be read as the adoption
+            recorded it; a restore refuses then too.
+          type: boolean
+        items:
+          description: The items the adoption recorded; a restore puts back the originals
+            of all of them.
+          items:
+            $ref: '#/components/schemas/LadoSetupItemResponse'
+          type: array
+        report:
+          $ref: '#/components/schemas/LadoSetupRestoreReportResponse'
+          description: The restore's report; omitted before a restore.
+      required:
+      - adoption
+      - items
+      - backupReadable
+      - backup
+      type: object
+    LadoSetupAdoptionPreviewResponse:
+      properties:
+        conflicts:
+          description: What the moved entries bring; a command naming a moved file
+            that cannot be rewritten (LADO_SETUP_HOOK_PATH_MOVED) blocks the adoption.
+          items:
+            $ref: '#/components/schemas/LadoSetupConflictResponse'
+          type: array
+        entries:
+          items:
+            $ref: '#/components/schemas/LadoSetupPreviewEntryResponse'
+          type: array
+        os:
+          type: string
+        planSha256:
+          description: The hash the desktop app's confirmation signs.
+          type: string
+        preconditions:
+          $ref: '#/components/schemas/LadoSetupPreconditionsResponse'
+        rewrites:
+          items:
+            $ref: '#/components/schemas/LadoSetupHookRewriteResponse'
+          type: array
+        warnings:
+          description: Stable codes, such as LADO_SETUP_DIRECT_USE_STOPS.
+          items:
+            type: string
+          type: array
+      required:
+      - planSha256
+      - os
+      - entries
+      - rewrites
+      - conflicts
+      - preconditions
+      - warnings
+      type: object
+    LadoSetupAdoptionResponse:
+      properties:
+        actor:
+          description: human, or human:dev-presence in a lab.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        errorMessage:
+          description: Why a partial adoption stopped.
+          type: string
+        id:
+          type: string
+        itemCount:
+          description: How many items the adoption recorded.
+          type: integer
+        manifestSha256:
+          description: Hash of the backup's manifest.
+          type: string
+        os:
+          description: The GOOS the adoption ran on.
+          type: string
+        planSha256:
+          description: Hash of the adoption plan the desktop app's confirmation signed.
+          type: string
+        restoredAt:
+          description: When the adoption was restored; omitted before.
+          format: date-time
+          type:
+          - "null"
+          - string
+        state:
+          description: 'partial: removing the originals stopped; what moved is managed,
+            and restore puts back what was removed.'
+          enum:
+          - completed
+          - partial
+          type: string
+      required:
+      - id
+      - createdAt
+      - actor
+      - os
+      - planSha256
+      - manifestSha256
+      - state
+      - errorMessage
+      - itemCount
+      type: object
+    LadoSetupBackupEntryResponse:
+      properties:
+        action:
+          enum:
+          - move
+          - keep
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        name:
+          type: string
+        path:
+          description: 'Under root, with slashes and #<key> after a key''s file; the
+            inventory''s roots give the folder.'
+          type: string
+        root:
+          enum:
+          - claude_dir
+          - claude_json
+          - codex_home
+          type: string
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+        type:
+          enum:
+          - file
+          - dir
+          - keys
+          type: string
+      required:
+      - tool
+      - kind
+      - name
+      - action
+      - root
+      - path
+      - type
+      - size
+      - sha256
+      type: object
+    LadoSetupBindingResponse:
+      properties:
+        itemId:
+          type: string
+        scope:
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          type: string
+        state:
+          enum:
+          - "on"
+          - "off"
+          - inherit
+          - force_on
+          - force_off
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - itemId
+      - scope
+      - scopeId
+      - state
+      - updatedAt
+      type: object
+    LadoSetupChangeResponse:
+      properties:
+        acceptance:
+          $ref: '#/components/schemas/LadoSetupAcceptanceResponse'
+        actor:
+          description: 'Who made the change: human or human:dev-presence with a confirmation,
+            api without one; empty for a dry run.'
+          type: string
+        after:
+          $ref: '#/components/schemas/LadoSetupContentResponse'
+          description: The content after the change; omitted for a delete, a binding
+            or an acceptance.
+        applied:
+          description: False for a dry run, which changes nothing.
+          type: boolean
+        before:
+          $ref: '#/components/schemas/LadoSetupContentResponse'
+          description: The content before the change; omitted for a create, a binding
+            or an acceptance.
+        binding:
+          $ref: '#/components/schemas/LadoSetupBindingResponse'
+        changeSha256:
+          description: Hash of the change without dryRun, which the desktop app's
+            confirmation signs.
+          type: string
+        conflictsAdded:
+          items:
+            $ref: '#/components/schemas/LadoSetupConflictResponse'
+          type: array
+        conflictsRemoved:
+          items:
+            $ref: '#/components/schemas/LadoSetupConflictResponse'
+          type: array
+        impact:
+          $ref: '#/components/schemas/LadoRuleImpactResponse'
+        item:
+          $ref: '#/components/schemas/LadoSetupItemResponse'
+          description: The item the change is about, as the change leaves it; a dry
+            run's new item has no id.
+        needsPresence:
+          description: Making the change needs the desktop app's confirmation for
+            changeSha256.
+          type: boolean
+        op:
+          enum:
+          - create
+          - edit
+          - delete
+          - binding
+          - drift_keep
+          - drift_revert
+          - accept
+          - revoke
+          type: string
+        pins:
+          description: Rule snapshots that pinned a version of a deleted item; they
+            keep reading it.
+          type: integer
+        version:
+          $ref: '#/components/schemas/LadoSetupItemVersionResponse'
+          description: The item's version after a create, an edit or a drift keep
+            or revert.
+        warnings:
+          description: Stable codes, such as LADO_SETUP_PREVIEW_INCOMPLETE.
+          items:
+            type: string
+          type: array
+      required:
+      - op
+      - changeSha256
+      - needsPresence
+      - applied
+      - actor
+      - item
+      - conflictsAdded
+      - conflictsRemoved
+      - impact
+      - pins
+      - warnings
+      type: object
+    LadoSetupConflictListResponse:
+      properties:
+        conflicts:
+          description: By severity, code and item; accepted warnings are marked.
+          items:
+            $ref: '#/components/schemas/LadoSetupConflictResponse'
+          type: array
+      required:
+      - conflicts
+      type: object
+    LadoSetupConflictResponse:
+      properties:
+        acceptanceId:
+          description: The live acceptance that covers a warning; empty when none
+            does.
+          type: string
+        code:
+          description: Stable conflict code the app translates.
+          type: string
+        contentSha256:
+          description: The content the result was found in; an acceptance holds for
+            that content only.
+          type: string
+        detail:
+          description: Tells apart results of one code on one item, such as the hook
+            event; an acceptance names it.
+          type: string
+        details:
+          additionalProperties:
+            type: string
+          description: 'The values the app shows: item or origin, and by code event,
+            matcher, rule, key, mode, ceiling, plugin and path.'
+          type: object
+        itemId:
+          description: The managed item; empty for setup without an item, which path
+            names.
+          type: string
+        path:
+          type: string
+        severity:
+          description: Only a warning can be accepted.
+          enum:
+          - blocking
+          - warning
+          - info
+          type: string
+      required:
+      - code
+      - severity
+      - itemId
+      - path
+      - detail
+      - contentSha256
+      - details
+      - acceptanceId
+      type: object
+    LadoSetupContentResponse:
+      properties:
+        contentKind:
+          enum:
+          - file
+          - json
+          - tree
+          type: string
+        executable:
+          type: boolean
+        files:
+          description: A folder's files.
+          items:
+            $ref: '#/components/schemas/LadoSetupTreeFileResponse'
+          type: array
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+        text:
+          description: A file's text, a one-file skill's SKILL.md, or a JSON value
+            with two-space indents; empty for a folder and for content that is no
+            text or larger than 1 MiB.
+          type: string
+      required:
+      - contentKind
+      - sha256
+      - size
+      - executable
+      - text
+      - files
+      type: object
+    LadoSetupDriftResponse:
+      properties:
+        itemId:
+          description: The managed item that drifted; for a new local entry, the live
+            item of its tool, kind and name if there is one.
+          type: string
+        itemKind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        kind:
+          description: 'edited: a managed copy no longer holds its item''s latest
+            version. new_local: an original location holds new adoptable setup, which
+            is never moved by itself.'
+          enum:
+          - edited
+          - new_local
+          type: string
+        name:
+          type: string
+        path:
+          description: 'What changed: the managed copy for an edit, the entry at its
+            original location for a new local one.'
+          type: string
+        sha256:
+          description: Its content hash now; keeping an edit sends it back.
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - itemId
+      - kind
+      - tool
+      - itemKind
+      - name
+      - path
+      - sha256
+      type: object
+    LadoSetupEntryResponse:
+      properties:
+        defaultAction:
+          description: move or keep for an adoptable entry; empty for the others.
+          type: string
+        itemId:
+          description: The managed item of a managed entry; empty for the others.
+          type: string
+        keptInPlace:
+          description: 'What stays at the entry''s location when it is adopted: the
+            login variables of Claude Code''s env setting.'
+          items:
+            type: string
+          type: array
+        kind:
+          description: 'The item kind the entry is or would be adopted as: instructions,
+            setting, skill, agent, command, output_style, hook_script or mcp_server.
+            Empty for an entry that is no setup item, such as credentials.'
+          type: string
+        location:
+          enum:
+          - claude_dir
+          - claude_json
+          - codex_home
+          - project
+          - managed
+          type: string
+        name:
+          description: The item's name in its tool and kind; for an entry that is
+            no item, its file name, its path in the tool folder or its config key.
+          type: string
+        path:
+          description: 'Absolute path, with #<key> after the file for a key. Entries
+            of one name can share it, so the app keys its list by path.'
+          type: string
+        projectId:
+          description: The project of an entry found in a project; empty for the others.
+          type: string
+        reason:
+          description: Why the entry is not adoptable, a stable code the app translates;
+            empty for managed and adoptable entries.
+          type: string
+        sha256:
+          description: Content hash of an adoptable, managed or repository-tracked
+            entry; empty for the others.
+          type: string
+        size:
+          description: Content size of an adoptable, managed or repository-tracked
+            entry; 0 for the others.
+          format: int64
+          type: integer
+        status:
+          enum:
+          - managed
+          - adoptable
+          - not_adoptable
+          - never
+          - not_managed
+          - repo_tracked
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+        tracked:
+          description: The project's repository tracks the file.
+          type: boolean
+      required:
+      - tool
+      - kind
+      - name
+      - location
+      - path
+      - size
+      - sha256
+      - tracked
+      - status
+      - reason
+      - defaultAction
+      - keptInPlace
+      - itemId
+      - projectId
+      type: object
+    LadoSetupHookRewriteResponse:
+      properties:
+        after:
+          type: string
+        before:
+          type: string
+        event:
+          description: The hook event; empty for statusLine.
+          type: string
+        matcher:
+          type: string
+        paths:
+          description: The moved entries the command names, under the Claude folder.
+          items:
+            type: string
+          type: array
+        setting:
+          enum:
+          - hooks
+          - statusLine
+          type: string
+      required:
+      - setting
+      - event
+      - matcher
+      - before
+      - after
+      - paths
+      type: object
+    LadoSetupInventoryResponse:
+      properties:
+        adoptions:
+          description: Oldest first.
+          items:
+            $ref: '#/components/schemas/LadoSetupAdoptionResponse'
+          type: array
+        drift:
+          items:
+            $ref: '#/components/schemas/LadoSetupDriftResponse'
+          type: array
+        entries:
+          items:
+            $ref: '#/components/schemas/LadoSetupEntryResponse'
+          type: array
+        items:
+          description: The managed items of both tools as they resolve at Global.
+          items:
+            $ref: '#/components/schemas/LadoSetupItemStateResponse'
+          type: array
+        os:
+          description: The GOOS the daemon runs on.
+          type: string
+        projects:
+          items:
+            $ref: '#/components/schemas/LadoSetupProjectScanResponse'
+          type: array
+        roots:
+          items:
+            $ref: '#/components/schemas/LadoSetupRootResponse'
+          type: array
+        scannedAt:
+          format: date-time
+          type: string
+        verified:
+          additionalProperties:
+            type: boolean
+          description: For each tool, whether LADO measured that sessions get adopted
+            setup on this OS; adoption is refused where it did not.
+          type: object
+      required:
+      - os
+      - verified
+      - scannedAt
+      - entries
+      - roots
+      - projects
+      - drift
+      - adoptions
+      - items
+      type: object
+    LadoSetupItemDetailResponse:
+      properties:
+        item:
+          $ref: '#/components/schemas/LadoSetupItemResponse'
+        managedPath:
+          description: Where a live item's managed copy is; a folder item's files
+            are edited there. Empty for an item that is not live.
+          type: string
+        versions:
+          description: Oldest first.
+          items:
+            $ref: '#/components/schemas/LadoSetupVersionDetailResponse'
+          type: array
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - item
+      - managedPath
+      - versions
+      - warnings
+      type: object
+    LadoSetupItemListResponse:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/LadoSetupItemStateResponse'
+          type: array
+      required:
+      - items
+      type: object
+    LadoSetupItemResponse:
+      properties:
+        adoptionId:
+          description: Empty for an item made in LADO.
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        deletedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        id:
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        live:
+          description: 'Neither deleted nor restored: only a live item is delivered.'
+          type: boolean
+        name:
+          type: string
+        originPath:
+          description: Where adoption found the item; empty for an item made in LADO.
+          type: string
+        restoredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - id
+      - tool
+      - kind
+      - name
+      - originPath
+      - adoptionId
+      - live
+      - createdAt
+      type: object
+    LadoSetupItemStateResponse:
+      properties:
+        global:
+          description: The Global binding; an item without one is on.
+          enum:
+          - "on"
+          - "off"
+          type: string
+        installedSha256:
+          description: Hash of the plugins an on enabledPlugins setting turns on,
+            as Claude Code has them installed; empty for every other item.
+          type: string
+        itemId:
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        name:
+          type: string
+        "on":
+          description: Sessions of the scope get the item.
+          type: boolean
+        project:
+          description: The binding for the resolved project; inherit at Global.
+          enum:
+          - inherit
+          - force_on
+          - force_off
+          type: string
+        sha256:
+          type: string
+        source:
+          $ref: '#/components/schemas/LadoRuleSourceResponse'
+          description: The binding that decided it; Global without a stored binding
+            is on.
+        task:
+          description: The binding for the resolved task; inherit for Global and a
+            project.
+          enum:
+          - inherit
+          - force_on
+          - force_off
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+        version:
+          type: integer
+        versionId:
+          type: string
+      required:
+      - itemId
+      - tool
+      - kind
+      - name
+      - versionId
+      - version
+      - sha256
+      - "on"
+      - source
+      - global
+      - project
+      - task
+      - installedSha256
+      type: object
+    LadoSetupItemVersionResponse:
+      properties:
+        actor:
+          description: 'Who made the version: api, human, or human:dev-presence in
+            a lab.'
+          type: string
+        contentKind:
+          enum:
+          - file
+          - json
+          - tree
+          type: string
+        createdAt:
+          format: date-time
+          type: string
+        executable:
+          type: boolean
+        id:
+          description: Empty in a dry run, for a version not made yet.
+          type: string
+        itemId:
+          type: string
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+        version:
+          description: Counts from 1; an edit sends the latest back as baseVersion.
+          type: integer
+      required:
+      - id
+      - itemId
+      - version
+      - contentKind
+      - sha256
+      - size
+      - executable
+      - actor
+      - createdAt
+      type: object
+    LadoSetupPreconditionsResponse:
+      properties:
+        ok:
+          description: Nothing holds the adoption back.
+          type: boolean
+        os:
+          type: string
+        processes:
+          items:
+            $ref: '#/components/schemas/LadoSetupRunningProcessResponse'
+          type: array
+        processesIgnored:
+          description: A lab daemon leaves the programs out.
+          type: boolean
+        sessions:
+          items:
+            $ref: '#/components/schemas/LadoSetupRunningSessionResponse'
+          type: array
+        unverified:
+          description: Tools whose delivery LADO has not measured on this OS.
+          items:
+            type: string
+          type: array
+      required:
+      - os
+      - unverified
+      - sessions
+      - processes
+      - processesIgnored
+      - ok
+      type: object
+    LadoSetupPreviewEntryResponse:
+      properties:
+        action:
+          enum:
+          - move
+          - keep
+          type: string
+        delivery:
+          description: 'How sessions get a moved entry: home (Claude Code''s per-session
+            config home) or overlay (Codex launch options); empty for a kept one.'
+          type: string
+        keptInPlace:
+          description: The login variables a moved env setting leaves in place.
+          items:
+            type: string
+          type: array
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        managedPath:
+          description: Where a moved entry goes; empty for a kept one.
+          type: string
+        name:
+          type: string
+        originPath:
+          type: string
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - tool
+      - kind
+      - name
+      - action
+      - originPath
+      - sha256
+      - size
+      - managedPath
+      - delivery
+      - keptInPlace
+      type: object
+    LadoSetupProjectScanResponse:
+      properties:
+        error:
+          description: Why the project could not be read; its entries are then missing.
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        path:
+          type: string
+      required:
+      - id
+      - name
+      - path
+      - error
+      type: object
+    LadoSetupRestoreReportResponse:
+      properties:
+        entries:
+          items:
+            $ref: '#/components/schemas/LadoSetupRestoredEntryResponse'
+          type: array
+      required:
+      - entries
+      type: object
+    LadoSetupRestoreResponse:
+      properties:
+        adoptionId:
+          type: string
+        applied:
+          type: boolean
+        report:
+          $ref: '#/components/schemas/LadoSetupRestoreReportResponse'
+        restoredAt:
+          format: date-time
+          type: string
+        warnings:
+          items:
+            type: string
+          type: array
+      required:
+      - adoptionId
+      - applied
+      - restoredAt
+      - report
+      - warnings
+      type: object
+    LadoSetupRestoredEntryResponse:
+      properties:
+        beside:
+          description: The copy written beside the path, under root; empty unless
+            restored_beside.
+          type: string
+        error:
+          description: Why a failed original could not be put back.
+          type: string
+        itemId:
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        name:
+          type: string
+        path:
+          description: 'Under root, with slashes and #<key> after a key''s file.'
+          type: string
+        root:
+          enum:
+          - claude_dir
+          - claude_json
+          - codex_home
+          type: string
+        status:
+          description: 'restored_beside: something new held the path, so the original
+            is beside it; key_kept: the file has the key now, which stays.'
+          enum:
+          - restored
+          - restored_beside
+          - key_kept
+          - failed
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - itemId
+      - tool
+      - kind
+      - name
+      - root
+      - path
+      - status
+      - beside
+      - error
+      type: object
+    LadoSetupRootResponse:
+      properties:
+        error:
+          description: Why it could not be read; its entries are then missing.
+          type: string
+        found:
+          type: boolean
+        location:
+          enum:
+          - claude_dir
+          - claude_json
+          - codex_home
+          type: string
+        path:
+          description: Empty when the daemon knows none.
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - tool
+      - location
+      - path
+      - found
+      - error
+      type: object
+    LadoSetupRunningProcessResponse:
+      properties:
+        name:
+          type: string
+        pid:
+          type: integer
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - pid
+      - name
+      - tool
+      type: object
+    LadoSetupRunningSessionResponse:
+      properties:
+        id:
+          type: string
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+      required:
+      - id
+      - tool
+      type: object
+    LadoSetupTreeFileResponse:
+      properties:
+        mode:
+          enum:
+          - file
+          - exec
+          type: string
+        path:
+          type: string
+        sha256:
+          type: string
+        size:
+          format: int64
+          type: integer
+      required:
+      - path
+      - mode
+      - size
+      - sha256
+      type: object
+    LadoSetupVerifyCheckResponse:
+      properties:
+        check:
+          enum:
+          - managed_copy
+          - codex_override
+          - home
+          type: string
+        error:
+          type: string
+        itemId:
+          type: string
+        ok:
+          type: boolean
+      required:
+      - itemId
+      - check
+      - ok
+      - error
+      type: object
+    LadoSetupVersionDetailResponse:
+      properties:
+        content:
+          $ref: '#/components/schemas/LadoSetupContentResponse'
+          description: Omitted when LADO could not read it.
+        version:
+          $ref: '#/components/schemas/LadoSetupItemVersionResponse'
+      required:
+      - version
+      type: object
+    LadoSnapshotSetupItemResponse:
+      properties:
+        installedSha256:
+          type: string
+        itemId:
+          type: string
+        kind:
+          enum:
+          - instructions
+          - setting
+          - skill
+          - agent
+          - command
+          - output_style
+          - hook_script
+          - mcp_server
+          type: string
+        name:
+          type: string
+        sha256:
+          type: string
+        source:
+          $ref: '#/components/schemas/LadoRuleSourceResponse'
+        tool:
+          enum:
+          - claude-code
+          - codex
+          type: string
+        version:
+          type: integer
+        versionId:
+          type: string
+      required:
+      - itemId
+      - tool
+      - kind
+      - name
+      - versionId
+      - version
+      - sha256
+      - source
+      - installedSha256
       type: object
     LadoTaskExecutionResponse:
       properties:
@@ -20839,6 +23156,25 @@ components:
       required:
       - action
       type: object
+    ResolveLadoSetupDriftRequest:
+      properties:
+        action:
+          description: keep needs a human-presence proof for an item that can run
+            code or widen access.
+          enum:
+          - keep
+          - revert
+          type: string
+        dryRun:
+          description: Show the change without making it; needs no presence proof.
+          type: boolean
+        sha256:
+          description: 'For keep: the drift''s sha256 as reviewed; another one refuses
+            the keep.'
+          type: string
+      required:
+      - action
+      type: object
     RestoreArtifactVersionRequest:
       properties:
         path:
@@ -21920,6 +24256,38 @@ components:
           type: string
       required:
       - ruleId
+      - scope
+      - state
+      type: object
+    SetLadoSetupBindingRequest:
+      properties:
+        dryRun:
+          description: Show the change without making it; needs no presence proof.
+          type: boolean
+        itemId:
+          type: string
+        scope:
+          enum:
+          - global
+          - project
+          - task
+          type: string
+        scopeId:
+          description: The project or task id; empty at global.
+          type: string
+        state:
+          description: on, off or inherit at global; inherit, force_on or force_off
+            for a project or a task. inherit removes the binding, which at Global
+            turns the item on.
+          enum:
+          - "on"
+          - "off"
+          - inherit
+          - force_on
+          - force_off
+          type: string
+      required:
+      - itemId
       - scope
       - state
       type: object
@@ -23422,6 +25790,21 @@ components:
           type: string
       required:
       - baseVersion
+      type: object
+    UpdateLadoSetupItemRequest:
+      properties:
+        baseVersion:
+          description: The version the edit started from; a newer one refuses the
+            edit.
+          type: integer
+        content:
+          description: The new content, shaped as for creation.
+        dryRun:
+          description: Show the change without making it; needs no presence proof.
+          type: boolean
+      required:
+      - baseVersion
+      - content
       type: object
     UpdateLadoTaskRequest:
       properties:

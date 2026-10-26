@@ -33,11 +33,15 @@ func (s *ladoGateSink) SetWorkGate(gate ports.WorkGate) { s.gate = gate }
 
 func (s *ladoGateSink) SetLadoPrompt(section sessionmanager.LadoPromptSection) { s.prompt = section }
 
-// SetWorkGate, SetLadoPrompt and ResolveDefaultBranch keep wiring_test.go's
-// fake a sessionLifecycle.
+// SetWorkGate, SetLadoPrompt, the setup hooks and ResolveDefaultBranch keep
+// wiring_test.go's fake a sessionLifecycle.
 func (f *fakeSessionLifecycle) SetWorkGate(ports.WorkGate) {}
 
 func (f *fakeSessionLifecycle) SetLadoPrompt(sessionmanager.LadoPromptSection) {}
+
+func (f *fakeSessionLifecycle) SetLadoSetupHome(ports.LadoSetupHome) {}
+
+func (f *fakeSessionLifecycle) SetLadoChatServers(sessionmanager.LadoChatServers) {}
 
 func (f *fakeSessionLifecycle) ResolveDefaultBranch(context.Context, string, string) (ports.WorkspaceDefaultBranch, error) {
 	return ports.WorkspaceDefaultBranch{}, ports.ErrWorkspaceDefaultBranchUnresolved
@@ -227,7 +231,7 @@ func TestWireLadoWorkStartsTheDispatcher(t *testing.T) {
 	}
 	sessions := &ladoWorkerSessions{}
 
-	_, tasks, _, queue := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	_, tasks, _, queue, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
 	done := queue.Start(ctx)
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -277,7 +281,7 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	}
 	log := slog.New(slog.DiscardHandler)
 
-	_, tasks, rules, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
 
 	if tasks == nil || rules == nil {
 		t.Fatalf("wireLadoWork returned tasks %v, rules %v", tasks, rules)
@@ -361,7 +365,7 @@ func TestWireLadoWorkGivesTasksTheRules(t *testing.T) {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
 
-	_, tasks, rules, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
 
 	listed, err := tasks.List(ctx, "mer", false)
 	if err != nil || len(listed) != 1 {

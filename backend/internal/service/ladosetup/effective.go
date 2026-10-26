@@ -79,12 +79,12 @@ func (s *Service) EffectiveSetup(ctx context.Context, in ladopolicy.SetupScope) 
 }
 
 // ScopeConflictsInput names a scope as ConflictInput does: neither id for
-// Global, the project, or the task with its project.
+// Global, the project, or the task, whose project then applies.
 type ScopeConflictsInput struct {
 	ProjectID domain.ProjectID
 	TaskID    domain.LadoTaskID
-	// Ceiling is the rules' permission ceiling; empty skips the default mode
-	// check.
+	// Ceiling is the rules' permission ceiling. Empty asks the policy for it,
+	// and without a policy skips the default mode check.
 	Ceiling domain.PermissionMode
 }
 
@@ -98,7 +98,16 @@ func (s *Service) ScopeConflicts(ctx context.Context, in ScopeConflictsInput) ([
 	if s.deps.Store == nil {
 		return []Conflict{}, nil
 	}
-	st, err := s.readScope(ctx, in.ProjectID, in.TaskID)
+	scope, err := s.viewScope(ctx, in.ProjectID, in.TaskID)
+	if err != nil {
+		return nil, err
+	}
+	if in.Ceiling == "" {
+		if in.Ceiling, err = s.ceiling(ctx); err != nil {
+			return nil, err
+		}
+	}
+	st, err := s.readScope(ctx, scope.project, scope.task)
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +115,12 @@ func (s *Service) ScopeConflicts(ctx context.Context, in ScopeConflictsInput) ([
 	if err != nil {
 		return nil, err
 	}
-	project, err := s.projectSettings(ctx, in.ProjectID)
+	project, err := s.projectSettings(ctx, scope.project)
 	if err != nil {
 		return nil, err
 	}
 	out := s.Conflicts(ConflictInput{
-		ProjectID: in.ProjectID, TaskID: in.TaskID, Setup: setup, Moved: st.moved(), Ceiling: in.Ceiling,
+		ProjectID: scope.project, TaskID: scope.task, Setup: setup, Moved: st.moved(), Ceiling: in.Ceiling,
 		ProjectSettings: project, Acceptances: st.acceptances,
 	})
 	if out == nil {

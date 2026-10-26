@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -80,6 +81,9 @@ func seedLadoQueued(t *testing.T, store *sqlite.Store, project domain.ProjectID,
 		Rules: []ladopolicy.SnapshotRule{
 			{RuleID: domain.LadoRulePermissionCeiling, Name: "Permission ceiling", Version: 1},
 			{RuleID: "team.tests", Name: "Run the tests", Version: 3},
+		},
+		Setup: []ladopolicy.SnapshotSetupItem{
+			{ItemID: "lado-setup-item-1", Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindInstructions, Name: "CLAUDE.md", Version: 2},
 		},
 		Prompt: ladoWorkerRules,
 	})
@@ -248,6 +252,10 @@ func TestLadoAPI_ExecutionDetail(t *testing.T) {
 	if snapshot.SHA256 != seed.snapshot || snapshot.Agent != "claude-code" || snapshot.Model != "claude-sonnet-5" || snapshot.PermissionMode != "accept-edits" ||
 		snapshot.PermissionCeiling != "auto" || snapshot.Prompt != ladoWorkerRules || fmt.Sprint(snapshot.Rules) != fmt.Sprint(wantRules) {
 		t.Fatalf("snapshot = %+v, want the approval's", snapshot)
+	}
+	wantSetup := []controllers.LadoExecutionSetupItemResponse{{ItemID: "lado-setup-item-1", Tool: "claude-code", Kind: "instructions", Name: "CLAUDE.md", Version: 2}}
+	if !reflect.DeepEqual(snapshot.Setup, wantSetup) {
+		t.Fatalf("snapshot setup = %+v, want %+v", snapshot.Setup, wantSetup)
 	}
 	if base := got.Base; base.PlanSHA != strings.Repeat("c", 40) || base.DispatchSHA != strings.Repeat("d", 40) || base.CommitsAhead == nil || *base.CommitsAhead != 3 {
 		t.Fatalf("base = %+v, want the move from the plan's base", base)

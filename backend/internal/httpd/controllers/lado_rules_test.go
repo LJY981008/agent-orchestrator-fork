@@ -508,6 +508,8 @@ func TestLadoAPI_Effective(t *testing.T) {
 	wantApproved := &controllers.LadoApprovedRulesResponse{
 		SnapshotSHA256: strings.Repeat("d", 64), ApprovedAt: ladoRuleTime, Revision: 3,
 		Added: []string{}, Removed: []string{"lado-rule-1"}, Changed: []string{},
+		SetupAdded: []string{}, SetupRemoved: []string{}, SetupChanged: []string{},
+		Setup: []controllers.LadoSnapshotSetupItemResponse{}, Accepted: []controllers.LadoSetupAcceptedConflictResponse{},
 	}
 	if !reflect.DeepEqual(resp.Approved, wantApproved) {
 		t.Fatalf("approved = %+v, want %+v", resp.Approved, wantApproved)

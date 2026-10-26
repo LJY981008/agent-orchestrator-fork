@@ -200,6 +200,10 @@ func (p *impactPolicy) ImpactOfSetupChange(_ context.Context, change ladopolicy.
 	return ladopolicy.Impact{Projects: []ladopolicy.ImpactProject{{ID: testProject, Name: "Demo"}}, Tasks: []ladopolicy.ImpactTask{}}, nil
 }
 
+func (p *impactPolicy) Ceiling(context.Context) (domain.PermissionMode, error) {
+	return domain.PermissionModeAuto, nil
+}
+
 // Plan §12: a dry run of every op writes nothing, not to the store, the
 // blobs, the managed folder or the tool folders, and hashes the change the
 // same way each time. The hash is the subject the real change's

@@ -14,6 +14,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -48,14 +49,16 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 
-// wireLadoWork builds LADO's repository connections, its rules with the
-// built-in ones seeded, issue-backed tasks with their plans, whose approvals
-// fix the rules and queue the plans, and the dispatcher that starts the
-// queued plans' workers and stops the worker of a cancelled task. The daemon
-// calls it once AO's project service exists, after installLadoCredentials
-// opened the token store, and starts the dispatcher once workers may spawn.
-// Without AO's session service the dispatcher only reads; it must not start.
-func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service, *ladopolicy.Service, *ladoqueue.Service) {
+// wireLadoWork builds LADO's repository connections, the local setup it
+// manages with its session hooks, its rules with the built-in ones seeded,
+// issue-backed tasks with their plans, whose approvals fix the rules and the
+// setup and queue the plans, and the dispatcher that starts the queued plans'
+// workers and stops the worker of a cancelled task. The daemon calls it once
+// AO's project service exists, after installLadoCredentials opened the token
+// store and before sessions restore, and starts the dispatcher once workers
+// may spawn. Without AO's session service the dispatcher only reads; it must
+// not start.
+func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service, *ladopolicy.Service, *ladoqueue.Service, *ladosetup.Service) {
 	if ladoStoredTokens == nil {
 		installLadoCredentials(cfg, log)
 	}
@@ -68,7 +71,9 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 		Log:         log,
 	})
 	blobs := ladoblob.New(cfg.StateDir)
-	rules := ladopolicy.New(ladopolicy.Deps{Store: store, Projects: store, Blobs: blobs, AOBuild: cfg.Telemetry.AppVersion, Log: log})
+	setup := wireLadoSetup(cfg, store, blobs, work.setup, log)
+	rules := ladopolicy.New(ladopolicy.Deps{Store: store, Projects: store, Blobs: blobs, AOBuild: cfg.Telemetry.AppVersion, Setup: setup, Log: log})
+	setup.SetPolicy(rules)
 	// A failed seed leaves the permission ceiling missing, which resolves to
 	// a blocking problem the app shows, so the daemon still starts.
 	if err := rules.EnsureBuiltins(ctx); err != nil {
@@ -95,7 +100,7 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	if work.sessions != nil {
 		tasks.SetKiller(queue)
 	}
-	return connections, tasks, rules, queue
+	return connections, tasks, rules, queue, setup
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.

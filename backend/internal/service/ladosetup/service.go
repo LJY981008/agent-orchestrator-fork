@@ -53,10 +53,13 @@ type Store interface {
 }
 
 // Policy finds what a setup change reaches: the LADO projects whose rules
-// and setup it changes and the approved tasks it sends back to review.
-// *ladopolicy.Service implements it.
+// and setup it changes and the approved tasks it sends back to review. It
+// also tells the rules' permission ceiling, which the app's list of
+// conflicts compares a default permission mode with. *ladopolicy.Service
+// implements it.
 type Policy interface {
 	ImpactOfSetupChange(ctx context.Context, change ladopolicy.SetupChange) (ladopolicy.Impact, error)
+	Ceiling(ctx context.Context) (domain.PermissionMode, error)
 }
 
 // Blobs keeps the content of setup item versions. *ladoblob.Store

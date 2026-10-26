@@ -282,22 +282,25 @@ func ladoRuleResponse(view ladopolicy.RuleView) LadoRuleResponse {
 }
 
 func ladoRuleChangeResponse(result ladopolicy.ChangeResult) LadoRuleChangeResponse {
-	resp := LadoRuleChangeResponse{
-		Applied: result.Applied,
-		Impact: LadoRuleImpactResponse{
-			Projects: make([]LadoImpactProjectResponse, 0, len(result.Impact.Projects)),
-			Tasks:    make([]LadoImpactTaskResponse, 0, len(result.Impact.Tasks)),
-		},
-	}
+	resp := LadoRuleChangeResponse{Applied: result.Applied, Impact: ladoImpactResponse(result.Impact)}
 	if result.Rule.Rule.ID != "" {
 		rule := ladoRuleResponse(result.Rule)
 		resp.Rule = &rule
 	}
-	for _, p := range result.Impact.Projects {
-		resp.Impact.Projects = append(resp.Impact.Projects, LadoImpactProjectResponse{ID: string(p.ID), Name: p.Name})
+	return resp
+}
+
+// ladoImpactResponse is what a rule or setup change reaches.
+func ladoImpactResponse(impact ladopolicy.Impact) LadoRuleImpactResponse {
+	resp := LadoRuleImpactResponse{
+		Projects: make([]LadoImpactProjectResponse, 0, len(impact.Projects)),
+		Tasks:    make([]LadoImpactTaskResponse, 0, len(impact.Tasks)),
 	}
-	for _, t := range result.Impact.Tasks {
-		resp.Impact.Tasks = append(resp.Impact.Tasks, LadoImpactTaskResponse{ID: string(t.ID), ProjectID: string(t.ProjectID), Title: t.Title, IssueRef: string(t.IssueRef)})
+	for _, p := range impact.Projects {
+		resp.Projects = append(resp.Projects, LadoImpactProjectResponse{ID: string(p.ID), Name: p.Name})
+	}
+	for _, t := range impact.Tasks {
+		resp.Tasks = append(resp.Tasks, LadoImpactTaskResponse{ID: string(t.ID), ProjectID: string(t.ProjectID), Title: t.Title, IssueRef: string(t.IssueRef)})
 	}
 	return resp
 }
@@ -313,9 +316,10 @@ func ladoEffectiveResponse(view ladopolicy.EffectiveView) LadoEffectiveResponse 
 		AORules:           make([]LadoAORuleResponse, 0, len(view.AORules)),
 		Prompt:            view.Prompt,
 		Capabilities:      make([]LadoCapabilityResponse, 0, len(view.Capabilities)),
-		Problems:          make([]LadoPolicyProblemResponse, 0, len(view.Problems)),
+		Problems:          ladoPolicyProblems(view.Problems),
 		Blocking:          view.Blocking(),
 		SnapshotSHA256:    view.SHA256,
+		Setup:             ladoEffectiveSetupResponse(view.Setup),
 	}
 	for _, e := range view.Entries {
 		content := e.Rule.Version.Content
@@ -341,18 +345,6 @@ func ladoEffectiveResponse(view ladopolicy.EffectiveView) LadoEffectiveResponse 
 	for _, capability := range view.Capabilities {
 		resp.Capabilities = append(resp.Capabilities, LadoCapabilityResponse{Class: string(capability.Class), Status: string(capability.Status)})
 	}
-	for _, problem := range view.Problems {
-		details := problem.Details
-		if details == nil {
-			details = map[string]string{}
-		}
-		resp.Problems = append(resp.Problems, LadoPolicyProblemResponse{
-			Code:     problem.Code,
-			Severity: string(problem.Severity),
-			Rules:    ladoStrings(problem.Rules),
-			Details:  details,
-		})
-	}
 	if approved := view.Approved; approved != nil {
 		resp.Approved = &LadoApprovedRulesResponse{
 			SnapshotSHA256: approved.Snapshot.SHA256,
@@ -363,7 +355,36 @@ func ladoEffectiveResponse(view ladopolicy.EffectiveView) LadoEffectiveResponse 
 			Added:          ladoStrings(approved.Added),
 			Removed:        ladoStrings(approved.Removed),
 			Changed:        ladoStrings(approved.Changed),
+			SetupAdded:     ladoStrings(approved.SetupAdded),
+			SetupRemoved:   ladoStrings(approved.SetupRemoved),
+			SetupChanged:   ladoStrings(approved.SetupChanged),
+			Setup:          ladoSnapshotSetup(approved.Content.Setup),
+			AOSystemSHA256: approved.Content.AOSystem.SHA256,
+			Accepted:       make([]LadoSetupAcceptedConflictResponse, 0, len(approved.Content.AcceptedConflicts)),
+		}
+		for _, a := range approved.Content.AcceptedConflicts {
+			resp.Approved.Accepted = append(resp.Approved.Accepted, LadoSetupAcceptedConflictResponse{
+				Code: a.Code, ItemID: string(a.ItemID), Detail: a.Detail, AcceptanceID: string(a.AcceptanceID),
+			})
 		}
 	}
 	return resp
+}
+
+// ladoPolicyProblems lists rule problems with their details, never nil.
+func ladoPolicyProblems(problems []domain.LadoPolicyProblem) []LadoPolicyProblemResponse {
+	out := make([]LadoPolicyProblemResponse, 0, len(problems))
+	for _, problem := range problems {
+		details := problem.Details
+		if details == nil {
+			details = map[string]string{}
+		}
+		out = append(out, LadoPolicyProblemResponse{
+			Code:     problem.Code,
+			Severity: string(problem.Severity),
+			Rules:    ladoStrings(problem.Rules),
+			Details:  details,
+		})
+	}
+	return out
 }
