@@ -1,16 +1,24 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { LADO_DESKTOP_GET_CHANNEL, LADO_DESKTOP_SET_CHANNEL, type LadoDesktopSettings, type LadoDesktopSettingsPatch } from "./shared/lado-desktop";
 import {
+	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
+	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
+	LADO_PRESENCE_RESTORE_SETUP_CHANNEL,
 	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoCeilingMode,
+	type LadoPresenceAdoptSetupResult,
 	type LadoPresenceApproveRequest,
 	type LadoPresenceApproveResult,
 	type LadoPresenceModeRequest,
 	type LadoPresenceModeResult,
+	type LadoPresenceRestoreSetupResult,
 	type LadoPresenceRuleChangeRequest,
 	type LadoPresenceRuleChangeResult,
+	type LadoPresenceSetupChangeRequest,
+	type LadoPresenceSetupChangeResult,
+	type LadoPresenceSetupEntry,
 } from "./shared/lado-presence";
 import { APP_SHORTCUT_CHANNEL, CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL, SET_TERMINAL_FOCUSED_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, type AppShortcutEvent, type KeybindingOverrides } from "./shared/shortcuts";
 import {
@@ -837,6 +845,13 @@ const api = {
 					projectId,
 					ladoMode: on,
 				} satisfies LadoPresenceModeRequest) as Promise<LadoPresenceModeResult | null>,
+			// Setup entries to adopt, an adoption to restore, or a setup change.
+			adoptSetup: (entries: LadoPresenceSetupEntry[]) =>
+				ipcRenderer.invoke(LADO_PRESENCE_ADOPT_SETUP_CHANNEL, { entries }) as Promise<LadoPresenceAdoptSetupResult | null>,
+			restoreSetup: (adoptionId: string) =>
+				ipcRenderer.invoke(LADO_PRESENCE_RESTORE_SETUP_CHANNEL, { adoptionId }) as Promise<LadoPresenceRestoreSetupResult | null>,
+			changeSetup: (request: LadoPresenceSetupChangeRequest) =>
+				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_SETUP_CHANNEL, request) as Promise<LadoPresenceSetupChangeResult | null>,
 		},
 	},
 };

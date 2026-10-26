@@ -76,6 +76,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 		problems: [],
 		blocking: false,
 		snapshotSha256: "e".repeat(64),
+		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
 		approved: {
 			snapshotSha256: "e".repeat(64),
 			approvedAt: "2026-10-22T10:00:00Z",
@@ -85,6 +86,12 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 			added: [],
 			removed: [],
 			changed: [],
+			setup: [],
+			setupAdded: [],
+			setupRemoved: [],
+			setupChanged: [],
+			aoSystemSha256: "",
+			accepted: [],
 		},
 		...fields,
 	};
@@ -202,6 +209,12 @@ describe("LadoTaskRules", () => {
 					added: [review.ruleId],
 					removed: ["lado-rule-old"],
 					changed: [ceiling.ruleId],
+					setup: [],
+					setupAdded: [],
+					setupRemoved: [],
+					setupChanged: [],
+					aoSystemSha256: "",
+					accepted: [],
 				},
 			}),
 		);

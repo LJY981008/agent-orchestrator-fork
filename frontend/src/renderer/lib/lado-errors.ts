@@ -1,7 +1,9 @@
-// LADO fork: LADO's daemon errors, connection check problems, rules problems
-// and the reasons behind a task's or a queue entry's state in the developer's
-// language. The daemon answers in English with a stable code; the app
-// translates the code and fills in the details the daemon sends.
+// LADO fork: LADO's daemon errors, connection check problems, rules problems,
+// local setup's reasons, conflicts and warnings, and the reasons behind a
+// task's or a queue entry's state in the developer's language. The daemon
+// answers in English with a stable code; the app translates the code and
+// fills in the details the daemon sends.
+import { agentLabel } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/messages";
 import { LadoApiError, type LadoConnectionCheck, type LadoQueueReason, type LadoTaskStateReason } from "./lado";
@@ -133,6 +135,35 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_ISSUE_NOT_FOUND: "lado.error.issueNotFound",
 	// The app sends includeArchived as a boolean; anything else is a bug.
 	INVALID_QUERY: "lado.error.internal",
+	// Local setup (step 7).
+	LADO_SETUP_UNAVAILABLE: "lado.error.setupUnavailable",
+	LADO_SETUP_NOT_FOUND: "lado.error.setupNotFound",
+	LADO_SETUP_SCOPE_INVALID: "lado.error.setupScopeInvalid",
+	LADO_SETUP_ADOPTION_INVALID: "lado.error.setupAdoptionInvalid",
+	LADO_SETUP_NOT_ADOPTABLE: "lado.error.setupNotAdoptable",
+	LADO_SETUP_CHANGED: "lado.error.setupChanged",
+	LADO_SETUP_OS_UNVERIFIED: "lado.error.setupOsUnverified",
+	LADO_SETUP_TOOL_RUNNING: "lado.error.setupToolRunning",
+	LADO_SETUP_ADOPTION_FAILED: "lado.error.setupAdoptionFailed",
+	LADO_SETUP_HOOK_PATH_MOVED: "lado.error.setupHookPathMoved",
+	LADO_SETUP_ALREADY_RESTORED: "lado.error.setupAlreadyRestored",
+	LADO_SETUP_RESTORE_FAILED: "lado.error.setupRestoreFailed",
+	LADO_SETUP_DRIFT_UNREADABLE: "lado.error.setupDriftUnreadable",
+	LADO_SETUP_ITEM_CHANGED: "lado.error.setupItemChanged",
+	LADO_SETUP_CHANGE_INVALID: "lado.error.setupChangeInvalid",
+	LADO_SETUP_CONTENT_INVALID: "lado.error.setupContentInvalid",
+	LADO_SETUP_LOGIN_KEY: "lado.error.setupLoginKey",
+	LADO_SETUP_ITEM_EXISTS: "lado.error.setupItemExists",
+	LADO_SETUP_FOLDER_ITEM: "lado.error.setupFolderItem",
+	LADO_SETUP_CONFLICT_NOT_FOUND: "lado.error.setupConflictNotFound",
+	LADO_SETUP_CONFLICT_NOT_ACCEPTABLE: "lado.error.setupConflictNotAcceptable",
+	LADO_SETUP_HOME_FAILED: "lado.error.setupHomeFailed",
+	LADO_SETUP_CODEX_FAILED: "lado.error.setupCodexFailed",
+	LADO_SETUP_LOAD_FAILED: "lado.error.setupLoadFailed",
+	// The desktop app's main process, before it reaches the daemon.
+	LADO_SETUP_ADOPTION_ID_INVALID: "lado.error.setupNotFound",
+	// The app sends the setup routes' bodies as the API defines them.
+	INVALID_JSON: "lado.error.internal",
 };
 
 // LADO_EXECUTION_FIXED also refuses restoring a run LADO stopped for good;
@@ -142,9 +173,21 @@ const restoreKeys: Partial<Record<string, LadoErrorKey>> = {
 	task_cancelled: "lado.error.restoreCancelled",
 };
 
+// An adoption or a restore that stopped says by its stage, and an adoption
+// by its state, what happened to the developer's files.
+const setupStageKeys: Partial<Record<string, Partial<Record<string, LadoErrorKey>>>> = {
+	LADO_SETUP_ADOPTION_FAILED: { partial: "lado.error.setupAdoptionPartial", record: "lado.error.setupAdoptionNotRecorded" },
+	LADO_SETUP_RESTORE_FAILED: { manifest: "lado.error.setupRestoreBackupUnreadable", record: "lado.error.setupRestoreNotRecorded" },
+};
+
 function errorKey(code: string, details: Record<string, unknown> | undefined): LadoErrorKey | undefined {
 	if (code === "LADO_EXECUTION_FIXED" && typeof details?.reason === "string") {
 		return restoreKeys[details.reason] ?? errorKeys[code];
+	}
+	const stages = setupStageKeys[code];
+	if (stages) {
+		const state = details?.state === "partial" ? stages.partial : undefined;
+		return state ?? (typeof details?.stage === "string" ? stages[details.stage] : undefined) ?? errorKeys[code];
 	}
 	return errorKeys[code];
 }
@@ -165,13 +208,32 @@ const problemKeys: Partial<Record<string, LadoProblemKey>> = {
 
 // The details LADO's messages name; a detail the daemon left out reads empty,
 // and a permission ceiling reads as AO's project settings name the mode.
-function detailValues(t: TFunction, details: Record<string, unknown> | undefined) {
+// Local setup's tools, kinds and reasons read in the developer's language, and
+// its lists of sessions, programs and tools read as one line.
+function detailValues(t: TFunction, code: string, details: Record<string, unknown> | undefined) {
 	const text = (name: string) => {
 		const value = details?.[name];
 		return typeof value === "string" || typeof value === "number" ? String(value) : "";
 	};
+	const list = (name: string, show: (item: Record<string, unknown>) => string) => {
+		const values = details?.[name];
+		return Array.isArray(values)
+			? values.flatMap((value) => (typeof value === "object" && value !== null ? [show(value as Record<string, unknown>)] : []))
+			: [];
+	};
+	const field = (item: Record<string, unknown>, name: string) => {
+		const value = item[name];
+		return typeof value === "string" || typeof value === "number" ? String(value) : "";
+	};
+	const sessions = list("sessions", (session) => `${field(session, "id")} (${agentLabel(field(session, "tool"))})`);
+	const processes = list("processes", (program) => `${field(program, "name")} (PID ${field(program, "pid")})`);
+	const toolIds = details?.tools;
+	const tools = Array.isArray(toolIds)
+		? toolIds.filter((tool): tool is string => typeof tool === "string").map((tool) => agentLabel(tool))
+		: [];
+	const setup = code.startsWith("LADO_SETUP_");
 	return {
-		reason: text("reason"),
+		reason: setup ? ladoSetupReasonText(t, text("reason"), details) : text("reason"),
 		min: text("min"),
 		max: text("max"),
 		issue: text("issue"),
@@ -179,6 +241,17 @@ function detailValues(t: TFunction, details: Record<string, unknown> | undefined
 		comment: text("comment"),
 		rule: text("rule"),
 		ceiling: modeLabel(t, text("ceiling")),
+		tool: text("tool") && agentLabel(text("tool")),
+		kind: ladoSetupKindLabel(t, text("kind")),
+		name: text("name"),
+		stage: text("stage"),
+		item: text("item"),
+		key: text("key"),
+		path: text("path"),
+		sessions: sessions.join(", "),
+		processes: processes.join(", "),
+		running: [...sessions, ...processes].join(", "),
+		tools: tools.join(", "),
 	};
 }
 
@@ -190,7 +263,8 @@ function detailValues(t: TFunction, details: Record<string, unknown> | undefined
 export function ladoErrorText(t: TFunction, error: unknown, fallback: LadoErrorKey = "lado.error.unreachable"): string {
 	if (error instanceof LadoApiError && error.code) {
 		const key = errorKey(error.code, error.details);
-		return key ? t(key, detailValues(t, error.details)) : error.message;
+		// A reason the daemon left out leaves no trailing space.
+		return key ? t(key, detailValues(t, error.code, error.details)).trim() : error.message;
 	}
 	return t(fallback);
 }
@@ -306,7 +380,8 @@ export function ladoPolicyProblemText(
 	labels: LadoProblemLabels = {},
 ): string {
 	const key = policyProblemKeys[problem.code];
-	if (!key) return problem.code;
+	// Local setup's conflicts are rules problems as well.
+	if (!key) return setupConflictKeys[problem.code] ? ladoSetupConflictText(t, problem) : problem.code;
 	const detail = (name: string) => problem.details?.[name] ?? "";
 	const label = (keys: Partial<Record<string, MessageKey>>, value: string) => {
 		const labelKey = keys[value];
@@ -359,4 +434,161 @@ export function ladoReasonText(t: TFunction, reason: string | undefined): string
 	if (!reason) return "";
 	const key = (reasonKeys as Partial<Record<string, LadoReasonKey>>)[reason];
 	return key ? t(key) : reason;
+}
+
+type LadoSetupKindKey = Extract<MessageKey, `lado.setup.kind.${string}`>;
+
+// The kinds of setup items (backend/internal/domain/lado_setup.go).
+const setupKindKeys: Partial<Record<string, LadoSetupKindKey>> = {
+	instructions: "lado.setup.kind.instructions",
+	setting: "lado.setup.kind.setting",
+	skill: "lado.setup.kind.skill",
+	agent: "lado.setup.kind.agent",
+	command: "lado.setup.kind.command",
+	output_style: "lado.setup.kind.outputStyle",
+	hook_script: "lado.setup.kind.hookScript",
+	mcp_server: "lado.setup.kind.mcpServer",
+};
+
+/** A setup item's kind in the developer's language; one from a newer daemon shows as is. */
+export function ladoSetupKindLabel(t: TFunction, kind: string): string {
+	const key = setupKindKeys[kind];
+	return key ? t(key) : kind;
+}
+
+type LadoSetupReasonKey = Extract<MessageKey, `lado.setup.reason.${string}`>;
+
+// Why the inventory does not adopt an entry (backend/internal/domain/lado_setup.go),
+// why an adoption refuses one, and why a change's request or content does
+// not fit (backend/internal/service/ladosetup/changes.go).
+const setupReasonKeys: Partial<Record<string, LadoSetupReasonKey>> = {
+	credentials: "lado.setup.reason.credentials",
+	login_key: "lado.setup.reason.loginKey",
+	app_state: "lado.setup.reason.appState",
+	plugins_stay: "lado.setup.reason.pluginsStay",
+	tool_state: "lado.setup.reason.toolState",
+	no_tui_path: "lado.setup.reason.noTuiPath",
+	deprecated: "lado.setup.reason.deprecated",
+	inline_table: "lado.setup.reason.inlineTable",
+	literal_credentials: "lado.setup.reason.literalCredentials",
+	name_unsupported: "lado.setup.reason.nameUnsupported",
+	unknown_location: "lado.setup.reason.unknownLocation",
+	worktrees_do_not_load: "lado.setup.reason.worktreesDoNotLoad",
+	ao_sets_per_session: "lado.setup.reason.aoSetsPerSession",
+	repo_tracked: "lado.setup.reason.repoTracked",
+	managed_settings: "lado.setup.reason.managedSettings",
+	symlink: "lado.setup.reason.symlink",
+	unreadable: "lado.setup.reason.unreadable",
+	not_found: "lado.setup.reason.notFound",
+	already_managed: "lado.setup.reason.alreadyManaged",
+	unknown: "lado.setup.reason.unknown",
+	missing: "lado.setup.reason.missing",
+	not_taken: "lado.setup.reason.notTaken",
+	invalid: "lado.setup.reason.invalid",
+	not_for_tool: "lado.setup.reason.notForTool",
+	not_created: "lado.setup.reason.notCreated",
+	not_text: "lado.setup.reason.notText",
+	too_large: "lado.setup.reason.tooLarge",
+	not_json: "lado.setup.reason.notJson",
+	not_object: "lado.setup.reason.notObject",
+	front_matter: "lado.setup.reason.frontMatter",
+	server_shape: "lado.setup.reason.serverShape",
+};
+
+/**
+ * Why LADO does not adopt an entry, or refuses a change, as one sentence in
+ * the developer's language, with the field and limit the daemon names. None
+ * reads empty; a reason from a newer daemon shows as is.
+ */
+export function ladoSetupReasonText(t: TFunction, reason: string | undefined, details?: Record<string, unknown>): string {
+	if (!reason) return "";
+	const key = setupReasonKeys[reason];
+	if (!key) return reason;
+	const detail = (name: string) => {
+		const value = details?.[name];
+		return typeof value === "string" || typeof value === "number" ? String(value) : "";
+	};
+	return t(key, { field: detail("field"), limit: detail("limit") });
+}
+
+type LadoSetupConflictKey = Extract<MessageKey, `lado.setup.conflict.${string}`>;
+
+// The conflict checks of local setup (backend/internal/service/ladosetup/conflicts.go).
+const setupConflictKeys: Partial<Record<string, LadoSetupConflictKey>> = {
+	LADO_SETUP_MCP_NAME_TAKEN: "lado.setup.conflict.mcpNameTaken",
+	LADO_SETUP_SKILL_NAME_TAKEN: "lado.setup.conflict.skillNameTaken",
+	LADO_SETUP_ENV_RESERVED: "lado.setup.conflict.envReserved",
+	LADO_SETUP_DENIES_AO: "lado.setup.conflict.deniesAo",
+	LADO_SETUP_HOOK_PATH_MOVED: "lado.setup.conflict.hookPathMoved",
+	LADO_SETUP_DENIES_GIT: "lado.setup.conflict.deniesGit",
+	LADO_SETUP_HOOK_MAY_BLOCK_TOOLS: "lado.setup.conflict.hookMayBlockTools",
+	LADO_SETUP_HOOK_ADDS_PROMPT_TEXT: "lado.setup.conflict.hookAddsPromptText",
+	LADO_SETUP_DEFAULT_MODE_ABOVE_CEILING: "lado.setup.conflict.defaultModeAboveCeiling",
+	LADO_SETUP_HOOK_SHARES_AO_EVENT: "lado.setup.conflict.hookSharesAoEvent",
+	LADO_SETUP_PROJECT_OVERRIDES: "lado.setup.conflict.projectOverrides",
+	LADO_SETUP_PLUGIN_HOOKS_UNREADABLE: "lado.setup.conflict.pluginHooksUnreadable",
+};
+
+// Claude Code's own names of the permission modes a defaultMode can ask for.
+const claudeModes: Partial<Record<string, string>> = {
+	acceptEdits: "accept-edits",
+	auto: "auto",
+	bypassPermissions: "bypass-permissions",
+};
+
+/**
+ * A setup conflict in the developer's language, with the key, rule, event,
+ * matcher, path and modes it names, and the plugin whose hook it is. A code
+ * this app does not know yet shows as is.
+ */
+export function ladoSetupConflictText(t: TFunction, conflict: { code: string; details?: Record<string, string> }): string {
+	const key = setupConflictKeys[conflict.code];
+	if (!key) return conflict.code;
+	const detail = (name: string) => conflict.details?.[name] ?? "";
+	const mode = detail("mode");
+	const text = t(key, {
+		key: detail("key"),
+		rule: detail("rule"),
+		event: detail("event"),
+		matcher: detail("matcher"),
+		path: detail("path"),
+		plugin: detail("plugin"),
+		mode: modeLabel(t, claudeModes[mode] ?? mode),
+		ceiling: modeLabel(t, detail("ceiling")),
+	});
+	const plugin = detail("plugin");
+	return plugin && conflict.code !== "LADO_SETUP_PLUGIN_HOOKS_UNREADABLE"
+		? `${text} ${t("lado.setup.conflict.fromPlugin", { plugin })}`
+		: text;
+}
+
+type LadoSetupRestoreKey = Extract<MessageKey, `lado.setup.restore.${string}`>;
+
+const setupRestoreKeys: Partial<Record<string, LadoSetupRestoreKey>> = {
+	restored: "lado.setup.restore.restored",
+	restored_beside: "lado.setup.restore.restoredBeside",
+	key_kept: "lado.setup.restore.keyKept",
+	failed: "lado.setup.restore.failed",
+};
+
+/** What a restore did with one original, as its report says; a status from a newer daemon shows as is. */
+export function ladoSetupRestoreStatusText(t: TFunction, status: string): string {
+	const key = setupRestoreKeys[status];
+	return key ? t(key) : status;
+}
+
+type LadoSetupWarningKey = Extract<MessageKey, `lado.setup.warning.${string}`>;
+
+// The warnings of adoption, restore and changes.
+const setupWarningKeys: Partial<Record<string, LadoSetupWarningKey>> = {
+	LADO_SETUP_DIRECT_USE_STOPS: "lado.setup.warning.directUseStops",
+	LADO_SETUP_BASELINE_FAILED: "lado.setup.warning.baselineFailed",
+	LADO_SETUP_MANAGED_WRITE_FAILED: "lado.setup.warning.managedWriteFailed",
+	LADO_SETUP_PREVIEW_INCOMPLETE: "lado.setup.warning.previewIncomplete",
+};
+
+/** A warning the daemon sent with a setup answer; one from a newer daemon shows as is. */
+export function ladoSetupWarningText(t: TFunction, code: string): string {
+	const key = setupWarningKeys[code];
+	return key ? t(key) : code;
 }

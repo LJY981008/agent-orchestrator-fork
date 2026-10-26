@@ -2,7 +2,17 @@ import { describe, expect, it } from "vitest";
 import { createFullAppI18n } from "../i18n/all-messages";
 import { APP_LOCALES } from "../../shared/ui-locale";
 import { LadoApiError } from "./lado";
-import { ladoErrorText, ladoPolicyProblemText, ladoQueueErrorText, ladoReasonText } from "./lado-errors";
+import {
+	ladoErrorText,
+	ladoPolicyProblemText,
+	ladoQueueErrorText,
+	ladoReasonText,
+	ladoSetupConflictText,
+	ladoSetupKindLabel,
+	ladoSetupReasonText,
+	ladoSetupRestoreStatusText,
+	ladoSetupWarningText,
+} from "./lado-errors";
 
 // Every code the rules routes and the approval send (backend/internal/service/ladopolicy,
 // ladotask and httpd/controllers/lado_rules.go).
@@ -270,5 +280,297 @@ describe("LADO queue errors and reasons", () => {
 		}
 		const ko = createFullAppI18n("ko").t;
 		expect(states.map((state) => ko(`lado.task.state.${state}` as const))).toEqual(["대기 중", "시작하는 중", "실행 중", "실패", "완료"]);
+	});
+});
+
+// Every code the local setup routes, the session launches and the desktop
+// app's main process send (backend/internal/service/ladosetup, ladopolicy and
+// httpd/controllers/lado_setup.go; src/main/lado-presence.ts).
+const setupCodes = [
+	"LADO_SETUP_UNAVAILABLE",
+	"LADO_SETUP_NOT_FOUND",
+	"LADO_SETUP_SCOPE_INVALID",
+	"LADO_SETUP_ADOPTION_INVALID",
+	"LADO_SETUP_NOT_ADOPTABLE",
+	"LADO_SETUP_CHANGED",
+	"LADO_SETUP_OS_UNVERIFIED",
+	"LADO_SETUP_TOOL_RUNNING",
+	"LADO_SETUP_ADOPTION_FAILED",
+	"LADO_SETUP_HOOK_PATH_MOVED",
+	"LADO_SETUP_ALREADY_RESTORED",
+	"LADO_SETUP_RESTORE_FAILED",
+	"LADO_SETUP_DRIFT_UNREADABLE",
+	"LADO_SETUP_ITEM_CHANGED",
+	"LADO_SETUP_CHANGE_INVALID",
+	"LADO_SETUP_CONTENT_INVALID",
+	"LADO_SETUP_LOGIN_KEY",
+	"LADO_SETUP_ITEM_EXISTS",
+	"LADO_SETUP_FOLDER_ITEM",
+	"LADO_SETUP_CONFLICT_NOT_FOUND",
+	"LADO_SETUP_CONFLICT_NOT_ACCEPTABLE",
+	"LADO_SETUP_HOME_FAILED",
+	"LADO_SETUP_CODEX_FAILED",
+	"LADO_SETUP_LOAD_FAILED",
+	"LADO_SETUP_ADOPTION_ID_INVALID",
+	"INVALID_JSON",
+];
+
+// Why the inventory does not adopt an entry (backend/internal/domain/lado_setup.go)
+// and why an adoption or a change refuses one (ladosetup adopt.go, changes.go).
+const setupReasons = [
+	"credentials",
+	"login_key",
+	"app_state",
+	"plugins_stay",
+	"tool_state",
+	"no_tui_path",
+	"deprecated",
+	"inline_table",
+	"literal_credentials",
+	"name_unsupported",
+	"unknown_location",
+	"worktrees_do_not_load",
+	"ao_sets_per_session",
+	"repo_tracked",
+	"managed_settings",
+	"symlink",
+	"unreadable",
+	"not_found",
+	"already_managed",
+	"unknown",
+	"missing",
+	"not_taken",
+	"invalid",
+	"not_for_tool",
+	"not_created",
+	"not_text",
+	"too_large",
+	"not_json",
+	"not_object",
+	"front_matter",
+	"server_shape",
+];
+
+// The conflict checks (backend/internal/service/ladosetup/conflicts.go).
+const setupConflicts = [
+	"LADO_SETUP_MCP_NAME_TAKEN",
+	"LADO_SETUP_SKILL_NAME_TAKEN",
+	"LADO_SETUP_ENV_RESERVED",
+	"LADO_SETUP_DENIES_AO",
+	"LADO_SETUP_HOOK_PATH_MOVED",
+	"LADO_SETUP_DENIES_GIT",
+	"LADO_SETUP_HOOK_MAY_BLOCK_TOOLS",
+	"LADO_SETUP_HOOK_ADDS_PROMPT_TEXT",
+	"LADO_SETUP_DEFAULT_MODE_ABOVE_CEILING",
+	"LADO_SETUP_HOOK_SHARES_AO_EVENT",
+	"LADO_SETUP_PROJECT_OVERRIDES",
+	"LADO_SETUP_PLUGIN_HOOKS_UNREADABLE",
+];
+
+const setupKinds = ["instructions", "setting", "skill", "agent", "command", "output_style", "hook_script", "mcp_server"];
+const restoreStatuses = ["restored", "restored_beside", "key_kept", "failed"];
+const setupWarnings = [
+	"LADO_SETUP_DIRECT_USE_STOPS",
+	"LADO_SETUP_BASELINE_FAILED",
+	"LADO_SETUP_MANAGED_WRITE_FAILED",
+	"LADO_SETUP_PREVIEW_INCOMPLETE",
+];
+
+// Every detail a setup message can name, so no placeholder stays unfilled.
+const setupDetails = {
+	tool: "claude-code",
+	kind: "mcp_server",
+	name: "search",
+	reason: "literal_credentials",
+	stage: "items",
+	item: "item-1",
+	key: "apiKeyHelper",
+	path: "hooks/check.sh",
+	field: "baseVersion",
+	limit: 1048576,
+	sessions: [{ id: "demo-7", tool: "claude-code" }],
+	processes: [{ pid: 4242, name: "codex", tool: "codex" }],
+	tools: ["claude-code", "codex"],
+};
+
+// LADO fork: local setup's errors, reasons, conflicts and warnings in the
+// developer's language (step 7).
+describe("LADO local setup errors", () => {
+	const daemon = "The daemon's English text";
+	const en = createFullAppI18n("en").t;
+	const ko = createFullAppI18n("ko").t;
+
+	it("translates every setup code in every language", () => {
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const code of setupCodes) {
+				const text = ladoErrorText(t, new LadoApiError(daemon, code, setupDetails));
+				expect(text, `${locale} ${code}`).not.toBe(daemon);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\./);
+				expect(text, `${locale} ${code}`).not.toMatch(/{{|}}/);
+			}
+		}
+		expect(ladoErrorText(en, new LadoApiError(daemon, "INVALID_JSON"))).toBe(en("lado.error.internal"));
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_ADOPTION_ID_INVALID"))).toBe(en("lado.error.setupNotFound"));
+		// A code from a newer daemon shows the daemon's own words.
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_SOMETHING_NEW"))).toBe(daemon);
+	});
+
+	it("names the sessions and programs to close as one line", () => {
+		const running = new LadoApiError(daemon, "LADO_SETUP_TOOL_RUNNING", {
+			sessions: [
+				{ id: "demo-7", tool: "claude-code" },
+				{ id: "demo-9", tool: "codex" },
+			],
+			processes: [{ pid: 4242, name: "claude", tool: "claude-code" }],
+		});
+		expect(ladoErrorText(en, running)).toBe(
+			"Close these Claude Code and Codex sessions and programs, then try again: demo-7 (Claude Code), demo-9 (Codex), claude (PID 4242)",
+		);
+		expect(ladoErrorText(ko, running)).toBe(
+			"다음 Claude Code·Codex 세션과 프로그램을 닫은 뒤 다시 시도하세요: demo-7 (Claude Code), demo-9 (Codex), claude (PID 4242)",
+		);
+		// Entries that are not objects are left out.
+		expect(
+			ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_TOOL_RUNNING", { sessions: ["demo-7"], processes: [{ pid: 7, name: "codex" }] })),
+		).toBe("Close these Claude Code and Codex sessions and programs, then try again: codex (PID 7)");
+	});
+
+	it("says why an entry or a change is refused, with the field and limit it names", () => {
+		expect(
+			ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_NOT_ADOPTABLE", { tool: "codex", kind: "mcp_server", name: "search", reason: "literal_credentials" })),
+		).toBe("LADO cannot adopt search. It holds a secret in plain text, which would end up on a command line.");
+		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_SETUP_NOT_ADOPTABLE", { name: "review", reason: "already_managed" }))).toBe(
+			"LADO가 review 항목을 채택할 수 없습니다. LADO가 이미 같은 이름의 항목을 관리합니다.",
+		);
+		expect(
+			ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_CHANGE_INVALID", { op: "edit", field: "baseVersion", reason: "missing" })),
+		).toBe("LADO cannot make this setup change. baseVersion is missing.");
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_CONTENT_INVALID", { reason: "too_large", limit: 1048576 }))).toBe(
+			"This content does not fit the item. The content is larger than 1048576 bytes.",
+		);
+		// The desktop app refuses a change without details: no reason, no trailing space.
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_CHANGE_INVALID"))).toBe("LADO cannot make this setup change.");
+		// A reason from a newer daemon shows as is.
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_CONTENT_INVALID", { reason: "something_new" }))).toBe(
+			"This content does not fit the item. something_new",
+		);
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_LOGIN_KEY", { key: "apiKeyHelper" }))).toBe(
+			"Logins stay where Claude Code keeps them, so LADO does not manage apiKeyHelper.",
+		);
+		// Other codes' reasons stay the daemon's words.
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_ISSUE_CREATE_FAILED", { reason: "missing" }))).toBe(
+			"Could not create the issue: missing",
+		);
+	});
+
+	it("says by its stage what a stopped adoption or restore did with the files", () => {
+		const adoption = (details: Record<string, unknown>) => ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_ADOPTION_FAILED", details));
+		expect(adoption({ stage: "copy", adoption: "adoption-1" })).toBe(
+			"The adoption stopped before anything was removed. Your files are where they were.",
+		);
+		expect(adoption({ stage: "remove", adoption: "adoption-1", state: "partial", root: "claude_dir", path: "skills/review" })).toBe(
+			"The adoption stopped while removing the originals. What was moved is managed now, and Restore puts it back.",
+		);
+		expect(adoption({ stage: "record", adoption: "adoption-1" })).toBe(
+			"LADO could not record the adoption, so it put back what it had removed.",
+		);
+		const restore = (details: Record<string, unknown>) => ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_RESTORE_FAILED", details));
+		expect(restore({ stage: "manifest", adoption: "adoption-1" })).toBe(
+			"LADO cannot read this adoption's backup as it was written, so it restored nothing.",
+		);
+		expect(restore({ stage: "put_back", path: "CLAUDE.md" })).toBe(
+			"LADO could not put back CLAUDE.md. What it put back stays where it is; restore again to finish the rest.",
+		);
+		expect(restore({ stage: "record" })).toBe("LADO put back the originals but could not record the restore. Restore again to record it.");
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			const texts = [
+				ladoErrorText(t, new LadoApiError(daemon, "LADO_SETUP_ADOPTION_FAILED", { stage: "copy" })),
+				ladoErrorText(t, new LadoApiError(daemon, "LADO_SETUP_ADOPTION_FAILED", { stage: "remove", state: "partial" })),
+				ladoErrorText(t, new LadoApiError(daemon, "LADO_SETUP_ADOPTION_FAILED", { stage: "record" })),
+			];
+			expect(new Set(texts).size, locale).toBe(3);
+		}
+	});
+
+	it("words every reason, kind, restore status and warning in every language", () => {
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const reason of setupReasons) {
+				const text = ladoSetupReasonText(t, reason, { field: "name", limit: 1048576 });
+				expect(text, `${locale} ${reason}`).not.toBe(reason);
+				expect(text, `${locale} ${reason}`).not.toMatch(/^lado\.|{{/);
+			}
+			for (const [values, label] of [
+				[setupKinds, ladoSetupKindLabel],
+				[restoreStatuses, ladoSetupRestoreStatusText],
+				[setupWarnings, ladoSetupWarningText],
+			] as const) {
+				for (const value of values) {
+					const text = label(t, value);
+					expect(text, `${locale} ${value}`).not.toBe(value);
+					expect(text, `${locale} ${value}`).not.toMatch(/^lado\./);
+				}
+			}
+		}
+		expect(ladoSetupReasonText(en, "worktrees_do_not_load")).toBe("AO worktrees do not load this file.");
+		expect(ladoSetupReasonText(ko, "plugins_stay")).toBe(
+			"플러그인은 Claude Code가 설치한 곳에 그대로 둡니다. 어떤 플러그인을 켤지는 enabledPlugins 설정을 채택해 관리하세요.",
+		);
+		expect(ladoSetupKindLabel(ko, "hook_script")).toBe("hook 스크립트");
+		expect(ladoSetupRestoreStatusText(en, "restored_beside")).toBe("Put beside what is there now");
+		expect(ladoSetupWarningText(ko, "LADO_SETUP_DIRECT_USE_STOPS")).toBe(
+			"이 앱 밖에서 쓰는 Claude Code와 Codex는 옮긴 항목을 더 이상 불러오지 않습니다.",
+		);
+		// None reads empty; values from a newer daemon show as is.
+		expect(ladoSetupReasonText(en, undefined)).toBe("");
+		expect(ladoSetupReasonText(en, "something_new")).toBe("something_new");
+		expect(ladoSetupKindLabel(en, "something_new")).toBe("something_new");
+		expect(ladoSetupRestoreStatusText(en, "something_new")).toBe("something_new");
+		expect(ladoSetupWarningText(en, "LADO_SETUP_SOMETHING_NEW")).toBe("LADO_SETUP_SOMETHING_NEW");
+	});
+
+	it("words every conflict with what it names, and the plugin whose hook it is", () => {
+		const details = {
+			key: "AO_SESSION",
+			rule: "Bash(git push:*)",
+			event: "PreToolUse",
+			matcher: "Bash",
+			path: "hooks/check.sh",
+			plugin: "",
+			mode: "bypassPermissions",
+			ceiling: "auto",
+			item: "item-1",
+		};
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const code of setupConflicts) {
+				const text = ladoSetupConflictText(t, { code, details });
+				expect(text, `${locale} ${code}`).not.toBe(code);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\.|{{/);
+			}
+		}
+		expect(ladoSetupConflictText(en, { code: "LADO_SETUP_DEFAULT_MODE_ABOVE_CEILING", details })).toBe(
+			"The default permission mode, Bypass permissions, is above the permission ceiling, Auto.",
+		);
+		expect(ladoSetupConflictText(en, { code: "LADO_SETUP_DENIES_GIT", details: { rule: "Bash(git push:*)", item: "item-1" } })).toBe(
+			"The permission rule Bash(git push:*) denies git or gh, which workers need for branches and pull requests.",
+		);
+		expect(
+			ladoSetupConflictText(en, { code: "LADO_SETUP_HOOK_SHARES_AO_EVENT", details: { event: "Stop", plugin: "acme@market", item: "item-1" } }),
+		).toBe("A hook runs on Stop, where AO runs its own hook too. From the plugin acme@market.");
+		expect(ladoSetupConflictText(en, { code: "LADO_SETUP_PLUGIN_HOOKS_UNREADABLE", details: { plugin: "acme@market" } })).toBe(
+			"LADO could not read the hooks of the plugin acme@market, so it did not check them.",
+		);
+		expect(ladoSetupConflictText(ko, { code: "LADO_SETUP_ENV_RESERVED", details: { key: "AO_SESSION" } })).toBe(
+			"env 설정이 AO가 세션마다 정하는 AO_SESSION 변수를 설정합니다.",
+		);
+		// A code from a newer daemon shows as is.
+		expect(ladoSetupConflictText(en, { code: "LADO_SETUP_SOMETHING_NEW" })).toBe("LADO_SETUP_SOMETHING_NEW");
+		// The rules that apply list setup conflicts among their problems.
+		expect(ladoPolicyProblemText(en, { code: "LADO_SETUP_MCP_NAME_TAKEN", rules: [], details: { item: "item-1" } })).toBe(
+			"An MCP server named ao takes the name of AO's own tool server.",
+		);
 	});
 });

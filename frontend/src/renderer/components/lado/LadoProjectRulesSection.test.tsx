@@ -117,6 +117,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 		problems: [],
 		blocking: false,
 		snapshotSha256: "e".repeat(64),
+		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
 		...fields,
 	};
 }

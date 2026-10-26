@@ -40,6 +40,7 @@ function execution(fields: Partial<lado.LadoExecution> = {}): lado.LadoExecution
 				{ id: "lado-rule-9", name: "No force push", version: 2 },
 			],
 			prompt: "Never force push.",
+			setup: [],
 		},
 		base: { planSha: "c".repeat(40), dispatchSha: "d".repeat(40), commitsAhead: 2 },
 		startedAt: new Date(Date.now() - 3_600_000).toISOString(),

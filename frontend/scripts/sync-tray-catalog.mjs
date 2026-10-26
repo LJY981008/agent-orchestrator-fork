@@ -38,6 +38,31 @@ const KEYS = [
 	"lado.presence.modeOffTitle",
 	"lado.presence.modeOffDetail",
 	"lado.presence.turnOff",
+	// LADO fork: adopting, restoring and changing local setup, and the setup
+	// item kinds the change confirmation names.
+	"lado.presence.setupAdoptTitle",
+	"lado.presence.setupAdoptDetail",
+	"lado.presence.setupAdoptBlocking",
+	"lado.presence.setupAdopt",
+	"lado.presence.setupRestoreTitle",
+	"lado.presence.setupRestoreDetail",
+	"lado.presence.setupRestore",
+	"lado.presence.setupChangeTitle",
+	"lado.presence.setupChangeDetail",
+	"lado.presence.setupChangeCreate",
+	"lado.presence.setupChangeEdit",
+	"lado.presence.setupChangeOnGlobal",
+	"lado.presence.setupChangeOnProject",
+	"lado.presence.setupChangeOnTask",
+	"lado.presence.setupChangeKeepDrift",
+	"lado.setup.kind.instructions",
+	"lado.setup.kind.setting",
+	"lado.setup.kind.skill",
+	"lado.setup.kind.agent",
+	"lado.setup.kind.command",
+	"lado.setup.kind.outputStyle",
+	"lado.setup.kind.hookScript",
+	"lado.setup.kind.mcpServer",
 ];
 
 const catalogs = {};

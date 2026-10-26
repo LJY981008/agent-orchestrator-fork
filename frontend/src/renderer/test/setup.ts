@@ -447,6 +447,9 @@ if (typeof window !== "undefined") {
 				approvePlan: async () => null,
 				changeRule: async () => null,
 				setLadoMode: async () => null,
+				adoptSetup: async () => null,
+				restoreSetup: async () => null,
+				changeSetup: async () => null,
 			},
 		},
 	};
