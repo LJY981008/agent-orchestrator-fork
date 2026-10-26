@@ -58,6 +58,9 @@ func TestLadoSetupTreeIsCanonical(t *testing.T) {
 	if want := []string{"SKILL.md", "docs/a&b <notes>.md", "scripts/run.sh"}; !slices.Equal(paths, want) {
 		t.Fatalf("Normalize paths = %q, want %q", paths, want)
 	}
+	if got := tree.Size(); got != 18+21+5 {
+		t.Fatalf("Size = %d, want the sum of the file sizes, 44", got)
+	}
 
 	// Another order gives the same bytes and hash.
 	reversed := domain.LadoSetupTree{Entries: slices.Clone(entries)}

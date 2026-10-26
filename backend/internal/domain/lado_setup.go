@@ -119,7 +119,8 @@ type LadoSetupItemVersion struct {
 	// file's bytes, the JSON value, or the tree's canonical JSON
 	// (LadoSetupTree.SHA256).
 	SHA256 string
-	// Size is the content's size in bytes; a tree's is the sum of its files.
+	// Size is the content's size in bytes; a tree's is the sum of its files
+	// (LadoSetupTree.Size).
 	Size int64
 	// Executable marks a file item that runs, such as a hook script. A tree
 	// keeps the mode of each file in its manifest.
@@ -339,6 +340,16 @@ func (t LadoSetupTree) SHA256() (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// Size is the sum of the tree's file sizes, the size of a folder item
+// version.
+func (t LadoSetupTree) Size() int64 {
+	var size int64
+	for _, e := range t.Entries {
+		size += e.Size
+	}
+	return size
 }
 
 // LadoSetupLocation is where the inventory found an entry. The first three
