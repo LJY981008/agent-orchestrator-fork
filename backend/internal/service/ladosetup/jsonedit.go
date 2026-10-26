@@ -162,3 +162,57 @@ func jsonWithMCPServer(data []byte, name string, value []byte) ([]byte, error) {
 	}
 	return jsonWith(data, claudeMCPKey, bytes.TrimSuffix(servers, []byte("\n")))
 }
+
+// memberKeys returns the keys of the object in data in order, or nil when
+// data holds no object.
+func memberKeys(data []byte) []string {
+	members, err := jsonMembers(data)
+	if err != nil {
+		return nil
+	}
+	keys := make([]string, 0, len(members))
+	for _, m := range members {
+		keys = append(keys, m.Key)
+	}
+	return keys
+}
+
+// insertMember inserts m among members where order, the keys of another
+// version of the object, puts it: right after the nearest key before it in
+// order that members have, else right before the nearest one after it, else
+// at the end.
+func insertMember(members []jsonMember, m jsonMember, order []string) []jsonMember {
+	index := func(key string) int {
+		return slices.IndexFunc(members, func(mm jsonMember) bool { return mm.Key == key })
+	}
+	at := len(members)
+	if pos := slices.Index(order, m.Key); pos >= 0 {
+		placed := false
+		for k := pos - 1; k >= 0 && !placed; k-- {
+			if j := index(order[k]); j >= 0 {
+				at, placed = j+1, true
+			}
+		}
+		for k := pos + 1; k < len(order) && !placed; k++ {
+			if j := index(order[k]); j >= 0 {
+				at, placed = j, true
+			}
+		}
+	}
+	return slices.Insert(members, at, m)
+}
+
+// jsonInsert returns the object in data with key, which data must not have,
+// set to value where order puts it (insertMember). The other members keep
+// their order and values.
+func jsonInsert(data []byte, key string, value []byte, order []string) ([]byte, error) {
+	members, err := jsonMembers(data)
+	if err != nil {
+		return nil, err
+	}
+	if slices.ContainsFunc(members, func(m jsonMember) bool { return m.Key == key }) {
+		return nil, fmt.Errorf("the object has %q already", key)
+	}
+	members = insertMember(members, jsonMember{Key: key, Value: value}, order)
+	return formatJSONObject(members, len(bytes.TrimSpace(data)) == 0 || bytes.HasSuffix(data, []byte("\n")))
+}

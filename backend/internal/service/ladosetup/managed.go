@@ -345,6 +345,13 @@ func (s *Service) checkManaged(ctx context.Context, iv domain.LadoSetupItemWithV
 	if err != nil {
 		return err
 	}
+	return s.compareManaged(iv, sum)
+}
+
+// compareManaged reports how a managed copy whose content hashes to sum
+// differs from the item's version, or nil when it holds the version: a file
+// item's executable bit counts too, where the file system keeps one.
+func (s *Service) compareManaged(iv domain.LadoSetupItemWithVersion, sum string) error {
 	if sum != iv.Version.SHA256 {
 		return fmt.Errorf("the managed copy hashes to %s, not %s", sum, iv.Version.SHA256)
 	}

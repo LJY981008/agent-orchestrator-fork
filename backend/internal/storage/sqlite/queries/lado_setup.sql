@@ -44,6 +44,14 @@ SELECT id, tool, kind, name, origin_path, adoption_id, created_at, deleted_at, r
 FROM lado_setup_items
 WHERE id = ?;
 
+-- name: ListLadoSetupItemsForAdoption :many
+-- Every item an adoption recorded, deleted and restored ones included:
+-- restore puts back the originals of all of them.
+SELECT id, tool, kind, name, origin_path, adoption_id, created_at, deleted_at, restored_at
+FROM lado_setup_items
+WHERE adoption_id = ?
+ORDER BY tool, kind, name, id;
+
 -- name: GetLiveLadoSetupItemByName :one
 -- The live item lado_setup_items_live allows for a tool, kind and name.
 SELECT id, tool, kind, name, origin_path, adoption_id, created_at, deleted_at, restored_at

@@ -425,45 +425,62 @@ func verifyBackup(ctx context.Context, dir string, written []byte, plan adoption
 		if be.Tool != pe.Tool || be.Kind != pe.Kind || be.Name != pe.Name {
 			return fail(be, "entry %d is %s %s %s, not %s", i, be.Tool, be.Kind, be.Name, pe.Name)
 		}
-		copyPath := be.copyPath(dir)
-		switch be.Type {
-		case backupTypeFile:
-			size, sum, err := fileSum(copyPath)
-			if err != nil {
-				return fail(be, "%v", err)
-			}
-			if sum != be.SHA256 || size != be.Size || sum != pe.SHA256 {
-				return fail(be, "the copy hashes to %s", sum)
-			}
-		case backupTypeDir:
-			tree, err := backupTree(ctx, copyPath, be.Files)
-			if err != nil {
-				return fail(be, "%v", err)
-			}
-			sum, err := tree.SHA256()
-			if err != nil || sum != be.SHA256 || sum != pe.SHA256 {
-				return fail(be, "the copied folder hashes to %s", sum)
-			}
-		case backupTypeKeys:
-			file, err := readRegularNoLink(copyPath)
-			if err != nil {
-				return fail(be, "%v", err)
-			}
-			if sha256Hex(file) != be.SHA256 || int64(len(file)) != be.Size {
-				return fail(be, "the copied file hashes to %s", sha256Hex(file))
-			}
-			value, err := keyValue(be.Tool, be.Kind, be.Name, file)
-			if err != nil {
-				return fail(be, "%v", err)
-			}
-			if sum := sha256Hex(value); len(be.RemovedKeys) != 1 || sum != be.RemovedKeys[0].SHA256 || sum != pe.SHA256 {
-				return fail(be, "the copied value hashes to %s", sum)
-			}
-		default:
-			return fail(be, "unknown type %q", be.Type)
+		sum, err := checkBackupCopy(ctx, dir, be)
+		if err != nil {
+			return fail(be, "%v", err)
+		}
+		if sum != pe.SHA256 {
+			return fail(be, "the copy's content hashes to %s, not what the preview hashed", sum)
 		}
 	}
 	return nil
+}
+
+// checkBackupCopy reads the backup copy of an entry back: it must match the
+// manifest. It returns the sha256 of the content a version holds: a file's
+// bytes, a folder's tree, or the value of the key, which a keys entry's copy
+// of its whole file must hold.
+func checkBackupCopy(ctx context.Context, dir string, be backupEntry) (string, error) {
+	copyPath := be.copyPath(dir)
+	switch be.Type {
+	case backupTypeFile:
+		size, sum, err := fileSum(copyPath)
+		if err != nil {
+			return "", err
+		}
+		if sum != be.SHA256 || size != be.Size {
+			return "", fmt.Errorf("the copy hashes to %s", sum)
+		}
+		return sum, nil
+	case backupTypeDir:
+		tree, err := backupTree(ctx, copyPath, be.Files)
+		if err != nil {
+			return "", err
+		}
+		sum, err := tree.SHA256()
+		if err != nil || sum != be.SHA256 {
+			return "", fmt.Errorf("the copied folder hashes to %s", sum)
+		}
+		return sum, nil
+	case backupTypeKeys:
+		file, err := readRegularNoLink(copyPath)
+		if err != nil {
+			return "", err
+		}
+		if sha256Hex(file) != be.SHA256 || int64(len(file)) != be.Size {
+			return "", fmt.Errorf("the copied file hashes to %s", sha256Hex(file))
+		}
+		value, err := keyValue(be.Tool, be.Kind, be.Name, file)
+		if err != nil {
+			return "", err
+		}
+		sum := sha256Hex(value)
+		if len(be.RemovedKeys) != 1 || sum != be.RemovedKeys[0].SHA256 {
+			return "", fmt.Errorf("the copied value hashes to %s", sum)
+		}
+		return sum, nil
+	}
+	return "", fmt.Errorf("unknown type %q", be.Type)
 }
 
 // backupTree hashes a copied folder: it must hold exactly the manifest's

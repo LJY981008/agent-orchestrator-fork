@@ -57,6 +57,7 @@ func (s *Service) scan(ctx context.Context) (Inventory, error) {
 	if err != nil {
 		return Inventory{}, err
 	}
+	drift := append(s.editedDrift(ctx, items), newLocalDrift(sc.entries, s.baselineSums())...)
 	// A scan cut short reads folders as unreadable; it is not kept.
 	if err := ctx.Err(); err != nil {
 		return Inventory{}, fmt.Errorf("scan the local setup: %w", err)
@@ -70,6 +71,7 @@ func (s *Service) scan(ctx context.Context) (Inventory, error) {
 		Roots:     sc.roots,
 		Projects:  projects,
 		Adoptions: adoptions,
+		Drift:     drift,
 		OS:        s.deps.GOOS,
 		Verified:  verified,
 		ScannedAt: s.deps.Clock().UTC(),

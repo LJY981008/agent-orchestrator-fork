@@ -483,6 +483,55 @@ func TestLadoSetupRestoreMarksItems(t *testing.T) {
 	}
 }
 
+// Restore puts back the originals of every item an adoption recorded, so
+// the list keeps deleted and restored items and leaves out the others.
+func TestLadoSetupItemsForAdoption(t *testing.T) {
+	s, _ := openLadoAuditStore(t)
+	ctx := context.Background()
+	skill := ladoSetupItem("lado-setup-1", domain.LadoSetupKindSkill, "review")
+	instructions := ladoSetupItem("lado-setup-2", domain.LadoSetupKindInstructions, "CLAUDE.md")
+	other := ladoSetupItem("lado-setup-3", domain.LadoSetupKindAgent, "planner.md")
+	mustAdoptLadoSetup(t, s, "lado-adoption-1", "nonce-1", skill, instructions)
+	mustAdoptLadoSetup(t, s, "lado-adoption-2", "nonce-2", other)
+	mustCreateLadoSetupItem(t, s, ladoSetupItem("lado-setup-4", domain.LadoSetupKindCommand, "ship.md"))
+	deletedAt := ladoSetupAt.Add(time.Minute)
+	if err := s.DeleteLadoSetupItem(ctx, skill.ID, deletedAt, ladoSetupEvent("setup.item_deleted", string(skill.ID), deletedAt)); err != nil {
+		t.Fatal(err)
+	}
+	ids := func(id domain.LadoSetupAdoptionID) []string {
+		t.Helper()
+		items, err := s.ListLadoSetupItemsForAdoption(ctx, id)
+		if err != nil {
+			t.Fatalf("ListLadoSetupItemsForAdoption %s: %v", id, err)
+		}
+		got := []string{}
+		for _, item := range items {
+			if item.AdoptionID != id {
+				t.Fatalf("item %s names adoption %s, want %s", item.ID, item.AdoptionID, id)
+			}
+			got = append(got, string(item.ID))
+		}
+		return got
+	}
+	// Ordered by kind and name: instructions before skill.
+	if got, want := ids("lado-adoption-1"), []string{"lado-setup-2", "lado-setup-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("items of adoption 1 = %v, want %v", got, want)
+	}
+	at := ladoSetupAt.Add(time.Hour)
+	if err := s.RestoreLadoSetupAdoption(ctx, "lado-adoption-1", nil, at, ladoSetupEvent("setup.restored", "lado-adoption-1", at), nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := ids("lado-adoption-1"), []string{"lado-setup-2", "lado-setup-1"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("items of restored adoption 1 = %v, want %v", got, want)
+	}
+	if got, want := ids("lado-adoption-2"), []string{"lado-setup-3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("items of adoption 2 = %v, want %v", got, want)
+	}
+	if got := ids("lado-adoption-9"); len(got) != 0 {
+		t.Fatalf("items of an unknown adoption = %v, want none", got)
+	}
+}
+
 func TestLadoSetupAcceptances(t *testing.T) {
 	s, raw := openLadoAuditStore(t)
 	ctx := context.Background()

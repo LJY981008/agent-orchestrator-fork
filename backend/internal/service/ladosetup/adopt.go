@@ -333,8 +333,8 @@ func (s *Service) plan(ctx context.Context, req []AdoptEntry) (adoptionPlan, err
 	if err := checkAdoptEntries(req); err != nil {
 		return adoptionPlan{}, err
 	}
-	if s.deps.Store == nil || s.deps.Blobs == nil || s.deps.StateDir == "" {
-		return adoptionPlan{}, apierr.Unavailable(CodeUnavailable, "LADO's local setup is not available in this daemon.")
+	if err := s.available(); err != nil {
+		return adoptionPlan{}, err
 	}
 	inv, err := s.Scan(ctx)
 	if err != nil {
@@ -639,11 +639,26 @@ func (s *Service) confirm(req AdoptRequest, plan adoptionPlan) (approval, error)
 	if err != nil {
 		return approval{}, err
 	}
+	return approvalOf(proof), nil
+}
+
+// approvalOf is the approval a presence proof gives: the developer, or the
+// dev presence of a lab.
+func approvalOf(proof domain.LadoPresenceProof) approval {
 	ap := approval{proof: proof, actor: actorHuman}
 	if proof.Dev {
 		ap.actor = actorDevPresence
 	}
-	return ap, nil
+	return ap
+}
+
+// available refuses a service without its store, blobs or state dir, which
+// every change of the setup needs.
+func (s *Service) available() error {
+	if s.deps.Store == nil || s.deps.Blobs == nil || s.deps.StateDir == "" {
+		return apierr.Unavailable(CodeUnavailable, "LADO's local setup is not available in this daemon.")
+	}
+	return nil
 }
 
 // runningDetails lists the sessions by id and the processes by PID and
@@ -1179,18 +1194,10 @@ func (s *Service) saveBaseline(ctx context.Context) error {
 	b := setupBaseline{Format: baselineFormat, SavedAt: inv.ScannedAt, Entries: []baselineEntry{}}
 	for _, e := range inv.Entries {
 		if isOriginal(e.Location) && e.Status == domain.LadoSetupStatusAdoptable {
-			b.Entries = append(b.Entries, baselineEntry{Tool: e.Tool, Kind: e.Kind, Name: e.Name, Path: e.Path, SHA256: e.SHA256})
+			b.Entries = append(b.Entries, baselineOf(e))
 		}
 	}
-	data, err := json.MarshalIndent(b, "", "  ")
-	if err != nil {
-		return err
-	}
-	path := baselinePath(s.deps.StateDir)
-	if err := os.MkdirAll(filepath.Dir(path), privateDir); err != nil {
-		return err
-	}
-	return atomicWrite(path, append(data, '\n'), privateFile, os.Rename)
+	return s.setBaseline(ctx, b)
 }
 
 // stage tells a test which adoption stage starts.

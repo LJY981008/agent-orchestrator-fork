@@ -327,6 +327,20 @@ func (s *Store) LadoSetupItem(ctx context.Context, id domain.LadoSetupItemID) (d
 	return ladoSetupItemFromGen(row), versions, true, nil
 }
 
+// ListLadoSetupItemsForAdoption returns every item an adoption recorded,
+// deleted and restored ones included, ordered by tool, kind and name.
+func (s *Store) ListLadoSetupItemsForAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) ([]domain.LadoSetupItem, error) {
+	rows, err := s.qr.ListLadoSetupItemsForAdoption(ctx, sql.NullString{String: string(id), Valid: true})
+	if err != nil {
+		return nil, fmt.Errorf("list LADO setup items of an adoption: %w", err)
+	}
+	items := make([]domain.LadoSetupItem, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, ladoSetupItemFromGen(row))
+	}
+	return items, nil
+}
+
 // LadoSetupItemVersion returns one item version.
 func (s *Store) LadoSetupItemVersion(ctx context.Context, id domain.LadoSetupItemVersionID) (domain.LadoSetupItemVersion, bool, error) {
 	row, err := s.qr.GetLadoSetupItemVersion(ctx, string(id))

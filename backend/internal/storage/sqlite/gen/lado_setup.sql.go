@@ -542,6 +542,48 @@ func (q *Queries) ListLadoSetupItemVersions(ctx context.Context, itemID string) 
 	return items, nil
 }
 
+const listLadoSetupItemsForAdoption = `-- name: ListLadoSetupItemsForAdoption :many
+SELECT id, tool, kind, name, origin_path, adoption_id, created_at, deleted_at, restored_at
+FROM lado_setup_items
+WHERE adoption_id = ?
+ORDER BY tool, kind, name, id
+`
+
+// Every item an adoption recorded, deleted and restored ones included:
+// restore puts back the originals of all of them.
+func (q *Queries) ListLadoSetupItemsForAdoption(ctx context.Context, adoptionID sql.NullString) ([]LadoSetupItem, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoSetupItemsForAdoption, adoptionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoSetupItem{}
+	for rows.Next() {
+		var i LadoSetupItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.Tool,
+			&i.Kind,
+			&i.Name,
+			&i.OriginPath,
+			&i.AdoptionID,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.RestoredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLiveLadoConflictAcceptances = `-- name: ListLiveLadoConflictAcceptances :many
 SELECT id, code, item_id, detail, content_sha256, scope, scope_id, actor, created_at, revoked_at
 FROM lado_conflict_acceptances

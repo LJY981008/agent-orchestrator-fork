@@ -10,6 +10,7 @@ package ladosetup
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -28,8 +29,14 @@ import (
 // Store keeps the setup LADO manages. *sqlite.Store implements it.
 type Store interface {
 	ListLiveLadoSetupItems(ctx context.Context) ([]domain.LadoSetupItemWithVersion, error)
+	LadoSetupItem(ctx context.Context, id domain.LadoSetupItemID) (domain.LadoSetupItem, []domain.LadoSetupItemVersion, bool, error)
+	AddLadoSetupItemVersion(ctx context.Context, itemID domain.LadoSetupItemID, baseVersion int, version domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
 	ListLadoSetupAdoptions(ctx context.Context) ([]domain.LadoSetupAdoption, error)
+	LadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) (domain.LadoSetupAdoption, bool, error)
+	ListLadoSetupItemsForAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) ([]domain.LadoSetupItem, error)
 	RecordLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
+	RestoreLadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID, report json.RawMessage, at time.Time, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
+	AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error)
 }
 
 // Blobs keeps the content of setup item versions. *ladoblob.Store
@@ -157,6 +164,10 @@ type Inventory struct {
 	Projects []ProjectScan
 	// Adoptions are the adoptions so far, oldest first.
 	Adoptions []domain.LadoSetupAdoption
+	// Drift is what changed outside LADO (plan §8): the managed copies that
+	// no longer hold their item's latest version, then the new setup at the
+	// original locations.
+	Drift []domain.LadoSetupDrift
 	// OS is the GOOS of the scan, and Verified tells for each tool whether
 	// adoption is allowed on it.
 	OS        string
@@ -251,6 +262,7 @@ func (inv Inventory) clone() Inventory {
 	inv.Roots = slices.Clone(inv.Roots)
 	inv.Projects = slices.Clone(inv.Projects)
 	inv.Adoptions = slices.Clone(inv.Adoptions)
+	inv.Drift = slices.Clone(inv.Drift)
 	inv.Verified = maps.Clone(inv.Verified)
 	return inv
 }
