@@ -23,6 +23,7 @@ HAR-012: 관리 항목을 앱에서 바꾸는 모든 길을 한 서비스로 모
 4. 삭제: soft delete(버전·스냅숏 고정은 그대로 — 항목이 쓰인 적이 있으면 그 사실을 응답에). 관리 폴더의 파일은 지운다(blob 은 남김).
 5. 수락: S06 규칙(경고만, 지금 버전의 sha256, 범위). 취소는 `revoked_at`.
 6. 감사 동작 이름은 플랜 §12 그대로.
+6a. S08 회고가 짚은 S07 의 틈을 고친다: `removeOriginal` 의 keys 분기에서 `atomicWrite` 가 rename 뒤 폴더 fsync 실패로 오류를 내면 지금은 실패로 보고 그 키가 기록·관리 사본 없이 원래 파일에서 빠진다. 오류 뒤 원래 파일을 다시 해시해 쓰려던 내용(`out`)과 같으면 성공으로 이어 간다(fsync 실패는 경고 로그). 테스트는 `ops` 대역으로 rename 뒤 오류를 낸다.
 7. 커밋 메시지 예: `feat(lado): change managed setup items with dry runs and confirmation`.
 
 ## 마무리 (모든 단계 공통)
@@ -41,15 +42,16 @@ HAR-012: 관리 항목을 앱에서 바꾸는 모든 길을 한 서비스로 모
 - `TestDeleteKeepsVersionsAndPins` — 삭제 뒤 버전 읽힘, 고정된 스냅숏은 그대로 읽힘
 - `TestBindingTurningOnACodeItemNeedsPresence` — hook 항목의 전역 on·프로젝트 force_on 은 확인 필요, off·force_off 는 불필요
 - `TestLoginKeysCannotBeAdded` — settings 에 로그인 키·로그인 env 를 넣는 만들기·편집 거부
+- `TestAdoptionTreatsAFlushErrorAfterRenameAsDone` — 위 6a: rename 은 됐고 fsync 만 실패하면 그 키는 관리 항목으로 기록되고 복원할 수 있다
 
 ## 수용 게이트
 
 - [ ] S12-G0: 체인 정의·하네스가 태그 이후 바뀌지 않았다
   CHECK: bash .claude/gate/lado-local-setup.sh defs-unchanged
   EXPECT: DEFS_UNCHANGED
-- [ ] S12-G1: 필수 테스트 8개가 격리된 홈에서 통과
-  CHECK: bash .claude/gate/lado-local-setup.sh go-tests-isolated ./internal/service/ladosetup/ TestChangeDryRunWritesNothing TestChangePresenceRules TestEditNeedsTheLatestVersion TestFolderItemsRefuseEdits TestCreateSkillWithOneFile TestDeleteKeepsVersionsAndPins TestBindingTurningOnACodeItemNeedsPresence TestLoginKeysCannotBeAdded
-  EXPECT: GO_TESTS_OK 8/8
+- [ ] S12-G1: 필수 테스트 9개가 격리된 홈에서 통과
+  CHECK: bash .claude/gate/lado-local-setup.sh go-tests-isolated ./internal/service/ladosetup/ TestChangeDryRunWritesNothing TestChangePresenceRules TestEditNeedsTheLatestVersion TestFolderItemsRefuseEdits TestCreateSkillWithOneFile TestDeleteKeepsVersionsAndPins TestBindingTurningOnACodeItemNeedsPresence TestLoginKeysCannotBeAdded TestAdoptionTreatsAFlushErrorAfterRenameAsDone
+  EXPECT: GO_TESTS_OK 9/9
 - [ ] S12-G2: 패키지 전체가 격리된 홈에서 race 없이 통과
   CHECK: bash .claude/gate/lado-local-setup.sh go-race-isolated ./internal/service/ladosetup/
   EXPECT: GO_RACE_OK
