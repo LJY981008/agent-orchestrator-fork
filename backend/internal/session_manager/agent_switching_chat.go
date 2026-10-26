@@ -406,6 +406,10 @@ func (m *Manager) executeChatAgentSwitch(
 			}
 			credentialRecord = prepared
 			m.augmentAgentRuntimeEnv(targetAgent, launchEnv)
+			// LADO fork: the target runs on the home prepareWorkspace built.
+			if err := m.applyLadoSetupHome(launchCtx, targetAgent, id, launchEnv); err != nil {
+				return nil, err
+			}
 			return launchEnv, nil
 		},
 		ProviderConversationID: providerConversationID,

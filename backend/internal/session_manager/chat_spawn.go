@@ -268,6 +268,10 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			}
 			if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
+				// LADO fork: the controller runs on the home prepareWorkspace built.
+				if err := m.applyLadoSetupHome(launchCtx, agent, id, launchEnv); err != nil {
+					return nil, err
+				}
 			}
 			in.record = prepared
 			return launchEnv, nil
@@ -545,6 +549,11 @@ func (m *Manager) resumeChatController(
 			}
 			if agent, ok := m.agents.Agent(rec.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
+				// LADO fork: a resumed controller gets its config home here,
+				// as no prepareWorkspace runs on this path.
+				if err := m.applyLadoSetupHome(launchCtx, agent, rec.ID, launchEnv); err != nil {
+					return nil, err
+				}
 			}
 			rec = prepared
 			return launchEnv, nil

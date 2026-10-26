@@ -469,9 +469,10 @@ type Manager struct {
 	// back without advertising the provider path.
 	openTranscriptFile func(string) (*os.File, error)
 	harnessUseGate     HarnessUseGate
-	// LADO fork: see lado_gate.go.
-	workGate   ports.WorkGate
-	ladoPrompt LadoPromptSection
+	// LADO fork: see lado_gate.go and lado_setup_home.go.
+	workGate      ports.WorkGate
+	ladoPrompt    LadoPromptSection
+	ladoSetupHome ports.LadoSetupHome
 	// lookPath is exec.LookPath in production; tests substitute a stub so
 	// they don't need real binaries on PATH. Returns ports.ErrAgentBinaryNotFound
 	// when the binary is missing so the sentinel propagates through toAPIError.
@@ -6383,6 +6384,10 @@ func (m *Manager) augmentAgentRuntimeEnv(agent ports.Agent, env map[string]strin
 // startup hooks can update the already-created session row), then any optional
 // PreLaunch step. Shared by Spawn and Restore.
 func (m *Manager) prepareWorkspace(ctx context.Context, agent ports.Agent, id domain.SessionID, workspacePath, systemPrompt, systemPromptFile string, agentConfig ports.AgentConfig, env map[string]string) error {
+	// LADO fork: first, so the trust below lands in the config home.
+	if err := m.applyLadoSetupHome(ctx, agent, id, env); err != nil {
+		return err
+	}
 	if err := agent.GetAgentHooks(ctx, ports.WorkspaceHookConfig{
 		SessionID:        string(id),
 		WorkspacePath:    workspacePath,

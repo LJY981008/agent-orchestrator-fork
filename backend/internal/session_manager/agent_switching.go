@@ -1780,7 +1780,8 @@ func safeNativeTranscriptPath(ctx context.Context, path, configDir string) strin
 		return ""
 	}
 	rel, err := filepath.Rel(realConfigDir, realPath)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// LADO fork: or under the folder a linked projects entry names.
+	if (err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator))) && !ladoProjectsLinkHolds(configDir, realPath) {
 		return ""
 	}
 	info, err := os.Stat(realPath)

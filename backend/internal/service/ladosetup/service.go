@@ -37,6 +37,9 @@ type Store interface {
 	RecordLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
 	RestoreLadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID, report json.RawMessage, at time.Time, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
 	AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error)
+	ListLadoSetupGlobalBindings(ctx context.Context) ([]domain.LadoSetupBinding, error)
+	ListLadoSetupBindings(ctx context.Context, scope domain.LadoRuleScope, scopeID string) ([]domain.LadoSetupBinding, error)
+	LadoSetupVersionsForClientRequest(ctx context.Context, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error)
 }
 
 // Blobs keeps the content of setup item versions. *ladoblob.Store
@@ -64,7 +67,7 @@ type Deps struct {
 	Store Store
 	Blobs Blobs
 	// StateDir is AO's state dir. LADO keeps its managed folder, backups and
-	// session homes under <StateDir>/lado.
+	// session config homes under <StateDir>/lado.
 	StateDir string
 	// ClaudeDir is the computer's own Claude folder ($CLAUDE_CONFIG_DIR or
 	// ~/.claude), ClaudeJSON Claude's global config (~/.claude.json, or the
@@ -82,8 +85,8 @@ type Deps struct {
 	// Without it no project is read.
 	Projects Projects
 	// Sessions lists AO's sessions, whose live Claude Code and Codex ones
-	// hold adoption and restore back. RunningTools refuses to answer without
-	// it.
+	// hold adoption and restore back, and whose ended ones lose their config
+	// homes. RunningTools and CleanupHomes refuse to answer without it.
 	Sessions Sessions
 	// Processes lists the computer's processes; nil uses procmem.Snapshot.
 	Processes func(ctx context.Context) ([]procmem.Process, error)
@@ -117,6 +120,11 @@ type Service struct {
 	mu sync.Mutex
 	// last is the last scan, nil before the first.
 	last *Inventory
+
+	// homesMu guards homesPrepared, when each session's config home was last
+	// prepared, which keeps CleanupHomes off a home a launch is using.
+	homesMu       sync.Mutex
+	homesPrepared map[domain.SessionID]time.Time
 }
 
 // New returns a Service.

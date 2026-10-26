@@ -81,6 +81,9 @@ const (
 	CheckManagedCopy = "managed_copy"
 	// CheckCodexOverride parses a Codex server's launch option back.
 	CheckCodexOverride = "codex_override"
+	// CheckHome finds a Claude Code item with its content in a config home
+	// built for the computer's own login.
+	CheckHome = "home"
 )
 
 const adoptionPlanFormat = "lado-setup-adoption/1"
@@ -1095,12 +1098,17 @@ func (s *Service) finish(ctx context.Context, rec recorded) AdoptResult {
 }
 
 // verifyAdopted checks every recorded item structurally (plan §7.7): its
-// managed copy holds the recorded version, and a Codex server's launch
-// option parses back to its content. S09 adds a probe home for Claude.
+// managed copy holds the recorded version, a Codex server's launch option
+// parses back to its content, and a config home built for the computer's own
+// login holds each Claude Code item.
 func (s *Service) verifyAdopted(ctx context.Context, items []adoptedItem) []VerifyCheck {
 	var checks []VerifyCheck
+	var claude []domain.LadoSetupItemWithVersion
 	for _, it := range items {
 		iv := it.iv
+		if iv.Item.Tool == domain.LadoSetupToolClaudeCode {
+			claude = append(claude, iv)
+		}
 		check := VerifyCheck{ItemID: iv.Item.ID, Check: CheckManagedCopy, OK: true}
 		if err := s.checkManaged(ctx, iv); err != nil {
 			check.OK, check.Error = false, err.Error()
@@ -1118,6 +1126,9 @@ func (s *Service) verifyAdopted(ctx context.Context, items []adoptedItem) []Veri
 			check.OK, check.Error = false, err.Error()
 		}
 		checks = append(checks, check)
+	}
+	if len(claude) > 0 {
+		checks = append(checks, s.verifyHome(ctx, claude)...)
 	}
 	return checks
 }

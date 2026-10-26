@@ -258,12 +258,28 @@ func (s *Service) writeManagedTree(path string, v domain.LadoSetupItemVersion) e
 			_ = os.RemoveAll(tmp)
 		}
 	}()
+	if err := s.writeTreeFiles(tmp, tree); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	done = true
+	return nil
+}
+
+// writeTreeFiles writes the files of a tree from their blobs into the empty
+// folder dir.
+func (s *Service) writeTreeFiles(dir string, tree domain.LadoSetupTree) error {
 	for _, e := range tree.Entries {
 		data, err := s.deps.Blobs.Get(e.SHA256, maxBlobBytes)
 		if err != nil {
 			return fmt.Errorf("read %s from its blob: %w", e.Path, err)
 		}
-		dst := filepath.Join(tmp, filepath.FromSlash(e.Path))
+		dst := filepath.Join(dir, filepath.FromSlash(e.Path))
 		if err := os.MkdirAll(filepath.Dir(dst), privateDir); err != nil {
 			return err
 		}
@@ -275,13 +291,6 @@ func (s *Service) writeManagedTree(path string, v domain.LadoSetupItemVersion) e
 			return err
 		}
 	}
-	if err := os.RemoveAll(path); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	done = true
 	return nil
 }
 
