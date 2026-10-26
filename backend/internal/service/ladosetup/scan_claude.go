@@ -158,7 +158,7 @@ func skipDir(d fs.DirEntry) error {
 // claudeSettings lists the keys of settings.json. A link is read through,
 // but its keys are not adopted: adoption rewrites the file.
 func (sc *scanner) claudeSettings(file domain.LadoSetupEntry, typ fs.FileMode) {
-	data, err := os.ReadFile(file.Path)
+	data, err := readRegular(file.Path)
 	if err != nil {
 		sc.unreadable(file, err)
 		return
@@ -175,6 +175,10 @@ func (sc *scanner) claudeSettings(file domain.LadoSetupEntry, typ fs.FileMode) {
 			sc.add(e, domain.LadoSetupStatusNever, domain.LadoSetupReasonLoginKey)
 			continue
 		}
+		if typ&fs.ModeSymlink != 0 {
+			sc.add(e, domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
+			continue
+		}
 		if key == claudeEnvKey {
 			if value, e.KeptInPlace, err = withoutLoginEnv(value); err != nil {
 				sc.unreadable(e, err)
@@ -185,10 +189,6 @@ func (sc *scanner) claudeSettings(file domain.LadoSetupEntry, typ fs.FileMode) {
 				sc.add(e, domain.LadoSetupStatusNever, domain.LadoSetupReasonLoginKey)
 				continue
 			}
-		}
-		if typ&fs.ModeSymlink != 0 {
-			sc.add(e, domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
-			continue
 		}
 		sc.jsonItem(e, value)
 	}
@@ -242,7 +242,7 @@ func (sc *scanner) claudeJSON() {
 		return
 	}
 	root.Found = true
-	data, err := os.ReadFile(path)
+	data, err := readRegular(path)
 	if err != nil {
 		root.Error = err.Error()
 		return

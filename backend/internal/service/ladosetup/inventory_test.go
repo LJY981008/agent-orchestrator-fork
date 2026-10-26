@@ -2,6 +2,7 @@ package ladosetup
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -132,15 +133,39 @@ func TestInventoryListsClaudeItems(t *testing.T) {
 // link's target, so its keys are not adoptable.
 func TestInventoryDoesNotAdoptThroughALinkedSettingsFile(t *testing.T) {
 	h := newFakeHome(t)
-	target := h.write(filepath.Join(h.root, "dotfiles", "settings.json"), `{"model": "opus", "apiKeyHelper": "pass claude"}`)
+	target := h.write(filepath.Join(h.root, "dotfiles", "settings.json"), `{"model": "opus", "apiKeyHelper": "pass claude", "env": {"ANTHROPIC_API_KEY": "sk", "EDITOR": "vim"}}`)
 	h.symlink(target, filepath.Join(h.claude, "settings.json"))
 	h.write(filepath.Join(h.root, "dotfiles", "claude.json"), `{"mcpServers": {"figma": {"url": "https://x"}}}`)
 	h.symlink(filepath.Join(h.root, "dotfiles", "claude.json"), h.claudeJSON)
+	h.write(filepath.Join(h.root, "dotfiles", "config.toml"), "model = \"gpt-5.5\"\n\n[mcp_servers.figma]\nurl = \"https://x\"\n")
+	h.symlink(filepath.Join(h.root, "dotfiles", "config.toml"), filepath.Join(h.codex, "config.toml"))
 
 	inv := mustScan(t, h.deps())
 	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationClaudeDir, domain.LadoSetupKindSetting, "model"), domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
 	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationClaudeDir, domain.LadoSetupKindSetting, "apiKeyHelper"), domain.LadoSetupStatusNever, domain.LadoSetupReasonLoginKey)
+	env := entryAt(t, inv, domain.LadoSetupLocationClaudeDir, domain.LadoSetupKindSetting, "env")
+	wantStatus(t, env, domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
+	if env.KeptInPlace != nil {
+		t.Fatalf("env that is not adopted keeps %v in place", env.KeptInPlace)
+	}
 	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationClaudeJSON, domain.LadoSetupKindMCPServer, "figma"), domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
+	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationCodexHome, domain.LadoSetupKindMCPServer, "figma"), domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
+	wantStatus(t, entryAtPath(t, inv, filepath.Join(h.codex, "config.toml")+"#model"), domain.LadoSetupStatusNotManaged, domain.LadoSetupReasonAOSetsPerSession)
+}
+
+// A file that was a link when it was opened is not hashed as the item's
+// content, even if it looked like a file before.
+func TestFileSumRefusesALink(t *testing.T) {
+	h := newFakeHome(t)
+	target := h.write(filepath.Join(h.root, "secret.txt"), "not the item")
+	link := filepath.Join(h.claude, "CLAUDE.md")
+	h.symlink(target, link)
+	if _, _, err := fileSum(link); !errors.Is(err, errLink) {
+		t.Fatalf("fileSum of a link = %v, want errLink", err)
+	}
+	if size, sum, err := fileSum(target); err != nil || sum != sumOf([]byte("not the item")) || size != 12 {
+		t.Fatalf("fileSum of a file = %d, %s, %v", size, sum, err)
+	}
 }
 
 // What a version cannot hold as it is, LADO lists with the reason: a link
@@ -522,13 +547,19 @@ func TestInventoryKeepsTheLastScan(t *testing.T) {
 	ctx := context.Background()
 	h := newFakeHome(t)
 	h.write(filepath.Join(h.claude, "CLAUDE.md"), "v1")
+	h.write(filepath.Join(h.claude, "settings.json"), `{"env": {"ANTHROPIC_API_KEY": "sk", "EDITOR": "vim"}}`)
 	svc := New(h.deps())
 
 	first, err := svc.Inventory(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	first.Entries[0].Name = "changed by a caller"
+	for i := range first.Entries {
+		first.Entries[i].Name += " changed by a caller"
+		if len(first.Entries[i].KeptInPlace) > 0 {
+			first.Entries[i].KeptInPlace[0] = "changed by a caller"
+		}
+	}
 	h.write(filepath.Join(h.claude, "CLAUDE.md"), "v2")
 	again, err := svc.Inventory(ctx)
 	if err != nil {
@@ -536,6 +567,9 @@ func TestInventoryKeepsTheLastScan(t *testing.T) {
 	}
 	if md := entryAt(t, again, domain.LadoSetupLocationClaudeDir, domain.LadoSetupKindInstructions, "CLAUDE.md"); md.SHA256 != sumOf([]byte("v1")) {
 		t.Fatalf("Inventory read the folder again: %s", md.SHA256)
+	}
+	if env := entryAt(t, again, domain.LadoSetupLocationClaudeDir, domain.LadoSetupKindSetting, "env"); !slices.Equal(env.KeptInPlace, []string{"ANTHROPIC_API_KEY"}) {
+		t.Fatalf("a caller changed the kept scan: env keeps %v", env.KeptInPlace)
 	}
 	rescanned, err := svc.Scan(ctx)
 	if err != nil {

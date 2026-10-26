@@ -107,7 +107,7 @@ func (sc *scanner) codexEntry(ctx context.Context, dir string, d fs.DirEntry) {
 // server. A link is read through, but its servers are not adopted: adoption
 // rewrites the file.
 func (sc *scanner) codexConfig(file domain.LadoSetupEntry, typ fs.FileMode) {
-	data, err := os.ReadFile(file.Path)
+	data, err := readRegular(file.Path)
 	if err != nil {
 		sc.unreadable(file, err)
 		return

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -232,9 +233,10 @@ func treeOf(ctx context.Context, dir string) (domain.LadoSetupTree, error) {
 	return tree, err
 }
 
-// fileSum returns the size and hex sha256 of a file's bytes.
+// fileSum returns the size and hex sha256 of the regular file at path, which
+// must not be a link.
 func fileSum(path string) (int64, string, error) {
-	f, err := os.Open(path)
+	f, err := openRegular(path, false)
 	if err != nil {
 		return 0, "", err
 	}
@@ -245,6 +247,52 @@ func fileSum(path string) (int64, string, error) {
 		return 0, "", err
 	}
 	return n, hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// readRegular reads the regular file at path, through a link.
+func readRegular(path string) ([]byte, error) {
+	f, err := openRegular(path, true)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
+}
+
+// openRegular opens path for reading only when it is a regular file. It
+// opens without blocking, so a named pipe fails instead of waiting for a
+// writer forever, and checks the file it opened, not an earlier look at the
+// path. Unless follow is set, a path that was a link when it was opened fails
+// with errLink.
+func openRegular(path string, follow bool) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	err = checkRegular(f, path, follow)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
+}
+
+func checkRegular(f *os.File, path string, follow bool) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%s is not a regular file", path)
+	}
+	if follow {
+		return nil
+	}
+	// The path is still the file that was opened, and not a link to it.
+	if here, err := os.Lstat(path); err != nil || !os.SameFile(info, here) {
+		return fmt.Errorf("%s %w", path, errLink)
+	}
+	return nil
 }
 
 func sha256Hex(data []byte) string {

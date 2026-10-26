@@ -222,6 +222,9 @@ func (s *Service) unlockScan() { <-s.scanning }
 // scan.
 func (inv Inventory) clone() Inventory {
 	inv.Entries = slices.Clone(inv.Entries)
+	for i := range inv.Entries {
+		inv.Entries[i].KeptInPlace = slices.Clone(inv.Entries[i].KeptInPlace)
+	}
 	inv.Roots = slices.Clone(inv.Roots)
 	inv.Projects = slices.Clone(inv.Projects)
 	inv.Adoptions = slices.Clone(inv.Adoptions)
