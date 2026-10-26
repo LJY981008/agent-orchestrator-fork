@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"os"
 	"runtime"
 	"slices"
 	"sync"
@@ -24,10 +25,11 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
-// Store reads the setup LADO manages. *sqlite.Store implements it.
+// Store keeps the setup LADO manages. *sqlite.Store implements it.
 type Store interface {
 	ListLiveLadoSetupItems(ctx context.Context) ([]domain.LadoSetupItemWithVersion, error)
 	ListLadoSetupAdoptions(ctx context.Context) ([]domain.LadoSetupAdoption, error)
+	RecordLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
 }
 
 // Blobs keeps the content of setup item versions. *ladoblob.Store
@@ -92,9 +94,18 @@ type Deps struct {
 // Service lists the local setup and keeps the last list.
 type Service struct {
 	deps Deps
-	// scanning admits one scan at a time. A caller that waits for it can
-	// give up with its context.
+	// scanning admits one scan at a time, and writing one change of the
+	// setup, such as an adoption. A caller that waits can give up with its
+	// context.
 	scanning chan struct{}
+	writing  chan struct{}
+	// ops change the original locations.
+	ops fileOps
+	// onStage and afterBackup let tests watch an adoption: onStage hears
+	// each stage start, and afterBackup runs between writing the backup and
+	// reading it back.
+	onStage     func(stage string)
+	afterBackup func(dir string)
 
 	mu sync.Mutex
 	// last is the last scan, nil before the first.
@@ -118,7 +129,19 @@ func New(deps Deps) *Service {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
-	return &Service{deps: deps, scanning: make(chan struct{}, 1)}
+	return &Service{
+		deps:     deps,
+		scanning: make(chan struct{}, 1),
+		writing:  make(chan struct{}, 1),
+		ops:      fileOps{removeAll: os.RemoveAll, rename: os.Rename},
+	}
+}
+
+// fileOps remove and replace originals. Tests stand in for them to fail the
+// way a locked file does on Windows.
+type fileOps struct {
+	removeAll func(path string) error
+	rename    func(oldpath, newpath string) error
 }
 
 // Inventory is one scan of the developer's setup (docs/LJY-PRD/HARNESS.md

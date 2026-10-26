@@ -102,24 +102,20 @@ func managedPath(stateDir string, tool domain.LadoSetupTool, kind domain.LadoSet
 	if stateDir == "" {
 		return ""
 	}
-	root := filepath.Join(stateDir, "lado", "harness", "claude")
-	if tool == domain.LadoSetupToolCodex {
-		root = filepath.Join(stateDir, "lado", "harness", "codex")
-	}
 	switch kind {
 	case domain.LadoSetupKindSetting:
-		return filepath.Join(root, "settings.json") + "#" + name
+		return managedKeyFile(stateDir, tool, kind) + "#" + name
 	case domain.LadoSetupKindMCPServer:
 		if tool == domain.LadoSetupToolCodex {
-			return filepath.Join(root, "config.toml") + "#mcp_servers." + name
+			return managedKeyFile(stateDir, tool, kind) + "#mcp_servers." + name
 		}
-		return filepath.Join(root, "mcp.json") + "#mcpServers." + name
+		return managedKeyFile(stateDir, tool, kind) + "#mcpServers." + name
 	case domain.LadoSetupKindInstructions:
-		return filepath.Join(root, filepath.FromSlash(name))
+		return filepath.Join(managedRoot(stateDir, tool), filepath.FromSlash(name))
 	}
 	for _, d := range claudeItemDirs {
 		if d.kind == kind {
-			return filepath.Join(root, d.name, filepath.FromSlash(name))
+			return filepath.Join(managedRoot(stateDir, tool), d.name, filepath.FromSlash(name))
 		}
 	}
 	return ""
