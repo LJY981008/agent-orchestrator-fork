@@ -19,6 +19,7 @@
 #   none <path> <fixed string>...       no string occurs in the file or under the directory -> NONE_OK
 #   locales <key>...                    every key is in all 8 renderer locale files        -> LOCALES_OK
 #   diff-budget <max> <file>...         added+deleted lines in the files since the tag <= max -> BUDGET_OK
+#   gitleaks                            gitleaks v7 on main..HEAD with this tree's config (like CI) -> GITLEAKS_OK
 set -uo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null)}"
@@ -137,6 +138,16 @@ case "$sub" in
     total="$(git diff --numstat "$TAG" HEAD -- "$@" | awk '{a+=$1; d+=$2} END {print a+d+0}')"
     (( total <= max )) || { git diff --numstat "$TAG" HEAD -- "$@"; fail "upstream hook budget exceeded: $total > $max"; }
     echo "BUDGET_OK $total/$max" ;;
+
+  gitleaks)
+    bin="${GITLEAKS_BIN:-/tmp/claude-1000/-home-code-project-agent-orchestrator-fork/9f26009d-a2e0-4373-8e25-bdcc14c16512/scratchpad/gitleaks-bin/gitleaks}"
+    [[ -x "$bin" ]] || fail "gitleaks binary missing: $bin (set GITLEAKS_BIN)"
+    common="$(git rev-parse --path-format=absolute --git-common-dir)" || fail "cannot find the main repository"
+    list="$(mktemp)"; git rev-list main..HEAD > "$list"
+    out="$("$bin" --path="${common%/.git}" --commits-file="$list" --config-path="$ROOT/.github/.gitleaks.toml" --redact 2>&1)"; rc=$?
+    rm -f "$list"
+    (( rc == 0 )) || { printf '%s\n' "$out" | grep -v '^time=' | tail -40; fail "gitleaks found leaks (rc=$rc)"; }
+    echo GITLEAKS_OK ;;
 
   *)
     fail "unknown subcommand: ${sub:-<none>}" ;;
