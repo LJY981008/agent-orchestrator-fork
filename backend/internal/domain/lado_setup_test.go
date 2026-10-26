@@ -288,6 +288,9 @@ func TestLadoSetupNeedsPresence(t *testing.T) {
 		{setting, "statusLine", true},
 		{setting, "enabledPlugins", true},
 		{setting, "extraKnownMarketplaces", true},
+		{setting, "otelHeadersHelper", true},
+		{setting, "enableAllProjectMcpServers", true},
+		{setting, "enabledMcpjsonServers", true},
 		// Everything else.
 		{setting, "model", false},
 		{setting, "modelSettings", false},

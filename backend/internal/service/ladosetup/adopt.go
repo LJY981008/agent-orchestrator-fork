@@ -12,6 +12,7 @@ package ladosetup
 // app state are never touched.
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -886,7 +887,13 @@ func (s *Service) removeOriginal(ctx context.Context, be backupEntry, written ma
 			return err
 		}
 		if err := atomicWrite(be.Path, out, info.Mode().Perm(), s.ops.rename); err != nil {
-			return err
+			// The rename can go through and an error still follow, as when
+			// flushing the folder fails. The file then holds what LADO wrote,
+			// without the key, so the key is removed and must be recorded.
+			if now, rerr := readRegularNoLink(be.Path); rerr != nil || !bytes.Equal(now, out) {
+				return err
+			}
+			s.deps.Log.Warn("LADO rewrote an original without an adopted key but could not flush it", "path", be.RelPath, "err", err)
 		}
 		written[be.Path] = sha256Hex(out)
 		return nil

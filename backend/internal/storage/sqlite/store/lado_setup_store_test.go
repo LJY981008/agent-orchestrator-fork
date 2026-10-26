@@ -662,6 +662,12 @@ func TestApproveLadoPlanPinsSetupVersions(t *testing.T) {
 	if got, ok, err := s.LadoPolicySnapshot(ctx, approval.ID); err != nil || !ok || len(got.SetupVersionIDs) != 2 {
 		t.Fatalf("first snapshot after the delete = (%+v, %v, %v), want both pins", got, ok, err)
 	}
+	// Pins count per item, over all its versions, a deleted item's too.
+	for id, want := range map[domain.LadoSetupItemID]int{claude.ID: 2, codex.ID: 1, "lado-setup-missing": 0} {
+		if n, err := s.CountLadoSetupItemPins(ctx, id); err != nil || n != want {
+			t.Fatalf("CountLadoSetupItemPins(%s) = (%d, %v), want %d", id, n, err, want)
+		}
+	}
 }
 
 func TestLadoSetupVersionsForClientRequest(t *testing.T) {

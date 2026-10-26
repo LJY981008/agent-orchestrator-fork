@@ -321,7 +321,7 @@ func ParseLadoPlan(content []byte, want LadoPlanExpectations) (LadoPlan, []LadoP
 	if !utf8.Valid(content) {
 		return LadoPlan{}, []LadoPlanProblem{{Code: LadoPlanNotText}}
 	}
-	front, body, ok := splitLadoFrontMatter(string(content))
+	front, body, ok := SplitLadoFrontMatter(string(content))
 	if !ok {
 		return LadoPlan{}, []LadoPlanProblem{{Code: LadoPlanMissingFrontMatter}}
 	}
@@ -387,9 +387,10 @@ func ParseLadoPlan(content []byte, want LadoPlanExpectations) (LadoPlan, []LadoP
 	return plan, r.problems
 }
 
-// splitLadoFrontMatter splits "---\n<yaml>\n---\n<body>". A byte order mark
-// and CRLF line ends are accepted.
-func splitLadoFrontMatter(content string) (front, body string, ok bool) {
+// SplitLadoFrontMatter splits "---\n<yaml>\n---\n<body>", the form of a plan
+// file and of a skill's SKILL.md. A byte order mark and CRLF line ends are
+// accepted.
+func SplitLadoFrontMatter(content string) (front, body string, ok bool) {
 	content = strings.TrimPrefix(content, "\ufeff")
 	content = strings.ReplaceAll(content, "\r\n", "\n")
 	rest, found := strings.CutPrefix(content, "---\n")

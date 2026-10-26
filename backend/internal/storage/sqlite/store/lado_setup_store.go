@@ -327,6 +327,16 @@ func (s *Store) LadoSetupItem(ctx context.Context, id domain.LadoSetupItemID) (d
 	return ladoSetupItemFromGen(row), versions, true, nil
 }
 
+// CountLadoSetupItemPins counts the rule snapshot pins that name a version of
+// an item, live or not. A pinned version stays readable after the item ends.
+func (s *Store) CountLadoSetupItemPins(ctx context.Context, id domain.LadoSetupItemID) (int, error) {
+	n, err := s.qr.CountLadoPolicySnapshotSetupForItem(ctx, string(id))
+	if err != nil {
+		return 0, fmt.Errorf("count LADO setup item pins: %w", err)
+	}
+	return int(n), nil
+}
+
 // ListLadoSetupItemsForAdoption returns every item an adoption recorded,
 // deleted and restored ones included, ordered by tool, kind and name.
 func (s *Store) ListLadoSetupItemsForAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) ([]domain.LadoSetupItem, error) {

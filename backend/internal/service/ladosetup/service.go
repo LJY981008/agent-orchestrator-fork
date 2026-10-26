@@ -24,6 +24,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 )
 
 // Store keeps the setup LADO manages. *sqlite.Store implements it.
@@ -41,6 +42,21 @@ type Store interface {
 	ListLadoSetupBindings(ctx context.Context, scope domain.LadoRuleScope, scopeID string) ([]domain.LadoSetupBinding, error)
 	LadoSetupVersionsForClientRequest(ctx context.Context, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error)
 	ListLiveLadoConflictAcceptances(ctx context.Context) ([]domain.LadoConflictAcceptance, error)
+	CreateLadoSetupItem(ctx context.Context, item domain.LadoSetupItem, version domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
+	DeleteLadoSetupItem(ctx context.Context, id domain.LadoSetupItemID, at time.Time, event domain.LadoAuditEvent) error
+	CountLadoSetupItemPins(ctx context.Context, id domain.LadoSetupItemID) (int, error)
+	SetLadoSetupBinding(ctx context.Context, b domain.LadoSetupBinding, inherit bool, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
+	AcceptLadoConflict(ctx context.Context, a domain.LadoConflictAcceptance, event domain.LadoAuditEvent) error
+	RevokeLadoConflictAcceptance(ctx context.Context, id domain.LadoConflictAcceptanceID, at time.Time, event domain.LadoAuditEvent) error
+	// LadoTask reads the task a binding or an acceptance names.
+	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
+}
+
+// Policy finds what a setup change reaches: the LADO projects whose rules
+// and setup it changes and the approved tasks it sends back to review.
+// *ladopolicy.Service implements it.
+type Policy interface {
+	ImpactOfSetupChange(ctx context.Context, change ladopolicy.SetupChange) (ladopolicy.Impact, error)
 }
 
 // Blobs keeps the content of setup item versions. *ladoblob.Store
@@ -121,6 +137,8 @@ type Service struct {
 	mu sync.Mutex
 	// last is the last scan, nil before the first.
 	last *Inventory
+	// policy finds what a change reaches; nil until SetPolicy.
+	policy Policy
 
 	// homesMu guards homesPrepared, when each session's config home was last
 	// prepared, which keeps CleanupHomes off a home a launch is using.
@@ -151,6 +169,16 @@ func New(deps Deps) *Service {
 		writing:  make(chan struct{}, 1),
 		ops:      fileOps{removeAll: os.RemoveAll, rename: os.Rename},
 	}
+}
+
+// SetPolicy gives the service the rule policy that finds what a setup change
+// reaches. The daemon sets it once both services exist, since the policy
+// reads the setup through this service. Until then a change reaches
+// nothing.
+func (s *Service) SetPolicy(p Policy) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.policy = p
 }
 
 // fileOps remove and replace originals. Tests stand in for them to fail the

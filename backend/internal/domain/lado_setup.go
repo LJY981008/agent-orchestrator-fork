@@ -563,8 +563,10 @@ var ladoSetupMovedSettings = []string{
 // LadoSetupNeedsPresence reports whether creating, editing, turning on or
 // keeping the drift of an item needs the desktop app's confirmation
 // (setup.change.requires_presence). Hook scripts, MCP servers and the
-// settings keys hooks, permissions, env, statusLine, enabledPlugins and
-// extraKnownMarketplaces can run code or widen access.
+// settings keys hooks, permissions, env, statusLine, enabledPlugins,
+// extraKnownMarketplaces, otelHeadersHelper (it runs a script),
+// enableAllProjectMcpServers and enabledMcpjsonServers (they approve a
+// project's MCP servers) can run code or widen access.
 func LadoSetupNeedsPresence(kind LadoSetupKind, name string) bool {
 	switch kind {
 	case LadoSetupKindHookScript, LadoSetupKindMCPServer:
@@ -578,7 +580,10 @@ func LadoSetupNeedsPresence(kind LadoSetupKind, name string) bool {
 
 // ladoSetupPresenceSettings are the Claude settings keys whose changes need
 // presence.
-var ladoSetupPresenceSettings = []string{"hooks", "permissions", "env", "statusLine", "enabledPlugins", "extraKnownMarketplaces"}
+var ladoSetupPresenceSettings = []string{
+	"hooks", "permissions", "env", "statusLine", "enabledPlugins", "extraKnownMarketplaces",
+	"otelHeadersHelper", "enableAllProjectMcpServers", "enabledMcpjsonServers",
+}
 
 // LadoSetupDeliveryVerified reports whether sessions on goos were measured to
 // get the tool's adopted setup (docs/LJY-PRD/HARNESS.md §9.4; the probe in
