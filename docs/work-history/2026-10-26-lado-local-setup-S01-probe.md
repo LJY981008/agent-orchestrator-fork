@@ -72,12 +72,59 @@
 
 ## Before — 수행 전 실측
 
-(단계 시작 때 채운다: 시작 HEAD, 환경, 바이너리·어댑터 버전과 경로, 실제 Claude 폴더와 `~/.claude.json` 의 경로)
+- 시작 HEAD: `0e7bf9ee8`(`chore(lado): define the step 7 chain for local setup adoption`, 태그 `lado-step7-chain-def` 와 같음), 트리 깨끗. `backend/internal/service/ladosetup/` 없음.
+- 환경: Linux(커널 7.0.0-31-generic), go1.27.1(스크래치 toolchain, PATH 맨 앞), Node v24.21.0, umask 0022, TZ=UTC. 이 단계는 체인 러너의 `claude -p` 안에서 돌아 환경에 `CLAUDECODE`·`CLAUDE_CODE_*`(entrypoint, session id, messaging socket·token 등)·`CLAUDE_PROJECT_DIR`·`CHAIN_RUN` 이 있다. `CLAUDE_CONFIG_DIR`·`CLAUDE_SECURESTORAGE_CONFIG_DIR`·`ANTHROPIC_*`·`CODEX_*` 는 없다.
+- claude: `command -v claude` = `/home/code/.local/node/bin/claude` → `readlink -f` = `/home/code/.local/node/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe`, `claude --version` = `2.1.283 (Claude Code)`.
+- codex: 게이트 도우미 기본값 `…/eeda879d-…/scratchpad/tools/codex-cli/node_modules/.bin/codex` → `@openai/codex/bin/codex.js`(node 실행 스크립트), `codex --version` = `codex-cli 0.163.0`.
+- ACP: `npm --prefix frontend run build:acp-runtime`(33 s, `npm ci` + Node 아카이브 내려받기·체크섬) → `frontend/resources/acp-runtime/node/bin/node` = v22.23.2, `node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js`, 어댑터 `package.json` 0.70.0(의존 `@anthropic-ai/claude-agent-sdk` 0.3.232, `@agentclientprotocol/sdk` 1.3.0), 빌드 스크립트의 패치 6개 적용. `.gitignore:79` 가 무시한다.
+- 실제 Claude 폴더 = `$HOME/.claude` = `/home/code/.claude`(`CLAUDE_CONFIG_DIR` 없음). 그 안 `.credentials.json` 은 일반 파일(0600, 링크 1). 실제 `~/.claude.json` = `/home/code/.claude.json`(124,737 B, 0600, user MCP 서버 없음).
 
 ## After — 수행 후 실측
 
-(커밋, 각 실측의 실제 출력 요약 — `auth status` 필드, init 이벤트의 목록 키와 값, ACP 알림 모양, `config/read` origin 모양 —, 엔트리와 다르게 한 것과 이유, 게이트 결과)
+- 코드 커밋 `b229b809d` `test(lado): probe setup delivery with the real claude and codex` — 2 파일, +1085.
+  - `helpers_test.go`: `requireProbe`(변수 없으면 skip, 그 뒤 바이너리·빌드·로그인 없음은 실패), 바이너리 찾기(claude 는 `LookPath`+`EvalSymlinks`, codex 는 `AO_LADO_SETUP_PROBE_CODEX` 아니면 PATH, ACP 런타임은 `AO_ACP_RUNTIME_DIR` 아니면 `frontend/resources/acp-runtime`), 실제 폴더·`~/.claude.json`·보안 저장 폴더 규칙, 랩(`newClaudeLab`: `real` 대역, 홈의 상태 링크 12개, 표지어 CLAUDE.md, SessionStart hook, 스킬·에이전트·명령·출력 스타일, `.claude.json` 복사본에 `mcpServers` 교체와 작업 폴더 trust), `auth status`, 줄 단위 stdio JSON-RPC 도우미(`startPeer`·`call`·`notify`·`waitNotification` — 자식의 요청은 -32601 로 거절, 정리 때 프로세스 트리를 죽이고 종료를 기다림).
+  - `probe_test.go`: 세 테스트와 print 턴·대화 기록 찾기·홈 항목 기록.
+- 실측 결과(`go test -v`, 3/3 PASS — TUI 4.1 s, Chat 1.1 s, Codex 0.2 s; 같은 결과로 세 번 돌았다):
+  - **TUI** (`TestDeliveryProbeClaudeTUI`)
+    - `auth status --json`, 변수 있음: 키 `analyticsDisabled, apiProvider, authMethod, configDirectory, email, loggedIn, orgId, orgName, projectsDirectory, subscriptionType`; `loggedIn=true`, `authMethod="claude.ai"`, `apiProvider="firstParty"`, `subscriptionType="max"`, exit 0. `configDirectory`·`projectsDirectory` 는 랩 홈과 그 `projects`(계정 값은 적지 않는다).
+    - 변수 없음(대조): 키 `analyticsDisabled, apiProvider, authMethod, configDirectory, loggedIn, projectsDirectory`; `loggedIn=false`, `authMethod="none"`, exit 1.
+    - `system`/`init` 키: `agents analytics_disabled apiKeySource capabilities claude_code_version cwd fast_mode_disabled_reason fast_mode_state mcp_servers memory_paths messaging_socket_path model output_style per_turn_effort_active permissionMode plugins product_feedback_disabled session_id skills slash_commands subtype terminal_slash_commands tools type uuid view_mode`.
+    - 목록: `lado-probe-skill` ∈ `skills`·`slash_commands`; `lado-probe-cmd` ∈ `slash_commands`; `lado-probe-agent` ∈ `agents`; `lado-probe-mcp` ∈ `mcp_servers` 로 `{name: "lado-probe-mcp", source: "user", status: "failed"}`(`command: "true"` 라 실패가 정상). 출력 스타일: **init 에 없음** — `output_style="default"`(활성 스타일 이름 하나, 목록 없음).
+    - 그 밖: `apiKeySource="none"`(OAuth), `model="claude-haiku-4-5-20251001"`, `permissionMode="default"`, `memory_paths={auto: <홈>/projects/<cwd 이름>/memory/}`.
+    - hook: 스트림에 `system`/`hook_started`·`hook_response`(`hook_event="SessionStart"`, `hook_name="SessionStart:startup"`), `<lab>/hook-ran` 생김.
+    - `result`: `subtype="success"`, `is_error=false`, `num_turns=1`, 텍스트 = 표지어 그대로(`LADOPROBE-<8 hex>`).
+    - 대화 기록: `<lab>/real/projects/-tmp-TestDeliveryProbeClaudeTUI…-001-work/<init session_id>.jsonl` — 홈의 `projects` 링크를 통해 대역 쪽에 씀. 실제 `~/.claude/projects/` 에 같은 이름 항목 없음. 실행 뒤 홈 상태 링크 12개 모두 링크 그대로.
+    - 자격 증명: 홈에 `.credentials.json` 없음, 실제 `.credentials.json` 은 일반 파일 그대로.
+    - Claude 가 홈에 더한 항목: `backups`, `cache`. 홈의 `.claude.json` 을 다시 씀(해시 바뀜).
+  - **Chat** (`TestDeliveryProbeClaudeChat`, `node dist/index.js`, 환경 = 랩 환경 + `CLAUDE_CODE_EXECUTABLE=<claude.exe 실제 경로>`)
+    - `initialize`(protocolVersion 1, fs·terminal false) → `protocolVersion=1`, `agentInfo={name: "@agentclientprotocol/claude-agent-acp", title: "Claude Agent", version: "0.70.0"}`, `authMethods` 없음.
+    - `session/new {cwd: <lab>/work, mcpServers: []}` → 키 `configOptions, modes, sessionId`.
+    - 알림 모양: `{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"…","update":{"sessionUpdate":"available_commands_update","availableCommands":[{"name","description","input"}, …]}}}` — 명령 55개, 1 s 안. `lado-probe-cmd` = `{name: "lado-probe-cmd", description: "LADO delivery probe command (user)", input: null}`. 스킬도 명령으로 옴: `{name: "lado-probe-skill", description: "LADO delivery probe skill. Never use it. (user)", input: null}`. 프롬프트·모델 호출 없음.
+  - **Codex** (`TestDeliveryProbeCodex`, `CODEX_HOME=<lab>/codex`, `codex -c 'mcp_servers.lado_probe={command="true",args=[]}' app-server`)
+    - `initialize` 결과 키 `codexHome, platformFamily, platformOs, userAgent`; 이어서 `initialized` 알림.
+    - `config/read {includeLayers: true}` 의 `layers`: `sessionFlags`(file 없음, `version="sha256:…"`), `user`(file `<lab>/codex/config.toml`), `system`(file `/etc/codex/config.toml` — 파일이 없어도 층은 나온다).
+    - `origins`: `mcp_servers.lado_probe.command` → `{name: {type: "sessionFlags"}, version: "sha256:…"}`; `mcp_servers.lado_file.command` → `{name: {type: "user", file: "<lab>/codex/config.toml"}, version: "sha256:…"}`. origin 은 잎 값 키 단위이고, 빈 배열 `args=[]` 에는 origin 이 없다.
+    - 실효 `config.mcp_servers.lado_probe = {args: [], command: "true", enabled: true, environment_id: "local", tool_timeout_sec: null}`(기본값이 채워짐), `lado_file` 도 같은 모양. 로그인 없이 app-server 기동과 `config/read` 가 된다.
+- 추가 실측(스크래치 랩, 커밋 안 함, 끝나고 실제 `~/.claude.json` 복사본과 함께 삭제): 홈에 `.claude.json` 이 **없어도** `auth status` 는 `loggedIn=true`, `authMethod="claude.ai"` — 로그인은 보안 저장 폴더의 `.credentials.json` 만으로 된다. 그때 Claude 는 홈에 새 `.claude.json`·`.claude.json.lock`·`backups/` 를 만든다.
+- 엔트리와 다르게 한 것과 이유:
+  1. 환경은 테스트 프로세스 환경을 그대로 덧씌우지 않고 부모의 `CLAUDE*`·`ANTHROPIC_*`·`CODEX_*` 변수를 뺀 뒤 랩 변수를 더했다(`cleanEnviron`). 체인 단계는 Claude Code 세션 안에서 돌아 `CLAUDECODE`·`CLAUDE_CODE_*` 가 있는데 데몬의 실행은 이것을 물려받지 않고, 부모에 로그인 변수가 있으면 "변수 없음 → 로그아웃" 대조가 뜻을 잃는다. 토큰 변수 이름은 코드에 쓰지 않는다(접두어로만 뺀다, G3).
+  2. `CLAUDE_SECURESTORAGE_CONFIG_DIR` 값 규칙에 플랜 결정 b 의 macOS 분기를 넣었다(`CLAUDE_CONFIG_DIR` 이 없고 macOS 면 `""`). Linux 에서는 엔트리와 같은 `/home/code/.claude`. 9단계가 macOS 에서 고치지 않고 돌리게 하려는 것.
+  3. 이식성: 랩 루트는 `EvalSymlinks(t.TempDir())`(macOS `/var`), trust 키는 AO 와 같이 `filepath.ToSlash(work)`, hook 은 `touch "<슬래시 경로>"`(Windows 의 Git Bash), Windows 의 Node 경로 `node/node.exe`.
+  4. 엔트리에 없던 실패 조건 셋: 대화 기록 파일 이름 = init 의 `session_id`, 실행 뒤 홈 상태 링크가 그대로 링크, 실제 `~/.claude/projects/` 에 랩 작업 폴더 항목이 생기지 않음. 로그만 남긴 것: 홈 `.claude.json` 재작성 여부, Claude 가 홈에 더한 항목, `memory_paths`, hook 이벤트, ACP 의 스킬 명령.
+- 그 밖 확인: `golangci-lint run ./internal/service/ladosetup/...` 0 issues(rules-core 세션 스크래치의 v2 빌드), `gofmt -l` 출력 없음, 실행 뒤 남은 어댑터·app-server·claude 프로세스 없음, `/tmp/TestDeliveryProbe*` 남지 않음.
+- 게이트(HEAD `b229b809d`): `GATES=6 MET=6 UNMET=0`(7.8 s — G1 이 세 실측을 실제 바이너리로 한 번 더 돌림). 이 엔트리 커밋 뒤 같은 명령으로 다시 돌려 증거를 새 HEAD 에 묶는다.
 
 ## 비교/회고
 
-(전제 (1)·(2)가 맞았는지, 틀린 부분, 남은 틈, 다음 단계 메모 — 특히 S09(홈 모양에서 꼭 필요했던 것), S10(`-c` 값 모양), S13(ACP 경로), 9단계의 Windows·macOS 실측에 쓸 명령)
+- **전제 (1) 맞음**(Linux, claude 2.1.283, 어댑터 0.70.0): `CLAUDE_CONFIG_DIR=<홈>` + `CLAUDE_SECURESTORAGE_CONFIG_DIR=<실제 폴더>` 로 로그인이 유지되고, 둘째 변수를 빼면 로그아웃이다 — 그 변수가 로그인을 나른다. 홈의 CLAUDE.md·settings hook·스킬·에이전트·명령·MCP 가 print 모드에서 읽히고, ACP 어댑터도 홈의 명령(과 스킬)을 알린다. 대화 기록은 상태 링크를 따라 실제 쪽에 쓰이고 홈에는 자격 증명 파일이 생기지 않는다.
+- **전제 (2) 맞음**(codex 0.163.0): `-c mcp_servers.<이름>=<인라인 표>` 는 `sessionFlags` 층, `CODEX_HOME/config.toml` 의 표는 `user` 층, 실효 config 에 둘 다 있다.
+- 틀린 부분: 없음. 남은 틈:
+  - 출력 스타일은 init 에 목록이 없어 이 실측으로 로드 여부를 못 본다(활성 스타일 이름만). 필요하면 홈 settings 에 `"outputStyle": "lado-probe-style"` 을 넣고 init `output_style` 를 보면 된다.
+  - TUI 는 print 모드(같은 엔진)로 쟀다. 대화형 TUI 의 trust 대화상자는 거치지 않았다 — AO 는 trust 를 `<CLAUDE_CONFIG_DIR>/.claude.json` 에 쓰므로 홈 준비 → trust 쓰기 순서(플랜 §9)가 그대로 맞다.
+  - Chat 은 명령 목록까지만 쟀다(프롬프트 없음). 같은 변수로 실제 턴이 도는 것은 print 모드에서 확인했다.
+  - Windows·macOS 는 이 단계 밖(9단계).
+- 다음 단계 메모:
+  - **S09(홈 모양)**: 꼭 필요했던 것은 두 변수뿐 — 로그인에 `.claude.json` 복사본은 필요 없다(스크래치 확인). 복사본은 base 의 `mcpServers`·온보딩 상태·trust 를 위한 것이다. 상태 항목을 심링크로 두면 Claude 는 링크를 바꾸지 않고 그 안에 쓴다(대화 기록, 자동 메모리 `projects/<cwd>/memory/`). Claude 는 홈에 `backups/`·`cache/` 를 만들고 `.claude.json` 을 다시 쓴다(`.claude.json.lock` 도 생길 수 있다) — 재조정은 이것들을 지우지 않는다. 홈 `.claude.json` 의 `mcpServers` 는 init 에 `source: "user"` 로 나온다. 홈에는 `.credentials.json` 이 생기지 않으므로 홈 정리 때 자격 증명을 신경 쓸 일이 없다.
+  - **S10(`-c` 값 모양)**: `mcp_servers.<이름>={command="true",args=[]}` 한 인자(TOML 인라인 표, `-c` 를 하위 명령 앞에 둠)가 그대로 받아들여졌다. 실효 값에 `enabled: true`·`environment_id: "local"` 기본이 붙고, origin 은 잎 키(`mcp_servers.<이름>.command`) 단위다. 이름은 `[A-Za-z0-9_-]` 로 제한하니 키 따옴표가 필요 없다.
+  - **S13(ACP 경로)**: AO 의 `resolveRuntime` 경로(`<runtime>/node/bin/node` + `…/claude-agent-acp/dist/index.js`)에 `CLAUDE_CODE_EXECUTABLE` 만 더한 환경으로 홈을 따른다 — 홈 변수 두 개가 어댑터 프로세스 환경에 있으면 어댑터·SDK 가 자식 claude 에 그대로 넘긴다. `session/new` 의 `mcpServers: []` 여도 홈의 MCP·명령은 claude 쪽에서 읽힌다.
+  - **9단계(Windows·macOS 실측)**: `npm --prefix frontend run build:acp-runtime` 뒤 `bash .claude/gate/lado-local-setup.sh probe TestDeliveryProbeClaudeTUI TestDeliveryProbeClaudeChat TestDeliveryProbeCodex`, 또는 `cd backend && AO_LADO_SETUP_PROBE=1 AO_LADO_SETUP_PROBE_CODEX=<codex> go test -count=1 -v -timeout 15m -run '^TestDeliveryProbe' ./internal/service/ladosetup/probe/`. macOS 는 보안 저장 변수 `""` 분기가 들어 있다. Windows 는 심링크(개발자 모드), hook 의 `touch`(Git Bash), codex 경로(`codex.exe` 또는 npm 실행 스크립트)를 먼저 확인한다.
