@@ -1366,7 +1366,7 @@ func (m *Manager) prepareTargetActivation(ctx context.Context, store ports.Agent
 			return preparedTargetActivation{}, ErrTargetAgentUnauthorized
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
+	systemPrompt, err := m.buildSystemPrompt(withLadoPromptHarness(ctx, harness), rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
 	if err != nil {
 		return preparedTargetActivation{}, fmt.Errorf("system prompt: %w", err)
 	}

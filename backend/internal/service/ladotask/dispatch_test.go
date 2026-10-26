@@ -157,7 +157,7 @@ func TestWorkerSectionComesFromTheSnapshot(t *testing.T) {
 	source := PromptSource{Settings: pf.store, Sessions: pf.store, Policies: pf.store}
 	section := func(t *testing.T, kind domain.SessionKind, id domain.SessionID) string {
 		t.Helper()
-		got, err := source.Section(ctx, kind, "demo", id)
+		got, err := source.Section(ctx, kind, "demo", id, domain.HarnessClaudeCode)
 		if err != nil {
 			t.Fatalf("Section(%s, %s): %v", kind, id, err)
 		}

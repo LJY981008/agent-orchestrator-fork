@@ -385,6 +385,10 @@ type ChatMCPServerConfig struct {
 	Env     map[string]string
 	URL     string
 	Headers map[string]string
+	// CodexConfig holds the server's other keys of a Codex [mcp_servers.<name>]
+	// table, which only the Codex app-server driver sends (LADO fork: adopted
+	// Codex servers). It is never changed after it is built.
+	CodexConfig map[string]any
 }
 
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
