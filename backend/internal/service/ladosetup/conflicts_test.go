@@ -425,6 +425,10 @@ func TestMovedPathReferences(t *testing.T) {
 		{"cat " + abs + "/CLAUDE.md", []string{"CLAUDE.md"}, `cat "$CLAUDE_CONFIG_DIR"/CLAUDE.md`},
 		{`"$HOME"/.claude/hooks/check.sh`, []string{"hooks/check.sh"}, `"$CLAUDE_CONFIG_DIR"/hooks/check.sh`},
 		{"X=~/.claude/hooks/check.sh run; cat ~/.claude/CLAUDE.md", []string{"hooks/check.sh", "CLAUDE.md"}, `X="$CLAUDE_CONFIG_DIR"/hooks/check.sh run; cat "$CLAUDE_CONFIG_DIR"/CLAUDE.md`},
+		{"bash ~/.claude//hooks/check.sh", []string{"hooks/check.sh"}, `bash "$CLAUDE_CONFIG_DIR"//hooks/check.sh`},
+		{"bash ~/.claude/./hooks/.//check.sh", []string{"hooks/check.sh"}, `bash "$CLAUDE_CONFIG_DIR"/./hooks/.//check.sh`},
+		// The shell leaves this "~" alone, but the program may expand it.
+		{"tool --config=~/.claude/CLAUDE.md", []string{"CLAUDE.md"}, `tool --config="$CLAUDE_CONFIG_DIR"/CLAUDE.md`},
 		{`~/.claude/hooks/my\ check.sh`, nil, ""},
 		// Entries that stay, and names that only start like a moved one.
 		{"bash ~/.claude/hooks/other.sh", nil, ""},

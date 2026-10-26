@@ -664,11 +664,13 @@ type pathRef struct {
 
 // movedPathReferences finds where command names a moved entry of the Claude
 // folder: the folder, a slash and the entry's name, followed by the end of
-// the word or by a slash into the entry. The folder is "~/.claude" (with the
-// "~" unquoted at the start of a word, or after "=" or ":"), "$HOME/.claude"
-// or "${HOME}/.claude" (not in single quotes) or claudeDir itself (in any
-// quotes). A quoted "~" is a plain character to the shell and names nothing.
-// The references come in the order they appear.
+// the word or by a slash into the entry. Runs of "/" and "./" may stand
+// between the parts, as the file system reads them; ".." is not resolved.
+// The folder is "~/.claude" (with the "~" unquoted at the start of a word, or
+// after "=" or ":"), "$HOME/.claude" or "${HOME}/.claude" (not in single
+// quotes) or claudeDir itself (in any quotes). A quoted "~" is a plain
+// character to the shell and names nothing. The references come in the order
+// they appear.
 func movedPathReferences(command, claudeDir string, movedNames []string) []pathRef {
 	if len(movedNames) == 0 || command == "" {
 		return nil
@@ -681,13 +683,13 @@ func movedPathReferences(command, claudeDir string, movedNames []string) []pathR
 		if n == 0 || i+n >= len(chars) || chars[i+n].b != '/' {
 			continue
 		}
-		name := movedNameAt(chars, i+n+1, movedNames)
+		name, end := movedNameAt(chars, i+n+1, movedNames)
 		if name == "" {
 			continue
 		}
 		first, last := chars[i], chars[i+n-1]
 		refs = append(refs, pathRef{Start: first.at, End: last.at + 1, Name: name, Replacement: configDirQuoted(first.quote, last.quote)})
-		i += n + len(name)
+		i = end - 1
 	}
 	return refs
 }
@@ -796,8 +798,10 @@ func claudeFolderAt(chars []shellByte, i int, dirs []string) int {
 	return 0
 }
 
-// wordStart reports whether chars[i] starts a word, or the value after "="
-// or ":", where the shell expands "~".
+// wordStart reports whether chars[i] starts a word, or follows "=" or ":",
+// where the shell expands "~" in an assignment. Outside an assignment, as in
+// --config=~/x, the shell leaves the "~" alone but the program may expand
+// it, so it counts as well: the rewritten command works either way.
 func wordStart(chars []shellByte, i int) bool {
 	if i == 0 {
 		return chars[0].at == 0
@@ -834,20 +838,57 @@ func hasLiteral(chars []shellByte, i int, s string) bool {
 	return true
 }
 
-// movedNameAt returns the longest moved name chars spell from j that ends a
-// path segment there, or "".
-func movedNameAt(chars []shellByte, j int, names []string) string {
-	best := ""
+// movedNameAt returns the longest moved name chars spell from j and the
+// index after it, or "" and -1.
+func movedNameAt(chars []shellByte, j int, names []string) (string, int) {
+	best, end := "", -1
 	for _, name := range names {
-		if len(name) <= len(best) || !hasLiteral(chars, j, name) {
+		if len(name) <= len(best) {
 			continue
 		}
-		k := j + len(name)
-		if k == len(chars) || (!chars[k].escaped && (chars[k].b == '/' || !isPathByte(chars[k].b))) {
-			best = name
+		if k := nameEnd(chars, j, name); k >= 0 {
+			best, end = name, k
 		}
 	}
-	return best
+	return best, end
+}
+
+// nameEnd returns the index after the slash path name when chars spell it
+// from j and it ends a path segment there, or -1. Runs of "/" and "./" may
+// come before the name and between its segments.
+func nameEnd(chars []shellByte, j int, name string) int {
+	k := skipSeparators(chars, j)
+	for n, segment := range strings.Split(name, "/") {
+		if n > 0 {
+			if k >= len(chars) || chars[k].b != '/' {
+				return -1
+			}
+			k = skipSeparators(chars, k)
+		}
+		if segment == "" || !hasLiteral(chars, k, segment) {
+			return -1
+		}
+		k += len(segment)
+	}
+	if k == len(chars) || (!chars[k].escaped && (chars[k].b == '/' || !isPathByte(chars[k].b))) {
+		return k
+	}
+	return -1
+}
+
+// skipSeparators returns the index after the slashes and "./" segments at k.
+func skipSeparators(chars []shellByte, k int) int {
+	for k < len(chars) {
+		switch {
+		case chars[k].b == '/':
+			k++
+		case chars[k].b == '.' && k+1 < len(chars) && chars[k+1].b == '/':
+			k += 2
+		default:
+			return k
+		}
+	}
+	return k
 }
 
 // isPathByte reports whether b can be part of a file name in a command

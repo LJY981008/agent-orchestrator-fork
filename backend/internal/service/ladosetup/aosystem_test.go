@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -59,9 +60,26 @@ func TestAOSystemHashFollowsAOSources(t *testing.T) {
 		}
 	}
 
-	// Codex: the events of the hooks AO passes at launch.
-	if want := codex.ManagedHookEvents(); len(want) == 0 || !slices.Equal(layer.CodexHookEvents, want) {
-		t.Errorf("Codex hook events %q, AO passes %q", layer.CodexHookEvents, want)
+	// Codex: the hook flags of AO's launch command, built with a stand-in
+	// codex on PATH. Windows looks in other places before PATH.
+	if runtime.GOOS != "windows" {
+		bin := t.TempDir()
+		newFakeHome(t).writeMode(filepath.Join(bin, "codex"), "#!/bin/sh\n", 0o755)
+		t.Setenv("PATH", bin)
+		argv, err := codex.New().GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: t.TempDir()})
+		if err != nil {
+			t.Fatalf("build AO's Codex launch command: %v", err)
+		}
+		var events []string
+		for i := 0; i+1 < len(argv); i++ {
+			if flag, ok := strings.CutPrefix(argv[i+1], "hooks."); argv[i] == "-c" && ok {
+				event, _, _ := strings.Cut(flag, "=")
+				events = append(events, event)
+			}
+		}
+		if len(events) == 0 || !slices.Equal(sortedUnique(events), sortedUnique(layer.CodexHookEvents)) {
+			t.Errorf("Codex hook events %q, AO's launch command passes %q", layer.CodexHookEvents, events)
+		}
 	}
 
 	// The tool server every Chat session gets (session_manager's
