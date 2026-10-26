@@ -63,8 +63,6 @@ var issueRecheckAfter = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.M
 // back as it was. It reports whether a worker started, which takes a run
 // slot, and returns only the writes that failed.
 func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, now time.Time) (bool, error) {
-	issueMisses := s.takeIssueMisses(entry.ID)
-
 	// 1. The entry's approval is the task's newest and still covers the
 	// latest revision, and the task runs no worker of another approval.
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
@@ -89,6 +87,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	}
 
 	// 2. The issue is open and reads as it did when the plan was made.
+	issueMisses := s.takeIssueMisses(entry.ID)
 	issue, err := s.deps.Tasks.IssueCheck(ctx, task)
 	switch {
 	case errors.Is(err, domain.ErrLadoIssueNotFound):

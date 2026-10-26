@@ -143,7 +143,8 @@ type Service struct {
 	mu sync.Mutex
 	// issueMisses counts, by entry, the reads of its issue that failed in a
 	// row, for the next wait (issueUnreadable). It starts again empty when
-	// the daemon does.
+	// the daemon does; an entry that leaves the queue while it waits for its
+	// issue keeps its count until then.
 	issueMisses map[domain.LadoQueueEntryID]int
 }
 

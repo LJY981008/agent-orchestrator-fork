@@ -804,3 +804,29 @@ func TestDisplayNameFitsAO(t *testing.T) {
 		t.Fatalf("displayName = %q, want the title on one line", got)
 	}
 }
+
+// A pass that stops at the first check, before the issue is read, keeps the
+// count of the issue reads that failed.
+func TestIssueBackoffSurvivesAnEarlierWait(t *testing.T) {
+	f := newFixture(t)
+	f.tasks.checkErr = apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", "Could not read github:acme/app#12: 502 Bad Gateway", nil)
+	f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+	f.tick(t, t0)
+
+	// The task's earlier worker still runs at the next pass, and ends.
+	task := testTask()
+	task.Execution = domain.LadoExecution{SessionID: "proj-1-3", TaskID: "task-1", PlanApprovalID: "approval-0", Attempt: 1, StartedAt: t0.Add(-time.Hour)}
+	f.store.setTask(task)
+	at := t0.Add(time.Minute)
+	f.tick(t, at)
+	if e := f.store.entry("entry-1"); e.WaitingReason != domain.LadoWaitingRunLive {
+		t.Fatalf("entry = %+v, want it waiting for the earlier worker", e)
+	}
+	task.Execution.SessionTerminated = true
+	f.store.setTask(task)
+	at = at.Add(time.Minute)
+	f.tick(t, at)
+	if e := f.store.entry("entry-1"); e.WaitingReason != domain.LadoWaitingIssueUnreadable || !e.NextAttemptAt.Equal(at.Add(2*time.Minute)) {
+		t.Fatalf("entry = %+v, want the second failed read to wait two minutes", e)
+	}
+}
