@@ -242,6 +242,18 @@ func (p adoptionPlan) moves() []planEntry {
 	return out
 }
 
+// tools are the tools whose setup moves, in order.
+func (p adoptionPlan) tools() []domain.LadoSetupTool {
+	var tools []domain.LadoSetupTool
+	for _, pe := range p.moves() {
+		if !slices.Contains(tools, pe.entry.Tool) {
+			tools = append(tools, pe.entry.Tool)
+		}
+	}
+	slices.Sort(tools)
+	return tools
+}
+
 // approval is a confirmed adoption: the presence proof and who gave it.
 type approval struct {
 	proof domain.LadoPresenceProof
@@ -354,7 +366,7 @@ func (s *Service) plan(ctx context.Context, req []AdoptEntry) (adoptionPlan, err
 	if err != nil {
 		return adoptionPlan{}, err
 	}
-	pre, err := s.preconditions(ctx, plan.moves())
+	pre, err := s.preconditions(ctx, plan.tools())
 	if err != nil {
 		return adoptionPlan{}, err
 	}
@@ -545,18 +557,11 @@ func (s *Service) adoptionConflicts(ctx context.Context, plan adoptionPlan, file
 }
 
 // preconditions checks the OS and what runs the tools whose setup moves.
-func (s *Service) preconditions(ctx context.Context, moves []planEntry) (Preconditions, error) {
+func (s *Service) preconditions(ctx context.Context, tools []domain.LadoSetupTool) (Preconditions, error) {
 	p := Preconditions{OS: s.deps.GOOS}
-	var tools []domain.LadoSetupTool
-	for _, pe := range moves {
-		if !slices.Contains(tools, pe.entry.Tool) {
-			tools = append(tools, pe.entry.Tool)
-		}
-	}
 	if len(tools) == 0 {
 		return p, nil
 	}
-	slices.Sort(tools)
 	for _, tool := range tools {
 		if !domain.LadoSetupDeliveryVerified(s.deps.GOOS, tool) {
 			p.Unverified = append(p.Unverified, tool)
