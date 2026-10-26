@@ -36,7 +36,7 @@
 ## 필수 테스트
 
 - `src/renderer/components/settings/LocalSetupSection.test.tsx` — 상태 4종, 도구·종류 묶음, 사유 문장, 전역 스위치가 바인딩 변경을 부름(코드 종류는 확인 흐름), 미검증 OS 에서 채택 비활성과 이유, 다시 검사
-- `src/renderer/components/lado/setup/LadoSetupAdoptDialog.test.tsx` — 항목·동작·다시 쓰기·경고·전제 조건 표시, 실행 중 목록이 있으면 확인 비활성, blocking 충돌이면 비활성, 확인이 `adoptSetup` 을 정확한 항목으로 부름
+- `src/renderer/components/lado/setup/LadoSetupAdoptDialog.test.tsx` — 항목·동작·다시 쓰기·경고·전제 조건 표시, 실행 중 목록이 있으면 확인 비활성, 다시 못 쓴 hook 경로(`LADO_SETUP_HOOK_PATH_MOVED`)가 있으면 비활성, 그 밖의 blocking 충돌은 경고 톤으로 보이되 막지 않음(S07 After 8), 확인이 `adoptSetup` 을 정확한 항목으로 부름
 - `src/renderer/components/lado/setup/LadoSetupAdoptionsCard.test.tsx` — 복원이 `restoreSetup` 을 부르고 보고를 보여 줌, 복원된 채택에는 버튼 없음
 - `src/renderer/components/lado/setup/LadoSetupConflictsCard.test.tsx` — 심각도 순서, 경고만 수락 가능, 끄기가 바인딩 off
 - `src/renderer/i18n/renderer-coverage.test.ts` — 하드코딩 영어 없음(기존 테스트)

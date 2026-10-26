@@ -19,7 +19,7 @@
 2. `lado-errors.ts`: S13 의 `LADO_SETUP_*` 코드마다 번역 키, `detailValues` 에 새 details 키(`tool`, `kind`, `name`, `stage`, `item`, `sessions`, `processes`) — 목록 값은 읽기 좋게 이어 붙임. 인벤토리 사유 코드·상태·충돌 코드의 번역 함수(`ladoSetupReasonText`, `ladoSetupConflictText`).
 3. `lado-events.ts`: `lado_setup` → 위 질의들과 그 프로젝트의 태스크·effective 무효화(`lado_rules` 처리 꼴).
 4. 메인(`main/lado-presence.ts`, 플랜 §14):
-   - `lado:presence:adoptSetup(entries)`: 입력 검사(배열, 항목마다 tool·kind·name·action 문자열, 최대 500개) → 데몬에 dry run → 응답 엄격 파싱(planSha256 64 hex, 도구별 개수, blocking 충돌 수) → blocking 이 있으면 묻지 않고 거부 → 확인 대화상자 → 새 증명 → `POST /lado/setup/adoptions {entries, planSha256}`.
+   - `lado:presence:adoptSetup(entries)`: 입력 검사(배열, 항목마다 tool·kind·name·action 문자열, 최대 500개) → 데몬에 dry run → 응답 엄격 파싱(planSha256 64 hex, 도구별 개수, blocking 충돌 수) → 다시 쓰지 못한 hook 경로(`LADO_SETUP_HOOK_PATH_MOVED`)가 있으면 묻지 않고 거부(데몬도 409 로 거부); 그 밖의 blocking 충돌은 막지 않고 확인 창에 개수로 적는다(S07 After 8: 제자리에 둬도 같은 충돌이고, 채택해야 앱에서 끄거나 고칠 수 있다) → 확인 대화상자 → 새 증명 → `POST /lado/setup/adoptions {entries, planSha256}`.
    - `lado:presence:restoreSetup(adoptionId)`: id 검사 → `GET /lado/setup/adoptions/{id}` → "원래 위치로 <n>개 복원?" → 서명.
    - `lado:presence:changeSetup(request)`: 허용 경로·메서드 목록(`POST /lado/setup/items`, `PATCH /lado/setup/items/{id}`, `PUT /lado/setup/bindings`, `POST /lado/setup/items/{id}/drift`)과 본문 필드 검사 → 같은 요청을 `dryRun:true` 로 → 응답의 `changeSha256`·항목 이름·종류 → "이 변경은 명령을 실행하거나 접근을 넓힐 수 있습니다" 확인 → 같은 요청(`dryRun` 없이)에 서명.
    - 문장은 메인 카탈로그 키(기존 `approveTitle`/`approveDetail`/`approve` 꼴): `lado.presence.setupAdoptTitle`, `lado.presence.setupAdoptDetail`, `lado.presence.setupAdopt`, `lado.presence.setupRestoreTitle`, `lado.presence.setupRestoreDetail`, `lado.presence.setupRestore`, `lado.presence.setupChangeTitle`, `lado.presence.setupChangeDetail` (변경 버튼은 기존 `lado.presence.change`, 취소는 `lado.presence.cancel`). 앱 언어. 8개 로캘에 진짜 번역.
@@ -38,7 +38,7 @@
 - `src/renderer/lib/lado-setup.test.ts` — dry run 뒤 확인이 필요하면 브리지 채널, 아니면 바로 적용; 무효화 키; 오류 변환
 - `src/renderer/lib/lado-events.test.ts` — `lado_setup` 이 인벤토리·충돌·effective·태스크를 무효화, 다른 kind 는 건드리지 않음
 - `src/renderer/lib/lado-errors.test.ts` — 새 코드와 details(목록 값 포함)의 문장, 모르는 코드는 데몬 문장
-- `src/main/lado-presence.test.ts` — 세 채널: 잘못된 입력 거부, 대상 다시 읽기, blocking 충돌이면 묻지 않음, 취소면 서명 안 함, 서명한 본문이 정확히 그 요청
+- `src/main/lado-presence.test.ts` — 세 채널: 잘못된 입력 거부, 대상 다시 읽기, 다시 못 쓴 hook 경로가 있으면 묻지 않음(다른 blocking 충돌은 창에 개수), 취소면 서명 안 함, 서명한 본문이 정확히 그 요청
 
 ## 수용 게이트
 
