@@ -19,7 +19,7 @@ HAR-012: 관리 항목을 앱에서 바꾸는 모든 길을 한 서비스로 모
    1. 검증: 종류별 내용 검사 — `instructions`·`agent`·`command`·`output_style`·한 파일 `skill`(SKILL.md) 은 UTF-8 텍스트(최대 1 MiB, 스킬은 front matter `name`·`description`), `setting` 은 JSON 값(로그인 키·`env` 의 로그인 변수 거부 `LADO_SETUP_LOGIN_KEY`), `mcp_server` 는 Claude 면 `{"type":…, …}` JSON, Codex 면 S05 의 adoptable 조건(이름·비밀 값 없음). 폴더 항목 편집은 `LADO_SETUP_FOLDER_ITEM`. 만들기에서 이름이 겹치면 409 `LADO_SETUP_ITEM_EXISTS`.
    2. dry run 결과: 옛·새 텍스트(차이는 화면이 그림), 더하거나 없애는 충돌(S06), 영향(S11 `ImpactOfSetupChange`), `needsPresence`, `changeSha256`. 아무것도 쓰지 않는다.
    3. 실제 적용: `needsPresence` 면 `presence(setup.change, changeSha256)` — 없으면 403 `LADO_PRESENCE_REQUIRED`(ladopresence 의 오류). 쓰기는 S04 메서드로 감사와 한 트랜잭션, 버전 내용은 먼저 blob 에. 커밋 뒤 관리 폴더 파일을 그 버전으로 다시 쓰고(S07 의 `managed.go`), 인벤토리 캐시를 무효화.
-3. 데스크톱 확인 판정(`needsPresence`, 결정 i): 만들기·편집·변경 감지 유지 — `domain.LadoSetupNeedsPresence(kind, name)`; 바인딩 — 그 항목이 presence 종류이고 새 상태가 `on`·`force_on`(전역 행을 지워 켜지는 inherit 포함). 끄기·`force_off`·삭제·되돌리기·수락·취소 — 필요 없음. 결과에 actor `human`/`human:dev-presence`(증명) 또는 `api`.
+3. 데스크톱 확인 판정(`needsPresence`, 결정 i): 먼저 S03 회고가 짚은 키 셋을 `domain.LadoSetupNeedsPresence` 의 settings 목록에 더한다 — `otelHeadersHelper`(스크립트 실행), `enableAllProjectMcpServers`·`enabledMcpjsonServers`(프로젝트 MCP 서버 승인) — 그리고 `TestLadoSetupNeedsPresence` 표에 세 줄을 더한다(플랜 결정 i 는 갱신됨). 만들기·편집·변경 감지 유지 — `domain.LadoSetupNeedsPresence(kind, name)`; 바인딩 — 그 항목이 presence 종류이고 새 상태가 `on`·`force_on`(전역 행을 지워 켜지는 inherit 포함). 끄기·`force_off`·삭제·되돌리기·수락·취소 — 필요 없음. 결과에 actor `human`/`human:dev-presence`(증명) 또는 `api`.
 4. 삭제: soft delete(버전·스냅숏 고정은 그대로 — 항목이 쓰인 적이 있으면 그 사실을 응답에). 관리 폴더의 파일은 지운다(blob 은 남김).
 5. 수락: S06 규칙(경고만, 지금 버전의 sha256, 범위). 취소는 `revoked_at`.
 6. 감사 동작 이름은 플랜 §12 그대로.
