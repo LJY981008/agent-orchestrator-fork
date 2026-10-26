@@ -11,7 +11,7 @@ import (
 )
 
 const getLadoProjectSettings = `-- name: GetLadoProjectSettings :one
-SELECT project_id, lado_mode, updated_at
+SELECT project_id, lado_mode, updated_at, max_concurrent
 FROM lado_project_settings
 WHERE project_id = ?
 `
@@ -19,7 +19,12 @@ WHERE project_id = ?
 func (q *Queries) GetLadoProjectSettings(ctx context.Context, projectID string) (LadoProjectSetting, error) {
 	row := q.db.QueryRowContext(ctx, getLadoProjectSettings, projectID)
 	var i LadoProjectSetting
-	err := row.Scan(&i.ProjectID, &i.LadoMode, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ProjectID,
+		&i.LadoMode,
+		&i.UpdatedAt,
+		&i.MaxConcurrent,
+	)
 	return i, err
 }
 
@@ -29,7 +34,7 @@ VALUES (?, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET
     lado_mode = excluded.lado_mode,
     updated_at = excluded.updated_at
-RETURNING project_id, lado_mode, updated_at
+RETURNING project_id, lado_mode, updated_at, max_concurrent
 `
 
 type UpsertLadoProjectSettingsParams struct {
@@ -41,6 +46,11 @@ type UpsertLadoProjectSettingsParams struct {
 func (q *Queries) UpsertLadoProjectSettings(ctx context.Context, arg UpsertLadoProjectSettingsParams) (LadoProjectSetting, error) {
 	row := q.db.QueryRowContext(ctx, upsertLadoProjectSettings, arg.ProjectID, arg.LadoMode, arg.UpdatedAt)
 	var i LadoProjectSetting
-	err := row.Scan(&i.ProjectID, &i.LadoMode, &i.UpdatedAt)
+	err := row.Scan(
+		&i.ProjectID,
+		&i.LadoMode,
+		&i.UpdatedAt,
+		&i.MaxConcurrent,
+	)
 	return i, err
 }

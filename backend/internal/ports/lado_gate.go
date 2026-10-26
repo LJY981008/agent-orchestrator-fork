@@ -17,6 +17,19 @@ type WorkGate interface {
 	// AuthorizeSend refuses a message to target from an origin that LADO does
 	// not allow for it.
 	AuthorizeSend(ctx context.Context, target domain.SessionID, origin SendOrigin) error
+	// ClampTurnSettings caps the approval of a LADO execution's next turns at
+	// its rule snapshot's permission ceiling. Other sessions get s unchanged.
+	ClampTurnSettings(ctx context.Context, target domain.SessionID, s ChatTurnSettings) (ChatTurnSettings, error)
+	// AuthorizeConfigMode refuses a config option that would switch a LADO
+	// execution to an approval mode above its ceiling: the provider applies the
+	// option before AO records it.
+	AuthorizeConfigMode(ctx context.Context, target domain.SessionID, mode domain.PermissionMode) error
+	// AuthorizeExecutionChange refuses an agent switch or an interface
+	// transition of a LADO execution, which runs as it was approved.
+	AuthorizeExecutionChange(ctx context.Context, target domain.SessionID) error
+	// AuthorizeRestore refuses a person's restore or resume of a LADO
+	// execution that LADO stopped for good.
+	AuthorizeRestore(ctx context.Context, target domain.SessionID) error
 }
 
 // SendOrigin is who a message to a session comes from, read from the facts AO

@@ -197,6 +197,8 @@ title = "gitleaks config"
         # The fake GitHub token the cloud redaction tests feed through
         # checkout errors and Setup output to prove it never reaches events.
         '''gh[ps]_abcdefghijklmnopqrstuvwxyz0123456789''',
+        # LADO token-isolation tests use synthetic GitHub tokens.
+        '''ghp_[Ll]ado[0-9A-Za-z]{32}''',
     ]
     # Historical false positives from the ReverbCode rewrite graft (#2166).
     # All offenders are example secret-patterns in security docs and

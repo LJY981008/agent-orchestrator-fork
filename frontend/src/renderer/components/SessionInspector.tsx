@@ -51,6 +51,7 @@ import { formatTimeCompact } from "../lib/format-time";
 import { AgentAvatar } from "./AgentAvatar";
 import { SessionArtifactsView, type ArtifactOpenRequest } from "./SessionArtifactsView";
 import { OrchestratorChildrenSection } from "./OrchestratorChildrenSection";
+import { LadoExecutionPanel } from "./lado/LadoExecutionPanel";
 import { ProductExternalLink } from "./ProductExternalLink";
 import { CopyButton } from "./chat/CopyButton";
 import { ResumeAgentControl } from "./ResumeAgentControl";
@@ -484,6 +485,8 @@ const SummaryView = memo(function SummaryView({
 				/>
 			}
 			completion={showSessionControls ? <SessionControls hostId={hostId} session={session} /> : undefined}
+			// LADO fork: a LADO run's rule snapshot; nothing for other sessions.
+			context={<LadoExecutionPanel hostId={hostId} session={session} />}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : undefined}
 		/>
 	);

@@ -14,11 +14,11 @@ import (
 )
 
 // LadoProjectSettings returns the project's LADO settings. A project without a
-// stored row has LADO mode off.
+// stored row has LADO mode off and the default cap.
 func (s *Store) LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {
 	row, err := s.qr.GetLadoProjectSettings(ctx, string(projectID))
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.LadoProjectSettings{ProjectID: projectID}, nil
+		return domain.LadoProjectSettings{ProjectID: projectID, MaxConcurrent: domain.LadoDefaultProjectMaxConcurrent}, nil
 	}
 	if err != nil {
 		return domain.LadoProjectSettings{}, fmt.Errorf("read LADO project settings: %w", err)
@@ -49,8 +49,9 @@ func (s *Store) SetLadoMode(ctx context.Context, projectID domain.ProjectID, on 
 
 func ladoProjectSettingsFromGen(row gen.LadoProjectSetting) domain.LadoProjectSettings {
 	return domain.LadoProjectSettings{
-		ProjectID: domain.ProjectID(row.ProjectID),
-		LadoMode:  row.LadoMode == 1,
-		UpdatedAt: row.UpdatedAt,
+		ProjectID:     domain.ProjectID(row.ProjectID),
+		LadoMode:      row.LadoMode == 1,
+		MaxConcurrent: int(row.MaxConcurrent),
+		UpdatedAt:     row.UpdatedAt,
 	}
 }

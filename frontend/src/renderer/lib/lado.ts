@@ -1,7 +1,7 @@
 // LADO fork: daemon calls for repository connections, issue-backed tasks, plans,
-// approvals and rules (docs/LJY-PRD/TDD.md §5.1, §5.2 and §13,
-// docs/LJY-PRD/HARNESS.md §3-§8). LADO routes live on this computer's daemon
-// only; remote hosts never serve them.
+// approvals, rules and runs (docs/LJY-PRD/TDD.md §5.1-§5.3 and
+// §13, docs/LJY-PRD/HARNESS.md §3-§8). LADO routes live on this computer's
+// daemon only; remote hosts never serve them.
 import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import type { LadoCeilingMode } from "../../shared/lado-presence";
@@ -41,6 +41,21 @@ export type LadoBindingInput = components["schemas"]["SetLadoBindingRequest"];
 export type LadoEffective = components["schemas"]["LadoEffectiveResponse"];
 export type LadoEffectiveRule = components["schemas"]["LadoEffectiveRuleResponse"];
 export type LadoPolicyProblem = components["schemas"]["LadoPolicyProblemResponse"];
+export type LadoTaskState = LadoTask["state"];
+/** Why a task needs review, is blocked or failed, or what its queued plan waits for. */
+export type LadoTaskStateReason = NonNullable<LadoTask["stateReason"]>;
+export type LadoTaskQueue = components["schemas"]["LadoTaskQueueResponse"];
+export type LadoTaskExecution = components["schemas"]["LadoTaskExecutionResponse"];
+export type LadoQueueItem = components["schemas"]["LadoQueueItemResponse"];
+export type LadoQueueState = LadoQueueItem["state"];
+export type LadoQueueReason = NonNullable<LadoQueueItem["reason"]>;
+export type LadoExecution = components["schemas"]["LadoExecutionResponse"];
+export type LadoExecutionPR = components["schemas"]["LadoExecutionPRResponse"];
+export type LadoDispatchSettings = components["schemas"]["LadoDispatchSettingsResponse"];
+export type LadoDispatchSettingsInput = components["schemas"]["UpdateLadoDispatchSettingsRequest"];
+/** A maximum run time the daemon accepts, in minutes; 0 means no limit. */
+export type LadoRunMinutes = LadoDispatchSettings["maxRunMinutes"];
+type LadoProjectSettingsInput = components["schemas"]["UpdateLadoProjectSettingsRequest"];
 
 /**
  * A failed LADO call. It keeps the daemon's error code and details, so the
@@ -81,6 +96,8 @@ export const ladoEffectiveQueryRoot = ["lado", "effective"] as const;
 /** A project's rules, and its tasks' rules, share the project's prefix. */
 export const ladoEffectiveProjectQueryKey = (projectId: string) => ["lado", "effective", projectId] as const;
 export const ladoEffectiveQueryKey = (projectId: string, taskId: string) => ["lado", "effective", projectId, taskId] as const;
+export const ladoExecutionQueryKey = (sessionId: string) => ["lado", "execution", sessionId] as const;
+export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
 
 /**
  * Refreshes what a rule change can reach: the rules, every effective view,
@@ -97,6 +114,47 @@ export async function fetchLadoProjectSettings(projectId: string): Promise<LadoP
 		params: { path: { projectId } },
 	});
 	if (error) throw ladoError(error, "Could not read the project's LADO settings");
+	return data;
+}
+
+/**
+ * Turns a project's LADO mode on or off. Turning it on is a plain call, which
+ * the daemon refuses while tracker intake is on. Turning it off lets the
+ * project's workers start without an approved plan, so in the desktop app the
+ * main process asks the developer to confirm and signs the change; null means
+ * the developer cancelled and nothing changed. In a browser the call goes to
+ * the daemon directly, which accepts it only in development
+ * (AO_LADO_DEV_PRESENCE=1). Queued work waits while the mode is off; running
+ * workers go on.
+ */
+export async function setLadoMode(projectId: string, on: boolean): Promise<LadoProjectSettings | null> {
+	if (!on) {
+		// The bridge answers null when there is no desktop main process to ask.
+		const result = (await aoBridge.lado?.presence?.setLadoMode(projectId, false)) ?? null;
+		if (result) {
+			if (result.status === "cancelled") return null;
+			if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
+			return result.settings;
+		}
+	}
+	return putLadoProjectSettings(projectId, { ladoMode: on }, on ? "Could not turn on LADO mode" : "Could not turn off LADO mode");
+}
+
+/** Changes how many executions run at once in the project; it needs no confirmation. */
+export async function updateLadoProjectSettings(projectId: string, input: { maxConcurrent: number }): Promise<LadoProjectSettings> {
+	return putLadoProjectSettings(projectId, { maxConcurrent: input.maxConcurrent }, "Could not change the project's LADO settings");
+}
+
+async function putLadoProjectSettings(
+	projectId: string,
+	body: LadoProjectSettingsInput,
+	fallback: string,
+): Promise<LadoProjectSettings> {
+	const { data, error } = await apiClient.PUT("/api/v1/lado/projects/{projectId}/settings", {
+		params: { path: { projectId } },
+		body,
+	});
+	if (error) throw ladoError(error, fallback);
 	return data;
 }
 
@@ -162,6 +220,23 @@ export function ladoIssueLabel(number: number, repositoryRef: string, repositori
 	const repository = repositories.find((candidate) => candidate.ref === repositoryRef);
 	const name = repository?.name ?? repositoryRef.slice(repositoryRef.indexOf(":") + 1).replace(/@.*$/, "");
 	return `${name}#${number}`;
+}
+
+/** How many times LADO tries to start a task's worker before the task fails. */
+export const LADO_MAX_ATTEMPTS = 3;
+
+// One map per task list, shared by every board card that reads the list.
+const tasksBySession = new WeakMap<readonly LadoTask[], Map<string, LadoTask>>();
+
+/** The task whose newest execution runs in the session, if LADO started it. */
+export function ladoTaskForSession(tasks: readonly LadoTask[], sessionId: string): LadoTask | undefined {
+	let bySession = tasksBySession.get(tasks);
+	if (!bySession) {
+		bySession = new Map();
+		for (const task of tasks) if (task.execution) bySession.set(task.execution.sessionId, task);
+		tasksBySession.set(tasks, bySession);
+	}
+	return bySession.get(sessionId);
 }
 
 export async function importLadoTasks(projectId: string, issueRefs: string[]): Promise<LadoImportResult> {
@@ -334,4 +409,39 @@ export async function changeLadoCeiling(ruleId: string, mode: LadoCeilingMode): 
 	const { rule } = await fetchLadoRule(ruleId);
 	const changed = await updateLadoRule(ruleId, { baseVersion: rule.version, ceiling: { mode } });
 	return changed.rule ?? rule;
+}
+
+/**
+ * The execution a worker session runs: its task, plan, rule snapshot, base
+ * and run. Null for a session LADO did not start.
+ */
+export async function fetchLadoExecution(sessionId: string): Promise<LadoExecution | null> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/executions/{sessionId}", {
+		params: { path: { sessionId } },
+	});
+	if (error) {
+		if (apiErrorCode(error) === "LADO_EXECUTION_NOT_FOUND") return null;
+		throw ladoError(error, "Could not load the run");
+	}
+	return data;
+}
+
+/** The cap on running executions, their maximum run time and the memory hold. */
+export async function fetchLadoDispatchSettings(): Promise<LadoDispatchSettings> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/dispatch-settings");
+	if (error) throw ladoError(error, "Could not load the run settings");
+	return data;
+}
+
+/** Replaces all three dispatch settings; it needs no confirmation. */
+export async function updateLadoDispatchSettings(input: LadoDispatchSettingsInput): Promise<LadoDispatchSettings> {
+	const { data, error } = await apiClient.PUT("/api/v1/lado/dispatch-settings", {
+		body: {
+			maxConcurrent: input.maxConcurrent,
+			maxRunMinutes: input.maxRunMinutes,
+			holdOnMemoryTight: input.holdOnMemoryTight,
+		},
+	});
+	if (error) throw ladoError(error, "Could not save the run settings");
+	return data;
 }

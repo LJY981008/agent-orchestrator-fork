@@ -1,13 +1,15 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
-// approvals and rules. Rule changes that can reach approved tasks go through
-// useLadoRuleChange (lib/lado-rules.ts).
+// approvals, rules, runs and the dispatch settings. Rule changes
+// that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
 	approveLadoPlan,
 	cancelLadoTask,
 	createLadoTask,
 	deleteLadoRule,
+	fetchLadoDispatchSettings,
 	fetchLadoEffective,
+	fetchLadoExecution,
 	fetchLadoPlan,
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
@@ -18,7 +20,9 @@ import {
 	fetchLadoTaskView,
 	importLadoTasks,
 	invalidateLadoRuleQueries,
+	ladoDispatchSettingsQueryKey,
 	ladoEffectiveQueryKey,
+	ladoExecutionQueryKey,
 	ladoPlanQueryKey,
 	ladoPlanQueryRoot,
 	ladoProjectIssuesQueryKey,
@@ -29,7 +33,22 @@ import {
 	ladoTasksQueryKey,
 	ladoTaskViewQueryKey,
 	requestLadoPlan,
+	setLadoMode,
+	updateLadoDispatchSettings,
+	updateLadoProjectSettings,
+	type LadoDispatchSettingsInput,
 } from "../lib/lado";
+
+/** A project's LADO settings: its mode and how many of its executions run at once. */
+export function useLadoProjectSettings(projectId: string | undefined) {
+	return useQuery({
+		queryKey: ladoProjectSettingsQueryKey(projectId ?? ""),
+		queryFn: () => fetchLadoProjectSettings(projectId ?? ""),
+		enabled: Boolean(projectId),
+		staleTime: 30_000,
+		retry: false,
+	});
+}
 
 /**
  * Whether a project is in LADO mode, and whether that is known yet. Pass no
@@ -37,19 +56,42 @@ import {
  * standalone); they read as off at once.
  */
 export function useLadoModeState(projectId: string | undefined): { ladoMode: boolean; known: boolean } {
-	const query = useQuery({
-		queryKey: ladoProjectSettingsQueryKey(projectId ?? ""),
-		queryFn: () => fetchLadoProjectSettings(projectId ?? ""),
-		enabled: Boolean(projectId),
-		staleTime: 30_000,
-		retry: false,
-	});
+	const query = useLadoProjectSettings(projectId);
 	return { ladoMode: query.data?.ladoMode === true, known: !projectId || query.isFetched };
 }
 
 /** Whether a project is in LADO mode; see useLadoModeState. */
 export function useLadoMode(projectId: string | undefined): boolean {
 	return useLadoModeState(projectId).ladoMode;
+}
+
+/**
+ * Turns the project's LADO mode on or off. Resolves to null when the
+ * developer cancelled the desktop confirmation of turning it off; nothing
+ * changed then.
+ */
+export function useSetLadoMode(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (on: boolean) => setLadoMode(projectId, on),
+		onSuccess: (settings) => {
+			if (!settings) return;
+			queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings);
+			// Queued work waits while the mode is off, and goes on when it is on again.
+			void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
+		},
+		retry: false,
+	});
+}
+
+/** Changes how many executions run at once in the project. */
+export function useUpdateLadoProjectSettings(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (input: { maxConcurrent: number }) => updateLadoProjectSettings(projectId, input),
+		onSuccess: (settings) => queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings),
+		retry: false,
+	});
 }
 
 export function useLadoTasks(projectId: string, enabled = true) {
@@ -219,6 +261,36 @@ export function useDeleteLadoRule() {
 	return useMutation({
 		mutationFn: (ruleId: string) => deleteLadoRule(ruleId),
 		onSuccess: () => invalidateLadoRuleQueries(queryClient),
+		retry: false,
+	});
+}
+
+/** The execution a worker session runs; null for a session LADO did not start. */
+export function useLadoExecution(sessionId: string | null | undefined, enabled = true) {
+	return useQuery({
+		queryKey: ladoExecutionQueryKey(sessionId ?? ""),
+		queryFn: () => fetchLadoExecution(sessionId ?? ""),
+		enabled: enabled && Boolean(sessionId),
+		retry: false,
+	});
+}
+
+/** The cap on running executions, their maximum run time and the memory hold. */
+export function useLadoDispatchSettings(enabled = true) {
+	return useQuery({
+		queryKey: ladoDispatchSettingsQueryKey,
+		queryFn: fetchLadoDispatchSettings,
+		enabled,
+		retry: false,
+	});
+}
+
+/** Saves all three dispatch settings together. */
+export function useUpdateLadoDispatchSettings() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (input: LadoDispatchSettingsInput) => updateLadoDispatchSettings(input),
+		onSuccess: (settings) => queryClient.setQueryData(ladoDispatchSettingsQueryKey, settings),
 		retry: false,
 	});
 }

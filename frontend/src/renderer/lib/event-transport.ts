@@ -72,7 +72,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// LADO fork: projects whose issue-backed tasks changed, and the tasks.
 			const pendingLadoTaskProjects = new Set<string>();
 			const pendingLadoTasks = new Set<string>();
-			const ladoEvents = createLadoEventBatch();
+			const ladoEvents = createLadoEventBatch(queryClient);
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;
@@ -362,7 +362,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 							if (typeof payload.taskId === "string" && payload.taskId) pendingLadoTasks.add(payload.taskId);
 							ladoOnly = true;
 						}
-						if (ladoEvents.note(payload)) ladoOnly = true;
+						if (ladoEvents.note(payload, decoded)) ladoOnly = true;
 						if (
 							typeof payload?.reviewId === "string" &&
 							payload.reviewId &&

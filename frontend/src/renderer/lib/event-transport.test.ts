@@ -79,12 +79,14 @@ class EventSourceStub {
 	}
 }
 
-function fakeQueryClient() {
+function fakeQueryClient(cached: [unknown[], unknown][] = []) {
+	const cache = new Map(cached.map(([queryKey, data]) => [JSON.stringify(queryKey), data]));
 	return {
 		invalidateQueries: vi.fn().mockResolvedValue(undefined),
 		isFetching: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
+		getQueryData: vi.fn((queryKey: unknown[]) => cache.get(JSON.stringify(queryKey))),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
@@ -655,6 +657,106 @@ describe("createEventTransport", () => {
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "effective", "proj-1"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "effective"] }, { cancelRefetch: false });
 			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "rules"] }, { cancelRefetch: false });
+			// A task change is not a run's.
+			const calls = vi.mocked(queryClient.invalidateQueries).mock.calls.map(([filters]) => filters?.queryKey);
+			expect(calls.some((queryKey) => queryKey?.[0] === "lado" && queryKey[1] === "execution")).toBe(false);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// LADO fork: a run started or timed out. Its panel, its task's lanes and
+	// board card, and the task's open view refresh; the sidebar does not.
+	it("refreshes the run and its task on lado_execution events", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("session_updated", JSON.stringify({
+				seq: 49,
+				projectId: "proj-1",
+				sessionId: "proj-1-7",
+				type: "session_updated",
+				payload: { kind: "lado_execution", sessionId: "proj-1-7", taskId: "lado-task-1", projectId: "proj-1" },
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			for (const queryKey of [
+				["lado", "execution", "proj-1-7"],
+				["lado", "tasks", "proj-1"],
+				["lado", "task", "lado-task-1"],
+			]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["lado", "tasks", "proj-2"] }, { cancelRefetch: false });
+			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// LADO fork: a run's task reads running, completed or failed from its
+	// session and PR, which LADO's own tables do not record, so those AO
+	// events refresh the project's LADO tasks and the session's run as well
+	// as the sidebar. A session update moves a run the board or the session's
+	// run panel shows when it ends the session or brings it back (AO restores
+	// a session); a live run's activity, and sessions LADO did not start, move
+	// no LADO task.
+	const boardRun = (sessionEnded: boolean): [unknown[], unknown] => [
+		["lado", "tasks", "proj-1"],
+		[{ id: "lado-task-1", projectId: "proj-1", state: sessionEnded ? "failed" : "running", execution: { sessionId: "proj-1-7", sessionEnded } }],
+	];
+	const panelRun = (sessionEnded: boolean): [unknown[], unknown] => [["lado", "execution", "proj-1-7"], { sessionId: "proj-1-7", sessionEnded }];
+	it.each([
+		["a PR change", "pr_updated", { url: "https://github.com/acme/demo/pull/3", session: "proj-1-7", state: "merged" }, [], true],
+		["a run's end", "session_updated", { id: "proj-1-7", activity: "exited", isTerminated: true }, [boardRun(false)], true],
+		["a restored run", "session_updated", { id: "proj-1-7", activity: "idle", isTerminated: false }, [boardRun(true)], true],
+		["a restored run its panel shows", "session_updated", { id: "proj-1-7", activity: "idle", isTerminated: false }, [panelRun(true)], true],
+		["a live run's activity", "session_updated", { id: "proj-1-7", activity: "active", isTerminated: false }, [boardRun(false), panelRun(false)], false],
+		["the end of a session LADO did not start", "session_updated", { id: "proj-1-7", activity: "exited", isTerminated: true }, [], false],
+	] as const)("refreshes LADO tasks and the run for %s", (_name, type, payload, cached, refreshes) => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient([...cached]);
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit(type, JSON.stringify({
+				seq: 51,
+				projectId: "proj-1",
+				sessionId: "proj-1-7",
+				type,
+				payload,
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			const calls = vi.mocked(queryClient.invalidateQueries).mock.calls.map(([filters]) => filters?.queryKey);
+			expect(calls).toContainEqual(["workspaces"]);
+			for (const queryKey of [["lado", "tasks", "proj-1"], ["lado", "execution", "proj-1-7"]]) {
+				if (refreshes) expect(calls).toContainEqual(queryKey);
+				else expect(calls).not.toContainEqual(queryKey);
+			}
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	// LADO fork: a PR that moves to another session leaves the run it came from.
+	it("refreshes both runs when a PR moves to another session", () => {
+		vi.useFakeTimers();
+		try {
+			const queryClient = fakeQueryClient();
+			createEventTransport(queryClient).connect();
+			cdcSources()[0].emit("pr_session_changed", JSON.stringify({
+				seq: 54,
+				projectId: "proj-1",
+				sessionId: "proj-1-8",
+				type: "pr_session_changed",
+				payload: { url: "https://github.com/acme/demo/pull/3", fromSession: "proj-1-7", toSession: "proj-1-8" },
+				createdAt: "2026-10-23T09:00:00Z",
+			}));
+			vi.advanceTimersByTime(200);
+			for (const queryKey of [["lado", "tasks", "proj-1"], ["lado", "execution", "proj-1-8"], ["lado", "execution", "proj-1-7"]]) {
+				expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey }, { cancelRefetch: false });
+			}
 		} finally {
 			vi.useRealTimers();
 		}

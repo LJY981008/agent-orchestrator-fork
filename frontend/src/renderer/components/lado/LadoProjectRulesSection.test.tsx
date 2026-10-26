@@ -292,7 +292,7 @@ describe("LadoProjectRulesSection", () => {
 	it("adds a Rules page to local LADO projects only", async () => {
 		const user = userEvent.setup();
 		localWorkspacesState.ids = ["demo", "plain"];
-		vi.mocked(lado.fetchLadoProjectSettings).mockImplementation(async (projectId) => ({ projectId, ladoMode: projectId === "demo" }));
+		vi.mocked(lado.fetchLadoProjectSettings).mockImplementation(async (projectId) => ({ projectId, ladoMode: projectId === "demo", maxConcurrent: 1 }));
 
 		useUiStore.getState().openProjectSettings("demo");
 		renderSettings();

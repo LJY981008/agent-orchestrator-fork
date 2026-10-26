@@ -115,7 +115,7 @@ func TestLadoAPI_PutRejectsMalformedBodies(t *testing.T) {
 }
 
 func TestLadoAPI_ServiceErrorsKeepTheirEnvelope(t *testing.T) {
-	svc := &fakeLadoProjectService{err: apierr.Conflict("LADO_MODE_UNAVAILABLE", "not yet", nil)}
+	svc := &fakeLadoProjectService{err: apierr.Conflict("LADO_TRACKER_INTAKE_ENABLED", "intake is on", nil)}
 	srv := newLadoTestServer(t, httpd.APIDeps{LadoProjects: svc})
 
 	body, status, _ := doRequest(t, srv, "PUT", "/api/v1/lado/projects/mer/settings", `{"ladoMode":true}`)
@@ -123,8 +123,8 @@ func TestLadoAPI_ServiceErrorsKeepTheirEnvelope(t *testing.T) {
 		t.Fatalf("status = %d, body %s", status, body)
 	}
 	var apiErr envelope.APIError
-	if err := json.Unmarshal(body, &apiErr); err != nil || apiErr.Code != "LADO_MODE_UNAVAILABLE" {
-		t.Fatalf("envelope = %s (%v), want code LADO_MODE_UNAVAILABLE", body, err)
+	if err := json.Unmarshal(body, &apiErr); err != nil || apiErr.Code != "LADO_TRACKER_INTAKE_ENABLED" {
+		t.Fatalf("envelope = %s (%v), want code LADO_TRACKER_INTAKE_ENABLED", body, err)
 	}
 }
 

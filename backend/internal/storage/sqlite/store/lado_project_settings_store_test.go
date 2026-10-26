@@ -13,8 +13,8 @@ func TestLadoProjectSettingsDefaultToModeOff(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LadoProjectSettings: %v", err)
 	}
-	if got.ProjectID != "mer" || got.LadoMode || !got.UpdatedAt.IsZero() {
-		t.Fatalf("settings = %+v, want project mer with LADO mode off and no update time", got)
+	if got.ProjectID != "mer" || got.LadoMode || got.MaxConcurrent != 1 || !got.UpdatedAt.IsZero() {
+		t.Fatalf("settings = %+v, want project mer with LADO mode off, cap 1 and no update time", got)
 	}
 }
 

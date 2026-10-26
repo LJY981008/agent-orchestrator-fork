@@ -1,9 +1,12 @@
 package sqlite
 
 import (
+	"context"
 	"database/sql"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -121,6 +124,35 @@ func triggerExists(t *testing.T, db *sql.DB, name string) bool {
 		t.Fatalf("look up trigger %s: %v", name, err)
 	}
 	return count == 1
+}
+
+func tableExists(t *testing.T, db *sql.DB, name string) bool {
+	t.Helper()
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count); err != nil {
+		t.Fatalf("look up table %s: %v", name, err)
+	}
+	return count == 1
+}
+
+// insertLadoSnapshotFixture writes policy snapshot "snapshot" of approval
+// "approval", with the task "task" (project "p"), request "request", revision
+// "revision" and presence proof "nonce" an approval needs.
+func insertLadoSnapshotFixture(t *testing.T, db *sql.DB) {
+	t.Helper()
+	hash := strings.Repeat("a", 64)
+	mustExec(t, db, `INSERT INTO lado_tasks (id, project_id, issue_repo, issue_ref, created_at, updated_at)
+		VALUES ('task', 'p', 'github:o/r', 'github:o/r#1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO lado_plan_requests (id, task_id, session_id, issue_snapshot_sha256, requested_at)
+		VALUES ('request', 'task', 's', ?, CURRENT_TIMESTAMP)`, hash)
+	mustExec(t, db, `INSERT INTO lado_plan_revisions (id, task_id, request_id, number, session_id, path, artifact_version, source, sha256, issue_snapshot_sha256, created_at)
+		VALUES ('revision', 'task', 'request', 1, 's', 'plan.md', 1, 'agent', ?, ?, CURRENT_TIMESTAMP)`, hash, hash)
+	mustExec(t, db, `INSERT INTO lado_presence_proofs (nonce, action, subject_id, expires_at, used_at)
+		VALUES ('nonce', 'plan.approve', 'revision', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+	mustExec(t, db, `INSERT INTO lado_plan_approvals (id, revision_id, task_id, sha256, proof_nonce, approved_at)
+		VALUES ('approval', 'revision', 'task', ?, 'nonce', CURRENT_TIMESTAMP)`, hash)
+	mustExec(t, db, `INSERT INTO lado_policy_snapshots (id, approval_id, sha256, snapshot_json, blocking, created_at)
+		VALUES ('snapshot', 'approval', ?, '{}', 0, CURRENT_TIMESTAMP)`, hash)
 }
 
 func insertLadoAuditFixture(t *testing.T, db *sql.DB, subjectID string) {
@@ -255,11 +287,7 @@ func TestLadoMigrateCreatesRuleTables(t *testing.T) {
 		t.Fatalf("%s = %d, want 0005 applied", ladoVersionTable, got)
 	}
 	for _, name := range []string{"lado_rules", "lado_rule_versions", "lado_rule_bindings", "lado_policy_snapshots", "lado_policy_snapshot_rules"} {
-		var count int
-		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&count); err != nil {
-			t.Fatalf("look up table %s: %v", name, err)
-		}
-		if count != 1 {
+		if !tableExists(t, db, name) {
 			t.Fatalf("table %s missing after the LADO track", name)
 		}
 	}
@@ -289,27 +317,143 @@ func TestLadoMigrateCreatesRuleTables(t *testing.T) {
 		}
 	}
 
-	// A snapshot belongs to a plan approval, which needs its task, request,
-	// revision and presence proof.
-	hash := strings.Repeat("a", 64)
-	mustExec(t, db, `INSERT INTO lado_tasks (id, project_id, issue_repo, issue_ref, created_at, updated_at)
-		VALUES ('task', 'p', 'github:o/r', 'github:o/r#1', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
-	mustExec(t, db, `INSERT INTO lado_plan_requests (id, task_id, session_id, issue_snapshot_sha256, requested_at)
-		VALUES ('request', 'task', 's', ?, CURRENT_TIMESTAMP)`, hash)
-	mustExec(t, db, `INSERT INTO lado_plan_revisions (id, task_id, request_id, number, session_id, path, artifact_version, source, sha256, issue_snapshot_sha256, created_at)
-		VALUES ('revision', 'task', 'request', 1, 's', 'plan.md', 1, 'agent', ?, ?, CURRENT_TIMESTAMP)`, hash, hash)
-	mustExec(t, db, `INSERT INTO lado_presence_proofs (nonce, action, subject_id, expires_at, used_at)
-		VALUES ('nonce', 'plan.approve', 'revision', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
-	mustExec(t, db, `INSERT INTO lado_plan_approvals (id, revision_id, task_id, sha256, proof_nonce, approved_at)
-		VALUES ('approval', 'revision', 'task', ?, 'nonce', CURRENT_TIMESTAMP)`, hash)
-	mustExec(t, db, `INSERT INTO lado_policy_snapshots (id, approval_id, sha256, snapshot_json, blocking, created_at)
-		VALUES ('snapshot', 'approval', ?, '{}', 0, CURRENT_TIMESTAMP)`, hash)
+	insertLadoSnapshotFixture(t, db)
 	if _, err := db.Exec(`INSERT INTO lado_policy_snapshot_rules (snapshot_id, rule_id, rule_version_id)
 		VALUES ('snapshot', 'rule', 'missing')`); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
 		t.Fatalf("snapshot rule naming a missing version: err = %v, want the FOREIGN KEY refusal", err)
 	}
 	mustExec(t, db, `INSERT INTO lado_rule_versions (id, rule_id, number, name, enforcement_json, sha256, actor, created_at)
-		VALUES ('rule-v1', 'rule', 1, 'Rule', '["prompt"]', ?, 'lado', CURRENT_TIMESTAMP)`, hash)
+		VALUES ('rule-v1', 'rule', 1, 'Rule', '["prompt"]', ?, 'lado', CURRENT_TIMESTAMP)`, strings.Repeat("a", 64))
 	mustExec(t, db, `INSERT INTO lado_policy_snapshot_rules (snapshot_id, rule_id, rule_version_id)
 		VALUES ('snapshot', 'rule', 'rule-v1')`)
+}
+
+func TestLadoMigrateCreatesQueueTables(t *testing.T) {
+	db := openLadoDatabase(t, 1)
+	if got := appliedVersion(t, db, ladoVersionTable); got < 6 {
+		t.Fatalf("%s = %d, want 0006 applied", ladoVersionTable, got)
+	}
+	for _, name := range []string{"lado_queue_entries", "lado_executions", "lado_dispatch_settings"} {
+		if !tableExists(t, db, name) {
+			t.Fatalf("table %s missing after the LADO track", name)
+		}
+	}
+	// Entries and executions publish through ladoCDCTriggers; the settings
+	// tables publish nothing.
+	for _, name := range []string{"lado_cdc_queue_entries_insert", "lado_cdc_queue_entries_update", "lado_cdc_executions_insert", "lado_cdc_executions_update"} {
+		if !triggerExists(t, db, name) {
+			t.Fatalf("trigger %s missing after open", name)
+		}
+	}
+	var settingsTriggers int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name IN ('lado_dispatch_settings', 'lado_project_settings')`).Scan(&settingsTriggers); err != nil {
+		t.Fatalf("count settings triggers: %v", err)
+	}
+	if settingsTriggers != 0 {
+		t.Fatalf("settings tables have %d triggers, want none", settingsTriggers)
+	}
+
+	// A project's cap defaults to 1, and the added column keeps its CHECK.
+	mustExec(t, db, `INSERT INTO lado_project_settings (project_id, lado_mode, updated_at) VALUES ('p', 1, CURRENT_TIMESTAMP)`)
+	var projectCap int
+	if err := db.QueryRow(`SELECT max_concurrent FROM lado_project_settings WHERE project_id = 'p'`).Scan(&projectCap); err != nil {
+		t.Fatalf("read project cap: %v", err)
+	}
+	if projectCap != 1 {
+		t.Fatalf("lado_project_settings.max_concurrent = %d, want the default 1", projectCap)
+	}
+	for _, n := range []int{0, 9} {
+		if _, err := db.Exec(`UPDATE lado_project_settings SET max_concurrent = ? WHERE project_id = 'p'`, n); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("project cap %d: err = %v, want the CHECK refusal", n, err)
+		}
+	}
+
+	// Dispatch settings are a single row with a cap of 1-8.
+	insertSettings := func(id, maxConcurrent int) error {
+		_, err := db.Exec(`INSERT INTO lado_dispatch_settings (id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at)
+			VALUES (?, ?, 480, 1, CURRENT_TIMESTAMP)`, id, maxConcurrent)
+		return err
+	}
+	for _, row := range [][2]int{{2, 2}, {1, 0}, {1, 9}} {
+		if err := insertSettings(row[0], row[1]); err == nil || !strings.Contains(err.Error(), "CHECK constraint failed") {
+			t.Fatalf("dispatch settings id %d cap %d: err = %v, want the CHECK refusal", row[0], row[1], err)
+		}
+	}
+	if err := insertSettings(1, 2); err != nil {
+		t.Fatalf("dispatch settings: %v", err)
+	}
+
+	// One queue entry per approval, and one execution per entry.
+	insertLadoSnapshotFixture(t, db)
+	insertEntry := func(id, approvalID string) error {
+		_, err := db.Exec(`INSERT INTO lado_queue_entries (id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at)
+			VALUES (?, 'task', 'p', ?, 'snapshot', CURRENT_TIMESTAMP)`, id, approvalID)
+		return err
+	}
+	if err := insertEntry("entry-orphan", "missing"); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+		t.Fatalf("entry naming a missing approval: err = %v, want the FOREIGN KEY refusal", err)
+	}
+	if err := insertEntry("entry", "approval"); err != nil {
+		t.Fatalf("queue entry: %v", err)
+	}
+	if err := insertEntry("entry-again", "approval"); err == nil || !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		t.Fatalf("second entry for one approval: err = %v, want the UNIQUE refusal", err)
+	}
+	insertExecution := func(sessionID string) error {
+		_, err := db.Exec(`INSERT INTO lado_executions (session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id, attempt, started_at)
+			VALUES (?, 'task', 'entry', 'revision', 'approval', 'snapshot', 1, CURRENT_TIMESTAMP)`, sessionID)
+		return err
+	}
+	if err := insertExecution("session-1"); err != nil {
+		t.Fatalf("execution: %v", err)
+	}
+	if err := insertExecution("session-2"); err == nil || !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		t.Fatalf("second execution of one entry: err = %v, want the UNIQUE refusal", err)
+	}
+}
+
+// ladoMigrationProvider opens the LADO track on db the way migrateLado does.
+func ladoMigrationProvider(t *testing.T, db *sql.DB) *goose.Provider {
+	t.Helper()
+	migrations, err := fs.Sub(ladoMigrationsFS, "migrations_lado")
+	if err != nil {
+		t.Fatalf("open LADO migrations: %v", err)
+	}
+	provider, err := goose.NewProvider(goose.DialectSQLite3, db, migrations,
+		goose.WithTableName(ladoVersionTable),
+		goose.WithDisableGlobalRegistry(true),
+	)
+	if err != nil {
+		t.Fatalf("prepare LADO migrations: %v", err)
+	}
+	return provider
+}
+
+func TestLadoQueueMigrationRoundTrip(t *testing.T) {
+	db := openLadoDatabase(t, 1)
+	provider := ladoMigrationProvider(t, db)
+	if _, err := provider.DownTo(context.Background(), 5); err != nil {
+		t.Fatalf("down to 0005: %v", err)
+	}
+	for _, name := range []string{"lado_queue_entries", "lado_executions", "lado_dispatch_settings"} {
+		if tableExists(t, db, name) {
+			t.Fatalf("table %s survived the 0006 down migration", name)
+		}
+	}
+	if slices.Contains(tableColumns(t, db, "lado_project_settings"), "max_concurrent") {
+		t.Fatal("lado_project_settings.max_concurrent survived the 0006 down migration")
+	}
+
+	// A project row written before 0006 gets the default cap on the way up.
+	mustExec(t, db, `INSERT INTO lado_project_settings (project_id, lado_mode, updated_at) VALUES ('p', 1, CURRENT_TIMESTAMP)`)
+	if _, err := provider.Up(context.Background()); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
+	var mode, projectCap int
+	if err := db.QueryRow(`SELECT lado_mode, max_concurrent FROM lado_project_settings WHERE project_id = 'p'`).Scan(&mode, &projectCap); err != nil {
+		t.Fatalf("read project settings: %v", err)
+	}
+	if mode != 1 || projectCap != 1 {
+		t.Fatalf("project settings after the round trip = mode %d, cap %d; want mode 1, cap 1", mode, projectCap)
+	}
 }

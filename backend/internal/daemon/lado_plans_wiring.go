@@ -12,11 +12,13 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -31,7 +33,7 @@ const ladoDevPresenceEnv = "AO_LADO_DEV_PRESENCE"
 // daemon that made up its own shares it with nobody, so its approvals fail
 // closed.
 func newLadoPresence(token string, fromApp bool, log *slog.Logger) *ladopresence.Verifier {
-	dev := ladoDevMode(os.Getenv(ladoDevPresenceEnv))
+	dev := ladoDevPresenceOn(os.Getenv(ladoDevPresenceEnv))
 	if dev {
 		log.Warn("LADO dev presence: approvals are accepted without the desktop app's confirmation", "env", ladoDevPresenceEnv)
 	}
@@ -41,12 +43,29 @@ func newLadoPresence(token string, fromApp bool, log *slog.Logger) *ladopresence
 	return ladopresence.New(token, fromApp, dev, nil)
 }
 
-// ladoWorkDeps are the AO parts LADO's plans use. A missing part leaves the
-// plan loop off, as in tests that only need tasks.
+// ladoDevPresenceOn accepts the values AO's own toggles accept for "on".
+func ladoDevPresenceOn(raw string) bool {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "on", "true", "1", "yes":
+		return true
+	}
+	return false
+}
+
+// ladoWorkDeps are the AO parts LADO's plans and its dispatcher use. A
+// missing part leaves the plan loop off, or the dispatcher unable to start
+// workers, as in tests that only need tasks.
 type ladoWorkDeps struct {
 	orchestrators ladoOrchestratorSpawner
 	sender        ladoMessageSender
 	artifacts     *artifactversions.Capturer
+	// sessions starts and stops workers: AO's session service.
+	sessions ladoqueue.Sessions
+	// branches resolves the branch a worker starts from: the session
+	// manager, through its workspace.
+	branches ladoqueue.Branches
+	// memory reads memory pressure: the daemon's usage memory reader.
+	memory ladoqueue.Memory
 }
 
 // ladoOrchestratorSpawner is AO's session service.

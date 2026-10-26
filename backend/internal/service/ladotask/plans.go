@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	githubtracker "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/github"
+	gitlabtracker "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/gitlab"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
@@ -177,9 +179,16 @@ func (s *Service) readIssueWithComments(ctx context.Context, task domain.LadoTas
 	return issue, comments, nil
 }
 
+// issueReadFailed is the error of an issue the tracker did not give. When the
+// tracker answered that the issue does not exist, it also wraps
+// domain.ErrLadoIssueNotFound.
 func issueReadFailed(ref domain.IssueID, err error) error {
-	return apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", fmt.Sprintf("Could not read %s: %v", ref, err),
+	failed := apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", fmt.Sprintf("Could not read %s: %v", ref, err),
 		map[string]any{"issue": string(ref), "reason": err.Error()})
+	if errors.Is(err, githubtracker.ErrNotFound) || errors.Is(err, gitlabtracker.ErrNotFound) {
+		return fmt.Errorf("%w: %w", domain.ErrLadoIssueNotFound, failed)
+	}
+	return failed
 }
 
 // writeIssueFile puts the pinned snapshot where the orchestrator reads it.
@@ -228,11 +237,12 @@ func (s *Service) deliver(ctx context.Context, task domain.LadoTask, req domain.
 }
 
 // ApprovePlan approves one exact plan revision with a human-presence proof
-// (docs/LJY-PRD/TDD.md §5.2). sha256 is the plan hash and policySHA256 the
-// rule snapshot hash the developer saw; the approval, the rule snapshot, the
-// proof and the audit event commit together. A snapshot with a blocking
-// problem is approved too, and the task shows as Blocked. A task that needs
-// review, or is blocked, approves its latest revision again.
+// (docs/LJY-PRD/TDD.md §5.2) and queues it for the dispatcher. sha256 is the
+// plan hash and policySHA256 the rule snapshot hash the developer saw; the
+// approval, the rule snapshot, the queue entry, the proof and the audit event
+// commit together, and the approval supersedes the task's older open entries.
+// A snapshot with a blocking problem is approved too, and the task shows as
+// Blocked. Which tasks may be approved again is approvable's.
 func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRevisionID, sha256, policySHA256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error) {
 	rev, err := s.revision(ctx, revisionID)
 	if err != nil {
@@ -250,6 +260,10 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 	case !rev.Valid():
 		return domain.LadoPlanApproval{}, apierr.Conflict("LADO_PLAN_INVALID", "This plan has problems and cannot be approved. Ask for changes first.", nil)
 	}
+	// The state shows whether the rules changed since the last approval.
+	if err := approvable(s.withPolicy(ctx, task)); err != nil {
+		return domain.LadoPlanApproval{}, err
+	}
 	if _, err := s.deps.Blobs.Get(rev.SHA256, domain.LadoPlanMaxBytes); err != nil {
 		s.deps.Log.Error("LADO could not read a pinned plan before approval", "revision", rev.ID, "err", err)
 		return domain.LadoPlanApproval{}, apierr.Conflict("LADO_PLAN_BLOB_MISSING", "The pinned copy of this plan is missing or changed on disk, so it cannot be approved.", nil)
@@ -263,17 +277,6 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 	if proof.Dev {
 		actor = "human:dev-presence"
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"task":           task.ID,
-		"issue":          task.IssueRef,
-		"revision":       rev.Number,
-		"sha256":         rev.SHA256,
-		"issueSnapshot":  rev.IssueSnapshotSHA256,
-		"policySnapshot": snapshot.SHA256,
-		"blocking":       snapshot.Blocking,
-		"proof":          proof.Nonce,
-		"dev":            proof.Dev,
-	})
 	approval := domain.LadoPlanApproval{
 		ID:         domain.LadoPlanApprovalID("lado-approval-" + s.deps.NewID()),
 		RevisionID: rev.ID,
@@ -282,6 +285,24 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		ProofNonce: proof.Nonce,
 		ApprovedAt: now,
 	}
+	entry := domain.LadoQueueEntry{
+		ID:         domain.LadoQueueEntryID("lado-queue-" + s.deps.NewID()),
+		TaskID:     task.ID,
+		ProjectID:  task.ProjectID,
+		EnqueuedAt: now,
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"task":           task.ID,
+		"issue":          task.IssueRef,
+		"revision":       rev.Number,
+		"sha256":         rev.SHA256,
+		"issueSnapshot":  rev.IssueSnapshotSHA256,
+		"policySnapshot": snapshot.SHA256,
+		"blocking":       snapshot.Blocking,
+		"queueEntry":     entry.ID,
+		"proof":          proof.Nonce,
+		"dev":            proof.Dev,
+	})
 	snapshot.ApprovalID = approval.ID
 	approval, _, err = s.deps.Store.ApproveLadoPlan(ctx, approval, proof, domain.LadoAuditEvent{
 		At:          now,
@@ -290,7 +311,7 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		SubjectKind: "plan_revision",
 		SubjectID:   string(rev.ID),
 		Payload:     payload,
-	}, &snapshot)
+	}, &snapshot, &entry)
 	switch {
 	case errors.Is(err, domain.ErrLadoPresenceReplayed):
 		return domain.LadoPlanApproval{}, ladopresence.Replayed()
@@ -304,6 +325,28 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 		return domain.LadoPlanApproval{}, apierr.Internal("LADO_PLAN_APPROVE_FAILED", "Failed to save the approval")
 	}
 	return approval, nil
+}
+
+// approvable refuses an approval that would start a second worker for the
+// task: any approval while the session of the task's newest execution lives,
+// whatever its PR or deadline did, or after its work merged, and approving the
+// revision of a queued or dispatching task again. That task's approval covers
+// the latest revision, the only one ApprovePlan accepts; a newer revision
+// makes the task Planned, and its approval supersedes the queued entry. A task
+// that needs review, is blocked or failed approves its latest revision again.
+// The task's state must carry the rules as they are now (withPolicy), so a
+// queued task whose rules changed reads as needing review.
+func approvable(task domain.LadoTask) error {
+	state := task.State()
+	details := map[string]any{"taskId": string(task.ID), "state": string(state)}
+	live := task.Execution.SessionID != "" && !task.Execution.SessionTerminated
+	switch {
+	case live || state == domain.LadoTaskRunning || state == domain.LadoTaskCompleted:
+		return apierr.Conflict("LADO_TASK_RUNNING", "This task's worker still runs, or its work merged. LADO runs one worker per task, so no plan can be approved now.", details)
+	case state == domain.LadoTaskQueued || state == domain.LadoTaskDispatching:
+		return apierr.Conflict("LADO_TASK_ALREADY_QUEUED", "This plan is approved and waits for its worker. Only a newer revision can replace it.", details)
+	}
+	return nil
 }
 
 func superseded() error {
@@ -458,16 +501,18 @@ func errorMessage(err error) string {
 }
 
 // openTask returns a task that a plan request or approval may act on: not
-// cancelled, its issue open, its project in LADO mode.
+// cancelled, its issue open, its project in LADO mode. The issue's own state
+// decides, because a task whose worker runs or merged shows that state while
+// its issue is closed.
 func (s *Service) openTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, error) {
 	task, err := s.task(ctx, id)
 	if err != nil {
 		return domain.LadoTask{}, err
 	}
-	switch task.State() {
-	case domain.LadoTaskCancelled:
+	switch {
+	case !task.CancelledAt.IsZero():
 		return domain.LadoTask{}, apierr.Conflict("LADO_TASK_CANCELLED", "This task was cancelled.", nil)
-	case domain.LadoTaskClosedUnmerged:
+	case task.Issue.State == domain.IssueDone || task.Issue.State == domain.IssueCancelled:
 		return domain.LadoTask{}, apierr.Conflict("LADO_ISSUE_CLOSED", "The task's issue is closed. Reopen it on the tracker to plan this work.", nil)
 	}
 	if _, err := s.ladoRepos(ctx, task.ProjectID); err != nil {
@@ -489,13 +534,18 @@ func (s *Service) revision(ctx context.Context, id domain.LadoPlanRevisionID) (d
 
 // snapshotOf reads a request's pinned issue snapshot back.
 func (s *Service) snapshotOf(req domain.LadoPlanRequest) (domain.LadoIssueSnapshot, error) {
-	data, err := s.deps.Blobs.Get(req.IssueSnapshotSHA256, maxSnapshotBytes)
+	return s.pinnedIssue(req.IssueSnapshotSHA256)
+}
+
+// pinnedIssue reads a pinned issue snapshot back by its sha256.
+func (s *Service) pinnedIssue(sum string) (domain.LadoIssueSnapshot, error) {
+	data, err := s.deps.Blobs.Get(sum, maxSnapshotBytes)
 	if err != nil {
 		return domain.LadoIssueSnapshot{}, err
 	}
 	var snapshot domain.LadoIssueSnapshot
 	if err := json.Unmarshal(data, &snapshot); err != nil {
-		return domain.LadoIssueSnapshot{}, fmt.Errorf("decode issue snapshot %s: %w", req.IssueSnapshotSHA256, err)
+		return domain.LadoIssueSnapshot{}, fmt.Errorf("decode issue snapshot %s: %w", sum, err)
 	}
 	return snapshot, nil
 }

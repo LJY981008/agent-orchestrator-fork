@@ -1,5 +1,5 @@
 -- name: GetLadoProjectSettings :one
-SELECT project_id, lado_mode, updated_at
+SELECT project_id, lado_mode, updated_at, max_concurrent
 FROM lado_project_settings
 WHERE project_id = ?;
 
@@ -9,4 +9,4 @@ VALUES (?, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET
     lado_mode = excluded.lado_mode,
     updated_at = excluded.updated_at
-RETURNING project_id, lado_mode, updated_at;
+RETURNING project_id, lado_mode, updated_at, max_concurrent;

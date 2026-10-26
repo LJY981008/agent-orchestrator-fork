@@ -9,6 +9,9 @@ import "time"
 type LadoProjectSettings struct {
 	ProjectID ProjectID
 	// LadoMode puts the project's workers under the worker gate (TDD §6).
-	LadoMode  bool
-	UpdatedAt time.Time
+	LadoMode bool
+	// MaxConcurrent caps the executions that run at once in the project:
+	// LadoDefaultProjectMaxConcurrent until it sets one.
+	MaxConcurrent int
+	UpdatedAt     time.Time
 }

@@ -427,6 +427,30 @@ type LadoAuditEvent struct {
 	PrevSha256  string
 }
 
+type LadoDispatchSetting struct {
+	ID                int64
+	MaxConcurrent     int64
+	MaxRunMinutes     int64
+	HoldOnMemoryTight int64
+	UpdatedAt         time.Time
+}
+
+type LadoExecution struct {
+	SessionID        string
+	TaskID           string
+	QueueEntryID     string
+	PlanRevisionID   string
+	PlanApprovalID   string
+	PolicySnapshotID string
+	Attempt          int64
+	PlanBaseSha      string
+	DispatchBaseSha  string
+	BaseCommitsAhead sql.NullInt64
+	StartedAt        time.Time
+	DeadlineAt       sql.NullTime
+	TimedOutAt       sql.NullTime
+}
+
 type LadoPlanApproval struct {
 	ID         string
 	RevisionID string
@@ -493,9 +517,32 @@ type LadoPresenceProof struct {
 }
 
 type LadoProjectSetting struct {
-	ProjectID string
-	LadoMode  int64
-	UpdatedAt time.Time
+	ProjectID     string
+	LadoMode      int64
+	UpdatedAt     time.Time
+	MaxConcurrent int64
+}
+
+type LadoQueueEntry struct {
+	ID                   string
+	TaskID               string
+	ProjectID            string
+	PlanApprovalID       string
+	PolicySnapshotID     string
+	EnqueuedAt           time.Time
+	AttemptCount         int64
+	NextAttemptAt        sql.NullTime
+	LeaseToken           sql.NullString
+	ClaimedAt            sql.NullTime
+	LeaseExpiresAt       sql.NullTime
+	WaitingReason        string
+	ReviewRequiredReason string
+	BlockedReason        string
+	ErrorMessage         string
+	DispatchedSessionID  sql.NullString
+	FailedAt             sql.NullTime
+	SupersededAt         sql.NullTime
+	CancelledAt          sql.NullTime
 }
 
 type LadoRule struct {

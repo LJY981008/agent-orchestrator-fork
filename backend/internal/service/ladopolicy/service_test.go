@@ -201,8 +201,9 @@ func (fx *serviceFixture) plan(t *testing.T, task domain.LadoTask, ceiling domai
 	return fx.reload(t, task.ID), rev
 }
 
-// approve approves the revision with the rules' snapshot of it, as the task
-// service does, and returns the task and the stored snapshot.
+// approve approves the revision with the rules' snapshot of it and queues it
+// as "lado-queue-<revision>", as the task service does, and returns the task
+// and the stored snapshot.
 func (fx *serviceFixture) approve(t *testing.T, task domain.LadoTask, rev domain.LadoPlanRevision) (domain.LadoTask, domain.LadoPolicySnapshot) {
 	t.Helper()
 	ctx := context.Background()
@@ -219,7 +220,7 @@ func (fx *serviceFixture) approve(t *testing.T, task domain.LadoTask, rev domain
 		domain.LadoPlanApproval{ID: id, RevisionID: rev.ID, TaskID: task.ID, SHA256: rev.SHA256, ProofNonce: proof.Nonce, ApprovedAt: fx.now},
 		proof,
 		domain.LadoAuditEvent{At: fx.now, Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: string(rev.ID), Payload: json.RawMessage(`{}`)},
-		&snapshot,
+		&snapshot, &domain.LadoQueueEntry{ID: queueEntryOf(rev)},
 	); err != nil {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
@@ -228,6 +229,11 @@ func (fx *serviceFixture) approve(t *testing.T, task domain.LadoTask, rev domain
 		t.Fatalf("LadoPolicySnapshot = (%v, %v)", ok, err)
 	}
 	return fx.reload(t, task.ID), stored
+}
+
+// queueEntryOf names the queue entry approve gives the revision's approval.
+func queueEntryOf(rev domain.LadoPlanRevision) domain.LadoQueueEntryID {
+	return domain.LadoQueueEntryID("lado-queue-" + string(rev.ID))
 }
 
 // approvedTask adds a task of demo run by agent whose plan the developer
@@ -896,7 +902,7 @@ func TestDisablingKeepsHistoryAndSnapshots(t *testing.T) {
 		t.Fatal(err)
 	}
 	if effective, err := fx.svc.Effective(ctx, EffectiveInput{TaskID: task.ID}); err != nil || effective.Approved == nil || !effective.Approved.Matches ||
-		effective.Task.State() != domain.LadoTaskApproved {
+		effective.Task.State() != domain.LadoTaskQueued {
 		t.Fatalf("back to the approved rules: approved = %+v, %v, want a match", effective.Approved, err)
 	}
 	if _, err := fx.svc.Update(ctx, rule.ID, UpdateInput{BaseVersion: 2, Instruction: ptr("Third wording.")}); err != nil {
@@ -1293,6 +1299,102 @@ func TestImpactListsApprovedTasks(t *testing.T) {
 	wantAPIError(t, err, apierr.KindNotFound, "LADO_SCOPE_NOT_FOUND")
 	_, err = fx.svc.Effective(ctx, EffectiveInput{ProjectID: "other"})
 	wantAPIError(t, err, apierr.KindNotFound, "LADO_SCOPE_NOT_FOUND")
+}
+
+// A rule change reaches every task whose approval waits for its worker,
+// whatever stopped it on the way, and no task whose approval's worker runs or
+// ran: that execution keeps its snapshot.
+func TestImpactCountsQueuedAndFailedTasks(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	// Leases and executions are judged against the wall clock.
+	now := time.Now().UTC()
+	tokens := 0
+	// approveAndClaim approves a new task of demo and leases its entry, the
+	// one open entry no lease holds.
+	approveAndClaim := func(t *testing.T) (domain.LadoTask, string) {
+		t.Helper()
+		task, rev := fx.plan(t, fx.task(t, "claude-code"), domain.PermissionModeAuto)
+		task, _ = fx.approve(t, task, rev)
+		claimed, err := fx.store.ClaimLadoQueueEntries(ctx, now, now.Add(time.Hour), 1, nil, func() string {
+			tokens++
+			return fmt.Sprintf("token-%d", tokens)
+		})
+		if err != nil || len(claimed) != 1 || claimed[0].ID != queueEntryOf(rev) {
+			t.Fatalf("ClaimLadoQueueEntries = %+v, %v; want %s", claimed, err, queueEntryOf(rev))
+		}
+		return task, claimed[0].LeaseToken
+	}
+	// run links a live session to the leased entry of task.
+	run := func(t *testing.T, task domain.LadoTask, token string) domain.SessionID {
+		t.Helper()
+		session, err := fx.store.CreateSession(ctx, domain.SessionRecord{
+			ProjectID: "demo", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, CreatedAt: now, UpdatedAt: now,
+		})
+		if err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		if err := fx.store.LinkLadoExecution(ctx, task.Queue.ID, token, domain.LadoExecution{SessionID: session.ID, StartedAt: now}); err != nil {
+			t.Fatalf("LinkLadoExecution: %v", err)
+		}
+		return session.ID
+	}
+	mark := func(t *testing.T, what string, ok bool, err error) {
+		t.Helper()
+		if err != nil || !ok {
+			t.Fatalf("%s = %v, %v", what, ok, err)
+		}
+	}
+
+	dispatching, _ := approveAndClaim(t)
+	failed, token := approveAndClaim(t)
+	ok, err := fx.store.FailLadoQueueEntry(ctx, failed.Queue.ID, token, "spawn failed", now)
+	mark(t, "FailLadoQueueEntry", ok, err)
+	blocked, token := approveAndClaim(t)
+	ok, err = fx.store.MarkLadoQueueEntryBlocked(ctx, blocked.Queue.ID, token, domain.LadoBlockedBaseRefMismatch)
+	mark(t, "MarkLadoQueueEntryBlocked", ok, err)
+	edited, token := approveAndClaim(t)
+	ok, err = fx.store.MarkLadoQueueEntryReviewRequired(ctx, edited.Queue.ID, token, domain.LadoReviewIssueEdited)
+	mark(t, "MarkLadoQueueEntryReviewRequired", ok, err)
+	running, token := approveAndClaim(t)
+	run(t, running, token)
+	completed, token := approveAndClaim(t)
+	if err := fx.store.WritePR(ctx, domain.PullRequest{
+		URL: "https://github.com/acme/demo/pull/7", SessionID: run(t, completed, token), Number: 7, Merged: true, UpdatedAt: now,
+	}, nil, nil); err != nil {
+		t.Fatalf("WritePR: %v", err)
+	}
+	timedOut, token := approveAndClaim(t)
+	stopped := run(t, timedOut, token)
+	ok, err = fx.store.MarkLadoExecutionTimedOut(ctx, stopped, domain.LadoAuditEvent{
+		At: now, Actor: "lado", Action: "execution.timed_out", SubjectKind: "execution", SubjectID: string(stopped),
+	})
+	mark(t, "MarkLadoExecutionTimedOut", ok, err)
+	queued := fx.approvedTask(t, "claude-code")
+
+	wantStates := map[domain.LadoTaskID]domain.LadoTaskState{
+		dispatching.ID: domain.LadoTaskDispatching, failed.ID: domain.LadoTaskFailed, blocked.ID: domain.LadoTaskBlocked,
+		edited.ID: domain.LadoTaskReviewRequired, running.ID: domain.LadoTaskRunning, completed.ID: domain.LadoTaskCompleted,
+		timedOut.ID: domain.LadoTaskFailed, queued.ID: domain.LadoTaskQueued,
+	}
+	for id, want := range wantStates {
+		if got := fx.reload(t, id); got.State() != want {
+			t.Fatalf("%s state = %q (%s), want %q", id, got.State(), got.StateReason(), want)
+		}
+	}
+
+	got, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: domain.LadoRuleKoreanCommits, Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOn, DryRun: true})
+	if err != nil {
+		t.Fatalf("SetBinding: %v", err)
+	}
+	var listed []domain.LadoTaskID
+	for _, task := range got.Impact.Tasks {
+		listed = append(listed, task.ID)
+	}
+	want := []domain.LadoTaskID{dispatching.ID, failed.ID, blocked.ID, edited.ID, queued.ID}
+	if !slices.Equal(listed, want) {
+		t.Fatalf("impact tasks = %v, want the tasks waiting for their worker %v", listed, want)
+	}
 }
 
 func TestEffectiveNamesOneScope(t *testing.T) {

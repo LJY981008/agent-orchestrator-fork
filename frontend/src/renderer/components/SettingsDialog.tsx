@@ -1,4 +1,4 @@
-import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, ShieldCheck, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -19,6 +19,7 @@ import { ProjectEnvironmentSettings } from "./ProjectEnvironmentSettings";
 import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { CuesSettings } from "./CuesDialog";
 import { LadoProjectRulesSection } from "./lado/LadoProjectRulesSection";
+import { LadoProjectSection } from "./lado/LadoProjectSection";
 import { topbarDragStyle } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -94,8 +95,10 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 
 	const cloudOrgId = explicitCloudOrgId ?? cloudProject?.orgId;
 	const isCloudProjectSettings = displaySettings?.scope === "project" && cloudOrgId !== undefined;
-	// LADO fork: a local LADO project has a Rules page (docs/LJY-PRD/HARNESS.md §12).
-	const ladoProject = useLadoMode(localProjectScope && knownLocal && !cloudProject ? projectId : undefined);
+	// LADO fork: a local project has a LADO page, where its LADO mode is turned
+	// on and off, and a local LADO project a Rules page (docs/LJY-PRD/HARNESS.md §12).
+	const ladoProjectId = localProjectScope && knownLocal && !cloudProject ? projectId : undefined;
+	const ladoProject = useLadoMode(ladoProjectId);
 	const projectSections: Array<{
 		id: ProjectSettingsSection;
 		label: string;
@@ -117,6 +120,7 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	if (!remoteHostId && !isCloudProjectSettings) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
+		if (ladoProjectId) projectSections.push({ id: "lado", label: t("lado.project.title"), icon: ShieldCheck });
 		if (ladoProject) projectSections.push({ id: "rules", label: t("lado.rules.title"), icon: ScrollText });
 	}
 
@@ -295,6 +299,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
 				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "lado") {
+				return <LadoProjectSection projectId={displaySettings.projectId} />;
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "rules") {
 				return <LadoProjectRulesSection projectId={displaySettings.projectId} />;

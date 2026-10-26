@@ -31,14 +31,18 @@ type LadoTaskResponse struct {
 	ID        string `json:"id"`
 	ProjectID string `json:"projectId"`
 	// Repository is the canonical id of the repository that holds the issue.
-	Repository  string                `json:"repository" description:"Canonical id of the repository that holds the issue, such as github:owner/repo."`
-	State       string                `json:"state" enum:"draft,planned,review_required,blocked,approved,cancelled,closed_unmerged" description:"Derived task state. review_required: the rules changed since the approval; blocked: the approval's rule snapshot holds a blocking problem."`
-	Issue       LadoTaskIssueResponse `json:"issue"`
-	Agent       string                `json:"agent,omitempty" description:"Agent chosen for the task's execution."`
-	Model       string                `json:"model,omitempty" description:"Model chosen for the task's execution."`
-	Plan        LadoTaskPlanResponse  `json:"plan"`
-	CreatedAt   time.Time             `json:"createdAt"`
-	CancelledAt *time.Time            `json:"cancelledAt,omitempty"`
+	Repository string `json:"repository" description:"Canonical id of the repository that holds the issue, such as github:owner/repo."`
+	State      string `json:"state" enum:"draft,planned,review_required,blocked,approved,queued,dispatching,running,failed,completed,cancelled,closed_unmerged" description:"Derived task state. review_required: the plan needs a new approval; blocked: the plan or the setup must change first; queued: the approved plan waits for the dispatcher; dispatching: LADO starts its worker; running: the worker session lives or its PR is open; failed: the worker did not start, timed out or ended without a PR; completed: the PR merged; closed_unmerged: the PR or the issue closed without a merge. approved is no longer sent."`
+	// StateReason is domain.LadoTask.StateReason.
+	StateReason string                     `json:"stateReason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,approved_before_queue,blocking_snapshot,base_ref_mismatch,agent_unsupported,attempts_exhausted,timed_out,ended_without_pr,slot_global,slot_project,memory_tight,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the task needs review, is blocked or failed, or what its queued plan waits for, for the app to translate."`
+	Issue       LadoTaskIssueResponse      `json:"issue"`
+	Agent       string                     `json:"agent,omitempty" description:"Agent chosen for the task's execution."`
+	Model       string                     `json:"model,omitempty" description:"Model chosen for the task's execution."`
+	Plan        LadoTaskPlanResponse       `json:"plan"`
+	Queue       *LadoTaskQueueResponse     `json:"queue,omitempty" description:"The queue entry of the newest approval; omitted without one."`
+	Execution   *LadoTaskExecutionResponse `json:"execution,omitempty" description:"The newest execution; omitted before the first worker started."`
+	CreatedAt   time.Time                  `json:"createdAt"`
+	CancelledAt *time.Time                 `json:"cancelledAt,omitempty"`
 }
 
 // LadoTaskListResponse lists a project's tasks, oldest first.

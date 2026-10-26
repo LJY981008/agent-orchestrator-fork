@@ -614,7 +614,7 @@ func Run() error {
 	sessMgr = wiredSessMgr
 	// LADO fork: the worker gate goes in before anything can spawn or send
 	// (docs/LJY-PRD/TDD.md §6).
-	ladoProjects := wireLado(store, wiredSessMgr, chatSvc, log)
+	ladoProjects := wireLado(store, wiredSessMgr, chatSvc)
 	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -683,7 +683,7 @@ func Run() error {
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
-	ladoConnections, ladoTasks, ladoRules := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions}, log)
+	ladoConnections, ladoTasks, ladoRules, ladoQueue := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader}, log)
 	ladoTasksDone := ladoTasks.Start(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -880,6 +880,9 @@ func Run() error {
 	agentSvc.WarmCodexAccounts()
 	automationSvc, automationDone := startAutomations(ctx, store, sessionSvc, log)
 	lcStack.automationDone = automationDone
+	// LADO fork: the dispatcher spawns and stops workers, so like automations
+	// it starts after the startup reconcile above has settled the sessions.
+	ladoQueueDone := ladoQueue.Start(ctx)
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
 	// Push-device registry: persisted phones that receive OS push notifications.
@@ -1020,6 +1023,7 @@ func Run() error {
 		LadoConnections:    ladoConnections,
 		LadoTasks:          ladoTasks,
 		LadoRules:          ladoRules,
+		LadoQueue:          ladoQueue,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1218,6 +1222,7 @@ func Run() error {
 	managedPreview.Close()
 	<-previewDone
 	<-ladoTasksDone // LADO fork
+	<-ladoQueueDone // LADO fork
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight
 	// turns; the replacement daemon reconnects to the same initialized stream and

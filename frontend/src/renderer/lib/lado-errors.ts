@@ -1,10 +1,10 @@
-// LADO fork: LADO's daemon errors, connection check problems and rules
-// problems in the developer's language. The daemon answers in English with a
-// stable code; the app translates the code and fills in the details the
-// daemon sends.
+// LADO fork: LADO's daemon errors, connection check problems, rules problems
+// and the reasons behind a task's or a queue entry's state in the developer's
+// language. The daemon answers in English with a stable code; the app
+// translates the code and fills in the details the daemon sends.
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/messages";
-import { LadoApiError, type LadoConnectionCheck } from "./lado";
+import { LadoApiError, type LadoConnectionCheck, type LadoQueueReason, type LadoTaskStateReason } from "./lado";
 
 type LadoErrorKey = Extract<MessageKey, `lado.error.${string}`>;
 type LadoProblemKey = Extract<MessageKey, `lado.problem.${string}`>;
@@ -113,9 +113,41 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_RULES_CHANGED: "lado.error.rulesChanged",
 	LADO_RULES_LOAD_FAILED: "lado.error.internal",
 	LADO_RULES_SAVE_FAILED: "lado.error.internal",
+	// The queue, its runs and the dispatch settings (step 6).
+	LADO_TASK_ALREADY_QUEUED: "lado.error.taskAlreadyQueued",
+	LADO_TASK_RUNNING: "lado.error.taskRunning",
+	LADO_APPROVAL_ABOVE_CEILING: "lado.error.approvalAboveCeiling",
+	LADO_EXECUTION_FIXED: "lado.error.executionFixed",
+	LADO_EXECUTION_NOT_FOUND: "lado.error.executionNotFound",
+	LADO_DISPATCH_SETTINGS_INVALID: "lado.error.dispatchSettingsInvalid",
+	LADO_SETTINGS_EMPTY: "lado.error.settingsEmpty",
+	LADO_TRACKER_INTAKE_ENABLED: "lado.error.trackerIntakeEnabled",
+	// The desktop app's main process, before it reaches the daemon.
+	LADO_PROJECT_ID_INVALID: "lado.error.projectNotFound",
+	LADO_QUEUE_LOAD_FAILED: "lado.error.internal",
+	LADO_EXECUTION_LOAD_FAILED: "lado.error.internal",
+	LADO_DISPATCH_SETTINGS_LOAD_FAILED: "lado.error.internal",
+	LADO_DISPATCH_SETTINGS_UPDATE_FAILED: "lado.error.internal",
+	LADO_SETTINGS_UPDATE_FAILED: "lado.error.internal",
+	// A queue entry's error when the tracker no longer has the task's issue.
+	LADO_ISSUE_NOT_FOUND: "lado.error.issueNotFound",
 	// The app sends includeArchived as a boolean; anything else is a bug.
 	INVALID_QUERY: "lado.error.internal",
 };
+
+// LADO_EXECUTION_FIXED also refuses restoring a run LADO stopped for good;
+// its reason says why, and an agent or interface change has none.
+const restoreKeys: Partial<Record<string, LadoErrorKey>> = {
+	timed_out: "lado.error.restoreTimedOut",
+	task_cancelled: "lado.error.restoreCancelled",
+};
+
+function errorKey(code: string, details: Record<string, unknown> | undefined): LadoErrorKey | undefined {
+	if (code === "LADO_EXECUTION_FIXED" && typeof details?.reason === "string") {
+		return restoreKeys[details.reason] ?? errorKeys[code];
+	}
+	return errorKeys[code];
+}
 
 const problemKeys: Partial<Record<string, LadoProblemKey>> = {
 	token_missing: "lado.problem.tokenMissing",
@@ -131,19 +163,22 @@ const problemKeys: Partial<Record<string, LadoProblemKey>> = {
 	ssh_failed: "lado.problem.sshFailed",
 };
 
-// The details LADO's messages name; a detail the daemon left out reads empty.
-function detailValues(details: Record<string, unknown> | undefined) {
+// The details LADO's messages name; a detail the daemon left out reads empty,
+// and a permission ceiling reads as AO's project settings name the mode.
+function detailValues(t: TFunction, details: Record<string, unknown> | undefined) {
 	const text = (name: string) => {
 		const value = details?.[name];
 		return typeof value === "string" || typeof value === "number" ? String(value) : "";
 	};
 	return {
 		reason: text("reason"),
+		min: text("min"),
 		max: text("max"),
 		issue: text("issue"),
 		repository: text("repository"),
 		comment: text("comment"),
 		rule: text("rule"),
+		ceiling: modeLabel(t, text("ceiling")),
 	};
 }
 
@@ -154,10 +189,25 @@ function detailValues(details: Record<string, unknown> | undefined) {
  */
 export function ladoErrorText(t: TFunction, error: unknown, fallback: LadoErrorKey = "lado.error.unreachable"): string {
 	if (error instanceof LadoApiError && error.code) {
-		const key = errorKeys[error.code];
-		return key ? t(key, detailValues(error.details)) : error.message;
+		const key = errorKey(error.code, error.details);
+		return key ? t(key, detailValues(t, error.details)) : error.message;
 	}
 	return t(fallback);
+}
+
+// The codes that lead a queue entry's error and say all there is to say, so
+// the app words them; any other error is the daemon's own text.
+const queueErrorCodes = new Set(["LADO_ISSUE_NOT_FOUND"]);
+
+/**
+ * Why a task's last attempt failed, as its queue entry records it: the daemon
+ * cleans the text up (one line, no secrets) and leads it with the error code
+ * when there is one. LADO's own errors read in the developer's language.
+ */
+export function ladoQueueErrorText(t: TFunction, error: string): string {
+	const code = /^([A-Z][A-Z0-9_]*):/.exec(error)?.[1];
+	const key = code && queueErrorCodes.has(code) ? errorKeys[code] : undefined;
+	return key ? t(key) : error;
 }
 
 /** A failed connection check, translated, with what the tool printed if any. */
@@ -238,6 +288,11 @@ const modeKeys: Partial<Record<string, MessageKey>> = {
 	"bypass-permissions": "settings.project.permissionBypass",
 };
 
+function modeLabel(t: TFunction, mode: string): string {
+	const key = modeKeys[mode];
+	return key ? t(key) : mode;
+}
+
 /** How a problem names rules and agents; both default to their ids. */
 export type LadoProblemLabels = { rule?: (ruleId: string) => string; agent?: (harness: string) => string };
 
@@ -268,4 +323,40 @@ export function ladoPolicyProblemText(
 		reason: detail("reason"),
 		rules: (problem.rules ?? []).map((ruleId) => labels.rule?.(ruleId) ?? ruleId).join(", "),
 	});
+}
+
+type LadoReasonKey = Extract<MessageKey, `lado.reason.${string}`>;
+
+// Why a task needs review, is blocked or failed, or what its queued plan
+// waits for (backend/internal/domain/lado_queue.go). Keyed by the API's enums,
+// so a reason the daemon adds fails the typecheck until it has words here.
+const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> = {
+	rules_changed: "lado.reason.rules_changed",
+	issue_edited: "lado.reason.issue_edited",
+	plan_superseded: "lado.reason.plan_superseded",
+	approved_before_queue: "lado.reason.approved_before_queue",
+	blocking_snapshot: "lado.reason.blocking_snapshot",
+	base_ref_mismatch: "lado.reason.base_ref_mismatch",
+	agent_unsupported: "lado.reason.agent_unsupported",
+	attempts_exhausted: "lado.reason.attempts_exhausted",
+	timed_out: "lado.reason.timed_out",
+	ended_without_pr: "lado.reason.ended_without_pr",
+	slot_global: "lado.reason.slot_global",
+	slot_project: "lado.reason.slot_project",
+	memory_tight: "lado.reason.memory_tight",
+	issue_unreadable: "lado.reason.issue_unreadable",
+	retry: "lado.reason.retry",
+	lado_mode_off: "lado.reason.lado_mode_off",
+	run_live: "lado.reason.run_live",
+};
+
+/**
+ * Why a task or a queue entry is where it is, in the developer's language: a
+ * task's stateReason or an entry's reason. None reads empty; a reason from a
+ * newer daemon shows as is.
+ */
+export function ladoReasonText(t: TFunction, reason: string | undefined): string {
+	if (!reason) return "";
+	const key = (reasonKeys as Partial<Record<string, LadoReasonKey>>)[reason];
+	return key ? t(key) : reason;
 }

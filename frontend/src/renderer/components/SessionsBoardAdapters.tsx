@@ -39,6 +39,7 @@ import { ProductExternalLink } from "./ProductExternalLink";
 import { SessionArchiveDialog, type SessionArchiveChoice } from "./SessionArchiveDialog";
 import { ArtifactPreviewCard } from "./SessionLinkPreviewCard";
 import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
+import { LadoSessionLine } from "./lado/LadoSessionLine";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
 export function toBoardSessionPresentation(
@@ -265,7 +266,11 @@ function DesktopSessionCard({
 			action={action}
 			artifacts={
 				interactive && onOpenArtifact ? (
-					<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} session={session} />
+					<>
+						{/* LADO fork: a LADO run's plan revision and rules hash. */}
+						<LadoSessionLine session={session} />
+						<BoardArtifactLinks artifacts={sessionArtifacts(session)} onOpen={onOpenArtifact} session={session} />
+					</>
 				) : undefined
 			}
 			branchAction={branchAction}

@@ -446,6 +446,7 @@ if (typeof window !== "undefined") {
 			presence: {
 				approvePlan: async () => null,
 				changeRule: async () => null,
+				setLadoMode: async () => null,
 			},
 		},
 	};

@@ -3,9 +3,12 @@ import { LADO_DESKTOP_GET_CHANNEL, LADO_DESKTOP_SET_CHANNEL, type LadoDesktopSet
 import {
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
+	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoCeilingMode,
 	type LadoPresenceApproveRequest,
 	type LadoPresenceApproveResult,
+	type LadoPresenceModeRequest,
+	type LadoPresenceModeResult,
 	type LadoPresenceRuleChangeRequest,
 	type LadoPresenceRuleChangeResult,
 } from "./shared/lado-presence";
@@ -815,9 +818,10 @@ const api = {
 			set: (patch: LadoDesktopSettingsPatch) =>
 				ipcRenderer.invoke(LADO_DESKTOP_SET_CHANNEL, patch) as Promise<LadoDesktopSettings | null>,
 		},
-		// LADO fork: main confirms natively and signs the approval or the
-		// permission ceiling change; only the revision id, or the rule id and
-		// mode, cross (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
+		// LADO fork: main confirms natively and signs the approval, the
+		// permission ceiling change or turning LADO mode off; only the revision
+		// id, the rule id and mode, or the project id and mode, cross
+		// (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 		presence: {
 			approvePlan: (revisionId: string) =>
 				ipcRenderer.invoke(LADO_PRESENCE_APPROVE_PLAN_CHANNEL, {
@@ -828,6 +832,11 @@ const api = {
 					ruleId,
 					ceiling: { mode },
 				} satisfies LadoPresenceRuleChangeRequest) as Promise<LadoPresenceRuleChangeResult | null>,
+			setLadoMode: (projectId: string, on: boolean) =>
+				ipcRenderer.invoke(LADO_PRESENCE_SET_LADO_MODE_CHANNEL, {
+					projectId,
+					ladoMode: on,
+				} satisfies LadoPresenceModeRequest) as Promise<LadoPresenceModeResult | null>,
 		},
 	},
 };

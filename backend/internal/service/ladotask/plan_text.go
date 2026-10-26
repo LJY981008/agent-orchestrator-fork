@@ -137,12 +137,21 @@ This project runs in LADO mode. Its work items are issues, and a worker starts o
 - Keep the plan format a request names. Every version of a plan file you save becomes a new revision, and only the latest revision can be approved.
 - When the developer asks for a changed plan, rewrite the same file.`
 
-// PromptSource gives an orchestrator its LADO instructions in a LADO
-// project. It needs only the project settings, so the daemon installs it
-// before any session starts or restores.
+// PromptSource gives an orchestrator its LADO instructions in a LADO project,
+// and a worker LADO dispatched the rules text of its approval. It needs only
+// stored facts, so the daemon installs it before any session starts or
+// restores.
 type PromptSource struct {
 	Settings interface {
 		LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
+	}
+	// Sessions reads a worker's client request id, and Policies the rule
+	// snapshot of the queue entry it names.
+	Sessions interface {
+		GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+	}
+	Policies interface {
+		LadoEntryPolicyByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoEntryPolicy, bool, error)
 	}
 }
 
@@ -157,4 +166,40 @@ func (p PromptSource) OrchestratorSection(ctx context.Context, projectID domain.
 		return "", nil
 	}
 	return orchestratorSection, nil
+}
+
+// WorkerSection returns the rules text of a worker LADO dispatched: the
+// prompt of the rule snapshot of the queue entry its client request id
+// names. Every rebuild of the worker's instructions reads it from that stored
+// snapshot, never from the rules as they are now. It is "" for any other
+// session and for a snapshot without rules text.
+func (p PromptSource) WorkerSection(ctx context.Context, sessionID domain.SessionID) (string, error) {
+	rec, found, err := p.Sessions.GetSession(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("read session %s: %w", sessionID, err)
+	}
+	if !found {
+		return "", nil
+	}
+	policy, ok, err := p.Policies.LadoEntryPolicyByClientRequest(ctx, rec.ClientRequestID)
+	if err != nil {
+		return "", fmt.Errorf("read the LADO rules of session %s: %w", sessionID, err)
+	}
+	if !ok {
+		return "", nil
+	}
+	return policy.Prompt, nil
+}
+
+// Section is the session manager's LADO section of a session's standing
+// instructions (sessionmanager.LadoPromptSection): OrchestratorSection for an
+// orchestrator, WorkerSection for a worker.
+func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
+	switch kind {
+	case domain.KindOrchestrator:
+		return p.OrchestratorSection(ctx, projectID)
+	case domain.KindWorker:
+		return p.WorkerSection(ctx, sessionID)
+	}
+	return "", nil
 }

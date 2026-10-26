@@ -1,10 +1,11 @@
 // LADO fork: the Plan and Queued lanes, LADO's tasks in front of the session
 // board (docs/LJY-PRD/TDD.md §3.3). Plan holds the tasks the human acts on
-// next (Draft, Planned, and approved tasks whose rules need review or block
-// the run); Queued holds the approved ones LADO acts on next. A
-// task card is not a session card: it stands for an issue that has no session
-// yet. DESIGN.md's decisions log records the lanes, the card and the task view.
-import type { TFunction } from "i18next";
+// next (Draft, Planned, approved tasks whose rules need review or block the
+// run, and failed runs); Queued holds the approved ones LADO acts on next,
+// waiting or starting. Once a worker starts, its session card on the board
+// stands for the task, so the task leaves the lanes. A task card is not a
+// session card: it stands for an issue that has no session yet. DESIGN.md's
+// decisions log records the lanes, the card and the task view.
 import { Ban } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -16,6 +17,7 @@ import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+import { ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoTaskDialog } from "./LadoTaskDialog";
 
 export function LadoLanes({ projectId }: { projectId: string }) {
@@ -25,9 +27,9 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 	const cancelTask = useCancelLadoTask(projectId);
 	const [cancelling, setCancelling] = useState<LadoTask | null>(null);
 	const [openTaskId, setOpenTaskId] = useState<string | null>(null);
-	const all = tasks.data ?? [];
-	const queued = orderTasks(all.filter((task) => task.state === "approved"));
-	const planned = orderTasks(all.filter((task) => task.state !== "approved"));
+	const all = (tasks.data ?? []).filter(inLanes);
+	const queued = orderQueue(all.filter(isQueued));
+	const planned = orderTasks(all.filter((task) => !isQueued(task)));
 	const cardProps = {
 		repositories: repositories.data ?? [],
 		onCancel: setCancelling,
@@ -130,6 +132,19 @@ function LadoLane({
 	);
 }
 
+// The daemon leaves cancelled tasks out; the lanes also leave out the tasks
+// whose worker started, since its session card carries them. A failed run
+// stays, to be approved again, and so does an issue closed before any run.
+function inLanes(task: LadoTask): boolean {
+	if (task.state === "running" || task.state === "completed") return false;
+	return task.state !== "closed_unmerged" || task.execution === undefined;
+}
+
+// Approved plans LADO starts next; approved is what an older daemon sends.
+function isQueued(task: LadoTask): boolean {
+	return task.state === "queued" || task.state === "dispatching" || task.state === "approved";
+}
+
 // Like the session lanes, newest first; tasks whose issue closed go last.
 function orderTasks(tasks: LadoTask[]): LadoTask[] {
 	return [...tasks].sort((left, right) => {
@@ -138,44 +153,12 @@ function orderTasks(tasks: LadoTask[]): LadoTask[] {
 	});
 }
 
-type TaskStatusTone = "muted" | "attention" | "ready";
-
-/**
- * The card's one status line. A plan waiting for review is the human's next
- * decision, so it takes the needs-you color; an approved plan reads as ready.
- * An approval whose rules changed since (review_required), or whose rules
- * block the run (blocked), needs the human again, unless a new plan it waits
- * for is requested.
- */
-export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; tone: TaskStatusTone } {
-	switch (task.state) {
-		case "closed_unmerged":
-			return { label: t("lado.task.state.closed"), tone: "muted" };
-		case "approved":
-			return { label: t("lado.task.state.approved"), tone: "ready" };
-		case "review_required":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			return { label: t("lado.task.state.reviewRequired"), tone: "attention" };
-		case "blocked":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			return { label: t("lado.task.state.blocked"), tone: "attention" };
-		case "planned":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			return task.plan.latest?.valid
-				? { label: t("lado.task.state.planned"), tone: "attention" }
-				: { label: t("lado.task.state.planInvalid"), tone: "attention" };
-		default:
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			if (task.plan.requestError) return { label: t("lado.task.state.planRequestFailed"), tone: "attention" };
-			return { label: t("lado.task.state.draft"), tone: "muted" };
-	}
+// In the order the dispatcher takes them: the oldest approval first. The
+// times are compared as instants, since the daemon trims fractional seconds.
+function orderQueue(tasks: LadoTask[]): LadoTask[] {
+	const enqueued = (task: LadoTask) => Date.parse(task.queue?.enqueuedAt ?? "") || 0;
+	return [...tasks].sort((left, right) => enqueued(left) - enqueued(right));
 }
-
-const toneDotClass: Record<TaskStatusTone, string> = {
-	muted: "bg-[var(--color-status-idle)]",
-	attention: "bg-[var(--color-status-needs-you)]",
-	ready: "bg-[var(--color-status-ready)]",
-};
 
 function LadoTaskCard({
 	task,
@@ -188,8 +171,9 @@ function LadoTaskCard({
 	onCancel: (task: LadoTask) => void;
 	onOpen: (task: LadoTask) => void;
 }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const status = ladoTaskStatus(task, t);
+	const reason = ladoTaskReason(task, t, i18n.language);
 	const issueLabel = ladoIssueLabel(task.issue.number, task.repository, repositories);
 	return (
 		<div
@@ -241,12 +225,20 @@ function LadoTaskCard({
 					</ProductExternalLink>
 				</div>
 			</div>
-			<div className="flex min-w-0 items-center gap-2 border-t border-border px-3.5 py-2.5">
-				<span className={cn("size-1.5 shrink-0 rounded-full", toneDotClass[status.tone])} aria-hidden="true" />
-				<span className="min-w-0 truncate text-2xs font-medium text-muted-foreground" data-testid="lado-task-state">
-					{status.label}
-				</span>
-				<span className="ml-auto shrink-0 tabular-nums text-2xs text-muted-foreground">{formatTimeCompact(task.createdAt)}</span>
+			<div className="border-t border-border px-3.5 py-2.5">
+				<div className="flex min-w-0 items-center gap-2">
+					<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
+					<span className="min-w-0 truncate text-2xs font-medium text-muted-foreground" data-testid="lado-task-state">
+						{status.label}
+					</span>
+					<span className="ml-auto shrink-0 tabular-nums text-2xs text-muted-foreground">{formatTimeCompact(task.createdAt)}</span>
+				</div>
+				{/* Under the label, past the dot and its gap. */}
+				{reason ? (
+					<p className="mt-1 truncate pl-3.5 text-2xs text-muted-foreground" title={reason} data-testid="lado-task-reason">
+						{reason}
+					</p>
+				) : null}
 			</div>
 		</div>
 	);

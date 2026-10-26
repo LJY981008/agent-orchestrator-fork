@@ -381,6 +381,7 @@ export const aoBridge: AoBridge =
 			presence: {
 				approvePlan: async () => null,
 				changeRule: async () => null,
+				setLadoMode: async () => null,
 			},
 		},
 	} satisfies AoBridge);

@@ -74,6 +74,25 @@ END`,
 		"WHEN OLD.delivered_at IS NOT NEW.delivered_at OR OLD.failed_at IS NOT NEW.failed_at"),
 	ladoPlanCDCTrigger("lado_cdc_plan_revisions_insert", "AFTER INSERT ON lado_plan_revisions", ""),
 	ladoPlanCDCTrigger("lado_cdc_plan_approvals_insert", "AFTER INSERT ON lado_plan_approvals", ""),
+	// A queue entry publishes its task's change when it is made and when a
+	// fact the task's state or its reason reads changes; lease times, the
+	// next attempt and the error text change only with one of those.
+	ladoPlanCDCTrigger("lado_cdc_queue_entries_insert", "AFTER INSERT ON lado_queue_entries", ""),
+	ladoPlanCDCTrigger("lado_cdc_queue_entries_update", "AFTER UPDATE ON lado_queue_entries",
+		`WHEN OLD.lease_token IS NOT NEW.lease_token OR
+    OLD.waiting_reason IS NOT NEW.waiting_reason OR
+    OLD.review_required_reason IS NOT NEW.review_required_reason OR
+    OLD.blocked_reason IS NOT NEW.blocked_reason OR
+    OLD.dispatched_session_id IS NOT NEW.dispatched_session_id OR
+    OLD.failed_at IS NOT NEW.failed_at OR
+    OLD.superseded_at IS NOT NEW.superseded_at OR
+    OLD.cancelled_at IS NOT NEW.cancelled_at OR
+    OLD.attempt_count IS NOT NEW.attempt_count`),
+	// An execution publishes on its session when it starts and when it times
+	// out. Dispatch settings and project caps publish nothing.
+	ladoExecutionCDCTrigger("lado_cdc_executions_insert", "AFTER INSERT ON lado_executions", ""),
+	ladoExecutionCDCTrigger("lado_cdc_executions_update", "AFTER UPDATE ON lado_executions",
+		"WHEN OLD.timed_out_at IS NOT NEW.timed_out_at"),
 	// Rules apply in every LADO project, so a rule, a new version or a Global
 	// binding publishes a lado_rules change in each project with LADO mode on.
 	// Versions never change, and their deletes follow the rule's.
@@ -98,6 +117,26 @@ BEGIN
     INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
     SELECT projects.id, NULL, 'session_updated',
         json_object('kind', 'lado_task', 'taskId', lado_tasks.id, 'projectId', projects.id),
+        datetime('now')
+    FROM lado_tasks
+    JOIN projects ON projects.id = lado_tasks.project_id
+    WHERE lado_tasks.id = NEW.task_id;
+END`
+}
+
+// ladoExecutionCDCTrigger publishes a change of the execution NEW names, on
+// its session, in its task's project. change_log names only sessions that
+// exist, so an execution whose session row is gone publishes without one.
+func ladoExecutionCDCTrigger(name, event, when string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, (SELECT sessions.id FROM sessions WHERE sessions.id = NEW.session_id), 'session_updated',
+        json_object('kind', 'lado_execution', 'sessionId', NEW.session_id, 'taskId', lado_tasks.id, 'projectId', projects.id),
         datetime('now')
     FROM lado_tasks
     JOIN projects ON projects.id = lado_tasks.project_id

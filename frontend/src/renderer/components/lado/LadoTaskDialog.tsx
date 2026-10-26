@@ -4,11 +4,14 @@
 // request changes, approve. Approving goes through the desktop app's native
 // confirmation (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md)
 // and fixes the rules that apply at that moment; the Rules tab shows them.
+// Once approved, the footer follows the queue and the run: what the queued
+// plan waits for, then the worker's session and PR, or why the run failed.
 import { useQueryClient } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { X } from "lucide-react";
 import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useApproveLadoPlan, useLadoPlan, useLadoTaskView, useRequestLadoPlan } from "../../hooks/useLado";
+import { useApproveLadoPlan, useLadoPlan, useLadoTasks, useLadoTaskView, useRequestLadoPlan } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
 import {
 	fetchLadoEffective,
@@ -18,9 +21,11 @@ import {
 	type LadoIssueComment,
 	type LadoPlan,
 	type LadoRepository,
+	type LadoTask,
 	type LadoTaskView,
 } from "../../lib/lado";
-import { ladoErrorText, ladoPlanProblemText } from "../../lib/lado-errors";
+import { ladoErrorText, ladoPlanProblemText, ladoQueueErrorText, ladoReasonText } from "../../lib/lado-errors";
+import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import { ChatMarkdown } from "../chat/ChatMarkdown";
 import { ProductExternalLink } from "../ProductExternalLink";
@@ -36,6 +41,7 @@ import {
 } from "../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
+import { ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoTaskRules } from "./LadoTaskRules";
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
@@ -91,14 +97,24 @@ export function LadoTaskDialog({
 				) : view.isError || !data || !taskId ? (
 					<p className="p-5 text-caption leading-4 text-error" role="alert">{ladoErrorText(t, view.error)}</p>
 				) : (
-					<TaskViewBody projectId={projectId} taskId={taskId} view={data} />
+					<TaskViewBody projectId={projectId} taskId={taskId} view={data} onClose={() => onOpenChange(false)} />
 				)}
 			</DialogContent>
 		</Dialog>
 	);
 }
 
-function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: string; view: LadoTaskView }) {
+function TaskViewBody({
+	projectId,
+	taskId,
+	view,
+	onClose,
+}: {
+	projectId: string;
+	taskId: string;
+	view: LadoTaskView;
+	onClose: () => void;
+}) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const requestPlan = useRequestLadoPlan(projectId, taskId);
@@ -117,19 +133,29 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 	const [changing, setChanging] = useState(false);
 	const [note, setNote] = useState("");
 	const noteId = useId();
-	const task = view.task;
+	// The project's task list follows the worker's session and PR, which do
+	// not refresh the view; the view reads the issue again only when it opens.
+	const listed = useLadoTasks(projectId).data?.find((candidate) => candidate.id === taskId);
+	const task = listed ?? view.task;
 	const open = task.state !== "cancelled" && task.state !== "closed_unmerged";
 	const pending = task.plan.requestPending;
 	const shown = plan.data;
-	// An approved plan is approved again when the rules changed since. When the
-	// rules it was approved with block the run, approving again would sign the
-	// same rules; fixing the problems (agent or rules) changes them, and the
-	// task then needs review, so a blocked plan is neither ready nor approvable.
-	const reapprove = task.state === "review_required";
+	// An approved plan is approved again when the rules or the issue changed
+	// since, or when its run failed. When the rules it was approved with block
+	// the run, approving again would sign the same rules; fixing the problems
+	// (agent or rules) changes them, and the task then needs review, so a
+	// blocked plan is neither ready nor approvable.
+	const reapprove = task.state === "review_required" || task.state === "failed";
 	const blocked = task.state === "blocked";
+	const queueing = task.state === "queued" || task.state === "dispatching";
+	// LADO runs one worker per task: while its session lives, or once its work
+	// merged, the daemon approves no plan of the task.
+	const runHolds = task.state === "running" || task.state === "completed" || (task.execution !== undefined && !task.execution.sessionEnded);
 	const approving = readingRules || approve.isPending;
-	const canApprove =
-		open && !pending && shown !== undefined && shown.latest && shown.revision.valid && (!shown.approved || reapprove) && !approving;
+	const approvable = open && !pending && shown !== undefined && shown.latest && shown.revision.valid && (!shown.approved || reapprove);
+	const canApprove = approvable && !runHolds && !approving;
+	const runLine = task.state === "failed" || (task.execution !== undefined && (task.state === "running" || task.state === "completed" || task.state === "closed_unmerged"));
+	const notice = approvalNotice(task, view, t);
 	const mutationError = requestPlan.error ?? approve.error ?? rulesReadError;
 	const staleRules = rulesChanged(approve.error);
 
@@ -225,10 +251,11 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 							{view.task.state === "cancelled" ? (
 								<p className="text-control text-settings-muted">{t("lado.view.cancelled")}</p>
 							) : null}
-							{task.state === "review_required" ? (
-								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.rulesNeedReview")}</p>
-							) : task.state === "blocked" ? (
-								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.rulesBlocked")}</p>
+							{notice ? (
+								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{notice}</p>
+							) : null}
+							{approvable && runHolds ? (
+								<p className="text-caption leading-4 text-settings-muted" role="status">{t("lado.error.taskRunning")}</p>
 							) : null}
 							{view.issueChangedSincePlan ? (
 								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.issueChanged")}</p>
@@ -271,6 +298,7 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 				</Tabs>
 			</div>
 			<div className={cn(settingsDialogFooterClass, "gap-2 p-4")}>
+				{runLine ? <RunStatus task={task} onClose={onClose} /> : null}
 				{staleRules ? (
 					<p role="status" className="mr-auto text-caption leading-4 text-[var(--color-status-needs-you)]">{t("lado.view.rulesJustChanged")}</p>
 				) : mutationError ? (
@@ -309,7 +337,9 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 						>
 							{t("lado.view.requestChanges")}
 						</Button>
-						{shown?.approved && !reapprove && !blocked ? (
+						{queueing ? (
+							<QueueStatus task={task} />
+						) : shown?.approved && !reapprove && !blocked ? (
 							<span className="text-control font-medium text-[var(--color-status-ready)]">{t("lado.view.approved")}</span>
 						) : (
 							<Button
@@ -326,6 +356,121 @@ function TaskViewBody({ projectId, taskId, view }: { projectId: string; taskId: 
 				)}
 			</div>
 		</>
+	);
+}
+
+/**
+ * Why an approved plan needs the developer again. Changed rules and rules that
+ * block the run point to the Rules tab, and a base workers cannot start from
+ * to Request changes, since only a new plan fixes it; the queue's other
+ * reasons say themselves, except an edited issue, which the view already
+ * reports.
+ */
+function approvalNotice(task: LadoTask, view: LadoTaskView, t: TFunction): string | null {
+	const reason = task.stateReason;
+	if (task.state === "review_required") {
+		if (!reason || reason === "rules_changed") return t("lado.view.rulesNeedReview");
+		return reason === "issue_edited" && view.issueChangedSincePlan ? null : ladoReasonText(t, reason);
+	}
+	if (task.state === "blocked") {
+		if (!reason || reason === "blocking_snapshot") return t("lado.view.rulesBlocked");
+		return reason === "base_ref_mismatch" ? t("lado.view.baseRefMismatch") : ladoReasonText(t, reason);
+	}
+	return null;
+}
+
+/** Where an approved plan waits, in place of the approval it already has. */
+function QueueStatus({ task }: { task: LadoTask }) {
+	const { t, i18n } = useTranslation();
+	const status = ladoTaskStatus(task, t);
+	const reason = ladoTaskReason(task, t, i18n.language);
+	return (
+		<span className="flex min-w-0 items-center gap-2 text-control" role="status" data-testid="lado-queue-status">
+			<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
+			<span className="shrink-0 font-medium text-foreground">{status.label}</span>
+			{reason ? (
+				<>
+					{/* Spaces for the text read aloud; the flex gap lays the row out. */}
+					{" "}
+					<span aria-hidden="true" className="text-passive">·</span>{" "}
+					<span className="min-w-0 truncate text-settings-muted">{reason}</span>
+				</>
+			) : null}
+		</span>
+	);
+}
+
+/**
+ * The run above the footer's actions: its state, why it failed, and the
+ * worker's session and PR, with what the last attempt ran into under it.
+ * Opening the session leaves the board for it.
+ */
+function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
+	const { t } = useTranslation();
+	const navigateToSession = useNavigateToSession();
+	// The run's own state, also while a new plan for the task is on its way.
+	const failed = task.state === "failed";
+	const status = failed ? { label: t("lado.task.state.failed"), tone: "attention" as const } : ladoTaskStatus(task, t);
+	const reason = failed ? ladoReasonText(t, task.stateReason) : "";
+	const error = failed && task.queue?.error ? ladoQueueErrorText(t, task.queue.error) : "";
+	const execution = task.execution;
+	// Spaces for the text read aloud; the flex gap lays the row out.
+	const separator = (
+		<>
+			{" "}
+			<span aria-hidden="true" className="text-passive">·</span>{" "}
+		</>
+	);
+	return (
+		<div className="flex min-w-0 basis-full flex-col gap-1 text-caption leading-4" data-testid="lado-run-status">
+			<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+				{/* Only the state is announced; the session and the PR are controls. */}
+				<span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" role="status">
+					<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
+					<span className="font-medium text-foreground">{status.label}</span>
+					{reason ? (
+						<>
+							{separator}
+							<span className="text-settings-muted">{reason}</span>
+						</>
+					) : null}
+				</span>
+				{execution ? (
+					<>
+						{separator}
+						<button
+							type="button"
+							className="rounded-sm text-foreground underline-offset-2 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+							onClick={() => {
+								onClose();
+								navigateToSession(task.projectId, execution.sessionId);
+							}}
+						>
+							{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
+							<span className="text-caption leading-4">{t("lado.view.openSession")}</span>
+						</button>
+					</>
+				) : null}
+				{execution?.pr ? (
+					<>
+						{separator}
+						<ProductExternalLink
+							href={execution.pr.url}
+							ariaLabel={t("lado.view.openPR", { number: execution.pr.number })}
+							className="font-mono text-settings-muted hover:text-foreground"
+						>
+							{t("lado.view.prNumber", { number: execution.pr.number })}
+						</ProductExternalLink>
+					</>
+				) : null}
+			</div>
+			{/* Under the label, past the dot and its gap; the whole text on hover. */}
+			{error ? (
+				<p className="truncate pl-3.5 text-settings-muted" title={error} data-testid="lado-run-error">
+					{error}
+				</p>
+			) : null}
+		</div>
 	);
 }
 

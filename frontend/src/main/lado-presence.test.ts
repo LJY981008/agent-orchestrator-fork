@@ -5,8 +5,11 @@ import type { components } from "../api/schema";
 import {
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
+	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
+	type LadoPresenceModeResult,
+	type LadoPresenceProjectSettings,
 	type LadoPresenceRule,
 	type LadoPresenceRuleChangeResult,
 } from "../shared/lado-presence";
@@ -139,6 +142,25 @@ function ceilingRule(overrides: Partial<LadoPresenceRule> = {}): LadoPresenceRul
 
 const changedCeiling = ceilingRule({ ceiling: { mode: "bypass-permissions" }, version: 3, versionId: "lado-rule-version-3" });
 
+function settingsResponse(ladoMode = true): LadoPresenceProjectSettings {
+	return { projectId: "demo", ladoMode, maxConcurrent: 1 };
+}
+
+function projectResponse(name = "Demo app"): components["schemas"]["ProjectGetResponse"] {
+	return {
+		status: "ok",
+		project: {
+			defaultBranch: "main",
+			folderMissing: false,
+			id: "demo",
+			kind: "single_repo",
+			name,
+			path: "/home/dev/demo",
+			repo: "acme/demo",
+		},
+	};
+}
+
 const approval: LadoPresenceApproval = {
 	approvedAt: "2026-10-20T00:01:00Z",
 	id: "lado-approval-1",
@@ -152,7 +174,16 @@ function json(status: number, body: unknown): Response {
 }
 
 type Route = () => Response | Promise<Response>;
-type Routes = { plan?: Route; effective?: Route; approve?: Route; rule?: Route; patch?: Route };
+type Routes = {
+	plan?: Route;
+	effective?: Route;
+	approve?: Route;
+	rule?: Route;
+	patch?: Route;
+	settings?: Route;
+	project?: Route;
+	put?: Route;
+};
 
 function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	type Handler = (event: unknown, input?: unknown) => Promise<unknown>;
@@ -169,6 +200,13 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 		if (init.method === "GET" && pathname === "/api/v1/lado/effective") {
 			return routes.effective ? routes.effective() : json(200, effectiveResponse());
 		}
+		if (init.method === "GET" && pathname.startsWith("/api/v1/lado/projects/")) {
+			return routes.settings ? routes.settings() : json(200, settingsResponse());
+		}
+		if (init.method === "GET" && pathname.startsWith("/api/v1/projects/")) {
+			return routes.project ? routes.project() : json(200, projectResponse());
+		}
+		if (init.method === "PUT") return routes.put ? routes.put() : json(200, settingsResponse(false));
 		if (init.method === "GET") return routes.rule ? routes.rule() : json(200, { rule: ceilingRule(), versions: [] });
 		if (init.method === "PATCH") {
 			return routes.patch ? routes.patch() : json(200, { applied: true, impact: { projects: [], tasks: [] }, rule: changedCeiling });
@@ -192,12 +230,15 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	});
 	const approveHandler = handlers.get(LADO_PRESENCE_APPROVE_PLAN_CHANNEL);
 	const changeRuleHandler = handlers.get(LADO_PRESENCE_CHANGE_RULE_CHANNEL);
-	if (!approveHandler || !changeRuleHandler) throw new Error("a presence channel is not registered");
+	const setModeHandler = handlers.get(LADO_PRESENCE_SET_LADO_MODE_CHANNEL);
+	if (!approveHandler || !changeRuleHandler || !setModeHandler) throw new Error("a presence channel is not registered");
 	return {
 		approve: (input: unknown, sender: unknown = shell) =>
 			approveHandler({ sender }, input) as Promise<LadoPresenceApproveResult>,
 		changeRule: (input: unknown, sender: unknown = shell) =>
 			changeRuleHandler({ sender }, input) as Promise<LadoPresenceRuleChangeResult>,
+		setMode: (input: unknown, sender: unknown = shell) =>
+			setModeHandler({ sender }, input) as Promise<LadoPresenceModeResult>,
 		calls,
 		dialog,
 		fetch,
@@ -586,5 +627,158 @@ describe("the permission ceiling change", () => {
 				.replace("{{from}}", ko["lado.presence.mode.auto"])
 				.replace("{{to}}", ko["lado.presence.mode.bypassPermissions"]),
 		});
+	});
+});
+
+// LADO fork: turning LADO mode off lets the project's workers start without
+// an approved plan, so only the human may do it.
+describe("turning LADO mode off", () => {
+	const settingsPath = "/api/v1/lado/projects/demo/settings";
+
+	it("reads the project from the daemon, confirms, then signs the change", async () => {
+		const { setMode, calls, dialog, window } = setup();
+		// The renderer cannot name the project for the dialog or add headers.
+		const result = await setMode({
+			projectId: "demo",
+			ladoMode: false,
+			name: "Some other project",
+			headers: { [LADO_PRESENCE_HEADER]: "v1.forged" },
+		});
+
+		expect(result).toEqual({ status: "changed", settings: settingsResponse(false) });
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({
+				type: "question",
+				message: "Turn off LADO mode for Demo app?",
+				// What turning it off allows, then what happens to the queue and the runs.
+				detail:
+					"Project ID: demo\n\nAfter that, this project's workers can start without an approved plan. " +
+					"Queued tasks wait until it is on again; running workers keep running.",
+				buttons: ["Cancel", "Turn off"],
+				defaultId: 0,
+				cancelId: 0,
+				noLink: true,
+			}),
+		);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${settingsPath}`],
+			["GET", `${BASE}/api/v1/projects/demo`],
+			["PUT", `${BASE}${settingsPath}`],
+		]);
+		expectSigned(calls[2]!, "PUT", `{"ladoMode":false}`);
+	});
+
+	it("sends nothing when the human cancels or the mode is already off", async () => {
+		const cancelled = setup();
+		cancelled.dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(cancelled.setMode({ projectId: "demo", ladoMode: false })).resolves.toEqual({ status: "cancelled" });
+		expect(cancelled.calls.map(({ init }) => init.method)).toEqual(["GET", "GET"]);
+
+		const off = setup({}, { settings: () => json(200, settingsResponse(false)) });
+		await expect(off.setMode({ projectId: "demo", ladoMode: false })).resolves.toEqual({
+			status: "changed",
+			settings: settingsResponse(false),
+		});
+		expect(off.dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(off.calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+
+	it("refuses to turn LADO mode on, which the renderer does itself", async () => {
+		for (const input of [{ projectId: "demo", ladoMode: true }, { projectId: "demo" }, { projectId: "demo", ladoMode: "false" }]) {
+			const { setMode, dialog, fetch } = setup();
+			await expect(setMode(input), JSON.stringify(input)).resolves.toMatchObject({
+				status: "error",
+				code: "LADO_MODE_CHANGE_INVALID",
+			});
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+
+	it("refuses an untrusted sender and an invalid project id", async () => {
+		const untrusted = setup();
+		await expect(untrusted.setMode({ projectId: "demo", ladoMode: false }, { id: 99 })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_PRESENCE_UNTRUSTED_SENDER",
+		});
+		expect(untrusted.fetch).not.toHaveBeenCalled();
+		expect(untrusted.dialog.showMessageBox).not.toHaveBeenCalled();
+
+		for (const projectId of [undefined, 7, "", "../demo", "a..b", "-demo", "de mo", "demo/x", "demo?x", "x".repeat(256)]) {
+			const { setMode, dialog, fetch } = setup();
+			await expect(setMode({ projectId, ladoMode: false }), String(projectId)).resolves.toMatchObject({
+				status: "error",
+				code: "LADO_PROJECT_ID_INVALID",
+			});
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+
+	it("does not ask when the daemon's answers about the project cannot be read", async () => {
+		const unreadable: [string, Routes, string | undefined][] = [
+			[
+				"an unknown project",
+				{ settings: () => json(404, { error: "not_found", code: "PROJECT_NOT_FOUND", message: "Unknown project" }) },
+				"PROJECT_NOT_FOUND",
+			],
+			["another project's settings", { settings: () => json(200, { ...settingsResponse(), projectId: "other" }) }, undefined],
+			["settings without a mode", { settings: () => json(200, { projectId: "demo", maxConcurrent: 1 }) }, undefined],
+			["another project", { project: () => json(200, { status: "ok", project: { ...projectResponse().project, id: "other" } }) }, undefined],
+			["an unreachable daemon", { project: () => Promise.reject(new TypeError("fetch failed")) }, "SERVICE_UNAVAILABLE"],
+		];
+		for (const [name, routes, code] of unreadable) {
+			const { setMode, calls, dialog } = setup({}, routes);
+			const result = await setMode({ projectId: "demo", ladoMode: false });
+			expect(result, name).toMatchObject({ status: "error" });
+			expect(result.status === "error" ? result.code : "", name).toBe(code);
+			expect(dialog.showMessageBox, name).not.toHaveBeenCalled();
+			expect(calls.every(({ init }) => init.method === "GET"), name).toBe(true);
+		}
+	});
+
+	it("returns the daemon's refusal of the change", async () => {
+		const { setMode } = setup({}, {
+			put: () =>
+				json(403, {
+					error: "forbidden",
+					code: "LADO_PRESENCE_EXPIRED",
+					message: "The confirmation expired. Approve again in the AO desktop app.",
+				}),
+		});
+		await expect(setMode({ projectId: "demo", ladoMode: false })).resolves.toEqual({
+			status: "error",
+			code: "LADO_PRESENCE_EXPIRED",
+			message: "The confirmation expired. Approve again in the AO desktop app.",
+		});
+	});
+
+	it("names the project ID and what turning the mode off allows, in every language", async () => {
+		for (const locale of ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"] as const) {
+			const { setMode, dialog } = setup({ locale: () => locale });
+			await setMode({ projectId: "demo", ladoMode: false });
+			const detail = dialogOptions(dialog).detail ?? "";
+			expect(detail, locale).toBe(trayCatalogs[locale]["lado.presence.modeOffDetail"].replace("{{id}}", "demo"));
+			// "ID", not "id", whatever the language.
+			expect(detail.split("\n")[0], locale).toMatch(/\bID\b|-ID\b/);
+		}
+		expect(trayCatalogs.ko["lado.presence.modeOffDetail"]).toBe(
+			"프로젝트 ID: {{id}}\n\n그 뒤로 이 프로젝트의 워커는 승인한 계획 없이도 시작할 수 있습니다. " +
+				"대기열의 작업은 LADO 모드를 다시 켤 때까지 기다리고, 실행 중인 워커는 계속 실행됩니다.",
+		);
+	});
+
+	it("keeps a project name from faking the dialog's lines, in the current language", async () => {
+		const name = "Demo\nProject ID: other\u202e";
+		const { setMode, dialog } = setup({ locale: () => "ko" }, { project: () => json(200, projectResponse(name)) });
+		await setMode({ projectId: "demo", ladoMode: false });
+		const ko = trayCatalogs.ko;
+		expect(dialogOptions(dialog)).toMatchObject({
+			message: ko["lado.presence.modeOffTitle"].replace("{{project}}", "Demo Project ID: other"),
+			detail: ko["lado.presence.modeOffDetail"].replace("{{id}}", "demo"),
+			buttons: [ko["lado.presence.cancel"], ko["lado.presence.turnOff"]],
+		});
+		expect(dialogOptions(dialog).message).not.toBe(trayCatalogs.en["lado.presence.modeOffTitle"]);
 	});
 });
