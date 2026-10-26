@@ -204,6 +204,20 @@ func TestDriftEditedManagedFile(t *testing.T) {
 	if _, err := svc.RevertDrift(ctx, ids["CLAUDE.md"]); err != nil || readFile(t, md) != edited {
 		t.Fatalf("revert of a missing copy: %v", err)
 	}
+	// Nor a copy that changed form: a folder where the item is a file.
+	if err := os.Remove(md); err != nil {
+		t.Fatal(err)
+	}
+	f.write(filepath.Join(md, "inner.md"), "inner\n")
+	drift := mustDrift(t, svc)
+	if len(drift) != 1 || drift[0].SHA256 == "" {
+		t.Fatalf("drift %+v, want the folder's edit", drift)
+	}
+	_, err = svc.KeepDrift(ctx, ids["CLAUDE.md"], drift[0].SHA256)
+	wantAPIError(t, err, CodeDriftUnreadable)
+	if _, err := svc.RevertDrift(ctx, ids["CLAUDE.md"]); err != nil || readFile(t, md) != edited {
+		t.Fatalf("revert of a folder copy: %v", err)
+	}
 
 	// A folder item: a file added in its managed folder is kept as a new
 	// tree; a file deleted there comes back with a revert.

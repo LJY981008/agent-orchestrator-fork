@@ -364,6 +364,68 @@ func TestRestorePutsKeysBackOnlyWhereAbsent(t *testing.T) {
 	if figma["url"] != "https://figma" || notion["url"] != "https://notion.example" || doc["model"] != "gpt-5" || doc["projects"] == nil || !strings.HasPrefix(text, "# my codex config\n") {
 		t.Fatalf("config.toml is\n%s", text)
 	}
+
+	// The keys the developer's tools wrote stay new local setup; what restore
+	// put back is not.
+	inv, err := svc.Inventory(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var paths []string
+	for _, d := range inv.Drift {
+		paths = append(paths, d.Path)
+	}
+	slices.Sort(paths)
+	want = []string{
+		settings + "#model", settings + "#verbose", f.claudeJSON + "#mcpServers.local", f.claudeJSON + "#mcpServers.search", config + "#mcp_servers.notion",
+	}
+	slices.Sort(want)
+	if !slices.Equal(paths, want) {
+		t.Fatalf("drift at %v, want %v", paths, want)
+	}
+}
+
+// A key file that is gone gets the adopted keys back alone: the login keys,
+// login variables and app state it held stay gone with it.
+func TestRestoreBringsBackOnlyAdoptedKeysIntoAGoneFile(t *testing.T) {
+	f := newAdoption(t)
+	svc := f.service()
+	res := f.mustAdopt(svc,
+		claudeMove(domain.LadoSetupKindSetting, "env"),
+		claudeMove(domain.LadoSetupKindSetting, "model"),
+		claudeMove(domain.LadoSetupKindMCPServer, "docs"),
+		codexMove(domain.LadoSetupKindMCPServer, "figma"),
+	)
+	settings, config := filepath.Join(f.claude, "settings.json"), filepath.Join(f.codex, "config.toml")
+	for _, path := range []string{settings, f.claudeJSON, config} {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rr, err := f.restore(svc, res.AdoptionID)
+	if err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	if want := []string{"docs restored", "env restored", "figma restored", "model restored"}; !slices.Equal(statuses(rr.Report), want) {
+		t.Fatalf("report %v, want %v", statuses(rr.Report), want)
+	}
+	if got, want := readFile(t, settings), "{\n  \"env\": {\n    \"DEBUG\": \"1\"\n  },\n  \"model\": \"opus\"\n}\n"; got != want {
+		t.Fatalf("settings.json is\n%s\nwant\n%s", got, want)
+	}
+	if info, err := os.Stat(settings); err != nil || info.Mode().Perm() != 0o644 {
+		t.Fatalf("settings.json mode %v (%v), want the original 0644", info.Mode(), err)
+	}
+	if got, want := readFile(t, f.claudeJSON), "{\n  \"mcpServers\": {\n    \"docs\": {\n      \"command\": \"docs-mcp\",\n      \"args\": [\n        \"--port\",\n        \"7\"\n      ]\n    }\n  }\n}\n"; got != want {
+		t.Fatalf("~/.claude.json is\n%s\nwant\n%s", got, want)
+	}
+	var doc map[string]any
+	if err := toml.Unmarshal([]byte(readFile(t, config)), &doc); err != nil {
+		t.Fatal(err)
+	}
+	servers, _ := doc["mcp_servers"].(map[string]any)
+	if len(doc) != 1 || len(servers) != 1 || servers["figma"] == nil {
+		t.Fatalf("config.toml is\n%s", readFile(t, config))
+	}
 }
 
 // Plan §8: a restored adoption's items end, so nothing resolves or delivers

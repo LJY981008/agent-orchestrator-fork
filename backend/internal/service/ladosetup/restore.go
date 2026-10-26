@@ -5,8 +5,10 @@ package ladosetup
 // file or folder is written byte for byte with its modes and mtimes where its
 // path is free, and beside what holds the path now, as <name>.lado-restored,
 // where it is taken. A key goes back into its file only where the file has
-// none; a file that is gone, or that holds exactly what the adoption left,
-// comes back whole. Restore never overwrites or removes what it finds, so
+// none; a file that holds exactly what the adoption left comes back whole,
+// and one that is gone comes back with the adopted keys alone, so login keys
+// and app state the developer removed with it stay removed. Restore never
+// overwrites or removes what it finds, so
 // running it again after a failure finishes the rest by the same rules. The
 // adoption's items then end: they are no longer resolved or delivered, and
 // their versions, the managed copies and the backup stay.
@@ -295,34 +297,42 @@ func (s *Service) putBackFile(ctx context.Context, dir string, be backupEntry, o
 		fail(err)
 		return
 	}
-	for n := 0; n <= maxBeside; n++ {
-		target := besidePath(be.Path, n)
-		state, err := originalAt(ctx, target, be)
-		if err != nil {
+	// The original's path first; when it is taken, a copy beside it that an
+	// earlier restore wrote, else the first free name beside it.
+	at, free := -1, -1
+	for n := 0; n <= maxBeside && at < 0; n++ {
+		state, err := originalAt(ctx, besidePath(be.Path, n), be)
+		switch {
+		case err != nil:
+			fail(err)
+			return
+		case state == pathOriginal:
+			at = n
+		case state == pathFree && n == 0:
+			at, free = 0, 0
+		case state == pathFree && free < 0:
+			free = n
+		}
+	}
+	if at < 0 {
+		if free < 0 {
+			fail(fmt.Errorf("%d copies are beside it already", maxBeside))
+			return
+		}
+		at = free
+	}
+	target := besidePath(be.Path, at)
+	if at == free {
+		if err := s.writeBackupCopy(ctx, dir, be, target); err != nil {
 			fail(err)
 			return
 		}
-		if state == pathTaken {
-			continue
-		}
-		if state == pathFree {
-			if err := s.writeBackupCopy(dir, be, target); err != nil {
-				fail(err)
-				return
-			}
-			if state, err = originalAt(ctx, target, be); err != nil || state != pathOriginal {
-				fail(cmp.Or(err, errRestoredDiffers))
-				return
-			}
-		}
-		out.Status = RestoreRestored
-		if n > 0 {
-			out.Status, out.Beside = RestoreBeside, besidePath(be.RelPath, n)
-		}
-		written[target] = true
-		return
 	}
-	fail(fmt.Errorf("%d copies are beside it already", maxBeside))
+	out.Status = RestoreRestored
+	if at > 0 {
+		out.Status, out.Beside = RestoreBeside, besidePath(be.RelPath, at)
+	}
+	written[target] = true
 }
 
 // besidePath is path for n = 0, and the nth copy beside it after that.
@@ -384,37 +394,83 @@ func originalAt(ctx context.Context, path string, be backupEntry) (pathState, er
 
 // writeBackupCopy writes the backup copy of a file or folder entry at
 // target, which is free, with the original's modes and mtimes. The copy is
-// written as a new sibling and renamed into place, so target never holds
-// part of it, and a folder missing on the way is made owner-only.
-func (s *Service) writeBackupCopy(dir string, be backupEntry, target string) error {
-	parent := filepath.Dir(target)
-	if err := os.MkdirAll(parent, privateDir); err != nil {
-		return err
-	}
+// written as a new sibling, checked against the manifest and renamed into
+// place, so target never holds part of it or other bytes. A folder missing
+// on the way is made owner-only.
+func (s *Service) writeBackupCopy(ctx context.Context, dir string, be backupEntry, target string) error {
 	staged := be
-	staged.Path = filepath.Join(parent, "."+filepath.Base(target)+".lado-restoring-"+s.deps.NewID())
-	if err := restoreCopy(dir, staged); err != nil {
+	staged.Path = s.stagedPath(target)
+	if err := os.MkdirAll(filepath.Dir(target), privateDir); err != nil {
+		return err
+	}
+	err := restoreCopy(dir, staged)
+	if err == nil {
+		var state pathState
+		if state, err = originalAt(ctx, staged.Path, be); err == nil && state != pathOriginal {
+			err = errRestoredDiffers
+		}
+	}
+	if err != nil {
 		_ = os.RemoveAll(staged.Path)
 		return err
 	}
-	// What took target meanwhile is not replaced.
+	return placeStaged(staged.Path, target)
+}
+
+// writeNewFile writes data to a new file at path, which is free, with mode,
+// through a new sibling and a rename.
+func (s *Service) writeNewFile(path string, data []byte, mode fs.FileMode) error {
+	staged := s.stagedPath(path)
+	if err := os.MkdirAll(filepath.Dir(path), privateDir); err != nil {
+		return err
+	}
+	if err := writeNew(staged, data, mode); err != nil {
+		_ = os.Remove(staged)
+		return err
+	}
+	return placeStaged(staged, path)
+}
+
+// stagedPath is a new name beside target for writing it.
+func (s *Service) stagedPath(target string) string {
+	return filepath.Join(filepath.Dir(target), "."+filepath.Base(target)+".lado-restoring-"+s.deps.NewID())
+}
+
+// placeStaged renames a staged copy to target when target is still free.
+// What took target meanwhile is not replaced, and the staged copy goes.
+// Between the check and the rename something could still take it: no
+// Claude Code or Codex runs during a restore (plan decision h).
+func placeStaged(staged, target string) error {
 	if _, err := os.Lstat(target); !errors.Is(err, fs.ErrNotExist) {
-		_ = os.RemoveAll(staged.Path)
+		_ = os.RemoveAll(staged)
 		return cmp.Or(err, errors.New("something took its place while LADO wrote it"))
 	}
-	if err := os.Rename(staged.Path, target); err != nil {
-		_ = os.RemoveAll(staged.Path)
+	if err := os.Rename(staged, target); err != nil {
+		_ = os.RemoveAll(staged)
 		return err
 	}
-	return syncDir(parent)
+	return syncDir(filepath.Dir(target))
+}
+
+// replaceFile writes data over the file at path through a new file and a
+// rename, when the file still holds was; else it writes nothing.
+func replaceFile(path string, was, data []byte, mode fs.FileMode) error {
+	now, err := readRegularNoLink(path)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(now, was) {
+		return errors.New("it changed while LADO restored it")
+	}
+	return atomicWrite(path, data, mode, os.Rename)
 }
 
 // putBackKeys puts back the keys an adoption took out of one file, group in
-// backup order. A file that is gone comes back whole, and so does one that
-// holds exactly what the adoption left: the backup is then the file as it
-// was, every key in its place. Otherwise each key goes back only where the
-// file has none, beside the keys it followed, and a key the file has now
-// stays.
+// backup order. A file that holds exactly what the adoption left comes back
+// whole: the backup is then the file as it was, every key in its place.
+// Otherwise each key goes back only where the file has none, beside the keys
+// it followed, and a key the file has now stays. A file that is gone comes
+// back with the adopted keys alone.
 func (s *Service) putBackKeys(ctx context.Context, dir string, group []backupEntry, out []*RestoredEntry, written map[string]bool) {
 	fail := func(k int, err error) { out[k].Status, out[k].Error = RestoreFailed, plainError(err) }
 	failAll := func(err error) {
@@ -442,13 +498,14 @@ func (s *Service) putBackKeys(ctx context.Context, dir string, group []backupEnt
 		failAll(err)
 		return
 	}
-	// done marks the keys in place and where restore put setup.
+	// done marks the keys in place, and where restore put setup: the keys
+	// it restored, and every key of a file it wrote whole.
 	done := func(whole bool) {
 		for k, be := range group {
-			if out[k].Status == "" {
+			if whole && out[k].Status == "" {
 				out[k].Status = RestoreRestored
 			}
-			if out[k].Status != RestoreFailed {
+			if out[k].Status == RestoreRestored {
 				written[path+"#"+keySuffix(be)] = true
 			}
 		}
@@ -457,39 +514,31 @@ func (s *Service) putBackKeys(ctx context.Context, dir string, group []backupEnt
 		}
 	}
 	cur, err := readRegularNoLink(path)
+	gone := errors.Is(err, fs.ErrNotExist)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		whole := first
-		whole.Type = backupTypeFile
-		if err := s.writeBackupCopy(dir, whole, path); err != nil {
-			failAll(err)
-			return
-		}
-		if _, sum, err := fileSum(path); err != nil || sum != first.SHA256 {
-			failAll(cmp.Or(err, errRestoredDiffers))
-			return
-		}
-		done(true)
-		return
+	case gone:
+		cur = nil
 	case err != nil:
 		failAll(err)
 		return
-	}
-	if left, err := adoptionLeft(group, orig); err == nil && bytes.Equal(cur, left) {
-		if err := atomicWrite(path, orig, mode, os.Rename); err != nil {
-			failAll(err)
+	default:
+		if left, err := adoptionLeft(group, orig); err == nil && bytes.Equal(cur, left) {
+			err := replaceFile(path, cur, orig, mode)
+			if err == nil {
+				err = os.Chtimes(path, first.MTime, first.MTime)
+			}
+			if err == nil {
+				if _, sum, serr := fileSum(path); serr != nil || sum != first.SHA256 {
+					err = cmp.Or(serr, errRestoredDiffers)
+				}
+			}
+			if err != nil {
+				failAll(err)
+				return
+			}
+			done(true)
 			return
 		}
-		if err := os.Chtimes(path, first.MTime, first.MTime); err != nil {
-			failAll(err)
-			return
-		}
-		if _, sum, err := fileSum(path); err != nil || sum != first.SHA256 {
-			failAll(cmp.Or(err, errRestoredDiffers))
-			return
-		}
-		done(true)
-		return
 	}
 	next := cur
 	var inserted []int
@@ -507,10 +556,15 @@ func (s *Service) putBackKeys(ctx context.Context, dir string, group []backupEnt
 		}
 		next, out[k].Status = edited, status
 	}
-	if !bytes.Equal(next, cur) {
-		info, err := os.Lstat(path)
-		if err == nil {
-			err = atomicWrite(path, next, info.Mode().Perm(), os.Rename)
+	if len(inserted) > 0 {
+		var err error
+		if gone {
+			err = s.writeNewFile(path, next, mode)
+		} else {
+			var info fs.FileInfo
+			if info, err = os.Lstat(path); err == nil {
+				err = replaceFile(path, cur, next, info.Mode().Perm())
+			}
 		}
 		if err != nil {
 			for _, k := range inserted {

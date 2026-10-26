@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"runtime"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
@@ -235,6 +237,11 @@ func (s *Service) keepDrift(ctx context.Context, itemID domain.LadoSetupItemID, 
 			map[string]any{"item": string(it.ID), "error": plainError(err)})
 	}
 	v := content.version
+	if v.ContentKind != latest.ContentKind {
+		return domain.LadoSetupItemVersion{}, apierr.Conflict(CodeDriftUnreadable,
+			"The managed copy of this item is a folder where the item is a file, or the other way round. Revert it to the latest version instead.",
+			map[string]any{"item": string(it.ID), "error": fmt.Sprintf("the managed copy is %s content, the item %s", v.ContentKind, latest.ContentKind)})
+	}
 	if v.SHA256 != sum {
 		return domain.LadoSetupItemVersion{}, apierr.Conflict(CodeChanged, "The managed copy changed since you reviewed it. Review it again.",
 			map[string]any{"item": string(it.ID), "sha256": v.SHA256})
@@ -245,6 +252,8 @@ func (s *Service) keepDrift(ctx context.Context, itemID domain.LadoSetupItemID, 
 	if err := checkKeepable(it, content); err != nil {
 		return domain.LadoSetupItemVersion{}, err
 	}
+	// From the first write on, the keep runs to its end.
+	ctx = context.WithoutCancel(ctx)
 	for _, data := range content.blobs {
 		if _, err := s.deps.Blobs.Put(data); err != nil {
 			return domain.LadoSetupItemVersion{}, fmt.Errorf("store the managed copy of %s: %w", it.Name, err)
@@ -298,12 +307,15 @@ func (s *Service) RevertDrift(ctx context.Context, itemID domain.LadoSetupItemID
 	if err == nil && s.compareManaged(iv, before) == nil {
 		return iv.Version, nil
 	}
+	// From the first write on, the revert runs to its end.
+	ctx = context.WithoutCancel(ctx)
 	if err := s.writeManaged(iv); err != nil {
-		if !isKeyKind(it.Kind) {
+		if !isKeyKind(it.Kind) || s.managedKeyFileParses(it.Tool, it.Kind) {
 			return domain.LadoSetupItemVersion{}, fmt.Errorf("revert %s: %w", it.Name, err)
 		}
-		// The managed key file no longer reads as one: it is written again
-		// from the versions of the items it holds.
+		// The managed key file no longer parses: it is written again from the
+		// versions of the items it holds. Edits in a file that parses are
+		// never thrown away so.
 		s.deps.Log.Warn("LADO writes a managed setup file again from its items", "item", it.Name, "err", err)
 		if err := s.rewriteManagedKeyFile(ctx, it.Tool, it.Kind); err != nil {
 			return domain.LadoSetupItemVersion{}, fmt.Errorf("revert %s: %w", it.Name, err)
@@ -426,6 +438,23 @@ func checkKeepable(it domain.LadoSetupItem, c managedContent) error {
 		return refuse(domain.LadoSetupReasonLiteralCredentials)
 	}
 	return nil
+}
+
+// managedKeyFileParses reports whether the managed key file of a tool and
+// kind reads as JSON object or TOML; a missing file is empty and does.
+func (s *Service) managedKeyFileParses(tool domain.LadoSetupTool, kind domain.LadoSetupKind) bool {
+	data, err := readRegularNoLink(managedKeyFile(s.deps.StateDir, tool, kind))
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return true
+	case err != nil:
+		return false
+	case tool == domain.LadoSetupToolCodex:
+		var doc map[string]any
+		return toml.Unmarshal(data, &doc) == nil
+	}
+	_, err = jsonMembers(data)
+	return err == nil
 }
 
 // rewriteManagedKeyFile writes the managed key file of a tool and kind from
