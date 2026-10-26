@@ -26,7 +26,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 4b | Plan requests and revisions, plans written in issue comments, approvals confirmed in the desktop app, the Plan and Queued lanes, the task view | Merged |
 | 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | Merged |
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Merged |
-| 7 | Adopting your local agent setup (CLAUDE.md, hooks, skills, MCP) into one managed place | Planned |
+| 7 | Adopting your local agent setup (CLAUDE.md and AGENTS.md, settings, hooks, skills, MCP servers) into one managed place that every session the app starts gets, with restore | In progress |
 | 8 | Verification, evidence and integration approval | Planned |
 | 9 | Releases of this fork: a workflow that builds the desktop app (Windows first) and publishes it where the app looks for updates, and the checks that need a real Windows install | Planned |
 
@@ -41,13 +41,15 @@ Build and run AO from source as the [development guide](docs/development.md) des
 5. Review the plan, ask for changes, and approve it. The desktop app asks you to confirm and signs the approval itself; the task moves to the Queued lane.
 6. When a run slot is free, LADO checks the approval again (the plan, the issue, the rules and the base branch) and starts a worker in Chat with the approved plan, the issue as it was pinned and the approved rules. The task leaves the lanes; the worker's session card shows a LADO line, and the session's inspector shows the rules the run was approved with. If the issue changed since the plan was made, or the rules changed since the approval, the task asks for a new approval instead. A worker that does not start after three attempts, that reaches the maximum run time, or whose session ends without a PR leaves the task Failed in the Plan lane, and the plan can be approved again.
 
+**Settings → Local setup** lists your Claude Code and Codex setup: the user-level files, settings keys, skills, agents, commands, hooks and MCP servers, and each project's setup files. Adopt… moves the items you pick into `~/.ao/lado/harness` after a backup, and from then on every Claude Code and Codex session the app starts gets them, while Claude Code and Codex run outside the app no longer do. Close Claude Code and Codex first: the app refuses while either runs. Adoption works on Linux only for now; Windows and macOS refuse it until step 9 checks them. You can then edit, turn off or delete the managed items there, per project on the project's **Rules** page, and per task on its Rules tab; changes that can run commands ask you to confirm in the desktop app. **Restore** on an adoption puts everything back where it was.
+
 **Settings → Runs** sets how many approved tasks run at once across projects (two by default), the maximum run time (8 hours by default; off, or 1 to 24 hours; it stops applying once the worker opens a PR) and whether queued tasks wait while the computer is low on memory (on by default).
 
-`AO_LADO_DEV_PRESENCE=1` lets approvals, and turning LADO mode off, through without the desktop app's confirmation, for the renderer running in a browser during development. Never set it on a daemon you use for real work.
+`AO_LADO_DEV_PRESENCE=1` lets approvals, and turning LADO mode off, through without the desktop app's confirmation, for the renderer running in a browser during development. `AO_LADO_DEV_SETUP_IGNORE_PROCESSES=1` lets a lab daemon that runs inside Claude Code or Codex adopt and restore anyway. Never set either on a daemon you use for real work.
 
 ## Where things live
 
-Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables in AO's database, pinned plans and issue snapshots in `~/.ao/lado/blobs`, GitLab tokens in an owner-only file, and the github.com token in AO's own token store. The one exception is the opt-in Start at login entry, which is the operating system's login item.
+Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables in AO's database, pinned plans and issue snapshots in `~/.ao/lado/blobs`, GitLab tokens in an owner-only file, and the github.com token in AO's own token store. Adopted local setup lives in `~/.ao/lado/harness`, the originals' backups in `~/.ao/lado/backups`, and each Claude Code session's config home in `~/.ao/lado/homes`. The one exception is the opt-in Start at login entry, which is the operating system's login item. Adopting and restoring change `~/.claude`, `~/.claude.json` and `~/.codex` only when you confirm it, and never touch your logins.
 
 ## Documentation
 
@@ -63,4 +65,5 @@ Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables
 - A Copilot orchestrator wraps every message in AO's "spawn a worker" directive, so LADO projects should use another agent as their orchestrator.
 - Approvals need the desktop app; there is no approval from the CLI or the mobile app, by design.
 - Only Claude Code and Codex run LADO tasks; a task with another agent shows Blocked. A LADO run stays in Chat with the agent it was approved with, and cannot switch either while it runs.
+- Local setup adoption works on Linux only until step 9 checks Windows and macOS; restore works everywhere. AO's reviewer and the background tasks that write titles get no adopted items yet.
 - A plan's base must be the branch workers start from. If that branch moved on after the plan was made, the run records by how many commits, but still starts.
