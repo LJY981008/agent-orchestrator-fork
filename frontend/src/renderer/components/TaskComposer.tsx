@@ -125,6 +125,8 @@ export type TaskComposerProps = {
 	onSubmittingChange?: (submitting: boolean) => void;
 	autoFocusTitle?: boolean;
 	createLabel?: string;
+	/** LADO fork: text the prompt starts with. */
+	initialPrompt?: string;
 };
 
 export function TaskComposer({
@@ -136,6 +138,7 @@ export function TaskComposer({
 	onSubmittingChange,
 	autoFocusTitle,
 	createLabel,
+	initialPrompt,
 }: TaskComposerProps) {
 	const { t } = useTranslation();
 	const taskPlaceholder = useMemo(() => {
@@ -147,7 +150,7 @@ export function TaskComposer({
 	const queryClient = useQueryClient();
 	const remoteConnections = useConnectedHosts();
 	const hostConnected = !hostId || remoteConnections.includes(hostId);
-	const [isPromptDirty, setIsPromptDirty] = useState(false);
+	const [isPromptDirty, setIsPromptDirty] = useState(() => Boolean(initialPrompt?.trim()));
 	const [model, setModel] = useState("");
 	const [mode, setMode] = useState("");
 	const [effort, setEffort] = useState("");
@@ -767,6 +770,7 @@ export function TaskComposer({
 		<TaskComposerView
 			autoFocusPrompt={autoFocusTitle}
 			canSubmit={canSubmit}
+			initialPrompt={initialPrompt}
 			context={ladoMode ? (
 				<LadoComposerContext issueRepository={issueRepository} disabled={isSubmitting} onImport={() => setImportOpen(true)} />
 			) : undefined}

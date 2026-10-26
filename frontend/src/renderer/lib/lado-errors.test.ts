@@ -80,8 +80,9 @@ describe("LADO rule errors", () => {
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_RULE_CONFLICT_UNKNOWN", { rule: "team.gone" }))).toBe(
 			"There is no rule team.gone.",
 		);
+		// The snapshot holds the local setup too, so the rules or the setup changed.
 		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_RULES_CHANGED"))).toBe(
-			"승인하는 동안 규칙이 바뀌었습니다. 규칙을 다시 확인한 뒤 승인하세요.",
+			"승인하는 동안 규칙이나 로컬 설정이 바뀌었습니다. 다시 확인한 뒤 승인하세요.",
 		);
 		// The presence errors now also answer a permission ceiling change.
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_PRESENCE_REQUIRED"))).toBe(
@@ -262,6 +263,9 @@ describe("LADO queue errors and reasons", () => {
 		expect(ladoReasonText(en, "approved_before_queue")).toBe("Not in the queue — approve again to queue it");
 		expect(ladoReasonText(ko, "approved_before_queue")).toBe("대기열에 없음 — 다시 승인하면 대기열에 듭니다");
 		expect(ladoReasonText(ko, "slot_project")).toBe("이 프로젝트의 빈 실행 자리를 기다리는 중");
+		// Review is needed again when the rules or the local setup in the snapshot changed.
+		expect(ladoReasonText(en, "rules_changed")).toBe("Rules or local setup changed since approval");
+		expect(ladoReasonText(ko, "rules_changed")).toBe("승인 뒤 규칙이나 로컬 설정이 바뀜");
 		expect(ladoReasonText(en, "timed_out")).toBe("Stopped at the maximum run time");
 		expect(ladoReasonText(ko, "run_live")).toBe("이 작업의 이전 실행이 아직 돌고 있음");
 		// No reason reads empty; one from a newer daemon shows as is.

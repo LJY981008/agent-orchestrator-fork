@@ -2,16 +2,18 @@
 // §9). What LADO manages and what it can or cannot adopt is grouped by kind,
 // each entry with its state in one line and where it lives. A managed item
 // has its Global switch, which the desktop app confirms for a kind that can
-// run commands, and a menu. What LADO never adopts or leaves to the tool
-// waits in a collapsed group under the card.
+// run commands, and a menu: Edit, History, the review of a copy changed by
+// hand, and Delete. What LADO never adopts or leaves to the tool waits in a
+// collapsed group under the card.
 import { agentLabel } from "@aoagents/product-ui";
-import { ChevronDown, MoreHorizontal, Trash2 } from "lucide-react";
+import { ChevronDown, FileDiff, History, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ladoErrorText } from "../../../lib/lado-errors";
 import {
 	useLadoSetupChange,
 	type LadoSetupChangeRequest,
+	type LadoSetupDrift,
 	type LadoSetupEntry,
 	type LadoSetupInventory,
 	type LadoSetupTool,
@@ -20,9 +22,12 @@ import { cn } from "../../../lib/utils";
 import { ConfirmDialog } from "../../ConfirmDialog";
 import { SettingsRow } from "../../settings/SettingsRow";
 import { SettingsSection } from "../../settings/SettingsSection";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../ui/dropdown-menu";
 import { Switch } from "../../ui/switch";
 import { LadoRuleImpactDialog } from "../LadoRuleImpactDialog";
+import { LadoSetupDriftDialog } from "./LadoSetupDriftReview";
+import { LadoSetupHistoryDialog } from "./LadoSetupHistoryDialog";
+import { LadoSetupItemEditor } from "./LadoSetupItemEditor";
 import {
 	compareEntries,
 	ladoSetupGroupKind,
@@ -36,6 +41,8 @@ import {
 } from "./lado-setup-view";
 
 type Deleting = { open: boolean; entry: LadoSetupEntry | null; error: unknown };
+// The editor, the history or a drift review of one item. Each opening mounts it again.
+type Opening = { key: number; open: boolean; view: "edit" | "history" | "drift"; itemId: string | null };
 
 export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; inventory: LadoSetupInventory }) {
 	const { t } = useTranslation();
@@ -44,6 +51,7 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 	const [failure, setFailure] = useState<{ itemId: string; error: unknown } | null>(null);
 	const [deleting, setDeleting] = useState<Deleting>({ open: false, entry: null, error: null });
 	const [otherOpen, setOtherOpen] = useState(false);
+	const [opening, setOpening] = useState<Opening>({ key: 0, open: false, view: "edit", itemId: null });
 
 	const shown = ladoSetupShownEntries(inventory, tool).sort(compareEntries);
 	const other = ladoSetupOtherEntries(inventory, tool).sort(compareEntries);
@@ -54,6 +62,12 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 		managed: ladoSetupManagedKeys(inventory),
 		globalOff: new Set(inventory.items.filter((item) => item.global === "off").map((item) => item.itemId)),
 	};
+	// Managed copies changed by hand since their latest version.
+	const edited = new Map<string, LadoSetupDrift>(
+		inventory.drift.filter((drift) => drift.kind === "edited").map((drift) => [drift.itemId, drift]),
+	);
+	const versions = new Map(inventory.items.map((item) => [item.itemId, item.version]));
+	const show = (view: Opening["view"], itemId: string) => setOpening((current) => ({ key: current.key + 1, open: true, view, itemId }));
 	const groups = [...ladoSetupKinds, "" as const]
 		.map((kind) => ({ kind, entries: shown.filter((entry) => ladoSetupGroupKind(entry.kind) === kind) }))
 		.filter((group) => group.entries.length > 0);
@@ -86,7 +100,11 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 		<EntryRow
 			key={`${entry.location}:${entry.path}`}
 			entry={entry}
-			status={ladoSetupStatusText(t, entry, context)}
+			status={
+				entry.status === "managed" && edited.has(entry.itemId)
+					? `${ladoSetupStatusText(t, entry, context)} · ${t("lado.setup.drift.changedStatus")}`
+					: ladoSetupStatusText(t, entry, context)
+			}
 			path={ladoSetupShortPath(entry.path, inventory)}
 			busy={changing === entry.itemId}
 			error={entry.itemId && failure?.itemId === entry.itemId ? failure.error : undefined}
@@ -94,9 +112,13 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 			onGlobalChange={(on) =>
 				run(entry.itemId, { op: "binding", input: { itemId: entry.itemId, scope: "global", scopeId: "", state: on ? "on" : "off" } })
 			}
+			onEdit={() => show("edit", entry.itemId)}
+			onHistory={() => show("history", entry.itemId)}
+			onReviewDrift={edited.has(entry.itemId) ? () => show("drift", entry.itemId) : undefined}
 			onDelete={() => setDeleting({ open: true, entry, error: null })}
 		/>
 	);
+	const onOpeningChange = (open: boolean) => setOpening((current) => ({ ...current, open }));
 
 	return (
 		<>
@@ -143,6 +165,19 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 				onConfirm={() => void change.confirm().catch(() => undefined)}
 				onCancel={change.cancel}
 			/>
+			{opening.view === "edit" ? (
+				<LadoSetupItemEditor key={opening.key} itemId={opening.itemId} open={opening.open} onOpenChange={onOpeningChange} />
+			) : opening.view === "history" ? (
+				<LadoSetupHistoryDialog key={opening.key} itemId={opening.itemId} open={opening.open} onOpenChange={onOpeningChange} />
+			) : (
+				<LadoSetupDriftDialog
+					key={opening.key}
+					drift={(opening.itemId && edited.get(opening.itemId)) || null}
+					latestVersion={opening.itemId ? versions.get(opening.itemId) : undefined}
+					open={opening.open}
+					onOpenChange={onOpeningChange}
+				/>
+			)}
 			<ConfirmDialog
 				open={deleting.open}
 				destructive
@@ -185,6 +220,9 @@ function EntryRow({
 	error,
 	globalOn,
 	onGlobalChange,
+	onEdit,
+	onHistory,
+	onReviewDrift,
 	onDelete,
 }: {
 	entry: LadoSetupEntry;
@@ -194,6 +232,10 @@ function EntryRow({
 	error?: unknown;
 	globalOn: boolean;
 	onGlobalChange: (on: boolean) => void;
+	onEdit: () => void;
+	onHistory: () => void;
+	/** Set when the managed copy changed by hand. */
+	onReviewDrift?: () => void;
 	onDelete: () => void;
 }) {
 	const { t } = useTranslation();
@@ -237,6 +279,21 @@ function EntryRow({
 							</button>
 						</DropdownMenuTrigger>
 						<DropdownMenuContent align="end" className="min-w-40">
+							<DropdownMenuItem onSelect={onEdit}>
+								<Pencil aria-hidden="true" />
+								{t("lado.rules.edit")}
+							</DropdownMenuItem>
+							<DropdownMenuItem onSelect={onHistory}>
+								<History aria-hidden="true" />
+								{t("lado.rules.showHistory")}
+							</DropdownMenuItem>
+							{onReviewDrift ? (
+								<DropdownMenuItem onSelect={onReviewDrift}>
+									<FileDiff aria-hidden="true" />
+									{t("lado.setup.list.reviewChange")}
+								</DropdownMenuItem>
+							) : null}
+							<DropdownMenuSeparator />
 							<DropdownMenuItem
 								className="text-destructive focus:text-destructive [&_svg]:text-destructive focus:[&_svg]:text-destructive"
 								onSelect={onDelete}

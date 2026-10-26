@@ -2,8 +2,19 @@ import { act, cleanup, render, screen, waitFor, within } from "@testing-library/
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { apiClient } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
 import * as lado from "../../lib/lado";
 import { useUiStore } from "../../stores/ui-store";
+import {
+	daemonCalls,
+	routeDaemon,
+	setupChangeResult,
+	setupEntry,
+	setupInventory,
+	setupItem,
+	type DaemonRoutes,
+} from "../../test/lado-setup-fixtures";
 import { SettingsDialog } from "../SettingsPageTestHarness";
 import { LadoProjectRulesSection } from "./LadoProjectRulesSection";
 
@@ -25,6 +36,12 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoRules: vi.fn(),
 	createLadoRule: vi.fn(),
 	setLadoBinding: vi.fn(),
+}));
+
+// Local setup goes through the daemon's setup routes (lib/lado-setup.ts).
+vi.mock("../../lib/api-client", async (original) => ({
+	...(await original<typeof import("../../lib/api-client")>()),
+	apiClient: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), PATCH: vi.fn(), DELETE: vi.fn() },
 }));
 
 // The settings dialog around the page, as SettingsDialog.test.tsx stubs it.
@@ -146,6 +163,23 @@ function renderSettings() {
 	);
 }
 
+/** Without managed setup or repository files the setup cards stay away. */
+function serveSetup(routes: DaemonRoutes = {}) {
+	routeDaemon(apiClient, {
+		"GET /api/v1/lado/setup/items": () => ({ data: { items: [] } }),
+		"GET /api/v1/lado/setup/inventory": () => ({ data: setupInventory() }),
+		...routes,
+	});
+}
+
+async function findSetupRow(itemId: string): Promise<HTMLElement> {
+	return waitFor(() => {
+		const row = document.querySelector<HTMLElement>(`[data-testid="lado-setup-scope-item"][data-item-id="${itemId}"]`);
+		if (!row) throw new Error(`no setup row for ${itemId}`);
+		return row;
+	});
+}
+
 async function findRow(ruleId: string): Promise<HTMLElement> {
 	return waitFor(() => {
 		const row = document.querySelector<HTMLElement>(`[data-testid="lado-effective-rule"][data-rule-id="${ruleId}"]`);
@@ -160,9 +194,10 @@ describe("LadoProjectRulesSection", () => {
 		vi.resetAllMocks();
 		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(effective());
 		vi.mocked(lado.fetchLadoRules).mockResolvedValue([]);
-		useUiStore.setState({ developerMode: false, settingsModal: null });
+		useUiStore.setState({ developerMode: false, settingsModal: null, newTaskRequest: null });
 		cloudProjectsState.data = [];
 		localWorkspacesState.ids = [];
+		serveSetup();
 	});
 
 	afterEach(cleanup);
@@ -198,6 +233,124 @@ describe("LadoProjectRulesSection", () => {
 		await user.click(within(dialog).getByRole("button", { name: "Change" }));
 		await waitFor(() => expect(lado.setLadoBinding).toHaveBeenCalledTimes(4));
 		expect(lado.setLadoBinding).toHaveBeenLastCalledWith({ ruleId: review.ruleId, scope: "project", scopeId: "demo", state: "inherit" });
+	});
+
+	it("turns managed setup items on or off for this project", async () => {
+		const user = userEvent.setup();
+		serveSetup({
+			"GET /api/v1/lado/setup/items": () => ({
+				data: {
+					items: [
+						setupItem({ itemId: "item-hook", kind: "hook_script", name: "notify.sh", global: "off" }),
+						setupItem({ itemId: "item-claude-md", kind: "instructions", name: "CLAUDE.md" }),
+						setupItem({
+							itemId: "item-agents",
+							tool: "codex",
+							kind: "instructions",
+							name: "AGENTS.md",
+							project: "force_off",
+							on: false,
+							source: { scope: "project", scopeId: "demo", state: "force_off" },
+						}),
+					],
+				},
+			}),
+			"PUT /api/v1/lado/setup/bindings": ({ body }) => ({
+				data: setupChangeResult({ applied: !(body as { dryRun?: boolean }).dryRun, needsPresence: (body as { itemId: string }).itemId === "item-hook" }),
+			}),
+		});
+		const changeSetup = vi
+			.spyOn(aoBridge.lado.presence, "changeSetup")
+			.mockResolvedValue({ status: "changed", change: setupChangeResult({ applied: true, actor: "human" }) });
+		renderSection();
+
+		const card = (await screen.findByRole("heading", { name: "Local setup for this project" })).closest("section")!;
+		// Both tools' items, Claude Code's first, each kind in the page's order.
+		const rows = within(card).getAllByTestId("lado-setup-scope-item");
+		expect(rows.map((row) => row.getAttribute("data-item-id"))).toEqual(["item-claude-md", "item-hook", "item-agents"]);
+		expect(rows[0]).toHaveTextContent("Claude Code · Instructions · On · from Global");
+		expect(rows[1]).toHaveTextContent("Claude Code · Hook script · Off · from Global");
+		expect(rows[2]).toHaveTextContent("Codex · Instructions · Off · set here");
+		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/lado/setup/items", { params: { query: { projectId: "demo" } } });
+
+		// Off for this project needs no desktop confirmation.
+		const claude = await findSetupRow("item-claude-md");
+		await user.click(within(claude).getByRole("button", { name: "CLAUDE.md for this project" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Off" }));
+		const off = { itemId: "item-claude-md", scope: "project", scopeId: "demo", state: "force_off" };
+		await waitFor(() => expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings")).toHaveLength(2));
+		expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings").map((call) => call.body)).toEqual([{ ...off, dryRun: true }, off]);
+		expect(changeSetup).not.toHaveBeenCalled();
+
+		// On for a script goes through it.
+		await user.click(within(await findSetupRow("item-hook")).getByRole("button", { name: "notify.sh for this project" }));
+		await user.click(await screen.findByRole("menuitem", { name: "On" }));
+		await waitFor(() =>
+			expect(changeSetup).toHaveBeenCalledWith({
+				method: "PUT",
+				path: "/api/v1/lado/setup/bindings",
+				body: { itemId: "item-hook", scope: "project", scopeId: "demo", state: "force_on" },
+			}),
+		);
+
+		// Back to Inherit.
+		await user.click(within(await findSetupRow("item-agents")).getByRole("button", { name: "AGENTS.md for this project" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Inherit" }));
+		await waitFor(() =>
+			expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings").at(-1)?.body).toEqual({
+				itemId: "item-agents",
+				scope: "project",
+				scopeId: "demo",
+				state: "inherit",
+			}),
+		);
+	});
+
+	it("lists the repository's setup files and edits one through a new task", async () => {
+		const user = userEvent.setup();
+		const tracked = (name: string, projectId: string, size: number) =>
+			setupEntry({
+				tool: name === "AGENTS.md" ? "codex" : "claude-code",
+				kind: name === ".claude/settings.json" ? "setting" : "instructions",
+				name,
+				status: "repo_tracked",
+				reason: "repo_tracked",
+				location: "project",
+				projectId,
+				path: `/work/${projectId}/${name}`,
+				tracked: true,
+				size,
+				sha256: "c".repeat(64),
+			});
+		serveSetup({
+			"GET /api/v1/lado/setup/inventory": () => ({
+				data: setupInventory({
+					entries: [tracked("CLAUDE.md", "demo", 820), tracked(".claude/settings.json", "demo", 2048), tracked("AGENTS.md", "other", 10)],
+					projects: [
+						{ id: "demo", name: "demo", path: "/work/demo", error: "" },
+						{ id: "other", name: "other", path: "/work/other", error: "" },
+					],
+				}),
+			}),
+		});
+		renderSection();
+
+		const card = (await screen.findByRole("heading", { name: "From the repository" })).closest("section")!;
+		expect(within(card).getByText("Claude Code and Codex read these from each task's worktree, so a change to one is a task of its own.")).toBeInTheDocument();
+		const files = within(card).getAllByTestId("lado-setup-repo-file");
+		// This project's files only.
+		expect(files.map((file) => file.getAttribute("data-path"))).toEqual(["/work/demo/.claude/settings.json", "/work/demo/CLAUDE.md"]);
+		expect(within(files[1]).getByText("CLAUDE.md")).toHaveClass("font-mono");
+		expect(files[1]).toHaveTextContent("Claude Code · Instructions · 820 bytes");
+		expect(files[0]).toHaveTextContent("Claude Code · Setting · 2 kB");
+		// Nothing here changes them in place.
+		expect(within(card).queryByRole("switch")).not.toBeInTheDocument();
+
+		await user.click(within(files[1]).getByRole("button", { name: "Edit CLAUDE.md in a new task" }));
+		// The project's New Task composer opens with the file named in its first line.
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: "demo", prompt: "Update CLAUDE.md" });
+		expect(useUiStore.getState().newTaskRequest?.hostId).toBeUndefined();
+		expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings")).toHaveLength(0);
 	});
 
 	it("shows protected rules as always on", async () => {

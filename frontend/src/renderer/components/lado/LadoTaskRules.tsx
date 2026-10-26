@@ -1,21 +1,24 @@
-// LADO fork: the task view's Rules tab (docs/LJY-PRD/HARNESS.md §5-§8 and
+// LADO fork: the task view's Rules tab (docs/LJY-PRD/HARNESS.md §5-§9 and
 // §12, PRD HAR-005): what applies to the task's next run, what keeps it from
-// running, whether the rules are still the ones its approval fixed, and the
-// task's own overrides.
+// running, whether the rules and the local setup are still the ones its
+// approval fixed, the warnings accepted for it, and the task's own overrides
+// of rules and setup items.
 import { agentLabel } from "@aoagents/product-ui";
 import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLadoEffective, useLadoRules } from "../../hooks/useLado";
+import { useLadoSetupConflicts } from "../../hooks/useLadoSetup";
 import type { MessageKey } from "../../i18n/messages";
 import type { LadoEffective, LadoPolicyProblem, LadoTask } from "../../lib/lado";
-import { ladoErrorText } from "../../lib/lado-errors";
+import { ladoErrorText, ladoSetupConflictText } from "../../lib/lado-errors";
 import { ladoProblemText, ladoRuleName, useLadoRuleChange } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
 import { SettingsSection } from "../settings/SettingsSection";
 import { LadoAORulesSection, LadoEffectiveRuleRow, type LadoOverrideState } from "./LadoProjectRulesSection";
 import { LadoRuleImpactDialog } from "./LadoRuleImpactDialog";
 import { ladoCeilingModeLabel } from "./LadoRuleRows";
+import { LadoSetupScopeCard } from "./setup/LadoSetupScopeRows";
 
 type Severity = LadoPolicyProblem["severity"];
 
@@ -80,6 +83,7 @@ export function LadoTaskRules({ projectId, task }: { projectId: string; task: La
 				</p>
 				<ApprovalComparison effective={data} task={task} />
 				<ProblemList effective={data} />
+				<AcceptedWarnings effective={data} projectId={projectId} taskId={task.id} />
 			</div>
 			<SettingsSection title={t("lado.task.rules.title")} grouped>
 				{data.rules.map((rule) => (
@@ -95,6 +99,7 @@ export function LadoTaskRules({ projectId, task }: { projectId: string; task: La
 					/>
 				))}
 			</SettingsSection>
+			<LadoSetupScopeCard title={t("lado.setup.task.title")} scope="task" scopeId={task.id} items={data.setup.items} showTool={false} readOnly={!open} />
 			<LadoAORulesSection rules={data.aoRules} />
 			<WorkerText prompt={data.prompt} />
 			<LadoRuleImpactDialog
@@ -141,6 +146,7 @@ function ApprovalComparison({ effective, task }: { effective: LadoEffective; tas
 	const { t } = useTranslation();
 	const approved = effective.approved;
 	const changes = approved && !approved.matches ? [...approved.added, ...approved.removed, ...approved.changed] : [];
+	const setupNames = useSetupChangeNames(effective);
 	// A removed rule can be archived since, so the current rules may not name it.
 	const unnamed = changes.some((ruleId) => !effective.rules.some((rule) => rule.ruleId === ruleId));
 	const allRules = useLadoRules(true, unnamed);
@@ -166,6 +172,11 @@ function ApprovalComparison({ effective, task }: { effective: LadoEffective; tas
 		{ key: "removed", ids: approved.removed, label: (rules: string) => t("lado.task.rules.removed", { rules }) },
 		{ key: "changed", ids: approved.changed, label: (rules: string) => t("lado.task.rules.changed", { rules }) },
 	];
+	const setupLines = [
+		{ key: "setupAdded", ids: approved.setupAdded, label: (items: string) => t("lado.setup.task.added", { items }) },
+		{ key: "setupRemoved", ids: approved.setupRemoved, label: (items: string) => t("lado.setup.task.removed", { items }) },
+		{ key: "setupChanged", ids: approved.setupChanged, label: (items: string) => t("lado.setup.task.changed", { items }) },
+	].filter((line) => line.ids.length > 0);
 	const listed = lines.filter((line) => line.ids.length > 0);
 	return (
 		<div className="flex flex-col gap-1">
@@ -175,11 +186,62 @@ function ApprovalComparison({ effective, task }: { effective: LadoEffective; tas
 					{line.label(list(line.ids))}
 				</p>
 			))}
+			{setupLines.map((line) => (
+				<p key={line.key} className="pl-3.5 text-caption leading-4 text-muted-foreground" data-testid="lado-approval-setup">
+					{line.label(line.ids.map(setupNames).join(", "))}
+				</p>
+			))}
 			{/* The snapshot also holds the agent, its mode, the AO instructions and AO's build. */}
-			{listed.length === 0 ? (
+			{listed.length === 0 && setupLines.length === 0 ? (
 				<p className="pl-3.5 text-caption leading-4 text-muted-foreground">{t("lado.task.rules.changedOutsideRules")}</p>
 			) : null}
 		</div>
+	);
+}
+
+/**
+ * A setup item's name in the approval comparison: from the setup now or the
+ * approved snapshot, and, for an enabledPlugins setting whose version stayed,
+ * that the installed plugins changed.
+ */
+function useSetupChangeNames(effective: LadoEffective): (itemId: string) => string {
+	const { t } = useTranslation();
+	const approved = new Map((effective.approved?.setup ?? []).map((item) => [item.itemId, item]));
+	const now = new Map(effective.setup.items.map((item) => [item.itemId, item]));
+	return (itemId) => {
+		const before = approved.get(itemId);
+		const current = now.get(itemId);
+		const name = current?.name ?? before?.name ?? itemId;
+		return before && current && before.versionId === current.versionId && before.installedSha256 !== current.installedSha256
+			? t("lado.setup.task.pluginsChanged", { name })
+			: name;
+	};
+}
+
+/**
+ * The setup warnings an acceptance covers for this task, which leave the
+ * problems; the conflicts are read for their wording only when there are any.
+ */
+function AcceptedWarnings({ effective, projectId, taskId }: { effective: LadoEffective; projectId: string; taskId: string }) {
+	const { t } = useTranslation();
+	const accepted = effective.setup.accepted;
+	const conflicts = useLadoSetupConflicts({ projectId, taskId }, accepted.length > 0);
+	if (accepted.length === 0) return null;
+	const names = new Map(effective.setup.items.map((item) => [item.itemId, item.name]));
+	const worded = new Map((conflicts.data ?? []).filter((conflict) => conflict.acceptanceId).map((conflict) => [conflict.acceptanceId, conflict]));
+	return (
+		<ul aria-label={t("lado.setup.task.accepted")} className="flex flex-col gap-1">
+			{accepted.map((acceptance) => {
+				const conflict = worded.get(acceptance.acceptanceId);
+				const text = conflict ? ladoSetupConflictText(t, conflict) : acceptance.code;
+				const item = names.get(acceptance.itemId) ?? acceptance.itemId;
+				return (
+					<li key={acceptance.acceptanceId} className="text-caption leading-4 text-muted-foreground" data-testid="lado-setup-accepted">
+						{[t("lado.setup.conflicts.accepted"), text, item].join(" · ")}
+					</li>
+				);
+			})}
+		</ul>
 	);
 }
 

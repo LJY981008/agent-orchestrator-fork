@@ -2,7 +2,8 @@
 // (docs/LJY-PRD/HARNESS.md §10), worst first. A blocking conflict stops LADO
 // tasks until the item is turned off or fixed; a warning can be accepted for
 // the item's current content; a note needs nothing. Each names the item it
-// is about, and turning that item off at Global is one action away.
+// is about, and editing that item or turning it off at Global is one action
+// away.
 import { agentLabel } from "@aoagents/product-ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,6 +19,7 @@ import { SettingsRow } from "../../settings/SettingsRow";
 import { SettingsSection } from "../../settings/SettingsSection";
 import { Button } from "../../ui/button";
 import { LadoRuleImpactDialog } from "../LadoRuleImpactDialog";
+import { LadoSetupItemEditor } from "./LadoSetupItemEditor";
 import { ladoSetupConflictsBySeverity, ladoSetupSeverityDotClass, ladoSetupSeverityKeys, ladoSetupShortPath } from "./lado-setup-view";
 
 function conflictKey(conflict: LadoSetupConflict): string {
@@ -29,6 +31,8 @@ export function LadoSetupConflictsCard({ conflicts, inventory }: { conflicts: re
 	const change = useLadoSetupChange();
 	const [changing, setChanging] = useState<string | null>(null);
 	const [failure, setFailure] = useState<{ key: string; error: unknown } | null>(null);
+	// Each opening mounts the editor again, so it starts from the item as it is then.
+	const [editing, setEditing] = useState<{ key: number; open: boolean; itemId: string | null }>({ key: 0, open: false, itemId: null });
 	if (conflicts.length === 0) return null;
 
 	const items = new Map(inventory.items.map((item) => [item.itemId, item]));
@@ -89,8 +93,20 @@ export function LadoSetupConflictsCard({ conflicts, inventory }: { conflicts: re
 								</>
 							}
 						>
-							{canTurnOff || canAccept ? (
+							{item || canTurnOff || canAccept ? (
 								<div className="flex items-center gap-1">
+									{item ? (
+										<Button
+											type="button"
+											variant="ghost"
+											size="sm"
+											className="text-settings-muted hover:text-settings-label"
+											aria-label={t("lado.setup.conflicts.editLabel", { name: item.name })}
+											onClick={() => setEditing((current) => ({ key: current.key + 1, open: true, itemId: item.itemId }))}
+										>
+											<span className="text-control">{t("lado.rules.edit")}</span>
+										</Button>
+									) : null}
 									{canTurnOff && item ? (
 										<Button
 											type="button"
@@ -128,6 +144,12 @@ export function LadoSetupConflictsCard({ conflicts, inventory }: { conflicts: re
 					);
 				})}
 			</SettingsSection>
+			<LadoSetupItemEditor
+				key={editing.key}
+				itemId={editing.itemId}
+				open={editing.open}
+				onOpenChange={(open) => setEditing((current) => ({ ...current, open }))}
+			/>
 			<LadoRuleImpactDialog
 				impact={change.pending?.result.impact ?? null}
 				busy={change.isPending}

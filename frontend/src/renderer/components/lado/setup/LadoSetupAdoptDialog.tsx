@@ -98,16 +98,19 @@ function useSettled(value: string, delayMs: number): string {
 
 /**
  * Open while the developer adopts. Every adoptable entry starts chosen with
- * its default action. Mount it again for each opening so it starts from the
- * inventory as it is then.
+ * its default action, or only the one only names (its tool/kind/name key),
+ * as a new entry found by drift is adopted. Mount it again for each opening
+ * so it starts from the inventory as it is then.
  */
 export function LadoSetupAdoptDialog({
 	open,
 	inventory,
+	only,
 	onOpenChange,
 }: {
 	open: boolean;
 	inventory: LadoSetupInventory;
+	only?: string;
 	onOpenChange: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
@@ -119,7 +122,12 @@ export function LadoSetupAdoptDialog({
 		[inventory],
 	);
 	const [choices, setChoices] = useState<Record<string, Choice>>(() =>
-		Object.fromEntries(candidates.map((entry) => [ladoSetupEntryKey(entry), { selected: true, action: defaultAction(entry) }])),
+		Object.fromEntries(
+			candidates.map((entry) => [
+				ladoSetupEntryKey(entry),
+				{ selected: only === undefined || ladoSetupEntryKey(entry) === only, action: defaultAction(entry) },
+			]),
+		),
 	);
 	const adopt = useAdoptLadoSetup();
 	const [submitting, setSubmitting] = useState(false);

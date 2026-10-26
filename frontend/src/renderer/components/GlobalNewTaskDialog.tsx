@@ -19,6 +19,7 @@ export function GlobalNewTaskDialog() {
 	const [open, setOpen] = useState(false);
 	const [projectId, setProjectId] = useState<string | undefined>(undefined);
 	const [hostId, setHostId] = useState<string | undefined>(undefined);
+	const [prompt, setPrompt] = useState("");
 	const lastNonce = useRef(newTaskRequest?.nonce ?? 0);
 
 	useEffect(() => {
@@ -30,6 +31,7 @@ export function GlobalNewTaskDialog() {
 		if (open) return;
 		setProjectId(newTaskRequest.projectId);
 		setHostId(newTaskRequest.hostId);
+		setPrompt(newTaskRequest.prompt ?? "");
 		setOpen(true);
 	}, [newTaskRequest, open]);
 
@@ -44,6 +46,7 @@ export function GlobalNewTaskDialog() {
 			open={open}
 			projectId={projectId}
 			hostId={hostId}
+			initialPrompt={prompt}
 			onProjectChange={setProjectId}
 			onCreated={(sessionId) => void handleCreated(sessionId)}
 			onIssueTasksCreated={(createdIn) => void navigate({ to: "/projects/$projectId", params: { projectId: createdIn } })}

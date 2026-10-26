@@ -1,10 +1,10 @@
 // LADO fork: Settings → Local setup (docs/LJY-PRD/HARNESS.md §9 and §10). The
 // developer's Claude Code and Codex setup in one place: what LADO found at the
-// last scan, the conflicts of what it manages, one card per tool, adopting
-// what it can take and restoring an adoption. Adopted items reach only the
-// sessions AO starts, and adoption stays off on an OS where LADO has not
-// checked that they do.
-import { FolderInput, RefreshCw } from "lucide-react";
+// last scan, the conflicts of what it manages, what changed outside the app,
+// one card per tool, adopting what it can take, new items made here and
+// restoring an adoption. Adopted items reach only the sessions AO starts, and
+// adoption stays off on an OS where LADO has not checked that they do.
+import { FolderInput, Plus, RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLadoSetupConflicts, useLadoSetupInventory, useScanLadoSetup } from "../../hooks/useLadoSetup";
@@ -13,6 +13,8 @@ import { cn } from "../../lib/utils";
 import { LadoSetupAdoptDialog } from "../lado/setup/LadoSetupAdoptDialog";
 import { LadoSetupAdoptionsCard } from "../lado/setup/LadoSetupAdoptionsCard";
 import { LadoSetupConflictsCard } from "../lado/setup/LadoSetupConflictsCard";
+import { LadoSetupCreateDialog } from "../lado/setup/LadoSetupCreateDialog";
+import { LadoSetupDriftCard } from "../lado/setup/LadoSetupDriftReview";
 import { LadoSetupItemList } from "../lado/setup/LadoSetupItemList";
 import { ladoSetupAdoptable, ladoSetupOSLabel, ladoSetupShownEntries, ladoSetupTools } from "../lado/setup/lado-setup-view";
 import { Button } from "../ui/button";
@@ -25,8 +27,10 @@ export function LocalSetupSection({ titleHidden }: { titleHidden?: boolean }) {
 	const conflicts = useLadoSetupConflicts();
 	const scan = useScanLadoSetup();
 	const osLineId = useId();
-	// Each opening mounts the dialog again, so it starts from the inventory as it is then.
-	const [adopting, setAdopting] = useState({ key: 0, open: false });
+	// Each opening mounts a dialog again, so it starts from the inventory as it is
+	// then; only names the one entry an adoption from drift takes.
+	const [adopting, setAdopting] = useState<{ key: number; open: boolean; only?: string }>({ key: 0, open: false });
+	const [creating, setCreating] = useState({ key: 0, open: false });
 
 	const data = inventory.data;
 	const unverified = data ? ladoSetupTools.filter((tool) => !data.verified[tool]) : [];
@@ -72,6 +76,18 @@ export function LocalSetupSection({ titleHidden }: { titleHidden?: boolean }) {
 							<span className="text-control">{t("lado.setup.section.adopt")}</span>
 						</Button>
 					) : null}
+					{data ? (
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="text-settings-muted hover:text-settings-label"
+							onClick={() => setCreating((current) => ({ key: current.key + 1, open: true }))}
+						>
+							<Plus aria-hidden="true" />
+							<span className="text-control">{t("lado.setup.create.action")}</span>
+						</Button>
+					) : null}
 				</div>
 			</div>
 			{data && unverified.length > 0 ? (
@@ -111,6 +127,10 @@ export function LocalSetupSection({ titleHidden }: { titleHidden?: boolean }) {
 						) : (
 							<LadoSetupConflictsCard conflicts={conflicts.data ?? []} inventory={data} />
 						)}
+						<LadoSetupDriftCard
+							inventory={data}
+							onAdopt={(only) => setAdopting((current) => ({ key: current.key + 1, open: true, only }))}
+						/>
 						{ladoSetupTools.map((tool) => (
 							<LadoSetupItemList key={tool} tool={tool} inventory={data} />
 						))}
@@ -123,9 +143,15 @@ export function LocalSetupSection({ titleHidden }: { titleHidden?: boolean }) {
 					key={adopting.key}
 					open={adopting.open}
 					inventory={data}
+					only={adopting.only}
 					onOpenChange={(open) => setAdopting((current) => ({ ...current, open }))}
 				/>
 			) : null}
+			<LadoSetupCreateDialog
+				key={`create-${creating.key}`}
+				open={creating.open}
+				onOpenChange={(open) => setCreating((current) => ({ ...current, open }))}
+			/>
 		</>
 	);
 }

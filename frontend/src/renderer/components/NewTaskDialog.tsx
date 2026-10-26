@@ -58,6 +58,8 @@ type NewTaskDialogProps = {
 	open: boolean;
 	projectId?: string;
 	hostId?: string;
+	/** LADO fork: text the composer starts with. */
+	initialPrompt?: string;
 	onProjectChange?: (projectId: string) => void;
 	onCreated: (sessionId: string) => void;
 	/** LADO fork: a LADO project's composer created or imported issue-backed tasks. */
@@ -65,7 +67,7 @@ type NewTaskDialogProps = {
 	onOpenChange: (open: boolean) => void;
 };
 
-export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCreated, onIssueTasksCreated, onOpenChange }: NewTaskDialogProps) {
+export function NewTaskDialog({ open, projectId, hostId, initialPrompt, onProjectChange, onCreated, onIssueTasksCreated, onOpenChange }: NewTaskDialogProps) {
 	const { t } = useTranslation();
 	// Settings opens as a page in the center pane; step aside so it is not hidden behind this modal.
 	const settingsOpen = useUiStore((state) => state.settingsModal?.scope === "global");
@@ -183,6 +185,7 @@ export function NewTaskDialog({ open, projectId, hostId, onProjectChange, onCrea
 					<TaskComposer
 						projectId={selectedProjectId}
 						hostId={hostId}
+						initialPrompt={initialPrompt}
 						createLabel={t("newTask.create")}
 						autoFocusTitle
 						onCreated={(sessionId) => {

@@ -7,8 +7,10 @@ import type { MessageKey } from "../../../i18n/messages";
 import { ladoSetupReasonText } from "../../../lib/lado-errors";
 import type {
 	LadoSetupConflict,
+	LadoSetupContent,
 	LadoSetupEntry,
 	LadoSetupInventory,
+	LadoSetupItemState,
 	LadoSetupKind,
 	LadoSetupRestoredEntry,
 	LadoSetupTool,
@@ -215,4 +217,46 @@ export function ladoSetupConflictsBySeverity(conflicts: readonly LadoSetupConfli
 		.map((conflict, index) => ({ conflict, index }))
 		.sort((a, b) => severityRank[a.conflict.severity] - severityRank[b.conflict.severity] || a.index - b.index)
 		.map(({ conflict }) => conflict);
+}
+
+/** The kinds the app can create for a tool; hook scripts come only from an adoption. */
+export function ladoSetupCreatableKinds(tool: LadoSetupTool): LadoSetupKind[] {
+	return tool === "codex" ? ["instructions", "mcp_server"] : ladoSetupKinds.filter((kind) => kind !== "hook_script");
+}
+
+/** A settings key and an MCP server hold a JSON value; the other kinds hold a file's text. */
+export function ladoSetupJSONKind(kind: string): boolean {
+	return kind === "setting" || kind === "mcp_server";
+}
+
+/** The kinds whose text is Markdown; a hook script is a program. */
+export function ladoSetupMarkdownKind(kind: string): boolean {
+	return kind !== "hook_script" && !ladoSetupJSONKind(kind);
+}
+
+/**
+ * A folder item: a skill with more than its SKILL.md, or a hook folder. Its
+ * files are changed in the managed folder, not in the app.
+ */
+export function ladoSetupFolderContent(kind: string, content: Pick<LadoSetupContent, "contentKind" | "files">): boolean {
+	if (content.contentKind !== "tree") return false;
+	return !(kind === "skill" && content.files.length === 1 && content.files[0]?.path === "SKILL.md");
+}
+
+/** Tool, then kind in the page's order, then name. */
+export function compareItems(a: Pick<LadoSetupItemState, "tool" | "kind" | "name">, b: Pick<LadoSetupItemState, "tool" | "kind" | "name">): number {
+	return (
+		ladoSetupTools.indexOf(a.tool) - ladoSetupTools.indexOf(b.tool) ||
+		ladoSetupKinds.indexOf(a.kind) - ladoSetupKinds.indexOf(b.kind) ||
+		a.name.localeCompare(b.name)
+	);
+}
+
+/** A size in the developer's language: "820 bytes", "1.2 kB", "3 MB". */
+export function ladoSetupSize(bytes: number, locale: string): string {
+	const [value, unit] =
+		bytes >= 1024 * 1024 ? [bytes / (1024 * 1024), "megabyte"] : bytes >= 1024 ? [bytes / 1024, "kilobyte"] : [bytes, "byte"];
+	// Short byte units read as "820 byte" in English, so bytes are spelled out.
+	const unitDisplay = unit === "byte" ? "long" : "short";
+	return new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay, maximumFractionDigits: 1 }).format(value);
 }
