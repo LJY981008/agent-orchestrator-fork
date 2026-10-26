@@ -12,12 +12,14 @@ import (
 // Compiler names the snapshot format. SnapshotContent's fields, their JSON
 // names and their order are the format: changing any of them needs a new
 // name.
-const Compiler = "lado-policy/1"
+const Compiler = "lado-policy/2"
 
 // SnapshotContent is what applied to one approval (docs/LJY-PRD/HARNESS.md
 // §8): the on rules with the binding behind each, the AO worker
-// instructions, the worker's rule text, the agent and its permission mode,
-// and the problems found. Lists are never nil, so they encode as [].
+// instructions, the on setup items of the agent's tool with the binding
+// behind each, the AO system layer, the accepted setup warnings, the worker's
+// rule text, the agent and its permission mode, and the problems found. Lists
+// are never nil, so they encode as [].
 type SnapshotContent struct {
 	Compiler          string                `json:"compiler"`
 	AOBuild           string                `json:"aoBuild"`
@@ -27,7 +29,11 @@ type SnapshotContent struct {
 	PermissionCeiling domain.PermissionMode `json:"permissionCeiling"`
 	Rules             []SnapshotRule        `json:"rules"`
 	AORules           []SnapshotAORule      `json:"aoRules"`
-	Prompt            string                `json:"prompt"`
+	// Setup are the on items of the agent tool's local setup.
+	Setup             []SnapshotSetupItem        `json:"setup"`
+	AOSystem          SnapshotAOSystem           `json:"aoSystem"`
+	AcceptedConflicts []SnapshotAcceptedConflict `json:"acceptedConflicts"`
+	Prompt            string                     `json:"prompt"`
 	// WorkflowGates are the on rules the daemon enforces as gates.
 	WorkflowGates []domain.LadoRuleID        `json:"workflowGates"`
 	Capabilities  []SnapshotCapability       `json:"capabilities"`
@@ -70,6 +76,36 @@ type SnapshotAORule struct {
 	SHA256 string     `json:"sha256"`
 }
 
+// SnapshotSetupItem is one on setup item: the version that applied and why
+// it applied. InstalledSHA256 is set for an enabledPlugins setting only
+// (SetupItemState).
+type SnapshotSetupItem struct {
+	ItemID          domain.LadoSetupItemID        `json:"itemId"`
+	Tool            domain.LadoSetupTool          `json:"tool"`
+	Kind            domain.LadoSetupKind          `json:"kind"`
+	Name            string                        `json:"name"`
+	VersionID       domain.LadoSetupItemVersionID `json:"versionId"`
+	Version         int                           `json:"version"`
+	SHA256          string                        `json:"sha256"`
+	Source          SnapshotSource                `json:"source"`
+	InstalledSHA256 string                        `json:"installedSha256,omitempty"`
+}
+
+// SnapshotAOSystem is the AO system layer: what AO adds to every session.
+// SHA256 is empty when LADO resolved no local setup.
+type SnapshotAOSystem struct {
+	SHA256 string `json:"sha256"`
+}
+
+// SnapshotAcceptedConflict is a setup conflict warning the developer
+// accepted, which left the problems.
+type SnapshotAcceptedConflict struct {
+	Code         string                          `json:"code"`
+	ItemID       domain.LadoSetupItemID          `json:"itemId"`
+	Detail       string                          `json:"detail"`
+	AcceptanceID domain.LadoConflictAcceptanceID `json:"acceptanceId"`
+}
+
 // SnapshotCapability is what the agent can do about one class the rules
 // need.
 type SnapshotCapability struct {
@@ -77,9 +113,11 @@ type SnapshotCapability struct {
 	Status CapabilityStatus `json:"status"`
 }
 
-// snapshotContent builds the snapshot of r. Only on rules and the worker
-// kinds of AO instructions go in; the orchestrator's do not reach workers.
+// snapshotContent builds the snapshot of r. Only on rules, on setup items and
+// the worker kinds of AO instructions go in; the orchestrator's do not reach
+// workers.
 func snapshotContent(in Input, r Resolution) SnapshotContent {
+	setup, accepted := snapshotSetup(in.Setup)
 	c := SnapshotContent{
 		Compiler:          Compiler,
 		AOBuild:           in.AOBuild,
@@ -89,6 +127,9 @@ func snapshotContent(in Input, r Resolution) SnapshotContent {
 		PermissionCeiling: r.Ceiling,
 		Rules:             []SnapshotRule{},
 		AORules:           []SnapshotAORule{},
+		Setup:             setup,
+		AOSystem:          SnapshotAOSystem{SHA256: in.Setup.AOSystemSHA256},
+		AcceptedConflicts: accepted,
 		Prompt:            r.Prompt,
 		WorkflowGates:     []domain.LadoRuleID{},
 		Capabilities:      []SnapshotCapability{},

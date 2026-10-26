@@ -12,6 +12,11 @@ import (
 // rule (docs/work-history/2026-10-22-lado-rules-core-plan.md §5).
 const koreanCommitsInstruction = "Write Git commit subjects and bodies primarily in Korean. Conventional Commit prefixes such as feat, fix, docs, refactor, test and chore may stay in English."
 
+// setupPresenceInstruction says what setup.change.requires_presence covers
+// (step 7 plan decision i). It names no prompt enforcement, so no worker gets
+// it.
+const setupPresenceInstruction = "Adopting or restoring local setup, and creating, editing, turning on or keeping a changed copy of a hook script, an MCP server or a setting that can run commands or widen access, need a confirmation in the AO desktop app."
+
 func TestBuiltinsAreTheStepFiveCatalog(t *testing.T) {
 	wants := []struct {
 		id          domain.LadoRuleID
@@ -26,6 +31,7 @@ func TestBuiltinsAreTheStepFiveCatalog(t *testing.T) {
 		{domain.LadoRulePlanApproval, "Plan approval required", "workflow", "", domain.LadoEnforcementWorkflowGate, `{}`, true, domain.LadoBindingOn},
 		{domain.LadoRulePermissionCeiling, "Permission ceiling", "tools", "", domain.LadoEnforcementToolPolicy, `{"mode":"auto"}`, true, domain.LadoBindingOn},
 		{domain.LadoRuleKoreanCommits, "Commit messages in Korean", "git", koreanCommitsInstruction, domain.LadoEnforcementPrompt, `{}`, false, domain.LadoBindingOff},
+		{domain.LadoRuleSetupPresence, "Local setup changes need the desktop app's confirmation", "", setupPresenceInstruction, domain.LadoEnforcementWorkflowGate, `{}`, true, domain.LadoBindingOn},
 	}
 
 	rules := ladopolicy.Builtins()
@@ -68,8 +74,8 @@ func TestBuiltinsAreTheStepFiveCatalog(t *testing.T) {
 			protected++
 		}
 	}
-	if protected != 2 {
-		t.Errorf("%d protected built-ins, want 2", protected)
+	if protected != 3 {
+		t.Errorf("%d protected built-ins, want 3", protected)
 	}
 
 	// Each call builds new rules, so a caller that changes one cannot change

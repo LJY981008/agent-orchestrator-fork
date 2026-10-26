@@ -40,6 +40,7 @@ type Store interface {
 	ListLadoSetupGlobalBindings(ctx context.Context) ([]domain.LadoSetupBinding, error)
 	ListLadoSetupBindings(ctx context.Context, scope domain.LadoRuleScope, scopeID string) ([]domain.LadoSetupBinding, error)
 	LadoSetupVersionsForClientRequest(ctx context.Context, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error)
+	ListLiveLadoConflictAcceptances(ctx context.Context) ([]domain.LadoConflictAcceptance, error)
 }
 
 // Blobs keeps the content of setup item versions. *ladoblob.Store

@@ -298,9 +298,11 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 		}
 		return got
 	}
-	want := map[domain.LadoRuleID]int{domain.LadoRulePlanApproval: 1, domain.LadoRulePermissionCeiling: 1, domain.LadoRuleKoreanCommits: 1}
+	want := map[domain.LadoRuleID]int{
+		domain.LadoRulePlanApproval: 1, domain.LadoRulePermissionCeiling: 1, domain.LadoRuleKoreanCommits: 1, domain.LadoRuleSetupPresence: 1,
+	}
 	if got := stored(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rules after wiring = %v, want the three built-ins at version 1", got)
+		t.Fatalf("rules after wiring = %v, want the four built-ins at version 1", got)
 	}
 
 	// A restart seeds nothing again.
@@ -312,7 +314,7 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	// The returned service resolves the seeded rules and stamps the running
 	// AO build into every snapshot.
 	view, err := rules.Effective(ctx, ladopolicy.EffectiveInput{ProjectID: "mer"})
-	if err != nil || len(view.Entries) != 3 || view.Ceiling != domain.PermissionModeAuto || view.Content.AOBuild != "0.12.0" {
+	if err != nil || len(view.Entries) != 4 || view.Ceiling != domain.PermissionModeAuto || view.Content.AOBuild != "0.12.0" {
 		t.Fatalf("Effective = %d rules, ceiling %q, AO build %q, err %v", len(view.Entries), view.Ceiling, view.Content.AOBuild, err)
 	}
 }

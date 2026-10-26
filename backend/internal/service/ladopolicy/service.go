@@ -90,6 +90,9 @@ type Deps struct {
 	// AOBuild is the running AO build, which every snapshot carries, so an
 	// AO update asks for new approvals.
 	AOBuild string
+	// Setup resolves the local setup LADO manages, which every snapshot
+	// carries; nil resolves none.
+	Setup SetupSource
 	// Clock stamps changes; nil uses time.Now.
 	Clock func() time.Time
 	// NewID returns a new unique id; nil uses uuid.NewString.
@@ -530,7 +533,10 @@ type EffectiveInput struct {
 	TaskID    domain.LadoTaskID
 }
 
-// EffectiveView is what the rules give a project or a task now.
+// EffectiveView is what the rules give a project or a task now. Its
+// Resolution holds the local setup of the agent's tool: the items with where
+// their state comes from, the AO system layer, the conflicts (also among the
+// problems) and the accepted warnings.
 type EffectiveView struct {
 	Resolution
 	// Agent is the task's agent, or the project's worker agent.
@@ -558,6 +564,10 @@ type ApprovedView struct {
 	// not now, and Changed the rules on in both with another version or
 	// binding, each sorted.
 	Added, Removed, Changed []domain.LadoRuleID
+	// SetupAdded, SetupRemoved and SetupChanged compare the on setup items
+	// the same way; a changed item also counts when the plugins an
+	// enabledPlugins setting turns on changed.
+	SetupAdded, SetupRemoved, SetupChanged []domain.LadoSetupItemID
 }
 
 // Effective resolves the rules for a project, or for a task at its latest
@@ -604,8 +614,10 @@ func (s *Service) effectiveProject(ctx context.Context, id domain.ProjectID) (Ef
 	if !scope.record.ArchivedAt.IsZero() {
 		return EffectiveView{}, scopeNotFound(domain.LadoScopeProject, string(id))
 	}
-	in := s.projectInput(scope)
-	in.Rules = rules
+	in, err := s.projectInput(ctx, rules, scope)
+	if err != nil {
+		return EffectiveView{}, err
+	}
 	return EffectiveView{Resolution: Resolve(in), Agent: in.Agent, AORules: in.AORules}, nil
 }
 
@@ -631,6 +643,7 @@ func (s *Service) approved(ctx context.Context, task domain.LadoTask, now Resolu
 		Matches:        snapshot.SHA256 == now.SHA256,
 	}
 	view.Added, view.Removed, view.Changed = diffRules(content.Rules, now.Content.Rules)
+	view.SetupAdded, view.SetupRemoved, view.SetupChanged = diffSetup(content.Setup, now.Content.Setup)
 	return view, nil
 }
 
@@ -663,19 +676,21 @@ func diffRules(then, now []SnapshotRule) (added, removed, changed []domain.LadoR
 
 // Snapshot fixes the rules for approving a task's plan revision: the
 // canonical snapshot and its hash, whether it blocks the task, and the rule
-// versions it used. The store gives it the approval's id and time.
+// and setup item versions it used, which the approval pins. The store gives
+// it the approval's id and time.
 func (s *Service) Snapshot(ctx context.Context, task domain.LadoTask, rev domain.LadoPlanRevision) (domain.LadoPolicySnapshot, error) {
 	r, _, err := s.resolveTask(ctx, task, rev)
 	if err != nil {
 		return domain.LadoPolicySnapshot{}, err
 	}
 	return domain.LadoPolicySnapshot{
-		ID:        domain.LadoPolicySnapshotID("lado-snapshot-" + s.deps.NewID()),
-		SHA256:    r.SHA256,
-		Content:   r.JSON,
-		Blocking:  r.Blocking(),
-		Rules:     r.SnapshotRules(),
-		CreatedAt: s.now(),
+		ID:              domain.LadoPolicySnapshotID("lado-snapshot-" + s.deps.NewID()),
+		SHA256:          r.SHA256,
+		Content:         r.JSON,
+		Blocking:        r.Blocking(),
+		Rules:           r.SnapshotRules(),
+		SetupVersionIDs: r.SnapshotSetup(),
+		CreatedAt:       s.now(),
 	}, nil
 }
 
@@ -692,9 +707,9 @@ func (s *Service) CurrentSHA256(ctx context.Context, task domain.LadoTask) (stri
 
 // CurrentSHA256s is CurrentSHA256 for many tasks, as a task list needs it:
 // it reads the rules once and each project with its AO instructions once. A
-// task whose project or pinned plan cannot be read is left out, which reads
-// as no change, as when CurrentSHA256 fails for it; only rules that cannot
-// be read fail the call.
+// task whose project, pinned plan or local setup cannot be read is left out,
+// which reads as no change, as when CurrentSHA256 fails for it; only rules
+// that cannot be read fail the call.
 func (s *Service) CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error) {
 	rules, err := s.rules(ctx)
 	if err != nil {
@@ -745,32 +760,48 @@ func (s *Service) projectScope(ctx context.Context, id domain.ProjectID) (projec
 	return projectScope{record: project, aoRules: ReadAORules(ctx, project)}, nil
 }
 
-// projectInput is what resolution reads for a project. Its agent is the
-// project's worker agent, as for a task without its own.
-func (s *Service) projectInput(scope projectScope) Input {
-	return Input{
+// projectInput is what resolution reads for a project under rules. Its agent
+// is the project's worker agent, as for a task without its own, and its local
+// setup that agent tool's.
+func (s *Service) projectInput(ctx context.Context, rules []domain.LadoRule, scope projectScope) (Input, error) {
+	in := Input{
+		Rules:     rules,
 		ProjectID: domain.ProjectID(scope.record.ID),
 		Agent:     ChooseAgent(domain.LadoTask{}, scope.record),
 		AORules:   scope.aoRules,
 		AOBuild:   s.deps.AOBuild,
 	}
+	var err error
+	if in.Setup, err = s.setupOf(ctx, in, nil); err != nil {
+		return Input{}, err
+	}
+	return in, nil
 }
 
 // taskInput is what resolution reads for a task at a plan revision, which
-// may be empty.
-func (s *Service) taskInput(ctx context.Context, task domain.LadoTask, scope projectScope, rev domain.LadoPlanRevision) (Input, error) {
+// may be empty, under rules. A pinned plan that cannot be read is
+// LADO_PLAN_BLOB_MISSING.
+func (s *Service) taskInput(ctx context.Context, rules []domain.LadoRule, task domain.LadoTask, scope projectScope, rev domain.LadoPlanRevision) (Input, error) {
 	ceiling, err := s.planCeiling(ctx, rev)
 	if err != nil {
-		return Input{}, err
+		s.deps.Log.Warn("LADO could not read a pinned plan for its rules", "revision", rev.ID, "err", err)
+		return Input{}, apierr.Conflict("LADO_PLAN_BLOB_MISSING",
+			"The pinned copy of this plan is missing or changed on disk, so LADO cannot tell which rules apply to it.",
+			map[string]any{"revision": string(rev.ID)})
 	}
-	return Input{
+	in := Input{
+		Rules:       rules,
 		ProjectID:   task.ProjectID,
 		TaskID:      task.ID,
 		Agent:       ChooseAgent(task, scope.record),
 		PlanCeiling: ceiling,
 		AORules:     scope.aoRules,
 		AOBuild:     s.deps.AOBuild,
-	}, nil
+	}
+	if in.Setup, err = s.setupOf(ctx, in, nil); err != nil {
+		return Input{}, err
+	}
+	return in, nil
 }
 
 // resolveTask resolves the rules for a task at a plan revision.
@@ -789,14 +820,10 @@ func (s *Service) resolveTask(ctx context.Context, task domain.LadoTask, rev dom
 // resolveTaskWith resolves the rules for a task at a plan revision with the
 // rules and the task's project as read before.
 func (s *Service) resolveTaskWith(ctx context.Context, rules []domain.LadoRule, scope projectScope, task domain.LadoTask, rev domain.LadoPlanRevision) (Resolution, Input, error) {
-	in, err := s.taskInput(ctx, task, scope, rev)
+	in, err := s.taskInput(ctx, rules, task, scope, rev)
 	if err != nil {
-		s.deps.Log.Warn("LADO could not read a pinned plan for its rules", "revision", rev.ID, "err", err)
-		return Resolution{}, Input{}, apierr.Conflict("LADO_PLAN_BLOB_MISSING",
-			"The pinned copy of this plan is missing or changed on disk, so LADO cannot tell which rules apply to it.",
-			map[string]any{"revision": string(rev.ID)})
+		return Resolution{}, Input{}, err
 	}
-	in.Rules = rules
 	return Resolve(in), in, nil
 }
 

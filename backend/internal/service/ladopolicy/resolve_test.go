@@ -275,7 +275,8 @@ func TestResolveBindings(t *testing.T) {
 			promptRule("b.later", "B", "b", 5), promptRule("a.later", "A", "a", 5), promptRule("c.earlier", "C", "c", -1))
 		slices.Reverse(rules)
 		want := []domain.LadoRuleID{
-			"c.earlier", domain.LadoRulePermissionCeiling, domain.LadoRuleKoreanCommits, domain.LadoRulePlanApproval, "a.later", "b.later",
+			"c.earlier", domain.LadoRulePermissionCeiling, domain.LadoRuleKoreanCommits, domain.LadoRulePlanApproval, domain.LadoRuleSetupPresence,
+			"a.later", "b.later",
 		}
 		if got := entryIDs(ladopolicy.Resolve(taskInput(rules, claudeCode))); !slices.Equal(got, want) {
 			t.Errorf("entries %v, want %v", got, want)

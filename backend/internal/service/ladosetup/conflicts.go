@@ -201,8 +201,8 @@ type conflictChecker struct {
 	aoEvents []string
 	out      []Conflict
 	seen     map[string]bool
-	// plugins are the install paths of the user's plugins, read once.
-	plugins    map[string]string
+	// plugins are the user installs of the plugins, read once.
+	plugins    map[string]pluginInstall
 	pluginsErr error
 	pluginsSet bool
 }
@@ -514,8 +514,8 @@ func (cc *conflictChecker) pluginHooks(name string) ([]claudeHook, error) {
 	if cc.pluginsErr != nil {
 		return nil, cc.pluginsErr
 	}
-	dir, ok := cc.plugins[name]
-	if !ok || !filepath.IsAbs(dir) {
+	dir := cc.plugins[name].InstallPath
+	if dir == "" || !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("plugin %s has no user install", name)
 	}
 	data, err := readRegular(filepath.Join(dir, "hooks", "hooks.json"))
@@ -532,11 +532,18 @@ func (cc *conflictChecker) pluginHooks(name string) ([]claudeHook, error) {
 	return claudeHooks(file["hooks"]), nil
 }
 
-// installedPlugins reads the install folders of the user's plugins from the
-// Claude folder's plugins/installed_plugins.json, by plugin name. Version 2
-// of the file lists each plugin's installs with their scope; version 1 had
-// one install per plugin.
-func installedPlugins(claudeDir string) (map[string]string, error) {
+// pluginInstall is a plugin's user install as Claude Code records it.
+type pluginInstall struct {
+	InstallPath  string `json:"installPath"`
+	Version      string `json:"version"`
+	GitCommitSha string `json:"gitCommitSha"`
+}
+
+// installedPlugins reads the user installs of the plugins from the Claude
+// folder's plugins/installed_plugins.json, by plugin name. Version 2 of the
+// file lists each plugin's installs with their scope; version 1 had one
+// install per plugin.
+func installedPlugins(claudeDir string) (map[string]pluginInstall, error) {
 	if claudeDir == "" {
 		return nil, errors.New("no Claude folder")
 	}
@@ -551,27 +558,27 @@ func installedPlugins(claudeDir string) (map[string]string, error) {
 		return nil, err
 	}
 	type install struct {
-		Scope       string `json:"scope"`
-		InstallPath string `json:"installPath"`
+		pluginInstall
+		Scope string `json:"scope"`
 	}
-	dirs := make(map[string]string, len(index.Plugins))
+	installs := make(map[string]pluginInstall, len(index.Plugins))
 	for name, raw := range index.Plugins {
-		var installs []install
-		if json.Unmarshal(raw, &installs) != nil {
+		var list []install
+		if json.Unmarshal(raw, &list) != nil {
 			var one install
 			if json.Unmarshal(raw, &one) != nil {
 				continue
 			}
-			installs = []install{one}
+			list = []install{one}
 		}
-		for _, in := range installs {
+		for _, in := range list {
 			if (in.Scope == "" || in.Scope == "user") && in.InstallPath != "" {
-				dirs[name] = in.InstallPath
+				installs[name] = in.pluginInstall
 				break
 			}
 		}
 	}
-	return dirs, nil
+	return installs, nil
 }
 
 // accept marks the warnings a live acceptance covers: the same code, item,
