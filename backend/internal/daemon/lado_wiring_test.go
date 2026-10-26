@@ -85,7 +85,6 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 // LADO mode changes without a development flag: on at once, off only with
 // presence.
 func TestWireLadoChangesLadoModeWithoutADevFlag(t *testing.T) {
-	t.Setenv("AO_LADO_DEV", "")
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)
 	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: "/tmp/mer", RegisteredAt: time.Now().UTC().Truncate(time.Second)}); err != nil {
@@ -212,7 +211,7 @@ func TestWireLadoWorkStartsTheDispatcher(t *testing.T) {
 	plan, snapshot := seedLadoApprovedTask(t, store, at, "")
 	// A dispatch claimed the entry and AO started its worker; the daemon
 	// stopped before LADO linked the two.
-	claimed, err := store.ClaimLadoQueueEntries(ctx, at, at.Add(2*time.Minute), 1, func() string { return "lease-1" })
+	claimed, err := store.ClaimLadoQueueEntries(ctx, at, at.Add(2*time.Minute), 1, nil, func() string { return "lease-1" })
 	if err != nil || len(claimed) != 1 {
 		t.Fatalf("claim = %+v, %v; want lado-queue-1", claimed, err)
 	}

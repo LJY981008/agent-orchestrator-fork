@@ -128,25 +128,31 @@ func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.La
 
 // ClaimLadoQueueEntries leases up to limit entries until leaseUntil, oldest
 // first, in one transaction: open entries whose lease is empty or expired at
-// now and whose next attempt is due, in projects with LADO mode on. Each
-// claim takes a token from newToken, counts an attempt and clears the waiting
-// reason, and writes only while the entry is still claimable. It returns the
-// claimed entries as stored.
-func (s *Store) ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, newToken func() string) ([]domain.LadoQueueEntry, error) {
+// now and whose next attempt is due, in projects with LADO mode on other
+// than fullProjects, whose run slots are all taken. Each claim takes a token
+// from newToken, counts an attempt and clears the waiting reason, and writes
+// only while the entry is still claimable. It returns the claimed entries as
+// stored.
+func (s *Store) ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, fullProjects []domain.ProjectID, newToken func() string) ([]domain.LadoQueueEntry, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	if !leaseUntil.After(now) {
 		return nil, errors.New("claim LADO queue entries: the lease must end after now")
 	}
+	// An empty JSON array leaves no project out.
+	full, err := json.Marshal(append([]domain.ProjectID{}, fullProjects...))
+	if err != nil {
+		return nil, fmt.Errorf("claim LADO queue entries: %w", err)
+	}
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return nil, err
 	}
 	defer s.writeMu.Unlock()
 	var claimed []domain.LadoQueueEntry
-	err := s.inTx(ctx, "claim LADO queue entries", func(q *gen.Queries) error {
+	err = s.inTx(ctx, "claim LADO queue entries", func(q *gen.Queries) error {
 		at := ladoNullTime(now)
-		rows, err := q.ListClaimableLadoQueueEntries(ctx, gen.ListClaimableLadoQueueEntriesParams{Now: at, MaxEntries: int64(limit)})
+		rows, err := q.ListClaimableLadoQueueEntries(ctx, gen.ListClaimableLadoQueueEntriesParams{Now: at, FullProjects: string(full), MaxEntries: int64(limit)})
 		if err != nil {
 			return err
 		}
@@ -160,6 +166,7 @@ func (s *Store) ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.
 				Now:            at,
 				LeaseExpiresAt: ladoNullTime(leaseUntil),
 				ID:             row.ID,
+				FullProjects:   string(full),
 			})
 			if err != nil {
 				return err
@@ -464,6 +471,20 @@ func (s *Store) LadoExecutionsPastDeadline(ctx context.Context, now time.Time) (
 	return executions, nil
 }
 
+// LiveLadoExecutions returns the executions whose session still runs, oldest
+// first, without their PR facts.
+func (s *Store) LiveLadoExecutions(ctx context.Context) ([]domain.LadoExecution, error) {
+	rows, err := s.qr.ListLiveLadoExecutions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list live LADO executions: %w", err)
+	}
+	executions := make([]domain.LadoExecution, 0, len(rows))
+	for _, row := range rows {
+		executions = append(executions, ladoExecutionFromGen(row))
+	}
+	return executions, nil
+}
+
 // MarkLadoExecutionTimedOut records that LADO stopped an execution at its
 // deadline, at the event's time, with its audit event in one transaction. It
 // reports false, writing neither, for a session that is not an execution or
@@ -505,29 +526,6 @@ func (s *Store) LadoExecution(ctx context.Context, sessionID domain.SessionID) (
 	}
 	if err != nil {
 		return domain.LadoExecution{}, false, fmt.Errorf("read LADO execution: %w", err)
-	}
-	return s.ladoExecutionWithPR(ctx, row.LadoExecution, row.SessionTerminated)
-}
-
-// LadoExecutionByClientRequest returns the execution whose session has the
-// client request id "lado:<entry>/<attempt>": the entry's execution, when
-// that attempt started it. Any other id reports false.
-func (s *Store) LadoExecutionByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoExecution, bool, error) {
-	entryID, attempt, ok := domain.ParseLadoClientRequestID(clientRequestID)
-	if !ok {
-		return domain.LadoExecution{}, false, nil
-	}
-	row, err := s.qr.GetLadoExecutionByEntry(ctx, string(entryID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.LadoExecution{}, false, nil
-	}
-	if err != nil {
-		return domain.LadoExecution{}, false, fmt.Errorf("read LADO execution: %w", err)
-	}
-	// The session of an earlier attempt, whose spawn failed, is not the
-	// execution.
-	if int(row.LadoExecution.Attempt) != attempt {
-		return domain.LadoExecution{}, false, nil
 	}
 	return s.ladoExecutionWithPR(ctx, row.LadoExecution, row.SessionTerminated)
 }

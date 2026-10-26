@@ -1316,7 +1316,7 @@ func TestImpactCountsQueuedAndFailedTasks(t *testing.T) {
 		t.Helper()
 		task, rev := fx.plan(t, fx.task(t, "claude-code"), domain.PermissionModeAuto)
 		task, _ = fx.approve(t, task, rev)
-		claimed, err := fx.store.ClaimLadoQueueEntries(ctx, now, now.Add(time.Hour), 1, func() string {
+		claimed, err := fx.store.ClaimLadoQueueEntries(ctx, now, now.Add(time.Hour), 1, nil, func() string {
 			tokens++
 			return fmt.Sprintf("token-%d", tokens)
 		})

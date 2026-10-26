@@ -18,15 +18,6 @@ SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_a
 FROM lado_queue_entries
 WHERE id = ?;
 
--- name: ListLadoQueueEntriesForTask :many
-SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
-    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
-    waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
-FROM lado_queue_entries
-WHERE task_id = ?
-ORDER BY enqueued_at DESC, id DESC;
-
 -- name: ListLadoQueueEntriesForTasks :many
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
@@ -35,15 +26,6 @@ SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_a
 FROM lado_queue_entries
 WHERE task_id IN (sqlc.slice('task_ids'))
 ORDER BY task_id, enqueued_at DESC, id DESC;
-
--- name: ListLadoQueueEntries :many
-SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
-    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
-    waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
-FROM lado_queue_entries
-WHERE project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL
-ORDER BY enqueued_at, id;
 
 -- name: CancelOpenLadoQueueEntriesForTask :execrows
 UPDATE lado_queue_entries
@@ -54,7 +36,8 @@ WHERE task_id = ?
 
 -- name: ListClaimableLadoQueueEntries :many
 -- Open entries whose lease is empty or expired and whose wait is over, in
--- projects with LADO mode on, oldest first.
+-- projects with LADO mode on, oldest first. full_projects is a JSON array of
+-- the projects whose run slots are all taken; their entries are left alone.
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
@@ -65,12 +48,13 @@ WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS N
   AND (lease_token IS NULL OR lease_expires_at <= sqlc.arg(now))
   AND (next_attempt_at IS NULL OR next_attempt_at <= sqlc.arg(now))
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+  AND project_id NOT IN (SELECT CAST(j.value AS TEXT) FROM json_each(sqlc.arg(full_projects)) AS j)
 ORDER BY enqueued_at, id
 LIMIT sqlc.arg(max_entries);
 
 -- name: ClaimLadoQueueEntry :execrows
--- Compare-and-set: leases the entry only while it is still claimable. Each
--- claim counts one attempt.
+-- Compare-and-set: leases the entry only while it is still claimable, as
+-- ListClaimableLadoQueueEntries reads it. Each claim counts one attempt.
 UPDATE lado_queue_entries
 SET lease_token = sqlc.arg(lease_token),
     claimed_at = sqlc.arg(now),
@@ -82,7 +66,8 @@ WHERE id = sqlc.arg(id)
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
   AND (lease_token IS NULL OR lease_expires_at <= sqlc.arg(now))
   AND (next_attempt_at IS NULL OR next_attempt_at <= sqlc.arg(now))
-  AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1);
+  AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+  AND project_id NOT IN (SELECT CAST(j.value AS TEXT) FROM json_each(sqlc.arg(full_projects)) AS j);
 
 -- name: ReleaseLadoQueueEntry :execrows
 UPDATE lado_queue_entries
@@ -222,15 +207,6 @@ SELECT sqlc.embed(e),
 FROM lado_executions e
 WHERE e.session_id = ?;
 
--- name: GetLadoExecutionByEntry :one
--- With whether the session ended, as in ListLadoExecutionsForTasks.
-SELECT sqlc.embed(e),
-    NOT EXISTS (
-        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
-    ) AS session_terminated
-FROM lado_executions e
-WHERE e.queue_entry_id = ?;
-
 -- name: ListLadoExecutionsForTasks :many
 -- With whether the session ended. An execution without a session row counts
 -- as ended, as in CountLiveLadoExecutionsByProject.
@@ -241,6 +217,15 @@ SELECT sqlc.embed(e),
 FROM lado_executions e
 WHERE e.task_id IN (sqlc.slice('task_ids'))
 ORDER BY e.task_id, e.started_at DESC, e.session_id DESC;
+
+-- name: ListLiveLadoExecutions :many
+-- Executions whose session still runs, oldest first.
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+FROM lado_executions e
+JOIN sessions s ON s.id = e.session_id
+WHERE s.is_terminated = 0
+ORDER BY e.started_at, e.session_id;
 
 -- name: CountLiveLadoExecutionsByProject :many
 SELECT t.project_id, COUNT(*) AS live
@@ -292,12 +277,6 @@ ON CONFLICT (id) DO UPDATE SET
 -- name: GetLadoProjectMaxConcurrent :one
 SELECT max_concurrent
 FROM lado_project_settings
-WHERE project_id = ?;
-
--- name: SetLadoProjectMaxConcurrent :execrows
-UPDATE lado_project_settings
-SET max_concurrent = ?,
-    updated_at = ?
 WHERE project_id = ?;
 
 -- name: UpsertLadoProjectMaxConcurrent :exec

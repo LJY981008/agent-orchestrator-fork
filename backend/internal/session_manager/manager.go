@@ -2942,6 +2942,10 @@ func (m *Manager) retireWorkspaceProjectForReplacement(ctx context.Context, rec 
 // runs before any durable session write, so a failure never resurrects the row
 // or destroys the worktree (it may hold the agent's prior work).
 func (m *Manager) RestoreWithMode(ctx context.Context, id domain.SessionID) (RestoreResult, error) {
+	// LADO fork: an execution LADO stopped for good stays stopped (lado_gate.go).
+	if err := m.authorizeLadoRestore(ctx, id); err != nil {
+		return RestoreResult{}, err
+	}
 	if err := m.beginAgentOperation(ctx, id, agentOperationRestore); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrSwitchInProgress
@@ -3214,6 +3218,10 @@ func (m *Manager) WakeHibernatedChat(ctx context.Context, id domain.SessionID) e
 // identity and never changes the durable terminated flag as an intermediate
 // step.
 func (m *Manager) ResumeAgentWithMode(ctx context.Context, id domain.SessionID) (result RestoreResult, err error) {
+	// LADO fork: an execution LADO stopped for good stays stopped (lado_gate.go).
+	if err := m.authorizeLadoRestore(ctx, id); err != nil {
+		return RestoreResult{}, err
+	}
 	if err := m.beginAgentResume(ctx, id); err != nil {
 		return RestoreResult{}, fmt.Errorf("resume agent %s: %w", id, err)
 	}

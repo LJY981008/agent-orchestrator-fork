@@ -2,14 +2,17 @@ package ladoqueue
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
@@ -24,6 +27,8 @@ const storeEntry domain.LadoQueueEntryID = "lado-queue-1"
 type storeFixture struct {
 	*fixture
 	db *store.Store
+	// dir holds the store's database.
+	dir string
 }
 
 // newStoreFixture seeds the task the way LADO makes one: a plan request, the
@@ -33,7 +38,8 @@ func newStoreFixture(t *testing.T, change func(*domain.LadoPlanRevision)) *store
 	t.Helper()
 	ctx := context.Background()
 	f := newFixture(t)
-	db := sqlitetest.MustOpen(t)
+	dir := t.TempDir()
+	db := sqlitetest.MustOpenAt(t, dir)
 	at := t0.Add(-2 * time.Hour)
 	must := func(what string, err error) {
 		t.Helper()
@@ -82,9 +88,78 @@ func newStoreFixture(t *testing.T, change func(*domain.LadoPlanRevision)) *store
 		}
 		return rec.ID, db.CommitClientRequestSession(ctx, rec.ID)
 	}
-	sf := &storeFixture{fixture: f, db: db}
+	sf := &storeFixture{fixture: f, db: db, dir: dir}
 	sf.svc = sf.dispatcher(db, f.git)
 	return sf
+}
+
+// queueTask seeds another task as newStoreFixture seeds task-1: task-<key>
+// in project, a LADO project already, for issue #<key>, approved now with its
+// own revision, approval and rule snapshot. Its worker starts from them. It
+// returns the task's queue entry, lado-queue-<key>.
+func (sf *storeFixture) queueTask(t *testing.T, key string, project domain.ProjectID) domain.LadoQueueEntryID {
+	t.Helper()
+	ctx := context.Background()
+	at := sf.clock()
+	must := func(what string, err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("task-%s: %s: %v", key, what, err)
+		}
+	}
+	task := testTask()
+	task.ID, task.ProjectID, task.IssueRef = domain.LadoTaskID("task-"+key), project, domain.IssueID("github:acme/app#"+key)
+	task.Plan, task.CreatedAt, task.UpdatedAt = domain.LadoTaskPlan{}, at, at
+	_, err := sf.db.CreateLadoTask(ctx, task)
+	must("create the task", err)
+	orchestrator := domain.SessionID(string(project) + "-orchestrator-1")
+	request := domain.LadoPlanRequestID("req-" + key)
+	_, err = sf.db.CreateLadoPlanRequest(ctx, domain.LadoPlanRequest{
+		ID: request, TaskID: task.ID, SessionID: orchestrator, IssueSnapshotSHA256: pinnedIssueSHA(), RequestedAt: at,
+	})
+	must("request the plan", err)
+	rev := testRevision()
+	rev.ID, rev.TaskID, rev.RequestID, rev.Number, rev.CreatedAt = domain.LadoPlanRevisionID("rev-"+key), task.ID, request, 1, at
+	rev.SessionID, rev.Path, rev.ArtifactVersion, rev.Source = orchestrator, domain.LadoPlanPath(task.ID), 1, "agent"
+	_, _, err = sf.db.PinLadoPlanRevision(ctx, rev)
+	must("pin the revision", err)
+	approval := domain.LadoPlanApproval{ID: domain.LadoPlanApprovalID("approval-" + key), RevisionID: rev.ID, TaskID: task.ID, SHA256: rev.SHA256, ApprovedAt: at}
+	snapshot := testSnapshot(claudeAgent(), false)
+	snapshot.ID, snapshot.ApprovalID = domain.LadoPolicySnapshotID("snap-"+key), approval.ID
+	entry := domain.LadoQueueEntryID("lado-queue-" + key)
+	_, _, err = sf.db.ApproveLadoPlan(ctx, approval,
+		domain.LadoPresenceProof{
+			Nonce: "nonce-" + key + "-AAAAAAAAAAAAAAAA", Action: domain.LadoPresencePlanApprove, SubjectID: string(rev.ID),
+			ExpiresAt: at.Add(time.Minute), UsedAt: at,
+		},
+		domain.LadoAuditEvent{At: at, Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: string(rev.ID)},
+		&snapshot, &domain.LadoQueueEntry{ID: entry})
+	must("approve the plan", err)
+	sf.tasks.mu.Lock()
+	defer sf.tasks.mu.Unlock()
+	if sf.tasks.inputs == nil {
+		sf.tasks.inputs = map[domain.LadoTaskID]ladotask.RunInput{}
+	}
+	in := sf.tasks.input
+	in.Revision, in.Approval, in.Snapshot = rev, approval, snapshot
+	sf.tasks.inputs[task.ID] = in
+	return entry
+}
+
+// taskChanges counts the changes the store published for a task.
+func (sf *storeFixture) taskChanges(t *testing.T, task domain.LadoTaskID) int {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(sf.dir, "ao.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatalf("open the database: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	var n int
+	if err := raw.QueryRow(`SELECT COUNT(*) FROM change_log
+		WHERE json_extract(payload, '$.kind') = 'lado_task' AND json_extract(payload, '$.taskId') = ?`, string(task)).Scan(&n); err != nil {
+		t.Fatalf("count the changes of %s: %v", task, err)
+	}
+	return n
 }
 
 // dispatcher returns a new dispatcher over st, as a daemon that starts again

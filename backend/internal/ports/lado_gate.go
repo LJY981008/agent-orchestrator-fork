@@ -27,6 +27,9 @@ type WorkGate interface {
 	// AuthorizeExecutionChange refuses an agent switch or an interface
 	// transition of a LADO execution, which runs as it was approved.
 	AuthorizeExecutionChange(ctx context.Context, target domain.SessionID) error
+	// AuthorizeRestore refuses a person's restore or resume of a LADO
+	// execution that LADO stopped for good.
+	AuthorizeRestore(ctx context.Context, target domain.SessionID) error
 }
 
 // SendOrigin is who a message to a session comes from, read from the facts AO

@@ -100,7 +100,7 @@ func seedLadoQueued(t *testing.T, store *sqlite.Store, project domain.ProjectID,
 func claimLado(t *testing.T, store *sqlite.Store, want domain.LadoQueueEntryID, now time.Time) string {
 	t.Helper()
 	token := "lease-" + string(want)
-	claimed, err := store.ClaimLadoQueueEntries(context.Background(), now, now.Add(2*time.Minute), 1, func() string { return token })
+	claimed, err := store.ClaimLadoQueueEntries(context.Background(), now, now.Add(2*time.Minute), 1, nil, func() string { return token })
 	if err != nil || len(claimed) != 1 || claimed[0].ID != want {
 		t.Fatalf("claim = %+v, %v; want %s", claimed, err, want)
 	}

@@ -62,13 +62,30 @@ func mustQueueLadoPlan(t *testing.T, s *sqlite.Store, approval string, rev domai
 // ladoQueueRows reads every queue entry, by id.
 func ladoQueueRows(t *testing.T, raw *sql.DB) map[domain.LadoQueueEntryID]gen.LadoQueueEntry {
 	t.Helper()
-	rows, err := gen.New(raw).ListLadoQueueEntries(context.Background(), sql.NullString{})
+	ctx := context.Background()
+	rows, err := raw.QueryContext(ctx, `SELECT id FROM lado_queue_entries`)
 	if err != nil {
 		t.Fatalf("list queue entries: %v", err)
 	}
-	byID := make(map[domain.LadoQueueEntryID]gen.LadoQueueEntry, len(rows))
-	for _, row := range rows {
-		byID[domain.LadoQueueEntryID(row.ID)] = row
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatalf("list queue entries: %v", err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("list queue entries: %v", err)
+	}
+	byID := make(map[domain.LadoQueueEntryID]gen.LadoQueueEntry, len(ids))
+	for _, id := range ids {
+		row, err := gen.New(raw).GetLadoQueueEntry(ctx, id)
+		if err != nil {
+			t.Fatalf("read queue entry %s: %v", id, err)
+		}
+		byID[domain.LadoQueueEntryID(id)] = row
 	}
 	return byID
 }
@@ -505,9 +522,6 @@ func TestLadoQueueChangesPublishEvents(t *testing.T) {
 	if err := q.UpsertLadoProjectMaxConcurrent(ctx, gen.UpsertLadoProjectMaxConcurrentParams{ProjectID: "mer", MaxConcurrent: 2, UpdatedAt: at}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := q.SetLadoProjectMaxConcurrent(ctx, gen.SetLadoProjectMaxConcurrentParams{MaxConcurrent: 4, UpdatedAt: at, ProjectID: "mer"}); err != nil {
-		t.Fatal(err)
-	}
 	expect("dispatch settings and project caps", nil...)
 }
 
@@ -551,7 +565,7 @@ func ladoTokens(prefix string) func() string {
 // checks that it got want, in that order.
 func mustClaimLadoQueue(t *testing.T, s *sqlite.Store, now time.Time, limit int, tokens func() string, want ...domain.LadoQueueEntryID) []domain.LadoQueueEntry {
 	t.Helper()
-	claimed, err := s.ClaimLadoQueueEntries(context.Background(), now, now.Add(2*time.Minute), limit, tokens)
+	claimed, err := s.ClaimLadoQueueEntries(context.Background(), now, now.Add(2*time.Minute), limit, nil, tokens)
 	if err != nil {
 		t.Fatalf("ClaimLadoQueueEntries at %s: %v", now, err)
 	}
@@ -669,13 +683,18 @@ func TestClaimLadoQueueEntriesLeasesOldestOpen(t *testing.T) {
 
 	// A claim with no room takes nothing, and a lease must end after it
 	// starts.
-	if got, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(2*time.Hour), 0, tokens); err != nil || len(got) != 0 {
+	if got, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(2*time.Hour), 0, nil, tokens); err != nil || len(got) != 0 {
 		t.Fatalf("claim with limit 0 = (%v, %v), want nothing", got, err)
 	}
-	if _, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(time.Hour), 10, tokens); err == nil {
+	if _, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(time.Hour), 10, nil, tokens); err == nil {
 		t.Fatal("a lease that ends as it starts was accepted")
 	}
-	mustClaimLadoQueue(t, s, later.Add(time.Hour), 10, tokens, zed, first, second, third, fourth)
+	// The entries of a project whose run slots are all taken are left alone.
+	full, err := s.ClaimLadoQueueEntries(ctx, later.Add(time.Hour), later.Add(time.Hour+2*time.Minute), 10, []domain.ProjectID{"mer"}, tokens)
+	if err != nil || len(full) != 1 || full[0].ID != zed {
+		t.Fatalf("claim with mer full = %+v (%v), want zed's entry alone", full, err)
+	}
+	mustClaimLadoQueue(t, s, later.Add(time.Hour), 10, tokens, first, second, third, fourth)
 }
 
 func TestSetLadoQueueWaiting(t *testing.T) {
@@ -1004,12 +1023,13 @@ func TestLinkLadoExecutionAtomically(t *testing.T) {
 	}
 }
 
-func TestLadoExecutionByClientRequest(t *testing.T) {
+func TestLadoExecutionReadsTheSessionFacts(t *testing.T) {
 	s, _ := openLadoQueueStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
 	mustLadoMode(t, s, "mer", true)
 	id := mustQueuedLadoTask(t, s, "1", "mer", ladoQueueAt)
+	running := mustQueuedLadoTask(t, s, "2", "mer", ladoQueueAt.Add(time.Minute))
 	now := ladoQueueAt.Add(time.Hour)
 	// The first attempt's spawn failed; the second attempt's session ran and
 	// merged its PR.
@@ -1023,30 +1043,23 @@ func TestLadoExecutionByClientRequest(t *testing.T) {
 		t.Fatalf("link: %v", err)
 	}
 	pr := mustWriteLadoPR(t, s, session, 4, true, false, now.Add(time.Hour))
-	want, ok, err := s.LadoExecution(ctx, session)
-	if err != nil || !ok || want.Attempt != 2 || !want.SessionTerminated || want.PR != pr {
-		t.Fatalf("LadoExecution = %+v (%v, %v), want attempt 2 of an ended session with PR %+v", want, ok, err, pr)
-	}
-
-	got, ok, err := s.LadoExecutionByClientRequest(ctx, domain.LadoClientRequestID(id, 2))
-	if err != nil || !ok || !reflect.DeepEqual(got, want) {
-		t.Fatalf("LadoExecutionByClientRequest = %+v (%v, %v), want %+v", got, ok, err, want)
-	}
-	// The failed attempt's session is not the execution, and other ids name
-	// none.
-	for _, other := range []string{
-		domain.LadoClientRequestID(id, 1),
-		domain.LadoClientRequestID("lado-queue-missing", 2),
-		"lado:" + string(id),
-		string(session),
-		"",
-	} {
-		if got, ok, err := s.LadoExecutionByClientRequest(ctx, other); err != nil || ok {
-			t.Fatalf("LadoExecutionByClientRequest %q = %+v (%v, %v), want none", other, got, ok, err)
-		}
+	got, ok, err := s.LadoExecution(ctx, session)
+	if err != nil || !ok || got.Attempt != 2 || !got.SessionTerminated || got.PR != pr {
+		t.Fatalf("LadoExecution = %+v (%v, %v), want attempt 2 of an ended session with PR %+v", got, ok, err, pr)
 	}
 	if got, ok, err := s.LadoExecution(ctx, "mer-unknown"); err != nil || ok {
 		t.Fatalf("LadoExecution of a session that is not an execution = %+v (%v, %v), want none", got, ok, err)
+	}
+
+	// Only the execution whose session runs is live.
+	claim := mustClaimLadoQueue(t, s, now, 1, ladoTokens("live"), running)[0]
+	live := mustLadoSession(t, s, "mer", false).ID
+	if err := s.LinkLadoExecution(ctx, running, claim.LeaseToken, domain.LadoExecution{SessionID: live, StartedAt: now}); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+	executions, err := s.LiveLadoExecutions(ctx)
+	if err != nil || len(executions) != 1 || executions[0].SessionID != live || executions[0].QueueEntryID != running || executions[0].TaskID != "lado-task-2" {
+		t.Fatalf("LiveLadoExecutions = %+v (%v), want the execution of %s alone", executions, err, live)
 	}
 }
 
@@ -1083,7 +1096,7 @@ func TestCountLiveLadoExecutions(t *testing.T) {
 	// does one waiting in the queue.
 	mustClaimLadoQueue(t, s, now, 1, tokens, queue("mer"))
 	expired := queue("zed")
-	if claimed, err := s.ClaimLadoQueueEntries(ctx, now.Add(-10*time.Minute), now.Add(-8*time.Minute), 1, tokens); err != nil || len(claimed) != 1 || claimed[0].ID != expired {
+	if claimed, err := s.ClaimLadoQueueEntries(ctx, now.Add(-10*time.Minute), now.Add(-8*time.Minute), 1, nil, tokens); err != nil || len(claimed) != 1 || claimed[0].ID != expired {
 		t.Fatalf("claim of %s = (%+v, %v)", expired, claimed, err)
 	}
 	queue("zed")

@@ -83,13 +83,36 @@ func (f fakePolicies) LadoEntryPolicyByClientRequest(_ context.Context, clientRe
 	return policy, ok, nil
 }
 
+// fakeExecutions holds LADO's executions and their tasks.
+type fakeExecutions struct {
+	executions map[domain.SessionID]domain.LadoExecution
+	tasks      map[domain.LadoTaskID]domain.LadoTask
+	err        error
+}
+
+func (f fakeExecutions) LadoExecution(_ context.Context, id domain.SessionID) (domain.LadoExecution, bool, error) {
+	if f.err != nil {
+		return domain.LadoExecution{}, false, f.err
+	}
+	exec, ok := f.executions[id]
+	return exec, ok, nil
+}
+
+func (f fakeExecutions) LadoTask(_ context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error) {
+	if f.err != nil {
+		return domain.LadoTask{}, false, f.err
+	}
+	task, ok := f.tasks[id]
+	return task, ok, nil
+}
+
 func ladoProject() fakeSettings {
 	return fakeSettings{ladoMode: map[domain.ProjectID]bool{"lado": true}}
 }
 
 // newGate is a gate with no queue entries.
 func newGate(settings ladogate.Settings, sessions ladogate.Sessions) *ladogate.Gate {
-	return ladogate.New(settings, sessions, fakeGrants{}, fakePolicies{})
+	return ladogate.New(settings, sessions, fakeGrants{}, fakePolicies{}, fakeExecutions{})
 }
 
 func requireRefusal(t *testing.T, err error, code string) {
@@ -245,7 +268,7 @@ func TestAuthorizeSpawnNeedsAnActiveGrant(t *testing.T) {
 		"entry-2": {attempt: 1, project: "lado", hash: "hash-2", leaseUntil: now.Add(-time.Minute)},
 		"entry-3": {attempt: 1, project: "other", hash: "hash-3", leaseUntil: now.Add(time.Hour)},
 	}}
-	gate := ladogate.New(ladoProject(), fakeSessions{}, grants, fakePolicies{})
+	gate := ladogate.New(ladoProject(), fakeSessions{}, grants, fakePolicies{}, fakeExecutions{})
 	worker := func(clientRequestID, hash string) ports.SpawnConfig {
 		return ports.SpawnConfig{ProjectID: "lado", Kind: domain.KindWorker, Prompt: "build it", ClientRequestID: clientRequestID, ClientRequestHash: hash}
 	}
@@ -279,7 +302,7 @@ func TestAuthorizeSpawnNeedsAnActiveGrant(t *testing.T) {
 	requireRefusal(t, gate.AuthorizeSpawn(context.Background(), automation), "LADO_AUTOMATION_REFUSED")
 
 	readErr := errors.New("database is locked")
-	unreadable := ladogate.New(ladoProject(), fakeSessions{}, fakeGrants{err: readErr}, fakePolicies{})
+	unreadable := ladogate.New(ladoProject(), fakeSessions{}, fakeGrants{err: readErr}, fakePolicies{}, fakeExecutions{})
 	if err := unreadable.AuthorizeSpawn(context.Background(), worker("lado:entry-1/2", "hash-1")); !errors.Is(err, readErr) {
 		t.Fatalf("AuthorizeSpawn when the grant cannot be read = %v, want the read error", err)
 	}
@@ -309,7 +332,7 @@ func executionGate(sessionErr, policyErr error) *ladogate.Gate {
 		// rather than guess one.
 		"lado:entry-2/1": {},
 	}}
-	return ladogate.New(ladoProject(), sessions, fakeGrants{}, policies)
+	return ladogate.New(ladoProject(), sessions, fakeGrants{}, policies, fakeExecutions{})
 }
 
 func TestClampTurnSettingsCapsExecutions(t *testing.T) {
@@ -417,5 +440,81 @@ func TestAuthorizeConfigModeAndExecutionChange(t *testing.T) {
 		if err := unreadable.AuthorizeExecutionChange(ctx, "lado-1"); !errors.Is(err, readErr) {
 			t.Fatalf("AuthorizeExecutionChange when the %s cannot be read = %v, want the read error", name, err)
 		}
+	}
+}
+
+// B3: a LADO client request id is the dispatcher's in every project and
+// outside them, because the dispatcher takes the session that holds one for
+// its queue entry's worker. Without the dispatcher's grant it is refused even
+// where LADO mode is off.
+func TestLadoIDsNeedAGrantEverywhere(t *testing.T) {
+	now := time.Now()
+	grants := fakeGrants{leases: map[domain.LadoQueueEntryID]fakeLease{
+		"entry-1": {attempt: 1, project: "plain", hash: "hash-1", leaseUntil: now.Add(time.Hour)},
+	}}
+	gate := ladogate.New(ladoProject(), fakeSessions{}, grants, fakePolicies{}, fakeExecutions{})
+	refused := []struct {
+		name string
+		cfg  ports.SpawnConfig
+	}{
+		{"standalone", ports.SpawnConfig{Kind: domain.KindWorker, ClientRequestID: "lado:entry-9/1", ClientRequestHash: "hash-1"}},
+		{"a project without LADO mode", ports.SpawnConfig{ProjectID: "plain", Kind: domain.KindWorker, ClientRequestID: "lado:entry-9/1", ClientRequestHash: "hash-1"}},
+		{"an orchestrator", ports.SpawnConfig{ProjectID: "plain", Kind: domain.KindOrchestrator, ClientRequestID: "lado:entry-9/1"}},
+		{"another hash", ports.SpawnConfig{ProjectID: "plain", Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1", ClientRequestHash: "hash-2"}},
+		{"another project", ports.SpawnConfig{ProjectID: "other", Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1", ClientRequestHash: "hash-1"}},
+		{"standalone with the grant's hash", ports.SpawnConfig{Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1", ClientRequestHash: "hash-1"}},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			requireRefusal(t, gate.AuthorizeSpawn(context.Background(), tc.cfg), "LADO_TASK_REQUIRED")
+		})
+	}
+	// The dispatcher's spawn passes, and other client request ids outside
+	// LADO projects stay AO's.
+	for _, cfg := range []ports.SpawnConfig{
+		{ProjectID: "plain", Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1", ClientRequestHash: "hash-1"},
+		{ProjectID: "plain", Kind: domain.KindWorker, ClientRequestID: "task-1", ClientRequestHash: "hash-1"},
+		{Kind: domain.KindWorker, ClientRequestID: "lado-1"},
+	} {
+		if err := gate.AuthorizeSpawn(context.Background(), cfg); err != nil {
+			t.Fatalf("AuthorizeSpawn %+v = %v, want nil", cfg, err)
+		}
+	}
+}
+
+// B7: a person cannot restore or resume an execution LADO stopped for good;
+// other executions and other sessions restore as AO restores them.
+func TestAuthorizeRestoreRefusesStoppedRuns(t *testing.T) {
+	executions := fakeExecutions{
+		executions: map[domain.SessionID]domain.LadoExecution{
+			"lado-1": {SessionID: "lado-1", TaskID: "task-1", TimedOutAt: time.Now().Add(-time.Minute)},
+			"lado-2": {SessionID: "lado-2", TaskID: "task-2"},
+			"lado-3": {SessionID: "lado-3", TaskID: "task-3", SessionTerminated: true},
+		},
+		tasks: map[domain.LadoTaskID]domain.LadoTask{
+			"task-1": {ID: "task-1"},
+			"task-2": {ID: "task-2", CancelledAt: time.Now().Add(-time.Hour)},
+			"task-3": {ID: "task-3"},
+		},
+	}
+	gate := ladogate.New(ladoProject(), fakeSessions{}, fakeGrants{}, fakePolicies{}, executions)
+	for id, reason := range map[domain.SessionID]string{"lado-1": "timed_out", "lado-2": "task_cancelled"} {
+		err := gate.AuthorizeRestore(context.Background(), id)
+		requireRefusal(t, err, "LADO_EXECUTION_FIXED")
+		var apiErr *apierr.Error
+		if errors.As(err, &apiErr); apiErr.Details["sessionId"] != string(id) || apiErr.Details["reason"] != reason {
+			t.Fatalf("AuthorizeRestore(%s) details = %v, want the session and %s", id, apiErr.Details, reason)
+		}
+	}
+	// An execution that ended on its own, and a session that is not one.
+	for _, id := range []domain.SessionID{"lado-3", "plain-1"} {
+		if err := gate.AuthorizeRestore(context.Background(), id); err != nil {
+			t.Fatalf("AuthorizeRestore(%s) = %v, want nil", id, err)
+		}
+	}
+	readErr := errors.New("database is locked")
+	unreadable := ladogate.New(ladoProject(), fakeSessions{}, fakeGrants{}, fakePolicies{}, fakeExecutions{err: readErr})
+	if err := unreadable.AuthorizeRestore(context.Background(), "lado-1"); !errors.Is(err, readErr) {
+		t.Fatalf("AuthorizeRestore when the execution cannot be read = %v, want the read error", err)
 	}
 }

@@ -194,7 +194,7 @@ func TestDispatchStopsAtTheFirstFailingCheck(t *testing.T) {
 				{"the issue check", f.tasks.checks, 2},
 				{"the rule check", f.policy.calls, 3},
 				{"the base check", len(f.branches.calls()), 4},
-				{"the run input read", f.tasks.inputs, 6},
+				{"the run input read", f.tasks.inputCalls, 6},
 			} {
 				want := 0
 				if c.failed >= step.check {
@@ -231,8 +231,8 @@ func TestIssueEditedAfterApprovalNeedsReview(t *testing.T) {
 			if e := f.store.entry("entry-1"); e.State(t0) != domain.LadoQueueReviewRequired || e.ReviewRequiredReason != domain.LadoReviewIssueEdited {
 				t.Fatalf("entry = %+v, want review required for issue_edited", e)
 			}
-			if n := len(f.sessions.spawned()); n != 0 || f.tasks.inputs != 0 {
-				t.Fatalf("spawned %d workers and read the run input %d times, want neither", n, f.tasks.inputs)
+			if n := len(f.sessions.spawned()); n != 0 || f.tasks.inputCalls != 0 {
+				t.Fatalf("spawned %d workers and read the run input %d times, want neither", n, f.tasks.inputCalls)
 			}
 			// The entry stays stopped until the developer approves again.
 			f.tick(t, t0.Add(time.Hour))
@@ -709,5 +709,98 @@ func TestStartDispatchesAtOnceAndStops(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Start did not stop once its context ended")
+	}
+}
+
+// B4: a task runs one worker at a time. An entry whose task still runs the
+// worker of an earlier approval waits for that worker to end, without
+// spending an attempt.
+func TestOneWorkerPerTask(t *testing.T) {
+	f := newFixture(t)
+	task := testTask()
+	task.Execution = domain.LadoExecution{SessionID: "proj-1-3", TaskID: "task-1", PlanApprovalID: "approval-0", Attempt: 1, StartedAt: t0.Add(-time.Hour)}
+	f.store.setTask(task)
+	f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+
+	f.tick(t, t0)
+	if n := len(f.sessions.spawned()); n != 0 {
+		t.Fatalf("spawned %d workers while the task's earlier worker runs, want none", n)
+	}
+	if e := f.store.entry("entry-1"); e.WaitingReason != domain.LadoWaitingRunLive || !e.NextAttemptAt.Equal(t0.Add(time.Minute)) ||
+		e.AttemptCount != 0 || e.LeaseToken != "" {
+		t.Fatalf("entry = %+v, want it waiting a minute for the earlier worker without an attempt", e)
+	}
+
+	// Once that worker ended, the entry's worker starts.
+	task.Execution.SessionTerminated = true
+	f.store.setTask(task)
+	f.tick(t, t0.Add(time.Minute))
+	if spawned := f.sessions.spawned(); len(spawned) != 1 || spawned[0].ClientRequestID != "lado:entry-1/1" {
+		t.Fatalf("spawned %+v, want entry-1's first attempt", spawned)
+	}
+}
+
+// B8: an issue that cannot be read is read again a little later each time it
+// fails in a row, without spending attempts.
+func TestUnreadableIssueBacksOff(t *testing.T) {
+	f := newFixture(t)
+	f.tasks.checkErr = apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", "Could not read github:acme/app#12: 502 Bad Gateway", nil)
+	f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+
+	at := t0
+	var waits []time.Duration
+	for range 6 {
+		f.tick(t, at)
+		e := f.store.entry("entry-1")
+		if e.WaitingReason != domain.LadoWaitingIssueUnreadable || e.AttemptCount != 0 || e.LeaseToken != "" {
+			t.Fatalf("entry = %+v, want it waiting for its issue without an attempt", e)
+		}
+		waits = append(waits, e.NextAttemptAt.Sub(at))
+		at = e.NextAttemptAt
+	}
+	if want := []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour, time.Hour}; !reflect.DeepEqual(waits, want) {
+		t.Fatalf("waits = %v, want %v", waits, want)
+	}
+
+	// The issue reads again: the worker starts.
+	f.tasks.mu.Lock()
+	f.tasks.checkErr = nil
+	f.tasks.mu.Unlock()
+	f.tick(t, at)
+	if spawned := f.sessions.spawned(); len(spawned) != 1 || spawned[0].ClientRequestID != "lado:entry-1/1" {
+		t.Fatalf("spawned %+v, want entry-1's first attempt", spawned)
+	}
+}
+
+// B8: an issue the tracker says no longer exists is not waited for: the
+// entry fails with a sentence that says so.
+func TestDeletedIssueFailsTheEntry(t *testing.T) {
+	f := newFixture(t)
+	f.tasks.checkErr = fmt.Errorf("%w: %w", domain.ErrLadoIssueNotFound,
+		apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", "Could not read github:acme/app#12: github tracker: issue not found: Not Found", nil))
+	f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+
+	f.tick(t, t0)
+	e := f.store.entry("entry-1")
+	if e.State(t0) != domain.LadoQueueFailed || e.ErrorMessage != "LADO_ISSUE_NOT_FOUND: the issue no longer exists on the tracker" ||
+		!e.FailedAt.Equal(t0) || e.LeaseToken != "" {
+		t.Fatalf("entry = %+v, want it failed now because the issue is gone", e)
+	}
+	f.tick(t, t0.Add(time.Hour))
+	if n, checks := len(f.sessions.spawned()), f.tasks.checks; n != 0 || checks != 1 {
+		t.Fatalf("spawned %d workers and read the issue %d times, want none and once", n, checks)
+	}
+}
+
+// A worker's display name is its issue title on one line, as long as AO's
+// session service takes.
+func TestDisplayNameFitsAO(t *testing.T) {
+	long := strings.Repeat("로그인 시간 초과 ", 20)
+	got := displayName(long)
+	if n := len([]rune(got)); n != maxDisplayNameRunes || !strings.HasPrefix(long, got) {
+		t.Fatalf("displayName = %q (%d runes), want the first %d runes of the title", got, n, maxDisplayNameRunes)
+	}
+	if got := displayName("Fix the\nlogin  timeout"); got != "Fix the login timeout" {
+		t.Fatalf("displayName = %q, want the title on one line", got)
 	}
 }

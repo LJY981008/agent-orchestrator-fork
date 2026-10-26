@@ -22,8 +22,11 @@ const abandonedAttempt = "the dispatch stopped before the worker started"
 
 // recover settles every entry a lease token holds, before a pass claims
 // anything: a claim takes an entry whose lease expired, which may have its
-// worker already. It returns the reads and writes that failed, joined.
-func (s *Service) recover(ctx context.Context, now time.Time, settings domain.LadoDispatchSettings) error {
+// worker already. Linking a worker needs the dispatch settings, for its
+// deadline; while they cannot be read (nil), an entry with a worker to link
+// keeps its lease for a later pass. It returns the reads and writes that
+// failed, joined.
+func (s *Service) recover(ctx context.Context, now time.Time, settings *domain.LadoDispatchSettings) error {
 	leased, err := s.deps.Store.LeasedLadoQueueEntries(ctx)
 	if err != nil {
 		return fmt.Errorf("list the leased queue entries: %w", err)
@@ -38,23 +41,42 @@ func (s *Service) recover(ctx context.Context, now time.Time, settings domain.La
 }
 
 // recoverEntry settles one leased entry by the session AO keeps for the
-// client request id of its attempt. A session AO finished starting is the
-// entry's execution whatever became of the lease: only the link is missing.
-// While the lease holds, a dispatch may still be starting the worker, so the
-// entry is left alone. Once it expired the attempt is over: a session AO
-// never finished starting is stopped, and the entry is due again.
-func (s *Service) recoverEntry(ctx context.Context, entry domain.LadoQueueEntry, now time.Time, settings domain.LadoDispatchSettings) error {
+// client request id of its attempt. A session the dispatcher did not start
+// for the attempt is no worker of the entry's: the attempt failed. A session
+// AO finished starting is the entry's execution whatever became of the
+// lease: only the link is missing. While the lease holds, a dispatch may
+// still be starting the worker, so the entry is left alone. Once it expired
+// the attempt is over: a session AO never finished starting is stopped, and
+// the entry is due again; one that could not be stopped keeps the lease, so
+// that no next attempt starts a second worker beside it.
+func (s *Service) recoverEntry(ctx context.Context, entry domain.LadoQueueEntry, now time.Time, settings *domain.LadoDispatchSettings) error {
 	session, found, err := s.deps.Store.GetSessionByClientRequestID(ctx, domain.LadoClientRequestID(entry.ID, entry.AttemptCount))
 	if err != nil {
 		return err
 	}
+	if found {
+		grant, err := s.deps.Store.LadoDispatchGrant(ctx, entry.ID, entry.AttemptCount, now)
+		if err != nil {
+			return err
+		}
+		if !startedFor(session, entry.ProjectID, grant.Hash) {
+			s.deps.Log.Warn("LADO found another session under the client request id of a queue entry's attempt",
+				"entry", entry.ID, "attempt", entry.AttemptCount, "session", session.ID)
+			return s.attemptFailed(ctx, entry, foreignSession)
+		}
+	}
 	switch {
 	case found && session.ClientRequestCommitted:
-		return s.relink(ctx, entry, session, settings)
+		if settings == nil {
+			return fmt.Errorf("link session %s: the dispatch settings could not be read", session.ID)
+		}
+		return s.relink(ctx, entry, session, *settings)
 	case entry.LeaseExpiresAt.After(now):
 		return nil
 	case found && !session.IsTerminated:
-		s.stopUnfinished(ctx, entry, session.ID)
+		if err := s.stopUnfinished(ctx, entry, session.ID); err != nil {
+			return err
+		}
 	}
 	return s.abandon(ctx, entry, now)
 }
@@ -81,15 +103,25 @@ func (s *Service) relink(ctx context.Context, entry domain.LadoQueueEntry, sessi
 
 // stopUnfinished stops a session AO began for an expired attempt but never
 // finished starting, so that the next attempt's worker is the task's only
-// one. A failed stop is only logged: AO's startup checks clean up such a
-// session too.
-func (s *Service) stopUnfinished(ctx context.Context, entry domain.LadoQueueEntry, id domain.SessionID) {
-	if _, err := s.deps.Sessions.RequestKill(context.WithoutCancel(ctx), id); err != nil {
-		s.deps.Log.Warn("LADO could not stop a worker that never finished starting", "entry", entry.ID, "session", id,
-			"problem", problem(err, "the session could not be stopped"))
-		return
+// one. A stop that failed while the session still runs is an error: the
+// entry keeps its lease, and the next pass tries again.
+func (s *Service) stopUnfinished(ctx context.Context, entry domain.LadoQueueEntry, id domain.SessionID) error {
+	ctx = context.WithoutCancel(ctx)
+	_, err := s.deps.Sessions.RequestKill(ctx, id)
+	if err == nil {
+		s.deps.Log.Info("LADO stopped a worker that never finished starting", "entry", entry.ID, "session", id)
+		return nil
 	}
-	s.deps.Log.Info("LADO stopped a worker that never finished starting", "entry", entry.ID, "session", id)
+	stopped := problem(err, "the session could not be stopped")
+	rec, found, readErr := s.deps.Store.GetSessionByClientRequestID(ctx, domain.LadoClientRequestID(entry.ID, entry.AttemptCount))
+	if readErr == nil && (!found || rec.IsTerminated) {
+		s.deps.Log.Info("LADO's stop of a worker that never finished starting failed, but the session ended", "entry", entry.ID, "session", id,
+			"problem", stopped)
+		return nil
+	}
+	s.deps.Log.Warn("LADO could not stop a worker that never finished starting and keeps its queue entry's claim", "entry", entry.ID, "session", id,
+		"problem", stopped)
+	return fmt.Errorf("stop session %s: %s", id, stopped)
 }
 
 // abandon gives up an expired attempt that started no worker: the entry is

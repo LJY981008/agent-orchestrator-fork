@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -24,9 +26,10 @@ const maxClaimsPerPass = 50
 // and dispatches each. Entries of projects with LADO mode off wait for it.
 // While memory is tight and the settings hold dispatch then, or while the
 // running executions fill every slot, the open entries are marked waiting
-// for that and nothing is claimed. An entry whose project fills its own slots
-// waits for the next pass, and the next claim may be of another project. The
-// workers this pass starts take their slots at once.
+// for that and nothing is claimed. A project whose running executions fill
+// its own slots is left out of the claims, and its open entries wait for a
+// slot there; a worker this pass starts takes its slots at once, and may
+// fill its project too. Each project's cap is read once a pass.
 func (s *Service) admit(ctx context.Context, now time.Time, settings domain.LadoDispatchSettings) error {
 	if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingModeOff, nil); err != nil {
 		return err
@@ -45,13 +48,45 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 		_, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotGlobal, nil)
 		return err
 	}
-	caps := map[domain.ProjectID]int{}
 	var problems []error
+	caps := map[domain.ProjectID]int{}
+	capOf := func(project domain.ProjectID) (int, error) {
+		if limit, ok := caps[project]; ok {
+			return limit, nil
+		}
+		limit, err := s.deps.Store.LadoProjectMaxConcurrent(ctx, project)
+		if err != nil {
+			return 0, fmt.Errorf("read the run cap of project %s: %w", project, err)
+		}
+		caps[project] = limit
+		return limit, nil
+	}
+	var full []domain.ProjectID
+	// fill leaves a project out of the claims; its open entries wait for a
+	// slot there, which is written only when the reason changes.
+	fill := func(project domain.ProjectID) {
+		full = append(full, project)
+		if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotProject, &project); err != nil {
+			problems = append(problems, err)
+		}
+	}
+	for _, project := range slices.Sorted(maps.Keys(perProject)) {
+		limit, err := capOf(project)
+		if err != nil {
+			// Without its cap the project may be full: it waits a pass.
+			problems = append(problems, err)
+			full = append(full, project)
+			continue
+		}
+		if perProject[project] >= limit {
+			fill(project)
+		}
+	}
 	for range maxClaimsPerPass {
 		if free <= 0 || ctx.Err() != nil {
 			break
 		}
-		claimed, err := s.deps.Store.ClaimLadoQueueEntries(ctx, now, now.Add(s.deps.Lease), 1, s.deps.NewID)
+		claimed, err := s.deps.Store.ClaimLadoQueueEntries(ctx, now, s.leaseEnd(now), 1, full, s.deps.NewID)
 		if err != nil {
 			problems = append(problems, err)
 			break
@@ -60,21 +95,20 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 			break
 		}
 		entry := claimed[0]
-		limit, ok := caps[entry.ProjectID]
-		if !ok {
-			if limit, err = s.deps.Store.LadoProjectMaxConcurrent(ctx, entry.ProjectID); err != nil {
-				problems = append(problems, fmt.Errorf("read the run cap of project %s: %w", entry.ProjectID, err))
-				if err := s.handBack(ctx, entry); err != nil {
-					problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
-				}
-				break
+		limit, err := capOf(entry.ProjectID)
+		if err != nil {
+			problems = append(problems, err)
+			if err := s.handBack(ctx, entry); err != nil {
+				problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
 			}
-			caps[entry.ProjectID] = limit
+			break
 		}
 		if perProject[entry.ProjectID] >= limit {
+			// Only a race gets here: the claim left full projects out.
 			if err := s.hold(ctx, entry, domain.LadoWaitingSlotProject, now.Add(s.deps.Interval)); err != nil {
 				problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
 			}
+			full = append(full, entry.ProjectID)
 			continue
 		}
 		started, err := s.dispatch(ctx, entry, settings, now)
@@ -84,9 +118,22 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 		if started {
 			free--
 			perProject[entry.ProjectID]++
+			if perProject[entry.ProjectID] >= limit {
+				fill(entry.ProjectID)
+			}
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// leaseEnd is when a claim made now ends: a lease from the clock's time, as
+// the spawns before the claim took theirs, and never from before the pass.
+func (s *Service) leaseEnd(now time.Time) time.Time {
+	from := s.deps.Clock().UTC()
+	if from.Before(now) {
+		from = now
+	}
+	return from.Add(s.deps.Lease)
 }
 
 // memoryTight reports whether memory pressure is tight now. Pressure that

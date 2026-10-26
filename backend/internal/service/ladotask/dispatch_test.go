@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 
+	githubtracker "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/github"
+	gitlabtracker "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/gitlab"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -67,6 +69,18 @@ func TestIssueCheckHashesTrustedComments(t *testing.T) {
 	for _, text := range []string{err.Error(), fmt.Sprintf("%+v", apiDetails(err)), logs.String()} {
 		if strings.Contains(text, secret) {
 			t.Fatalf("%q carries the token", text)
+		}
+	}
+	if errors.Is(err, domain.ErrLadoIssueNotFound) {
+		t.Fatalf("a refused read = %v, want it not to say the issue is gone", err)
+	}
+
+	// The tracker's answer that the issue does not exist says so.
+	for _, missing := range []error{githubtracker.ErrNotFound, gitlabtracker.ErrNotFound} {
+		pf.tracker.getErr = fmt.Errorf("%w: Not Found", missing)
+		_, err := pf.svc.IssueCheck(ctx, pf.latest(t))
+		if !errors.Is(err, domain.ErrLadoIssueNotFound) || apiCode(err) != "LADO_ISSUE_READ_FAILED" {
+			t.Fatalf("a missing issue = %v, want LADO_ISSUE_READ_FAILED wrapping domain.ErrLadoIssueNotFound", err)
 		}
 	}
 }

@@ -2,7 +2,8 @@
 // with LADO mode on, workers start only when LADO dispatches them, and only a
 // person or AO itself messages a worker. An execution, the worker LADO
 // dispatched, keeps the agent, interface and permission ceiling it was
-// approved with.
+// approved with, and one LADO stopped for good is not restored. Client
+// request ids of the form lado:<entry>/<attempt> are the dispatcher's alone.
 package ladogate
 
 import (
@@ -36,26 +37,44 @@ type Policies interface {
 	LadoEntryPolicyByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoEntryPolicy, bool, error)
 }
 
+// Executions reads LADO's executions and their tasks.
+type Executions interface {
+	LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error)
+	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
+}
+
 // Gate implements ports.WorkGate. Every read error refuses the work.
 type Gate struct {
-	settings Settings
-	sessions Sessions
-	grants   Grants
-	policies Policies
+	settings   Settings
+	sessions   Sessions
+	grants     Grants
+	policies   Policies
+	executions Executions
 }
 
 var _ ports.WorkGate = (*Gate)(nil)
 
-// New returns a gate over LADO's settings, AO's sessions, and the dispatch
-// grants and rule snapshots of LADO's queue.
-func New(settings Settings, sessions Sessions, grants Grants, policies Policies) *Gate {
-	return &Gate{settings: settings, sessions: sessions, grants: grants, policies: policies}
+// New returns a gate over LADO's settings, AO's sessions, the dispatch
+// grants and rule snapshots of LADO's queue, and LADO's executions.
+func New(settings Settings, sessions Sessions, grants Grants, policies Policies, executions Executions) *Gate {
+	return &Gate{settings: settings, sessions: sessions, grants: grants, policies: policies, executions: executions}
 }
 
 // AuthorizeSpawn refuses automations and every new worker in a LADO project
 // but the one LADO's dispatcher starts for the queue entry it holds;
-// orchestrators still start there.
+// orchestrators still start there. In every project, and outside them, a
+// LADO client request id needs the dispatcher's grant: the dispatcher takes
+// the session that holds one for its queue entry's worker.
 func (g *Gate) AuthorizeSpawn(ctx context.Context, cfg ports.SpawnConfig) error {
+	granted, err := g.granted(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	if _, _, dispatch := domain.ParseLadoClientRequestID(cfg.ClientRequestID); dispatch && !granted {
+		return apierr.Conflict("LADO_TASK_REQUIRED",
+			"Client request ids that start with lado: are LADO's: only its dispatcher starts sessions with them.",
+			map[string]any{"projectId": string(cfg.ProjectID), "clientRequestId": cfg.ClientRequestID})
+	}
 	if cfg.ProjectID == "" {
 		return nil
 	}
@@ -68,12 +87,8 @@ func (g *Gate) AuthorizeSpawn(ctx context.Context, cfg ports.SpawnConfig) error 
 		return apierr.Conflict("LADO_AUTOMATION_REFUSED",
 			"This project is in LADO mode: automations cannot start sessions in it.",
 			map[string]any{"projectId": string(cfg.ProjectID)})
-	case cfg.Kind == domain.KindOrchestrator:
+	case cfg.Kind == domain.KindOrchestrator, granted:
 		return nil
-	}
-	granted, err := g.granted(ctx, cfg)
-	if err != nil || granted {
-		return err
 	}
 	return apierr.Conflict("LADO_TASK_REQUIRED",
 		"This project is in LADO mode: workers start only from approved tasks. Create a task instead.",
@@ -156,6 +171,38 @@ func (g *Gate) AuthorizeExecutionChange(ctx context.Context, target domain.Sessi
 	return apierr.Conflict("LADO_EXECUTION_FIXED",
 		"This session runs an approved LADO task: its agent and interface stay as approved.",
 		map[string]any{"sessionId": string(target)})
+}
+
+// AuthorizeRestore refuses to restore or resume an execution LADO stopped for
+// good: one that ran past its maximum run time, or whose task was cancelled.
+// Other executions, and sessions that are not executions, restore as AO
+// restores them.
+func (g *Gate) AuthorizeRestore(ctx context.Context, target domain.SessionID) error {
+	exec, ok, err := g.executions.LadoExecution(ctx, target)
+	if err != nil {
+		return fmt.Errorf("LADO gate: read execution %s: %w", target, err)
+	}
+	if !ok {
+		return nil
+	}
+	reason := ""
+	if !exec.TimedOutAt.IsZero() {
+		reason = domain.LadoFailedTimedOut
+	} else {
+		task, found, err := g.executions.LadoTask(ctx, exec.TaskID)
+		if err != nil {
+			return fmt.Errorf("LADO gate: read task %s: %w", exec.TaskID, err)
+		}
+		if found && !task.CancelledAt.IsZero() {
+			reason = "task_cancelled"
+		}
+	}
+	if reason == "" {
+		return nil
+	}
+	return apierr.Conflict("LADO_EXECUTION_FIXED",
+		"This session ran an approved LADO task that LADO stopped, past its maximum run time or for a cancelled task: it cannot be restored.",
+		map[string]any{"sessionId": string(target), "reason": reason})
 }
 
 // execution reads whether target is an execution, a session started for a

@@ -6587,7 +6587,7 @@ export interface components {
              * @description Why the entry waits, needs review or is blocked, for the app to translate.
              * @enum {string}
              */
-            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off";
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
             /**
              * @description Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker.
              * @enum {string}
@@ -6781,6 +6781,11 @@ export interface components {
         LadoTaskQueueResponse: {
             /** @description Attempts to start the worker so far; LADO gives up after three. */
             attempts: number;
+            /**
+             * Format: date-time
+             * @description When the plan was approved; the dispatcher takes the oldest first.
+             */
+            enqueuedAt: string;
             /** @description Why starting the worker failed, without secrets. */
             error?: string;
             /**
@@ -6792,7 +6797,7 @@ export interface components {
              * @description Why the entry waits, needs review or is blocked.
              * @enum {string}
              */
-            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off";
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
             /** @enum {string} */
             state: "queued" | "waiting" | "dispatching" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
         };
@@ -6824,7 +6829,7 @@ export interface components {
              * @description Why the task needs review, is blocked or failed, or what its queued plan waits for, for the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
         };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];

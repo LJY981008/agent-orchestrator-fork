@@ -4,13 +4,16 @@
 // the run caps, checks that the approval still holds, spawns the worker
 // through AO's session service in Chat mode, and links the session to its
 // entry as the task's execution. It also links the workers a dispatch that
-// stopped midway had started, and stops the runs past their deadline.
+// stopped midway had started, stops the runs past their deadline, and stops
+// the runs their task no longer wants.
 package ladoqueue
 
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,15 +33,16 @@ const (
 
 // Store keeps the queue: the task reads a dispatch checks, the primitives
 // that claim entries and record what became of them, the session AO keeps
-// for a client request id, and what the app reads about the queue, its
-// executions and the dispatch settings (views.go).
+// for a client request id with the dispatch hash its worker carries, the
+// running executions, and what the app reads about the queue, its executions
+// and the dispatch settings (views.go).
 type Store interface {
 	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
 	LadoDispatchSettings(ctx context.Context) (domain.LadoDispatchSettings, error)
 	LadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID) (int, error)
 	CountLiveLadoExecutions(ctx context.Context, now time.Time) (int, map[domain.ProjectID]int, error)
 	SetLadoQueueWaiting(ctx context.Context, reason string, projectID *domain.ProjectID) (int64, error)
-	ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, newToken func() string) ([]domain.LadoQueueEntry, error)
+	ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, fullProjects []domain.ProjectID, newToken func() string) ([]domain.LadoQueueEntry, error)
 	ReleaseLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token string, nextAttempt time.Time, waiting string) (bool, error)
 	HoldLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, waiting string, nextAttempt time.Time) (bool, error)
 	MarkLadoQueueEntryReviewRequired(ctx context.Context, id domain.LadoQueueEntryID, token, reason string) (bool, error)
@@ -48,8 +52,11 @@ type Store interface {
 	LinkLadoExecution(ctx context.Context, entryID domain.LadoQueueEntryID, token string, exec domain.LadoExecution) error
 	LeasedLadoQueueEntries(ctx context.Context) ([]domain.LadoQueueEntry, error)
 	GetSessionByClientRequestID(ctx context.Context, id string) (domain.SessionRecord, bool, error)
+	LadoDispatchGrant(ctx context.Context, entryID domain.LadoQueueEntryID, attempt int, now time.Time) (domain.LadoDispatchGrant, error)
 	LadoExecutionsPastDeadline(ctx context.Context, now time.Time) ([]domain.LadoExecution, error)
 	MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.SessionID, event domain.LadoAuditEvent) (bool, error)
+	LiveLadoExecutions(ctx context.Context) ([]domain.LadoExecution, error)
+	AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error)
 	ListLadoQueue(ctx context.Context, projectID *domain.ProjectID) ([]domain.LadoQueueItem, error)
 	LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error)
 	LadoPlanRevision(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevision, bool, error)
@@ -132,6 +139,12 @@ type Service struct {
 	deps Deps
 	// memoryUnreadable is set once a memory reading failed and was logged.
 	memoryUnreadable atomic.Bool
+
+	mu sync.Mutex
+	// issueMisses counts, by entry, the reads of its issue that failed in a
+	// row, for the next wait (issueUnreadable). It starts again empty when
+	// the daemon does.
+	issueMisses map[domain.LadoQueueEntryID]int
 }
 
 // New returns a Service.
@@ -154,7 +167,7 @@ func New(deps Deps) *Service {
 	if deps.Lease <= 0 {
 		deps.Lease = defaultLease
 	}
-	return &Service{deps: deps}
+	return &Service{deps: deps, issueMisses: map[domain.LadoQueueEntryID]int{}}
 }
 
 // Start dispatches at once and then every Interval until ctx is done. The
@@ -180,27 +193,34 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 }
 
 // Tick runs one dispatch pass at now. It first settles the claims of a
-// dispatch that stopped midway and stops the runs past their deadline; then,
-// while run slots are free and memory allows, it claims entries one at a
-// time, oldest first, and dispatches each. No entry is claimed while a lease
-// could not be settled, because the lease may hide a worker. What an entry
-// waits for or why it stopped is the entry's state, not an error; Tick
-// returns the reads and writes that failed, joined.
+// dispatch that stopped midway, stops the runs past their deadline and the
+// runs their task no longer wants; then, while run slots are free and memory
+// allows, it claims entries one at a time, oldest first, and dispatches each.
+// No entry is claimed while a lease could not be settled, because the lease
+// may hide a worker, nor while the dispatch settings cannot be read; the
+// rest of the pass does not wait for them. What an entry waits for or why it
+// stopped is the entry's state, not an error; Tick returns the reads and
+// writes that failed, joined.
 func (s *Service) Tick(ctx context.Context, now time.Time) error {
 	now = now.UTC()
-	settings, err := s.deps.Store.LadoDispatchSettings(ctx)
-	if err != nil {
-		return err
-	}
 	var problems []error
-	recovered := s.recover(ctx, now, settings)
+	settings, err := s.deps.Store.LadoDispatchSettings(ctx)
+	known := &settings
+	if err != nil {
+		problems = append(problems, fmt.Errorf("read the dispatch settings: %w", err))
+		known = nil
+	}
+	recovered := s.recover(ctx, now, known)
 	if recovered != nil {
 		problems = append(problems, recovered)
 	}
 	if err := s.stopOverdue(ctx, now); err != nil {
 		problems = append(problems, err)
 	}
-	if recovered == nil {
+	if err := s.stopUnwanted(ctx); err != nil {
+		problems = append(problems, err)
+	}
+	if recovered == nil && known != nil {
 		if err := s.admit(ctx, now, settings); err != nil {
 			problems = append(problems, err)
 		}

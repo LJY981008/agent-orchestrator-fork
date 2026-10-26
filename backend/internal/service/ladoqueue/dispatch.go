@@ -35,22 +35,38 @@ const (
 	baseResolveTimeout = 30 * time.Second
 	// maxProblemBytes caps the error an entry records.
 	maxProblemBytes = 512
+	// maxDisplayNameRunes is the longest display name AO's session service
+	// takes for a session.
+	maxDisplayNameRunes = 100
+	// issueNotFound is the error of an entry whose issue the tracker no
+	// longer has.
+	issueNotFound = "LADO_ISSUE_NOT_FOUND: the issue no longer exists on the tracker"
+	// foreignSession is the error of an attempt whose client request id holds
+	// a session the dispatcher did not start for it.
+	foreignSession = "another session holds the attempt's client request id"
 )
 
 // retryAfter is the wait before an entry's second and third attempts.
 var retryAfter = [maxAttempts - 1]time.Duration{30 * time.Second, 2 * time.Minute}
 
+// issueRecheckAfter is how long an entry waits for each read of its issue
+// that failed in a row; the last wait repeats.
+var issueRecheckAfter = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.Minute, 15 * time.Minute, time.Hour}
+
 // dispatch checks a claimed entry in the order of docs/LJY-PRD/TDD.md §5.3
 // and starts its worker when every check passes. The first check that fails
 // settles the entry, and the later ones do not run: an approval that no
 // longer holds needs review, a closed issue cancels the entry, what only a
-// new plan or setup can fix blocks it, and a check that could not run holds
-// it for a minute without spending its attempt. A pass that stops before the
-// spawn hands the entry back as it was. It reports whether a worker started,
-// which takes a run slot, and returns only the writes that failed.
+// new plan or setup can fix blocks it, an issue the tracker no longer has
+// fails it, and a check that could not run holds it for a while without
+// spending its attempt. A pass that stops before the spawn hands the entry
+// back as it was. It reports whether a worker started, which takes a run
+// slot, and returns only the writes that failed.
 func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, now time.Time) (bool, error) {
+	issueMisses := s.takeIssueMisses(entry.ID)
+
 	// 1. The entry's approval is the task's newest and still covers the
-	// latest revision.
+	// latest revision, and the task runs no worker of another approval.
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
 	if err == nil && !ok {
 		err = fmt.Errorf("task %s not found", entry.TaskID)
@@ -66,15 +82,23 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.release(ctx, entry, time.Time{}, "")
 	case !task.Plan.ApprovalValid() || task.Plan.Approval.ID != entry.PlanApprovalID:
 		return false, s.review(ctx, entry, domain.LadoReviewPlanSuperseded)
+	case task.Execution.SessionID != "" && !task.Execution.SessionTerminated && task.Execution.PlanApprovalID != entry.PlanApprovalID:
+		// A task runs one worker at a time; the pass that stops a run its
+		// task no longer wants (stopUnwanted) ends this one.
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRunLive, now)
 	}
 
 	// 2. The issue is open and reads as it did when the plan was made.
 	issue, err := s.deps.Tasks.IssueCheck(ctx, task)
 	switch {
+	case errors.Is(err, domain.ErrLadoIssueNotFound):
+		s.deps.Log.Warn("LADO gave up a queued task whose issue the tracker no longer has", "entry", entry.ID, "task", task.ID,
+			"problem", problem(err, "the issue was not found"))
+		return false, s.fail(ctx, entry, issueNotFound)
 	case err != nil:
 		s.deps.Log.Warn("LADO could not read the issue of a queued task", "entry", entry.ID, "task", task.ID,
 			"problem", problem(err, "the issue could not be read"))
-		return false, s.recheck(ctx, entry, domain.LadoWaitingIssueUnreadable, now)
+		return false, s.issueUnreadable(ctx, entry, issueMisses, now)
 	case issue.State == domain.IssueDone || issue.State == domain.IssueCancelled:
 		// IssueCheck recorded the state, so the task shows Closed unmerged.
 		return false, s.cancel(ctx, entry, now)
@@ -148,6 +172,10 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		if lookupErr != nil {
 			s.deps.Log.Warn("LADO could not look for the session of a failed spawn", "entry", entry.ID, "err", lookupErr)
 		}
+		if found && !startedFor(rec, entry.ProjectID, cfg.ClientRequestHash) {
+			s.deps.Log.Warn("LADO found another session under the client request id of a failed spawn", "entry", entry.ID, "session", rec.ID)
+			found = false
+		}
 		if lookupErr != nil || !found || !rec.ClientRequestCommitted {
 			return false, s.attemptFailed(ctx, entry, problem(err, "the worker session could not start"))
 		}
@@ -187,8 +215,27 @@ func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.
 		Prompt:            workerPrompt(task, in),
 		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
 		RequestedMode:     domain.SessionModeChat,
-		DisplayName:       oneLine(task.Issue.Title),
+		DisplayName:       displayName(task.Issue.Title),
 	}
+}
+
+// displayName is the issue title on one line, cut to the longest display
+// name AO takes.
+func displayName(title string) string {
+	name := oneLine(title)
+	if utf8.RuneCountInString(name) > maxDisplayNameRunes {
+		name = string([]rune(name)[:maxDisplayNameRunes])
+	}
+	return name
+}
+
+// startedFor reports whether a session found under an attempt's client
+// request id is the attempt's worker: a worker of the entry's project that
+// carries the attempt's dispatch hash. Only the dispatcher's spawns hold LADO
+// client request ids (the worker gate refuses others), but a session from
+// before that rule could.
+func startedFor(rec domain.SessionRecord, project domain.ProjectID, hash string) bool {
+	return rec.ProjectID == project && rec.Kind == domain.KindWorker && hash != "" && rec.ClientRequestHash == hash
 }
 
 // snapshotAgent reads the agent a rule snapshot fixed.
@@ -313,23 +360,20 @@ func (s *Service) link(ctx context.Context, entry domain.LadoQueueEntry, exec do
 
 // stopIfUnwanted stops a worker its task no longer wants. A cancel or a newer
 // approval that lands while AO starts the worker finds no execution to stop
-// yet, so the dispatcher looks again once the session is linked: a task never
-// runs two workers, and a cancelled one none.
+// yet, so the dispatcher looks again once the session is linked, as every
+// pass does (stopUnwanted): a task never runs two workers, and a cancelled
+// one none.
 func (s *Service) stopIfUnwanted(ctx context.Context, entry domain.LadoQueueEntry, sessionID domain.SessionID) {
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
 	if err != nil || !ok {
 		s.deps.Log.Warn("LADO could not read a task again after starting its worker", "task", entry.TaskID, "err", err)
 		return
 	}
-	if task.CancelledAt.IsZero() && task.Plan.Approval.ID == entry.PlanApprovalID {
-		return
+	if reason := unwanted(task, entry.PlanApprovalID); reason != "" {
+		if err := s.stopRun(ctx, entry.TaskID, sessionID, reason); err != nil {
+			s.deps.Log.Warn("LADO could not record a stop", "task", entry.TaskID, "session", sessionID, "err", err)
+		}
 	}
-	if _, err := s.deps.Sessions.RequestKill(ctx, sessionID); err != nil {
-		s.deps.Log.Warn("LADO could not stop a worker its task no longer wants", "task", entry.TaskID, "session", sessionID,
-			"problem", problem(err, "the session could not be stopped"))
-		return
-	}
-	s.deps.Log.Info("LADO stopped a worker its task no longer wants", "task", entry.TaskID, "session", sessionID)
 }
 
 // attemptFailed records an attempt that did not start the worker: the entry
@@ -337,13 +381,12 @@ func (s *Service) stopIfUnwanted(ctx context.Context, entry domain.LadoQueueEntr
 // second, and fails with message after its third.
 func (s *Service) attemptFailed(ctx context.Context, entry domain.LadoQueueEntry, message string) error {
 	ctx = context.WithoutCancel(ctx)
-	at := s.deps.Clock().UTC()
 	if entry.AttemptCount >= maxAttempts {
 		s.deps.Log.Warn("LADO gave up starting a task's worker", "entry", entry.ID, "task", entry.TaskID,
 			"attempt", entry.AttemptCount, "problem", message)
-		ok, err := s.deps.Store.FailLadoQueueEntry(ctx, entry.ID, entry.LeaseToken, message, at)
-		return s.settled(entry, "failed", ok, err, slog.LevelInfo)
+		return s.fail(ctx, entry, message)
 	}
+	at := s.deps.Clock().UTC()
 	next := at.Add(retryAfter[max(entry.AttemptCount, 1)-1])
 	s.deps.Log.Warn("LADO could not start a task's worker and tries again", "entry", entry.ID, "task", entry.TaskID,
 		"attempt", entry.AttemptCount, "next", next, "problem", message)
@@ -365,19 +408,47 @@ func (s *Service) block(ctx context.Context, entry domain.LadoQueueEntry, reason
 	return s.settled(entry, "blocked: "+reason, ok, err, slog.LevelInfo)
 }
 
+func (s *Service) fail(ctx context.Context, entry domain.LadoQueueEntry, message string) error {
+	ok, err := s.deps.Store.FailLadoQueueEntry(context.WithoutCancel(ctx), entry.ID, entry.LeaseToken, message, s.deps.Clock().UTC())
+	return s.settled(entry, "failed", ok, err, slog.LevelInfo)
+}
+
 func (s *Service) cancel(ctx context.Context, entry domain.LadoQueueEntry, at time.Time) error {
 	ok, err := s.deps.Store.CancelLadoQueueEntry(context.WithoutCancel(ctx), entry.ID, entry.LeaseToken, at)
 	return s.settled(entry, "cancelled", ok, err, slog.LevelInfo)
 }
 
-// recheck holds the entry for a minute, because a check could not run. When
-// the pass is stopping, which fails the checks too, it hands the entry back
-// instead.
+// recheck holds the entry for a minute, because a check could not run or
+// must wait. When the pass is stopping, which fails the checks too, it hands
+// the entry back instead.
 func (s *Service) recheck(ctx context.Context, entry domain.LadoQueueEntry, waiting string, now time.Time) error {
 	if ctx.Err() != nil {
 		return s.handBack(ctx, entry)
 	}
 	return s.hold(ctx, entry, waiting, now.Add(recheckAfter))
+}
+
+// issueUnreadable holds the entry until its issue is read again, longer
+// after each read that failed in a row (issueRecheckAfter): misses is how
+// many failed before this one.
+func (s *Service) issueUnreadable(ctx context.Context, entry domain.LadoQueueEntry, misses int, now time.Time) error {
+	if ctx.Err() != nil {
+		return s.handBack(ctx, entry)
+	}
+	s.mu.Lock()
+	s.issueMisses[entry.ID] = misses + 1
+	s.mu.Unlock()
+	return s.hold(ctx, entry, domain.LadoWaitingIssueUnreadable, now.Add(issueRecheckAfter[min(misses, len(issueRecheckAfter)-1)]))
+}
+
+// takeIssueMisses returns how many reads of the entry's issue failed in a row
+// and forgets them: only another failed read counts them on.
+func (s *Service) takeIssueMisses(id domain.LadoQueueEntryID) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	misses := s.issueMisses[id]
+	delete(s.issueMisses, id)
+	return misses
 }
 
 // handBack returns the entry to the queue as it was before the claim.

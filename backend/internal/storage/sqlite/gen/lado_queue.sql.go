@@ -69,6 +69,7 @@ WHERE id = ?4
   AND (lease_token IS NULL OR lease_expires_at <= ?2)
   AND (next_attempt_at IS NULL OR next_attempt_at <= ?2)
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+  AND project_id NOT IN (SELECT CAST(j.value AS TEXT) FROM json_each(?5) AS j)
 `
 
 type ClaimLadoQueueEntryParams struct {
@@ -76,16 +77,18 @@ type ClaimLadoQueueEntryParams struct {
 	Now            sql.NullTime
 	LeaseExpiresAt sql.NullTime
 	ID             string
+	FullProjects   interface{}
 }
 
-// Compare-and-set: leases the entry only while it is still claimable. Each
-// claim counts one attempt.
+// Compare-and-set: leases the entry only while it is still claimable, as
+// ListClaimableLadoQueueEntries reads it. Each claim counts one attempt.
 func (q *Queries) ClaimLadoQueueEntry(ctx context.Context, arg ClaimLadoQueueEntryParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, claimLadoQueueEntry,
 		arg.LeaseToken,
 		arg.Now,
 		arg.LeaseExpiresAt,
 		arg.ID,
+		arg.FullProjects,
 	)
 	if err != nil {
 		return 0, err
@@ -234,43 +237,6 @@ type GetLadoExecutionRow struct {
 func (q *Queries) GetLadoExecution(ctx context.Context, sessionID string) (GetLadoExecutionRow, error) {
 	row := q.db.QueryRowContext(ctx, getLadoExecution, sessionID)
 	var i GetLadoExecutionRow
-	err := row.Scan(
-		&i.LadoExecution.SessionID,
-		&i.LadoExecution.TaskID,
-		&i.LadoExecution.QueueEntryID,
-		&i.LadoExecution.PlanRevisionID,
-		&i.LadoExecution.PlanApprovalID,
-		&i.LadoExecution.PolicySnapshotID,
-		&i.LadoExecution.Attempt,
-		&i.LadoExecution.PlanBaseSha,
-		&i.LadoExecution.DispatchBaseSha,
-		&i.LadoExecution.BaseCommitsAhead,
-		&i.LadoExecution.StartedAt,
-		&i.LadoExecution.DeadlineAt,
-		&i.LadoExecution.TimedOutAt,
-		&i.SessionTerminated,
-	)
-	return i, err
-}
-
-const getLadoExecutionByEntry = `-- name: GetLadoExecutionByEntry :one
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
-    NOT EXISTS (
-        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
-    ) AS session_terminated
-FROM lado_executions e
-WHERE e.queue_entry_id = ?
-`
-
-type GetLadoExecutionByEntryRow struct {
-	LadoExecution     LadoExecution
-	SessionTerminated bool
-}
-
-// With whether the session ended, as in ListLadoExecutionsForTasks.
-func (q *Queries) GetLadoExecutionByEntry(ctx context.Context, queueEntryID string) (GetLadoExecutionByEntryRow, error) {
-	row := q.db.QueryRowContext(ctx, getLadoExecutionByEntry, queueEntryID)
-	var i GetLadoExecutionByEntryRow
 	err := row.Scan(
 		&i.LadoExecution.SessionID,
 		&i.LadoExecution.TaskID,
@@ -515,19 +481,22 @@ WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS N
   AND (lease_token IS NULL OR lease_expires_at <= ?1)
   AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
+  AND project_id NOT IN (SELECT CAST(j.value AS TEXT) FROM json_each(?2) AS j)
 ORDER BY enqueued_at, id
-LIMIT ?2
+LIMIT ?3
 `
 
 type ListClaimableLadoQueueEntriesParams struct {
-	Now        sql.NullTime
-	MaxEntries int64
+	Now          sql.NullTime
+	FullProjects interface{}
+	MaxEntries   int64
 }
 
 // Open entries whose lease is empty or expired and whose wait is over, in
-// projects with LADO mode on, oldest first.
+// projects with LADO mode on, oldest first. full_projects is a JSON array of
+// the projects whose run slots are all taken; their entries are left alone.
 func (q *Queries) ListClaimableLadoQueueEntries(ctx context.Context, arg ListClaimableLadoQueueEntriesParams) ([]LadoQueueEntry, error) {
-	rows, err := q.db.QueryContext(ctx, listClaimableLadoQueueEntries, arg.Now, arg.MaxEntries)
+	rows, err := q.db.QueryContext(ctx, listClaimableLadoQueueEntries, arg.Now, arg.FullProjects, arg.MaxEntries)
 	if err != nil {
 		return nil, err
 	}
@@ -684,112 +653,6 @@ func (q *Queries) ListLadoExecutionsPastDeadline(ctx context.Context, now sql.Nu
 	return items, nil
 }
 
-const listLadoQueueEntries = `-- name: ListLadoQueueEntries :many
-SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
-    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
-    waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
-FROM lado_queue_entries
-WHERE project_id = ?1 OR ?1 IS NULL
-ORDER BY enqueued_at, id
-`
-
-func (q *Queries) ListLadoQueueEntries(ctx context.Context, projectID sql.NullString) ([]LadoQueueEntry, error) {
-	rows, err := q.db.QueryContext(ctx, listLadoQueueEntries, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []LadoQueueEntry{}
-	for rows.Next() {
-		var i LadoQueueEntry
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.ProjectID,
-			&i.PlanApprovalID,
-			&i.PolicySnapshotID,
-			&i.EnqueuedAt,
-			&i.AttemptCount,
-			&i.NextAttemptAt,
-			&i.LeaseToken,
-			&i.ClaimedAt,
-			&i.LeaseExpiresAt,
-			&i.WaitingReason,
-			&i.ReviewRequiredReason,
-			&i.BlockedReason,
-			&i.ErrorMessage,
-			&i.DispatchedSessionID,
-			&i.FailedAt,
-			&i.SupersededAt,
-			&i.CancelledAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLadoQueueEntriesForTask = `-- name: ListLadoQueueEntriesForTask :many
-SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
-    attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
-    waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
-FROM lado_queue_entries
-WHERE task_id = ?
-ORDER BY enqueued_at DESC, id DESC
-`
-
-func (q *Queries) ListLadoQueueEntriesForTask(ctx context.Context, taskID string) ([]LadoQueueEntry, error) {
-	rows, err := q.db.QueryContext(ctx, listLadoQueueEntriesForTask, taskID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := []LadoQueueEntry{}
-	for rows.Next() {
-		var i LadoQueueEntry
-		if err := rows.Scan(
-			&i.ID,
-			&i.TaskID,
-			&i.ProjectID,
-			&i.PlanApprovalID,
-			&i.PolicySnapshotID,
-			&i.EnqueuedAt,
-			&i.AttemptCount,
-			&i.NextAttemptAt,
-			&i.LeaseToken,
-			&i.ClaimedAt,
-			&i.LeaseExpiresAt,
-			&i.WaitingReason,
-			&i.ReviewRequiredReason,
-			&i.BlockedReason,
-			&i.ErrorMessage,
-			&i.DispatchedSessionID,
-			&i.FailedAt,
-			&i.SupersededAt,
-			&i.CancelledAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listLadoQueueEntriesForTasks = `-- name: ListLadoQueueEntriesForTasks :many
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
@@ -892,6 +755,53 @@ func (q *Queries) ListLeasedLadoQueueEntries(ctx context.Context) ([]LadoQueueEn
 			&i.FailedAt,
 			&i.SupersededAt,
 			&i.CancelledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveLadoExecutions = `-- name: ListLiveLadoExecutions :many
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+FROM lado_executions e
+JOIN sessions s ON s.id = e.session_id
+WHERE s.is_terminated = 0
+ORDER BY e.started_at, e.session_id
+`
+
+// Executions whose session still runs, oldest first.
+func (q *Queries) ListLiveLadoExecutions(ctx context.Context) ([]LadoExecution, error) {
+	rows, err := q.db.QueryContext(ctx, listLiveLadoExecutions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoExecution{}
+	for rows.Next() {
+		var i LadoExecution
+		if err := rows.Scan(
+			&i.SessionID,
+			&i.TaskID,
+			&i.QueueEntryID,
+			&i.PlanRevisionID,
+			&i.PlanApprovalID,
+			&i.PolicySnapshotID,
+			&i.Attempt,
+			&i.PlanBaseSha,
+			&i.DispatchBaseSha,
+			&i.BaseCommitsAhead,
+			&i.StartedAt,
+			&i.DeadlineAt,
+			&i.TimedOutAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1058,27 +968,6 @@ func (q *Queries) ReleaseLadoQueueEntry(ctx context.Context, arg ReleaseLadoQueu
 		arg.ID,
 		arg.LeaseToken,
 	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-const setLadoProjectMaxConcurrent = `-- name: SetLadoProjectMaxConcurrent :execrows
-UPDATE lado_project_settings
-SET max_concurrent = ?,
-    updated_at = ?
-WHERE project_id = ?
-`
-
-type SetLadoProjectMaxConcurrentParams struct {
-	MaxConcurrent int64
-	UpdatedAt     time.Time
-	ProjectID     string
-}
-
-func (q *Queries) SetLadoProjectMaxConcurrent(ctx context.Context, arg SetLadoProjectMaxConcurrentParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setLadoProjectMaxConcurrent, arg.MaxConcurrent, arg.UpdatedAt, arg.ProjectID)
 	if err != nil {
 		return 0, err
 	}

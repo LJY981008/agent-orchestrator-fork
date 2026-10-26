@@ -54,6 +54,10 @@ func (g *ladoRecordingGate) AuthorizeExecutionChange(context.Context, domain.Ses
 	return nil
 }
 
+func (g *ladoRecordingGate) AuthorizeRestore(context.Context, domain.SessionID) error {
+	return nil
+}
+
 func TestLadoGateRefusesAnotherSessionsMessageBeforeDelivery(t *testing.T) {
 	refusal := errors.New("refused by LADO")
 	// The conversation routes mark every request human and carry the CLI's

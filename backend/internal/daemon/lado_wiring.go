@@ -41,7 +41,7 @@ type ladoSessionTarget interface {
 // automations, tracker intake or the API can spawn or send, and before
 // sessions restore.
 func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget) *ladoproject.Service {
-	gate := ladogate.New(store, store, store, store)
+	gate := ladogate.New(store, store, store, store, store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
 	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store}.Section)

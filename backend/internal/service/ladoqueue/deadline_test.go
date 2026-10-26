@@ -92,3 +92,47 @@ func TestStopStopsTheSession(t *testing.T) {
 		t.Fatalf("stopped %v, want both sessions", kills)
 	}
 }
+
+// B6: once a run has a PR, whatever its state, its maximum run time no
+// longer applies: what is left is the PR's review. A run past its deadline
+// without one is stopped.
+func TestDeadlineStopsOnlyBeforeAPR(t *testing.T) {
+	f := newFixture(t)
+	deadline := t0.Add(-time.Minute)
+	run := func(session domain.SessionID, pr domain.LadoExecutionPR) domain.LadoExecution {
+		return domain.LadoExecution{SessionID: session, TaskID: "task-1", Attempt: 1, StartedAt: deadline.Add(-8 * time.Hour), DeadlineAt: deadline, PR: pr}
+	}
+	f.store.overdue = []domain.LadoExecution{
+		run("proj-1-3", domain.LadoExecutionPR{URL: "https://github.com/acme/app/pull/7", Number: 7}),
+		run("proj-1-4", domain.LadoExecutionPR{URL: "https://github.com/acme/app/pull/8", Number: 8, Closed: true}),
+		run("proj-1-5", domain.LadoExecutionPR{}),
+	}
+
+	f.tick(t, t0)
+
+	if kills := f.sessions.killed(); !reflect.DeepEqual(kills, []domain.SessionID{"proj-1-5"}) {
+		t.Fatalf("stopped %v, want only the run without a PR", kills)
+	}
+	runs, events := f.store.timedOut()
+	if !runs[0].TimedOutAt.IsZero() || !runs[1].TimedOutAt.IsZero() || !runs[2].TimedOutAt.Equal(t0) || len(events) != 1 {
+		t.Fatalf("time-outs %+v with %d events, want only proj-1-5 timed out now", runs, len(events))
+	}
+}
+
+// Recovery and deadlines do not wait for the dispatch settings; claims do.
+func TestTickStopsOverdueRunsWithoutSettings(t *testing.T) {
+	f := newFixture(t)
+	f.store.settingsErr = errors.New("database is locked")
+	f.store.overdue = []domain.LadoExecution{{SessionID: "proj-1-3", TaskID: "task-1", Attempt: 1, StartedAt: t0.Add(-9 * time.Hour), DeadlineAt: t0.Add(-time.Hour)}}
+	f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+
+	if err := f.svc.Tick(context.Background(), t0); err == nil || !strings.Contains(err.Error(), "database is locked") {
+		t.Fatalf("Tick = %v, want the failed settings read", err)
+	}
+	if kills := f.sessions.killed(); !reflect.DeepEqual(kills, []domain.SessionID{"proj-1-3"}) {
+		t.Fatalf("stopped %v, want the overdue run", kills)
+	}
+	if limits := f.store.claimLimits(); len(limits) != 0 {
+		t.Fatalf("claimed with %v, want no claim without the settings", limits)
+	}
+}

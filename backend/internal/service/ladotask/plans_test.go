@@ -343,7 +343,7 @@ func (pf *planFixture) planned(t *testing.T) domain.LadoPlanRevision {
 func (pf *planFixture) claim(t *testing.T) domain.LadoQueueEntry {
 	t.Helper()
 	now := time.Now().UTC()
-	claimed, err := pf.store.ClaimLadoQueueEntries(context.Background(), now, now.Add(time.Hour), 1, func() string {
+	claimed, err := pf.store.ClaimLadoQueueEntries(context.Background(), now, now.Add(time.Hour), 1, nil, func() string {
 		pf.leases++
 		return fmt.Sprintf("lease-%d", pf.leases)
 	})

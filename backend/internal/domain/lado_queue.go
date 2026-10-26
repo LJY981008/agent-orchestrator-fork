@@ -19,6 +19,10 @@ type LadoQueueEntryID string
 // or the entry was released or marked since.
 var ErrLadoLeaseLost = errors.New("the queue entry's lease no longer holds")
 
+// ErrLadoIssueNotFound means the tracker answered that a task's issue does not
+// exist: it was deleted, or its repository moved out of reach.
+var ErrLadoIssueNotFound = errors.New("the issue no longer exists on the tracker")
+
 // LadoQueueEntry is one plan approval waiting for the dispatcher, and the
 // record of how its dispatch went (docs/LJY-PRD/TDD.md §5.3). Approving a
 // plan writes the entry in the approval's transaction; a newer approval of
@@ -169,6 +173,9 @@ const (
 	LadoWaitingRetry = "retry"
 	// LadoWaitingModeOff means the project's LADO mode is off.
 	LadoWaitingModeOff = "lado_mode_off"
+	// LadoWaitingRunLive means the task's worker of an earlier approval
+	// still runs; a task runs one worker at a time.
+	LadoWaitingRunLive = "run_live"
 )
 
 // Failed: why a task's dispatch or execution failed.

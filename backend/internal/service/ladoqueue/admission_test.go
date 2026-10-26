@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
 )
 
@@ -69,12 +70,13 @@ func TestAdmissionHoldsAtTheCaps(t *testing.T) {
 			inProject("entry-3", "task-2", "proj-2", 20*time.Minute),
 			inProject("entry-4", "task-1", "proj-1", 10*time.Minute),
 		)
-		held := func(at time.Time, ids ...domain.LadoQueueEntryID) {
+		held := func(ids ...domain.LadoQueueEntryID) {
 			t.Helper()
 			for _, id := range ids {
-				if e := f.store.entry(id); e.WaitingReason != domain.LadoWaitingSlotProject || !e.NextAttemptAt.Equal(at.Add(15*time.Second)) ||
+				// Unclaimed, the entry waits for a slot, not for a time.
+				if e := f.store.entry(id); e.WaitingReason != domain.LadoWaitingSlotProject || !e.NextAttemptAt.IsZero() ||
 					e.AttemptCount != 0 || e.LeaseToken != "" {
-					t.Fatalf("entry = %+v, want it waiting a pass for its project's slot without spending an attempt", e)
+					t.Fatalf("entry = %+v, want it waiting for its project's slot, unclaimed", e)
 				}
 			}
 		}
@@ -89,7 +91,7 @@ func TestAdmissionHoldsAtTheCaps(t *testing.T) {
 		// proj-1's entries wait for its slot while proj-2's start; the worker
 		// this pass starts fills proj-2's slot as well.
 		f.tick(t, t0)
-		held(t0, "entry-1", "entry-3", "entry-4")
+		held("entry-1", "entry-3", "entry-4")
 		if got, want := requests(), []string{"lado:entry-2/1"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("spawned %v, want %v", got, want)
 		}
@@ -105,7 +107,7 @@ func TestAdmissionHoldsAtTheCaps(t *testing.T) {
 		if got, want := requests(), []string{"lado:entry-2/1", "lado:entry-1/1"}; !reflect.DeepEqual(got, want) {
 			t.Fatalf("spawned %v, want %v", got, want)
 		}
-		held(next, "entry-3", "entry-4")
+		held("entry-3", "entry-4")
 	})
 }
 
@@ -251,5 +253,91 @@ func TestModeOffProjectsWait(t *testing.T) {
 	}
 	if n := len(sf.sessions.spawned()); n != 1 {
 		t.Fatalf("spawned %d workers, want 1", n)
+	}
+}
+
+// B1: a project whose run slots are all taken is left out of the claims, so
+// its entries wait without a claim and a hold each pass: their attempts stay,
+// and the reason is written once. Other projects' entries are still claimed.
+func TestFullProjectsAreNotClaimed(t *testing.T) {
+	sf := newStoreFixture(t, nil)
+	ctx := context.Background()
+	settings := domain.DefaultLadoDispatchSettings()
+	settings.MaxConcurrent = 4
+	if _, err := sf.db.SetLadoDispatchSettings(ctx, settings, domain.LadoAuditEvent{At: t0, Actor: "api", Action: "dispatch.settings_changed", SubjectKind: "dispatch_settings", SubjectID: "1"}); err != nil {
+		t.Fatalf("set the dispatch settings: %v", err)
+	}
+	// task-1's worker runs, as many as proj-1's cap allows.
+	sf.tick(t, t0)
+	if exec := sf.execution(t, sf.session(t, 1).ID); exec.TaskID != "task-1" {
+		t.Fatalf("execution = %+v, want task-1's", exec)
+	}
+	if err := sf.db.UpsertProject(ctx, domain.ProjectRecord{ID: "proj-2", Path: "/work/web", RegisteredAt: t0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sf.db.SetLadoMode(ctx, "proj-2", true, t0); err != nil {
+		t.Fatal(err)
+	}
+	sf.projects.others = map[string]domain.ProjectRecord{"proj-2": {
+		ID: "proj-2", Path: "/work/web", Kind: domain.ProjectKindSingleRepo, Config: domain.ProjectConfig{DefaultBranch: domain.DefaultBranchAuto},
+	}}
+	sf.setClock(t0.Add(time.Minute))
+	waiting := sf.queueTask(t, "3", "proj-1")
+	other := sf.queueTask(t, "4", "proj-2")
+	changes := sf.taskChanges(t, "task-3")
+
+	for i := range 6 {
+		sf.tick(t, t0.Add(time.Duration(2+i)*time.Minute))
+	}
+
+	entry, ok, err := sf.db.LadoTask(ctx, "task-3")
+	if err != nil || !ok {
+		t.Fatalf("task-3 = (%v, %v)", ok, err)
+	}
+	if e := entry.Queue; e.ID != waiting || e.AttemptCount != 0 || e.LeaseToken != "" || e.WaitingReason != domain.LadoWaitingSlotProject {
+		t.Fatalf("task-3's entry = %+v, want it waiting for proj-1's slot without an attempt", e)
+	}
+	if n := sf.taskChanges(t, "task-3") - changes; n != 1 {
+		t.Fatalf("six passes published %d changes of task-3, want the one waiting reason", n)
+	}
+	var requests []string
+	for _, cfg := range sf.sessions.spawned() {
+		requests = append(requests, cfg.ClientRequestID)
+	}
+	if want := []string{"lado:lado-queue-1/1", "lado:" + string(other) + "/1"}; !reflect.DeepEqual(requests, want) {
+		t.Fatalf("spawned %v, want %v", requests, want)
+	}
+}
+
+// B2: each claim's lease runs from the claim, so a spawn that took long does
+// not leave the next entry's lease expired before its worker starts.
+func TestLeaseStartsAtTheClaim(t *testing.T) {
+	f := newFixture(t)
+	f.store.settings.MaxConcurrent = 2
+	f.store.caps["proj-1"] = 2
+	f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)), testEntry("entry-2", t0.Add(-5*time.Minute)))
+	slow := t0.Add(3 * time.Minute)
+	var leaseAtSecondSpawn time.Time
+	f.sessions.onSpawn = func(cfg ports.SpawnConfig) {
+		switch cfg.ClientRequestID {
+		case "lado:entry-1/1":
+			// AO takes three minutes, longer than a lease, to start the
+			// first worker.
+			f.setClock(slow)
+		case "lado:entry-2/1":
+			leaseAtSecondSpawn = f.store.entry("entry-2").LeaseExpiresAt
+		}
+	}
+
+	f.setClock(t0)
+	if err := f.svc.Tick(context.Background(), t0); err != nil {
+		t.Fatalf("Tick = %v", err)
+	}
+
+	if n := len(f.sessions.spawned()); n != 2 {
+		t.Fatalf("spawned %d workers, want 2", n)
+	}
+	if want := slow.Add(defaultLease); !leaseAtSecondSpawn.Equal(want) {
+		t.Fatalf("entry-2's lease ran to %s while its worker started, want %s: the claim's time and a lease", leaseAtSecondSpawn, want)
 	}
 }

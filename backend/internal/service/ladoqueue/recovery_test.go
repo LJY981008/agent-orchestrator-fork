@@ -90,7 +90,7 @@ func TestRecoveryReleasesAnExpiredClaim(t *testing.T) {
 	}
 	session := func(committed, ended bool) *domain.SessionRecord {
 		return &domain.SessionRecord{
-			ID: "proj-1-7", ProjectID: "proj-1", ClientRequestID: "lado:entry-1/1",
+			ID: "proj-1-7", ProjectID: "proj-1", Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1", ClientRequestHash: testDispatchHash(),
 			ClientRequestCommitted: committed, IsTerminated: ended, CreatedAt: t0.Add(-3 * time.Minute),
 		}
 	}
@@ -136,7 +136,7 @@ func TestRecoveryReleasesAnExpiredClaim(t *testing.T) {
 				f.store.addSession(*c.session)
 			}
 
-			if err := f.svc.recover(context.Background(), t0, f.store.settings); err != nil {
+			if err := f.svc.recover(context.Background(), t0, &f.store.settings); err != nil {
 				t.Fatalf("recover = %v", err)
 			}
 
@@ -197,7 +197,8 @@ func TestDispatchLinksTheSessionOfAFailedSpawn(t *testing.T) {
 			f.sessions.errs = []error{lost}
 			f.sessions.onSpawn = func(cfg ports.SpawnConfig) {
 				f.store.addSession(domain.SessionRecord{
-					ID: "proj-1-4", ProjectID: "proj-1", ClientRequestID: cfg.ClientRequestID, ClientRequestCommitted: c.committed,
+					ID: "proj-1-4", ProjectID: "proj-1", Kind: cfg.Kind, ClientRequestID: cfg.ClientRequestID,
+					ClientRequestHash: cfg.ClientRequestHash, ClientRequestCommitted: c.committed,
 				})
 			}
 
@@ -217,5 +218,100 @@ func TestDispatchLinksTheSessionOfAFailedSpawn(t *testing.T) {
 				t.Fatalf("the logs do not name the spawn's error:\n%s", f.logs.String())
 			}
 		})
+	}
+}
+
+// B3: a session under an attempt's client request id that the dispatcher did
+// not start for that entry, of another project, with another dispatch hash,
+// or not a worker, is not the entry's execution. It is neither linked nor
+// stopped, and the attempt counts as failed, after a failed spawn and in
+// recovery alike.
+func TestForeignSessionIsNotAdopted(t *testing.T) {
+	foreign := map[string]func(*domain.SessionRecord){
+		"of another project":      func(rec *domain.SessionRecord) { rec.ProjectID = "proj-9" },
+		"with another hash":       func(rec *domain.SessionRecord) { rec.ClientRequestHash = "0f0f" },
+		"an orchestrator":         func(rec *domain.SessionRecord) { rec.Kind = domain.KindOrchestrator },
+		"without a dispatch hash": func(rec *domain.SessionRecord) { rec.ClientRequestHash = "" },
+	}
+	session := func(id string, change func(*domain.SessionRecord)) domain.SessionRecord {
+		rec := domain.SessionRecord{
+			ID: domain.SessionID("proj-9-" + id), ProjectID: "proj-1", Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1",
+			ClientRequestHash: testDispatchHash(), ClientRequestCommitted: true, CreatedAt: t0.Add(-3 * time.Minute),
+		}
+		change(&rec)
+		return rec
+	}
+	retried := func(t *testing.T, f *fixture) {
+		t.Helper()
+		if links := f.store.linked(); len(links) != 0 {
+			t.Fatalf("linked %+v, want nothing", links)
+		}
+		if kills := f.sessions.killed(); len(kills) != 0 {
+			t.Fatalf("stopped %v, want the other session left alone", kills)
+		}
+		e := f.store.entry("entry-1")
+		if e.AttemptCount != 1 || e.WaitingReason != domain.LadoWaitingRetry || e.LeaseToken != "" || e.DispatchedSessionID != "" ||
+			!e.NextAttemptAt.Equal(t0.Add(30*time.Second)) {
+			t.Fatalf("entry = %+v, want its first attempt failed and the next one in 30 seconds", e)
+		}
+	}
+	for name, change := range foreign {
+		t.Run("after a failed spawn, a session "+name, func(t *testing.T) {
+			f := newFixture(t)
+			f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+			f.sessions.errs = []error{apierr.Conflict("CLIENT_REQUEST_CONFLICT", "The client request id was used with another request.", nil)}
+			f.sessions.onSpawn = func(ports.SpawnConfig) { f.store.addSession(session("4", change)) }
+
+			f.tick(t, t0)
+			retried(t, f)
+		})
+		t.Run("in recovery, a session "+name, func(t *testing.T) {
+			f := newFixture(t)
+			e := testEntry("entry-1", t0.Add(-time.Hour))
+			e.LeaseToken, e.ClaimedAt, e.LeaseExpiresAt, e.AttemptCount = "old-lease", t0.Add(-3*time.Minute), t0.Add(-time.Minute), 1
+			f.store.add(e)
+			f.store.addSession(session("7", change))
+
+			if err := f.svc.recover(context.Background(), t0, &f.store.settings); err != nil {
+				t.Fatalf("recover = %v, want the attempt failed without an error", err)
+			}
+			retried(t, f)
+		})
+	}
+}
+
+// B5: an attempt's session that never finished starting and could not be
+// stopped keeps the entry's claim, so no next attempt starts a second worker
+// beside it; the next pass tries again.
+func TestRecoveryKeepsTheLeaseWhenTheStopFails(t *testing.T) {
+	f := newFixture(t)
+	e := testEntry("entry-1", t0.Add(-time.Hour))
+	e.LeaseToken, e.ClaimedAt, e.LeaseExpiresAt, e.AttemptCount = "old-lease", t0.Add(-3*time.Minute), t0.Add(-time.Minute), 1
+	f.store.add(e, testEntry("entry-2", t0.Add(-30*time.Minute)))
+	f.store.addSession(domain.SessionRecord{
+		ID: "proj-1-7", ProjectID: "proj-1", Kind: domain.KindWorker, ClientRequestID: "lado:entry-1/1",
+		ClientRequestHash: testDispatchHash(), CreatedAt: t0.Add(-3 * time.Minute),
+	})
+	f.sessions.setKillErr("proj-1-7", apierr.Internal("SESSION_KILL_FAILED", "The runtime did not stop"))
+
+	if err := f.svc.Tick(context.Background(), t0); err == nil || !strings.Contains(err.Error(), "SESSION_KILL_FAILED") {
+		t.Fatalf("Tick = %v, want the failed stop", err)
+	}
+	if got := f.store.entry("entry-1"); got.LeaseToken != "old-lease" || got.AttemptCount != 1 {
+		t.Fatalf("entry = %+v, want its claim kept", got)
+	}
+	if limits := f.store.claimLimits(); len(limits) != 0 {
+		t.Fatalf("claimed with %v, want no claim while a worker may run", limits)
+	}
+
+	// The stop works on the next pass: the entry is due again and its next
+	// attempt starts.
+	f.sessions.setKillErr("proj-1-7", nil)
+	f.tick(t, t0.Add(15*time.Second))
+	if kills := f.sessions.killed(); !reflect.DeepEqual(kills, []domain.SessionID{"proj-1-7", "proj-1-7"}) {
+		t.Fatalf("stopped %v, want proj-1-7 twice", kills)
+	}
+	if spawned := f.sessions.spawned(); len(spawned) != 1 || spawned[0].ClientRequestID != "lado:entry-1/2" {
+		t.Fatalf("spawned %+v, want entry-1's second attempt", spawned)
 	}
 }

@@ -13,6 +13,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	githubtracker "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/github"
+	gitlabtracker "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/gitlab"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
@@ -177,9 +179,16 @@ func (s *Service) readIssueWithComments(ctx context.Context, task domain.LadoTas
 	return issue, comments, nil
 }
 
+// issueReadFailed is the error of an issue the tracker did not give. When the
+// tracker answered that the issue does not exist, it also wraps
+// domain.ErrLadoIssueNotFound.
 func issueReadFailed(ref domain.IssueID, err error) error {
-	return apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", fmt.Sprintf("Could not read %s: %v", ref, err),
+	failed := apierr.New(apierr.KindUnavailable, "LADO_ISSUE_READ_FAILED", fmt.Sprintf("Could not read %s: %v", ref, err),
 		map[string]any{"issue": string(ref), "reason": err.Error()})
+	if errors.Is(err, githubtracker.ErrNotFound) || errors.Is(err, gitlabtracker.ErrNotFound) {
+		return fmt.Errorf("%w: %w", domain.ErrLadoIssueNotFound, failed)
+	}
+	return failed
 }
 
 // writeIssueFile puts the pinned snapshot where the orchestrator reads it.

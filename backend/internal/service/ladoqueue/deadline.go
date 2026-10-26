@@ -1,8 +1,10 @@
 package ladoqueue
 
-// The maximum run time (decision g of the step 6 plan): a worker past its
-// deadline is stopped through AO, its worktree kept as it is, and the run is
-// marked timed out, so the task shows Failed.
+// The maximum run time (decision g of the step 6 plan, as the owner revised
+// it on 2026-10-26): a worker past its deadline that has not opened a PR is
+// stopped through AO, its worktree kept as it is, and the run is marked timed
+// out, so the task shows Failed. Once a run has a PR, in whatever state, the
+// limit no longer applies: what is left is the PR's review.
 
 import (
 	"context"
@@ -14,8 +16,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// stopOverdue stops each execution whose session still runs past its
-// deadline, and then marks it timed out with its audit event. A worker that
+// stopOverdue stops each execution without a PR whose session still runs
+// past its deadline, and then marks it timed out with its audit event. A worker that
 // could not be stopped stays unmarked and is stopped again on the next pass:
 // a task shows Failed only once its worker no longer runs. It returns the
 // reads and writes that failed, joined.
@@ -28,6 +30,9 @@ func (s *Service) stopOverdue(ctx context.Context, now time.Time) error {
 	for _, exec := range overdue {
 		if ctx.Err() != nil {
 			break
+		}
+		if exec.PR.URL != "" {
+			continue
 		}
 		if _, err := s.deps.Sessions.RequestKill(ctx, exec.SessionID); err != nil {
 			s.deps.Log.Warn("LADO could not stop a worker past its deadline", "task", exec.TaskID, "session", exec.SessionID,

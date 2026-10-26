@@ -18901,6 +18901,7 @@ components:
           - issue_unreadable
           - retry
           - lado_mode_off
+          - run_live
           type: string
         state:
           description: 'Derived entry state. The queue lists open entries: queued,
@@ -19351,6 +19352,11 @@ components:
         attempts:
           description: Attempts to start the worker so far; LADO gives up after three.
           type: integer
+        enqueuedAt:
+          description: When the plan was approved; the dispatcher takes the oldest
+            first.
+          format: date-time
+          type: string
         error:
           description: Why starting the worker failed, without secrets.
           type: string
@@ -19375,6 +19381,7 @@ components:
           - issue_unreadable
           - retry
           - lado_mode_off
+          - run_live
           type: string
         state:
           enum:
@@ -19391,6 +19398,7 @@ components:
       required:
       - state
       - attempts
+      - enqueuedAt
       type: object
     LadoTaskResponse:
       properties:
@@ -19468,6 +19476,7 @@ components:
           - issue_unreadable
           - retry
           - lado_mode_off
+          - run_live
           type: string
       required:
       - id

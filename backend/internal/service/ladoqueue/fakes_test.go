@@ -54,6 +54,12 @@ const (
 	testDispatchSHA = "d15ba7c4d15ba7c4d15ba7c4d15ba7c4d15ba7c4"
 )
 
+// testDispatchHash is the dispatch hash of the fixture's entries: the hash a
+// spawn of their worker carries.
+func testDispatchHash() string {
+	return domain.LadoDispatchHash(testPlanSHA, testSnapshotSHA)
+}
+
 // pinnedIssueSHA is the hash of the issue as the plan was made from it.
 func pinnedIssueSHA() string {
 	snapshot, _ := domain.NewLadoIssueSnapshot(testIssueRef, testIssueTitle, testIssueBody, nil)
@@ -153,6 +159,8 @@ func newFixture(t *testing.T) *fixture {
 		now:      t0,
 	}
 	f.store.tasks["task-1"] = testTask()
+	// A session AO stopped no longer runs.
+	f.sessions.ended = f.store.endSession
 	f.svc = New(Deps{
 		Store: f.store, Tasks: f.tasks, Policy: f.policy, Sessions: f.sessions,
 		Projects: f.projects, Branches: f.branches, Memory: f.memory, Git: f.git,
@@ -226,9 +234,17 @@ type fakeStore struct {
 	sessions   map[string]domain.SessionRecord
 	sessionErr error
 	// overdue are the running executions with a deadline.
-	overdue    []domain.LadoExecution
-	timeOuts   []domain.LadoAuditEvent
-	claims     []int
+	overdue  []domain.LadoExecution
+	timeOuts []domain.LadoAuditEvent
+	// live are the executions whose session runs; audits the audit events
+	// written on their own.
+	live   []domain.LadoExecution
+	audits []domain.LadoAuditEvent
+	// settingsErr fails reading the dispatch settings.
+	settingsErr error
+	claims      []int
+	// fullAsked are the projects each claim left out.
+	fullAsked  [][]domain.ProjectID
 	links      []domain.LadoExecution
 	linkErr    error
 	waitWrites int
@@ -283,7 +299,7 @@ func (f *fakeStore) LadoTask(_ context.Context, id domain.LadoTaskID) (domain.La
 func (f *fakeStore) LadoDispatchSettings(context.Context) (domain.LadoDispatchSettings, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.settings, nil
+	return f.settings, f.settingsErr
 }
 
 func (f *fakeStore) LadoProjectMaxConcurrent(_ context.Context, project domain.ProjectID) (int, error) {
@@ -403,10 +419,11 @@ func open(e domain.LadoQueueEntry) bool {
 		e.ReviewRequiredReason == "" && e.BlockedReason == ""
 }
 
-func (f *fakeStore) ClaimLadoQueueEntries(_ context.Context, now, leaseUntil time.Time, limit int, newToken func() string) ([]domain.LadoQueueEntry, error) {
+func (f *fakeStore) ClaimLadoQueueEntries(_ context.Context, now, leaseUntil time.Time, limit int, fullProjects []domain.ProjectID, newToken func() string) ([]domain.LadoQueueEntry, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.claims = append(f.claims, limit)
+	f.fullAsked = append(f.fullAsked, slices.Clone(fullProjects))
 	order := make([]int, len(f.entries))
 	for i := range order {
 		order[i] = i
@@ -416,7 +433,7 @@ func (f *fakeStore) ClaimLadoQueueEntries(_ context.Context, now, leaseUntil tim
 	for _, i := range order {
 		e := &f.entries[i]
 		leased := e.LeaseToken != "" && e.LeaseExpiresAt.After(now)
-		if len(claimed) == limit || !open(*e) || leased || e.NextAttemptAt.After(now) || f.modeOff[e.ProjectID] {
+		if len(claimed) == limit || !open(*e) || leased || e.NextAttemptAt.After(now) || f.modeOff[e.ProjectID] || slices.Contains(fullProjects, e.ProjectID) {
 			continue
 		}
 		e.LeaseToken, e.ClaimedAt, e.LeaseExpiresAt = newToken(), now, leaseUntil
@@ -492,6 +509,46 @@ func (f *fakeStore) LinkLadoExecution(_ context.Context, id domain.LadoQueueEntr
 	return nil
 }
 
+// LadoDispatchGrant answers like the store: every entry's worker carries the
+// fixture's dispatch hash.
+func (f *fakeStore) LadoDispatchGrant(_ context.Context, id domain.LadoQueueEntryID, attempt int, now time.Time) (domain.LadoDispatchGrant, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, e := range f.entries {
+		if e.ID == id {
+			active := e.State(now) == domain.LadoQueueDispatching && e.AttemptCount == attempt
+			return domain.LadoDispatchGrant{ProjectID: e.ProjectID, Hash: testDispatchHash(), Active: active}, nil
+		}
+	}
+	return domain.LadoDispatchGrant{}, nil
+}
+
+func (f *fakeStore) LiveLadoExecutions(context.Context) ([]domain.LadoExecution, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.live), nil
+}
+
+// endSession is AO stopping a session: its execution no longer runs.
+func (f *fakeStore) endSession(id domain.SessionID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.live = slices.DeleteFunc(f.live, func(exec domain.LadoExecution) bool { return exec.SessionID == id })
+}
+
+func (f *fakeStore) AppendLadoAuditEvent(_ context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.audits = append(f.audits, ev)
+	return ev, nil
+}
+
+func (f *fakeStore) audited() []domain.LadoAuditEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.audits)
+}
+
 // A dispatch reads none of the views below; views_test.go reads them from the
 // real store, and stores the settings here to see their audit events.
 
@@ -540,13 +597,15 @@ type fakeTasks struct {
 	state    domain.NormalizedIssueState
 	checkErr error
 	// onCheck runs inside IssueCheck, as the tracker answers.
-	onCheck  func()
-	input    ladotask.RunInput
+	onCheck func()
+	input   ladotask.RunInput
+	// inputs are the inputs of other tasks than the fixture's.
+	inputs   map[domain.LadoTaskID]ladotask.RunInput
 	inputErr error
 	// onInput runs inside RunInput.
-	onInput func()
-	checks  int
-	inputs  int
+	onInput    func()
+	checks     int
+	inputCalls int
 }
 
 func (f *fakeTasks) IssueCheck(_ context.Context, task domain.LadoTask) (ladotask.IssueCheck, error) {
@@ -570,7 +629,7 @@ func (f *fakeTasks) IssueCheck(_ context.Context, task domain.LadoTask) (ladotas
 	return ladotask.IssueCheck{SHA256: snapshot.SHA256(), State: state}, nil
 }
 
-func (f *fakeTasks) RunInput(context.Context, domain.LadoTask) (ladotask.RunInput, error) {
+func (f *fakeTasks) RunInput(_ context.Context, task domain.LadoTask) (ladotask.RunInput, error) {
 	f.mu.Lock()
 	hook := f.onInput
 	f.mu.Unlock()
@@ -579,7 +638,10 @@ func (f *fakeTasks) RunInput(context.Context, domain.LadoTask) (ladotask.RunInpu
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.inputs++
+	f.inputCalls++
+	if in, ok := f.inputs[task.ID]; ok {
+		return in, f.inputErr
+	}
 	return f.input, f.inputErr
 }
 
@@ -600,7 +662,7 @@ func (f *fakePolicy) CurrentSHA256(context.Context, domain.LadoTask) (string, er
 // fakeSessions records each spawn and answers with errs in turn, then with a
 // new session, the one start makes when set. onSpawn runs inside the spawn,
 // as AO starts the worker. A kill fails with killErrs' error for its
-// session.
+// session; one that succeeds tells ended.
 type fakeSessions struct {
 	mu       sync.Mutex
 	configs  []ports.SpawnConfig
@@ -609,6 +671,7 @@ type fakeSessions struct {
 	start    func(cfg ports.SpawnConfig) (domain.SessionID, error)
 	kills    []domain.SessionID
 	killErrs map[domain.SessionID]error
+	ended    func(domain.SessionID)
 }
 
 func (f *fakeSessions) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -638,12 +701,26 @@ func (f *fakeSessions) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.S
 
 func (f *fakeSessions) RequestKill(_ context.Context, id domain.SessionID) (sessionmanager.KillResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.kills = append(f.kills, id)
 	if err := f.killErrs[id]; err != nil {
+		f.mu.Unlock()
 		return sessionmanager.KillResult{}, err
 	}
+	ended := f.ended
+	f.mu.Unlock()
+	if ended != nil {
+		ended(id)
+	}
 	return sessionmanager.KillResult{Freed: true}, nil
+}
+
+func (f *fakeSessions) setKillErr(id domain.SessionID, err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.killErrs == nil {
+		f.killErrs = map[domain.SessionID]error{}
+	}
+	f.killErrs[id] = err
 }
 
 func (f *fakeSessions) spawned() []ports.SpawnConfig {

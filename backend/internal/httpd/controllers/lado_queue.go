@@ -154,6 +154,7 @@ func ladoTaskQueueResponse(entry domain.LadoQueueEntry, now time.Time) *LadoTask
 		Attempts:      entry.AttemptCount,
 		NextAttemptAt: ladoNextAttempt(entry, now),
 		Error:         entry.ErrorMessage,
+		EnqueuedAt:    entry.EnqueuedAt,
 	}
 }
 

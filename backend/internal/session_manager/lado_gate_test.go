@@ -18,9 +18,11 @@ type recordingWorkGate struct {
 	spawnErr     error
 	sendErr      error
 	executionErr error
+	restoreErr   error
 	spawns       []ports.SpawnConfig
 	sends        []ladoSendCall
 	changes      []domain.SessionID
+	restores     []domain.SessionID
 }
 
 type ladoSendCall struct {
@@ -49,6 +51,11 @@ func (g *recordingWorkGate) AuthorizeConfigMode(context.Context, domain.SessionI
 func (g *recordingWorkGate) AuthorizeExecutionChange(_ context.Context, target domain.SessionID) error {
 	g.changes = append(g.changes, target)
 	return g.executionErr
+}
+
+func (g *recordingWorkGate) AuthorizeRestore(_ context.Context, target domain.SessionID) error {
+	g.restores = append(g.restores, target)
+	return g.restoreErr
 }
 
 func TestLadoSendOriginReadsTheDeliveryFacts(t *testing.T) {
@@ -358,5 +365,41 @@ func TestResolveDefaultBranchAsksTheWorkspace(t *testing.T) {
 	plain := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: &recordingAgent{}}, Workspace: struct{ ports.Workspace }{ws}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}})
 	if _, err := plain.ResolveDefaultBranch(context.Background(), "/work/app", ""); !errors.Is(err, ports.ErrWorkspaceDefaultBranchUnresolved) {
 		t.Fatalf("ResolveDefaultBranch without the capability = %v, want ErrWorkspaceDefaultBranchUnresolved", err)
+	}
+}
+
+// A person's restore and resume of a session ask the LADO gate first, and a
+// refusal changes nothing.
+func TestRestoreAsksTheLadoGate(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	st.sessions["mer-7"] = domain.SessionRecord{
+		ID: "mer-7", ProjectID: "mer", Kind: domain.KindWorker, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-7", Branch: "b", AgentSessionID: "agent-x"},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: t.TempDir(), LookPath: lookPath})
+	refusal := errors.New("refused by LADO")
+	gate := &recordingWorkGate{restoreErr: refusal}
+	m.SetWorkGate(gate)
+
+	if _, err := m.RestoreWithMode(context.Background(), "mer-7"); !errors.Is(err, refusal) {
+		t.Fatalf("RestoreWithMode error = %v, want the gate's refusal", err)
+	}
+	if _, err := m.ResumeAgentWithMode(context.Background(), "mer-7"); !errors.Is(err, refusal) {
+		t.Fatalf("ResumeAgentWithMode error = %v, want the gate's refusal", err)
+	}
+	if want := []domain.SessionID{"mer-7", "mer-7"}; !reflect.DeepEqual(gate.restores, want) {
+		t.Fatalf("gate saw %v, want %v", gate.restores, want)
+	}
+	if agent.restoreCalls != 0 || !st.sessions["mer-7"].IsTerminated {
+		t.Fatalf("after the refusals: %d agent restores, terminated %v; want none and still terminated", agent.restoreCalls, st.sessions["mer-7"].IsTerminated)
+	}
+
+	// The gate lets other sessions restore.
+	gate.restoreErr = nil
+	if _, err := m.RestoreWithMode(context.Background(), "mer-7"); err != nil || agent.restoreCalls != 1 {
+		t.Fatalf("RestoreWithMode = %v after %d agent restores, want a restore", err, agent.restoreCalls)
 	}
 }

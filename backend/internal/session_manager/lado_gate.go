@@ -68,6 +68,15 @@ func (m *Manager) authorizeLadoExecutionChange(ctx context.Context, id domain.Se
 	return m.workGate.AuthorizeExecutionChange(ctx, id)
 }
 
+// authorizeLadoRestore asks the gate before a person restores or resumes a
+// session.
+func (m *Manager) authorizeLadoRestore(ctx context.Context, id domain.SessionID) error {
+	if m.workGate == nil {
+		return nil
+	}
+	return m.workGate.AuthorizeRestore(ctx, id)
+}
+
 func (m *Manager) authorizeLadoSend(ctx context.Context, id domain.SessionID, message string, options ports.MessageDeliveryOptions) error {
 	if m.workGate == nil {
 		return nil
