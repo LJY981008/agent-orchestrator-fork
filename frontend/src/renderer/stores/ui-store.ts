@@ -29,6 +29,7 @@ export type GlobalSettingsSection =
 	| "harness"
 	| "agents"
 	| "rules"
+	| "localSetup"
 	| "runs"
 	| "billing"
 	| "remoteHosts"
