@@ -585,3 +585,29 @@ var LadoSetupClaudeLoginEnv = []string{
 	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL",
 	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
 }
+
+// LadoSetupItemWithVersion is a setup item with one of its versions: the
+// latest one for a live item, or the one a rule snapshot pinned.
+type LadoSetupItemWithVersion struct {
+	Item    LadoSetupItem
+	Version LadoSetupItemVersion
+}
+
+// ErrLadoSetupItemExists means a live item already holds the tool, kind and
+// name.
+var ErrLadoSetupItemExists = errors.New("a live setup item has that name")
+
+// ErrLadoSetupItemChanged means the item got a newer version than the one an
+// edit started from.
+var ErrLadoSetupItemChanged = errors.New("the setup item has a newer version")
+
+// ErrLadoSetupItemNotLive means the item does not exist, or was deleted or
+// restored.
+var ErrLadoSetupItemNotLive = errors.New("the setup item is not live")
+
+// ErrLadoSetupAlreadyRestored means the adoption was restored before.
+var ErrLadoSetupAlreadyRestored = errors.New("the adoption was already restored")
+
+// ErrLadoConflictAcceptanceNotLive means the acceptance does not exist or was
+// revoked before.
+var ErrLadoConflictAcceptanceNotLive = errors.New("the conflict acceptance is not live")

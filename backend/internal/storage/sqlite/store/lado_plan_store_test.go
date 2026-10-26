@@ -475,7 +475,7 @@ func TestApproveLadoPlanRollsBackWhenTheSnapshotFails(t *testing.T) {
 	mustApproveLadoPlan(t, s, "lado-approval-1", first, "nonce-1", ladoPolicySnapshot("lado-snapshot-1", `{}`, false, rule))
 	rev := mustPin(t, s, ladoRevision("lado-plan-2", "lado-task-2", "req-2", 1, ladoSHA('b')))
 
-	tables := []string{"lado_plan_approvals", "lado_presence_proofs", "lado_audit_events", "lado_policy_snapshots", "lado_policy_snapshot_rules"}
+	tables := []string{"lado_plan_approvals", "lado_presence_proofs", "lado_audit_events", "lado_policy_snapshots", "lado_policy_snapshot_rules", "lado_policy_snapshot_setup"}
 	before := countLadoTables(t, raw, tables...)
 	unknownVersion := ladoPolicySnapshot("lado-snapshot-2", `{}`, false)
 	unknownVersion.Rules = []domain.LadoPolicySnapshotRule{{RuleID: rule.ID, VersionID: "lado-rule-1-v9"}}
@@ -522,7 +522,7 @@ func TestApproveLadoPlanRefusesARuleDeletedMeanwhile(t *testing.T) {
 		t.Fatalf("DeleteLadoRule: %v", err)
 	}
 
-	tables := []string{"lado_plan_approvals", "lado_presence_proofs", "lado_policy_snapshots", "lado_policy_snapshot_rules", "lado_audit_events"}
+	tables := []string{"lado_plan_approvals", "lado_presence_proofs", "lado_policy_snapshots", "lado_policy_snapshot_rules", "lado_audit_events", "lado_policy_snapshot_setup"}
 	before := countLadoTables(t, raw, tables...)
 	approval := domain.LadoPlanApproval{ID: "lado-approval-1", RevisionID: rev.ID, TaskID: rev.TaskID, SHA256: rev.SHA256, ApprovedAt: ladoPlanAt.Add(time.Minute)}
 	_, _, err := s.ApproveLadoPlan(ctx, approval, ladoProof("nonce-1", string(rev.ID)), ladoApprovalEvent(string(rev.ID)), snapshot, nil)
