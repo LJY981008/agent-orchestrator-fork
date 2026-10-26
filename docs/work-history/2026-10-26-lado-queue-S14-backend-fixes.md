@@ -95,12 +95,50 @@
 
 ## Before — 수행 전 실측
 
-(이 단계의 세션이 채운다)
+- 시작 HEAD `adc84a959`(`docs(lado): plan the step 6 review fixes as a 2-step chain`), 트리 깨끗. umask 0022, go1.27.1, Node 24.21.0. diff-budget 0/30.
+- `gitleaks`(CI 방식, main..HEAD 33 커밋) → `leaks found: 2`: `ladoqueue/dispatch_test.go` 의 `ghp_LadoTestToken…`, `ladotask/dispatch_test.go` 의 `ghp_ladoSecretToken…`. 둘 다 `ghp_` 뒤 37자, `[Ll]ado` 뒤 33자 — 새 허용 정규식 `ghp_[Ll]ado[0-9A-Za-z]{32}` 에 맞는다.
+- 잔재: `daemon/lado_wiring_test.go:88` 의 `t.Setenv("AO_LADO_DEV", "")`. 안 쓰는 코드 확인 — `ListLadoQueueEntriesForTask`(사용처 없음), `GetLadoExecutionByEntry`(`LadoExecutionByClientRequest` 만, 그것은 store 테스트만), `ListLadoQueueEntries`(store 테스트 도우미 1곳), `SetLadoProjectMaxConcurrent` 쿼리(CDC 테스트 1줄; store 는 Upsert).
+- 출발점(코드로 확인): `admit` 은 상한 찬 프로젝트 항목도 회차마다 claim → hold(`next_attempt_at` = 다음 틱). 리스 = 회차 `now` + Lease. 게이트는 LADO 모드 프로젝트에서만 허가를 본다. 스폰 오류 뒤·복구는 id 로 찾은 세션을 확인 없이 연결. 복구의 kill 실패는 로그만. 마감은 PR 과 무관. `RestoreWithMode`·`ResumeAgentWithMode` 에 LADO 훅 없음. 이슈 읽기 실패는 늘 1분, 트래커 404 도 `LADO_ISSUE_READ_FAILED` 하나(`domain.ErrLadoIssueNotFound` 없음).
+- AO 쪽: `RequestKill` 은 종료 의도를 저장한 뒤 돌아온다 — kill 이 성공한 세션은 다음 회차의 살아 있는 실행 목록에 없다(정리 감사가 한 번만 쓰이는 근거). 세션 서비스 표시 이름 상한 `maxDisplayNameLen = 100`(`service/session/service.go:27`, 넘으면 `DISPLAY_NAME_TOO_LONG`).
+- 필수 테스트 12개 없음.
 
 ## After — 수행 후 실측
 
-(이 단계의 세션이 채운다)
+- 커밋 3개:
+  - `1e417070e` `chore(lado): allow the synthetic test tokens in gitleaks` — 전역 allowlist `regexes` 에 주석 + `'''ghp_[Ll]ado[0-9A-Za-z]{32}'''`.
+  - `8a163e43d` `fix(lado): review fixes for the queue dispatcher` — 37 파일 +1345 −400.
+  - `97bf07477` `fix(lado): keep the issue read backoff across earlier waits` — 독립 리뷰 지적 1(아래).
+- B1: 두 쿼리에 `AND project_id NOT IN (SELECT CAST(j.value AS TEXT) FROM json_each(sqlc.arg(full_projects)) AS j)`. `npm run sqlc` 뒤 gen 을 읽어 두 문장이 온전함(`json_each(?2)`·`json_each(?5)`, `FullProjects interface{}`)을 확인. store `ClaimLadoQueueEntries(ctx, now, leaseUntil, limit, fullProjects []domain.ProjectID, newToken)` — 빈 목록·nil 은 `[]`. `admit`: 상한은 회차마다 프로젝트당 한 번(`capOf`); claim 전에 `perProject[p] >= cap(p)` 인 프로젝트를 빼고 `SetLadoQueueWaiting(slot_project, &p)`(같은 이유면 쓰지 않음); 상한을 못 읽은 프로젝트도 그 회차엔 뺀다(문제로 기록); 띄운 워커가 프로젝트를 채우면 더한다; 잡은 뒤 hold 는 경쟁 대비로만(그때도 뺀다). 상한 찬 프로젝트 항목의 `next_attempt_at` 은 이제 비어 있다(시각이 아니라 자리를 기다림).
+- B2: claim 마다 `leaseEnd(now)` = 시계(회차 `now` 보다 이르면 `now`) + Lease.
+- B3: 게이트 `AuthorizeSpawn` 이 먼저 허가를 읽고, LADO 형식 id 인데 허가가 없으면 프로젝트·모드와 무관하게 `LADO_TASK_REQUIRED`(문장 "Client request ids that start with lado: are LADO's…", details `{projectId, clientRequestId}`). 허가가 있으면 기존 검사가 이어진다(LADO 모드의 자동화 거부 그대로). 디스패처 `startedFor` = 같은 프로젝트 + worker + 해시 일치(빈 해시 아님). 스폰 오류 뒤 어긋나면 못 찾은 것으로 보고 `attemptFailed`. 복구는 기대 해시를 `LadoDispatchGrant` 에서 읽고(Store 인터페이스에 더함), 어긋나면 리스 유효 여부와 무관하게 `attemptFailed("another session holds the attempt's client request id")` — 연결·kill 없음, 오류 없음.
+- B4: 검사 1 — 태스크 최신 실행이 살아 있고 승인이 다르면 `recheck(run_live)`(1분). 새 `sweep.go` `stopUnwanted`: 새 쿼리 `ListLiveLadoExecutions`·store `LiveLadoExecutions`(PR 사실 없음) → 실행마다 `LadoTask` → `unwanted`(취소 → `task_cancelled`, 최신 승인이 다름 → `approval_superseded`) → `RequestKill` → 성공하면 `AppendLadoAuditEvent(execution.stopped)`(actor `lado`, subject `execution`/세션 id, payload `{task, session, reason}`); 실패는 로그만, 세션이 살아 있으니 다음 회차에 다시. link 뒤 `stopIfUnwanted` 도 같은 `unwanted`·`stopRun`(감사 포함). Tick 순서: 설정 → recover → stopOverdue → stopUnwanted → admit.
+- B5: `stopUnfinished` 가 kill 실패 시 세션을 다시 읽어 끝났으면 놓고, 살아 있거나 못 읽으면 `stop session <id>: <CODE: message>` 를 돌려준다 → 리스 유지, 그 회차 claim 없음.
+- B6: `stopOverdue` 가 `exec.PR.URL != ""` 면 건너뛴다(상태 무관, Go 에서 거름). `deadline.go` 머리 주석에 소유자 결정(2026-10-26).
+- B7: `ports.WorkGate.AuthorizeRestore`. 게이트 `New` 에 다섯째 인자 `Executions`(`LadoExecution`·`LadoTask`; 데몬은 store). 시간 초과 → `timed_out`, 태스크 취소 → `task_cancelled`, 409 `LADO_EXECUTION_FIXED` details `{sessionId, reason}`(에이전트·인터페이스 고정 거부와 같은 코드라 `reason` 으로 가른다). `manager.go` 두 진입점 첫머리 훅 각 4줄(diff-budget 8/30), `lado_gate.go` 에 `authorizeLadoRestore`. `RestoreAll` 은 그대로. 두 테스트 게이트에 메서드.
+- B8: `issueRecheckAfter` = 1, 2, 5, 15, 60분(마지막 반복). 연속 실패 수는 디스패처 메모리(`issueMisses`, 항목별) — 검사 2 직전에 꺼내고(지움) 읽기 실패 때만 +1 로 넣는다. ladotask `issueReadFailed` 는 `github.ErrNotFound`·`gitlab.ErrNotFound` 면 `fmt.Errorf("%w: %w", domain.ErrLadoIssueNotFound, apierr)`(HTTP 는 `errors.As` 라 응답 그대로). 디스패처는 `errors.Is` → `fail("LADO_ISSUE_NOT_FOUND: the issue no longer exists on the tracker")`.
+- N: 표시 이름 `displayName` 100 rune. Tick 은 설정 읽기가 실패해도 recover·stopOverdue·stopUnwanted 를 돌리고 admit 만 건너뛴다 — 설정을 모르면 relink 는 하지 않고(마감을 못 정함) 리스를 다음 회차로. 삭제: store `LadoExecutionByClientRequest`, 쿼리 `GetLadoExecutionByEntry`·`ListLadoQueueEntries`·`ListLadoQueueEntriesForTask`·`SetLadoProjectMaxConcurrent`(테스트 도우미 `ladoQueueRows` 는 raw SELECT + `GetLadoQueueEntry`, CDC 테스트의 그 줄 삭제, `TestLadoExecutionByClientRequest` → `TestLadoExecutionReadsTheSessionFacts`). `AO_LADO_DEV` 잔재 삭제. 태스크 DTO `queue.enqueuedAt`(필수) → `npm run api`.
+- 테스트: 필수 12개 + `TestTickStopsOverdueRunsWithoutSettings`·`TestDisplayNameFitsAO`·`TestIssueBackoffSurvivesAnEarlierWait`, store claim 테스트에 full 프로젝트 단언, ladotask 에 not-found 2종. 고친 기존 테스트: `TestAdmissionHoldsAtTheCaps/the project cap`(claim 되지 않아 `next_attempt_at` 이 비어 있음), 복구·스폰 오류 테스트의 세션에 worker·해시, claim 호출 6곳에 `nil`. 실제 store 픽스처에 `queueTask`(다른 태스크를 같은 방식으로 승인)·`taskChanges`(change_log 의 `lado_task` 행 수).
+- 확인: ladoqueue race PASS(22.9 s), G4 6패키지 PASS, store `-run Lado` + session_manager·chat race PASS, `go build ./... && go vet ./...` PASS, sqlc·api 재생성 깨끗, gitleaks(브랜치 35 커밋) 0.
+- 프런트 타입체크(6분 44초)는 예상대로 14건 실패 — 렌더러는 S15 몫: `lib/lado-errors.ts:302` `reasonKeys` 에 `run_live` 없음, `LadoLanes.test.tsx`(126·167·197–204)·`LadoTaskDialog.test.tsx`(424·450·466) 의 queue 고정값에 `enqueuedAt` 없음.
+- 독립 리뷰(Sonnet 서브에이전트, 약 2.3달러) 지적 3: (1) 이슈 실패 수를 검사 1 전에 꺼내 run_live·태스크 읽기 재시도가 백오프를 1분으로 되돌림 → 고침(`97bf07477`). (2) kill 은 됐는데 감사 쓰기가 실패하면 세션이 목록에서 빠져 다시 쓰이지 않음 → 기록만(아래 틈). (3) 끌 수 없는 미완 세션 하나가 모든 프로젝트의 claim 을 막음 → B5 엔트리대로 — 기록만.
+- 게이트(HEAD `97bf07477`, 깨끗한 트리): `GATES=13 MET=13 UNMET=0`. 이 엔트리 커밋 뒤 다시 돌려 증거를 새 HEAD 에 묶는다.
 
 ## 비교/회고
 
-(이 단계의 세션이 채운다)
+- 범위대로 끝났다. 엔트리에 없던 것: 테스트 3개(설정 없는 회차, 표시 이름, 백오프 보존), 상한을 못 읽은 프로젝트를 그 회차에 빼기, 설정을 모를 때 relink 미루기, `AuthorizeRestore` details 의 `reason`, store `LiveLadoExecutions`·쿼리 `ListLiveLadoExecutions`(정리에 필요). 엔트리와 다르게 한 것: 복구의 남의 세션은 리스가 유효해도 바로 실패한 시도로 센다(그 id 로는 이 시도가 성공할 수 없음).
+- B8 의 계산 방식: `waiting_reason`·`next_attempt_at` 으로는 연속 실패 수를 복원할 수 없다 — claim 이 `waiting_reason` 을 비우고, hold 가 시작된 시각은 어디에도 남지 않는다. 열을 더하지 않는 가장 작은 방법으로 디스패처 메모리에 센다. 데몬이 다시 시작하면 1분부터. 대기 중에 대체·취소돼 다시 잡히지 않는 항목의 수는 재시작까지 남는다(항목당 정수 하나).
+- 남은 틈(기록만):
+  - kill 이 성공한 뒤 `execution.stopped` 감사 쓰기가 실패하면 그 세션은 다음 회차 목록에 없어 감사가 다시 쓰이지 않는다. 마감의 kill → 시간 초과 표시도 S08 부터 같은 꼴(표시가 실패하면 그 실행은 `ended_without_pr` 로 보인다).
+  - 끌 수 없는 미완 세션 하나가 복구 오류로 남는 동안 모든 프로젝트의 claim 이 선다(B5 엔트리대로, "리스가 워커를 숨길 수 있음" 규칙). 프로젝트 단위로 막으려면 복구 오류를 프로젝트별로 나눠야 한다.
+  - 재승인 뒤 옛 승인의 실행(예: PR 없이 끝난 실행)을 사람이 복구하면 다음 회차 정리가 그 세션을 끈다(`approval_superseded`). `AuthorizeRestore` 는 시간 초과·취소만 거절한다(엔트리 B7 범위).
+  - `slot_project` 표시도 `slot_global`·`memory_tight` 처럼 기한 전인 `retry`·`issue_unreadable` 의 이유를 덮는다(다음 시각은 남음).
+  - 삭제된 이슈로 실패한 항목의 태스크 `stateReason` 은 `attempts_exhausted` 다(실패 이유를 따로 두지 않음) — 원인은 `queue.error` 에 있다.
+- 다음 단계 메모(S15):
+  - 타입체크가 지금 14건 깨져 있다(After) — 먼저 `reasonKeys` 에 `run_live` 와 8개 로캘 문구, 렌더러 테스트 고정값에 `enqueuedAt` 을 더한다.
+  - 새 대기 이유 `run_live`: 태스크의 다른 승인의 워커가 아직 돈다(1분마다 다시 봄, `nextAttemptAt` 있음). 정리가 그 워커를 끄면 다음 회차에 시작한다.
+  - `slot_project` 항목은 이제 `nextAttemptAt` 이 없다(상한 찬 프로젝트는 잡지 않음) — 이유로만 보인다. 상한 찬 프로젝트의 15초 이벤트도 사라졌다.
+  - 새 오류 문장: 항목 `error` = `LADO_ISSUE_NOT_FOUND: the issue no longer exists on the tracker`(태스크는 failed, `stateReason` `attempts_exhausted`), 남의 세션 때문에 실패한 시도의 마지막 오류 = `another session holds the attempt's client request id`. 게이트 거부: LADO 형식 id 의 `LADO_TASK_REQUIRED`(details `clientRequestId`), 복구 거부 409 `LADO_EXECUTION_FIXED` details `{sessionId, reason: timed_out | task_cancelled}` — 에이전트·인터페이스 고정 거부(details 에 `reason` 없음)와 같은 코드라 `reason` 으로 문구를 가른다.
+  - `queue.enqueuedAt`(RFC 3339, 필수) — 디스패처는 오래된 것부터 잡는다(같은 시각이면 id 순).
+  - 시간 상한 규칙: 실행 세션에 PR 이 생기면(상태 무관) 마감이 지나도 끄지 않는다. `deadlineAt` 은 그대로 오므로 패널은 `pr` 가 있으면 "PR 이 열려 시간 상한을 적용하지 않습니다".
+  - 감사 `execution.stopped`(actor `lado`, payload `{task, session, reason: task_cancelled | approval_superseded}`).
+  - TDD 의 "알려진 틈" 중 고쳐진 것: 상한 찬 프로젝트 claim 폭주(S08), 지워진 이슈 1분 반복(S07), 만료 리스의 미완 세션 kill 실패(S08). 위 남은 틈은 새로 적을 것.
