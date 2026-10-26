@@ -396,6 +396,7 @@ func TestLadoSetupCodesAreStable(t *testing.T) {
 			{string(domain.LadoSetupLocationClaudeJSON), "claude_json"},
 			{string(domain.LadoSetupLocationCodexHome), "codex_home"},
 			{string(domain.LadoSetupLocationProject), "project"},
+			{string(domain.LadoSetupLocationManaged), "managed"},
 		},
 		"status": {
 			{string(domain.LadoSetupStatusManaged), "managed"},
@@ -421,6 +422,8 @@ func TestLadoSetupCodesAreStable(t *testing.T) {
 			{string(domain.LadoSetupReasonAOSetsPerSession), "ao_sets_per_session"},
 			{string(domain.LadoSetupReasonRepoTracked), "repo_tracked"},
 			{string(domain.LadoSetupReasonManagedSettings), "managed_settings"},
+			{string(domain.LadoSetupReasonSymlink), "symlink"},
+			{string(domain.LadoSetupReasonUnreadable), "unreadable"},
 		},
 		"action": {
 			{string(domain.LadoSetupActionMove), "move"},

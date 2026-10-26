@@ -368,6 +368,9 @@ const (
 	LadoSetupLocationCodexHome LadoSetupLocation = "codex_home"
 	// LadoSetupLocationProject is the main checkout of a registered project.
 	LadoSetupLocationProject LadoSetupLocation = "project"
+	// LadoSetupLocationManaged is LADO's managed folder, <state>/lado/harness,
+	// where adopted and created items live.
+	LadoSetupLocationManaged LadoSetupLocation = "managed"
 )
 
 // LadoSetupStatus is what LADO can do with an inventory entry.
@@ -447,6 +450,15 @@ const (
 	LadoSetupReasonRepoTracked LadoSetupReason = "repo_tracked"
 	// LadoSetupReasonManagedSettings is settings an organization manages.
 	LadoSetupReasonManagedSettings LadoSetupReason = "managed_settings"
+	// LadoSetupReasonSymlink is a symbolic link, or a folder or file that
+	// holds one. LADO never adopts through a link: removing or rewriting it
+	// would change the link or what it points to.
+	LadoSetupReasonSymlink LadoSetupReason = "symlink"
+	// LadoSetupReasonUnreadable is something LADO could not read as setup: a
+	// file it may not open, a settings file that does not parse, or content
+	// a version cannot hold, such as a special file, a file name that is not
+	// UTF-8 or a TOML value JSON cannot hold.
+	LadoSetupReasonUnreadable LadoSetupReason = "unreadable"
 )
 
 // LadoSetupAction is what an adoption does with an entry.
@@ -468,7 +480,8 @@ const (
 type LadoSetupEntry struct {
 	Tool LadoSetupTool
 	// Kind and Name are the item the entry is or would be adopted as. Kind is
-	// empty for an entry that is no setup item, such as credentials.
+	// empty for an entry that is no setup item, such as credentials; Name is
+	// then its file name, its path under the tool folder or its config key.
 	Kind     LadoSetupKind
 	Name     string
 	Location LadoSetupLocation
@@ -488,6 +501,10 @@ type LadoSetupEntry struct {
 	// DefaultAction is what the adoption preview proposes for an adoptable
 	// entry (LadoSetupDefaultAction).
 	DefaultAction LadoSetupAction
+	// KeptInPlace names what stays at the entry's location when it is
+	// adopted: the login variables of Claude's env setting, which are not
+	// part of its content.
+	KeptInPlace []string
 	// ItemID is the live item of a managed entry.
 	ItemID LadoSetupItemID
 	// ProjectID is the project of an entry found in a project.
