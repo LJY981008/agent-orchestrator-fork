@@ -1,5 +1,5 @@
 // LADO fork: daemon calls for repository connections, issue-backed tasks, plans,
-// approvals, rules, the queue and its runs (docs/LJY-PRD/TDD.md §5.1-§5.3 and
+// approvals, rules and runs (docs/LJY-PRD/TDD.md §5.1-§5.3 and
 // §13, docs/LJY-PRD/HARNESS.md §3-§8). LADO routes live on this computer's
 // daemon only; remote hosts never serve them.
 import type { QueryClient } from "@tanstack/react-query";
@@ -96,9 +96,6 @@ export const ladoEffectiveQueryRoot = ["lado", "effective"] as const;
 /** A project's rules, and its tasks' rules, share the project's prefix. */
 export const ladoEffectiveProjectQueryKey = (projectId: string) => ["lado", "effective", projectId] as const;
 export const ladoEffectiveQueryKey = (projectId: string, taskId: string) => ["lado", "effective", projectId, taskId] as const;
-export const ladoQueueQueryRoot = ["lado", "queue"] as const;
-/** One project's queue, or every project's without an id. */
-export const ladoQueueQueryKey = (projectId?: string) => ["lado", "queue", projectId ?? ""] as const;
 export const ladoExecutionQueryKey = (sessionId: string) => ["lado", "execution", sessionId] as const;
 export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
 
@@ -227,23 +224,6 @@ export function ladoIssueLabel(number: number, repositoryRef: string, repositori
 
 /** How many times LADO tries to start a task's worker before the task fails. */
 export const LADO_MAX_ATTEMPTS = 3;
-
-/**
- * When a future moment comes, in the developer's language ("in 2 min.");
- * "now" once it has passed. Null for a time that does not parse.
- */
-export function ladoTimeUntil(isoDate: string, locale: string, now: number = Date.now()): string | null {
-	const at = Date.parse(isoDate);
-	if (!Number.isFinite(at)) return null;
-	const format = new Intl.RelativeTimeFormat(locale, { numeric: "auto", style: "short" });
-	const seconds = Math.max(0, Math.ceil((at - now) / 1000));
-	if (seconds < 60) return format.format(seconds, "second");
-	const minutes = Math.ceil(seconds / 60);
-	if (minutes < 60) return format.format(minutes, "minute");
-	// LADO's waits and run limits end within a day (the longest limit is 24
-	// hours), so whole hours are the largest unit.
-	return format.format(Math.round(minutes / 60), "hour");
-}
 
 // One map per task list, shared by every board card that reads the list.
 const tasksBySession = new WeakMap<readonly LadoTask[], Map<string, LadoTask>>();
@@ -429,15 +409,6 @@ export async function changeLadoCeiling(ruleId: string, mode: LadoCeilingMode): 
 	const { rule } = await fetchLadoRule(ruleId);
 	const changed = await updateLadoRule(ruleId, { baseVersion: rule.version, ceiling: { mode } });
 	return changed.rule ?? rule;
-}
-
-/** The open queue entries, of one project or of every project, in the order the dispatcher takes them. */
-export async function fetchLadoQueue(projectId?: string): Promise<LadoQueueItem[]> {
-	const { data, error } = await apiClient.GET("/api/v1/lado/queue", {
-		params: { query: projectId ? { projectId } : {} },
-	});
-	if (error) throw ladoError(error, "Could not load the queue");
-	return data?.entries ?? [];
 }
 
 /**

@@ -72,7 +72,7 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			// LADO fork: projects whose issue-backed tasks changed, and the tasks.
 			const pendingLadoTaskProjects = new Set<string>();
 			const pendingLadoTasks = new Set<string>();
-			const ladoEvents = createLadoEventBatch();
+			const ladoEvents = createLadoEventBatch(queryClient);
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
 			let allEditorHandoffsInvalidationPending = false;

@@ -9,11 +9,12 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLadoExecution } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
-import { LadoApiError, ladoTimeUntil, type LadoExecution } from "../../lib/lado";
+import { LadoApiError, type LadoExecution } from "../../lib/lado";
 import { ladoErrorText, ladoReasonText } from "../../lib/lado-errors";
 import { ladoRuleName } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
 import type { WorkspaceSession } from "../../types/workspace";
+import { formatResetTime } from "../settings/CodexAccountDetails";
 import { ladoCeilingModeLabel } from "./LadoRuleRows";
 import { ladoSessionProjectId } from "./LadoSessionLine";
 
@@ -44,8 +45,16 @@ function ExecutionSnapshot({ execution }: { execution: LadoExecution }) {
 	// An unknown count reads as no move.
 	const ahead = base.commitsAhead ?? 0;
 	// Once the session ended without LADO stopping it, the deadline is moot.
-	const until = execution.deadlineAt && !execution.sessionEnded ? ladoTimeUntil(execution.deadlineAt, i18n.language) : null;
-	const deadline = execution.timedOutAt ? ladoReasonText(t, "timed_out") : until ? t("lado.run.stops", { time: until }) : null;
+	// LADO stops no run whose worker opened a PR. The clock time stays true in
+	// a panel nobody refreshes, where "in 5 hr." would not.
+	const until = execution.deadlineAt && !execution.sessionEnded ? formatResetTime(execution.deadlineAt, i18n.language) : null;
+	const deadline = execution.timedOutAt
+		? ladoReasonText(t, "timed_out")
+		: !until
+			? null
+			: execution.pr
+				? t("lado.run.prOpen")
+				: t("lado.run.stops", { time: until.visible });
 	return (
 		<InspectorSection title={t("lado.run.title")}>
 			<div className="flex flex-col gap-2.5" data-testid="lado-execution-panel">

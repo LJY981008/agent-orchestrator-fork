@@ -3590,7 +3590,7 @@
 	"lado.task.state.failed": "失敗",
 	"lado.task.state.completed": "完了",
 	"lado.presence.modeOffTitle": "{{project}} の LADO モードをオフにしますか？",
-	"lado.presence.modeOffDetail": "プロジェクト ID: {{id}}\n\nキューのタスクは再びオンになるまで待ち、実行中のワーカーはそのまま動き続けます。",
+	"lado.presence.modeOffDetail": "プロジェクト ID: {{id}}\n\nその後、このプロジェクトのワーカーは承認した計画なしでも開始できます。キューのタスクは再びオンになるまで待ち、実行中のワーカーはそのまま動き続けます。",
 	"lado.presence.turnOff": "オフにする",
 	"lado.runs.title": "実行",
 	"lado.runs.note": "LADO モードがオンのプロジェクトで承認したタスクにだけ適用されます。",
@@ -3624,5 +3624,12 @@
 	"lado.run.deadline": "期限",
 	"lado.run.stops": "終了: {{time}}",
 	"lado.run.baseAhead_one": "計画から {{count}} コミット進んでいます",
-	"lado.run.baseAhead_other": "計画から {{count}} コミット進んでいます"
+	"lado.run.baseAhead_other": "計画から {{count}} コミット進んでいます",
+	"lado.reason.run_live": "このタスクの以前の実行がまだ動いている",
+	"lado.run.prOpen": "PR が作成されたため、時間の上限は適用されません",
+	"lado.view.baseRefMismatch": "計画のベースがワーカーの開始ブランチと違います。「修正を依頼」で計画を直してもらってください。",
+	"lado.error.issueNotFound": "この Issue はトラッカーにもうありません。",
+	"lado.error.restoreTimedOut": "LADO が最大実行時間でこの実行を停止したため、セッションを復元できません。",
+	"lado.error.restoreCancelled": "この実行のタスクはキャンセルされたため、セッションを復元できません。",
+	"lado.project.modeOffUnavailable": "LADO モードをオフにするには AO デスクトップアプリが必要です。アプリを開いてオフにしてください。"
 }

@@ -32,6 +32,11 @@ const task: lado.LadoTask = {
 	createdAt: "2026-10-19T09:00:00Z",
 };
 
+/** A queue entry as the task list sends it; approved at 09:30 unless said otherwise. */
+function entry(fields: Partial<lado.LadoTaskQueue> = {}): lado.LadoTaskQueue {
+	return { state: "queued", attempts: 0, enqueuedAt: "2026-10-19T09:30:00Z", ...fields };
+}
+
 function renderLane() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 	return render(
@@ -123,7 +128,7 @@ const revision: NonNullable<lado.LadoTask["plan"]["latest"]> = {
 test("approved tasks wait in the Queued lane", async () => {
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
 		task,
-		{ ...task, id: "lado-task-approved", state: "queued", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, queue: { state: "queued", attempts: 0 }, issue: { ...task.issue, title: "Ship it" } },
+		{ ...task, id: "lado-task-approved", state: "queued", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, queue: entry(), issue: { ...task.issue, title: "Ship it" } },
 	]);
 	renderLane();
 
@@ -164,7 +169,7 @@ test("shows rules that need review and blocked tasks in the Plan lane", async ()
 test("a starting task stays in Queued in the working color, and a failed run comes back to Plan", async () => {
 	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
-		{ ...task, id: "lado-task-starting", state: "dispatching", plan: approvedPlan, queue: { state: "dispatching", attempts: 2 }, issue: { ...task.issue, title: "Starting" } },
+		{ ...task, id: "lado-task-starting", state: "dispatching", plan: approvedPlan, queue: entry({ state: "dispatching", attempts: 2 }), issue: { ...task.issue, title: "Starting" } },
 		{
 			...task,
 			id: "lado-task-failed",
@@ -194,14 +199,15 @@ test("a starting task stays in Queued in the working color, and a failed run com
 test("the second line says what a queued task waits for and which attempt starts it", async () => {
 	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
 	const cases: [string, lado.LadoTask["stateReason"], lado.LadoTaskQueue, string][] = [
-		["slot", "slot_global", { state: "waiting", attempts: 0, reason: "slot_global" }, "Waiting for a free run slot"],
-		["project slot", "slot_project", { state: "waiting", attempts: 0, reason: "slot_project", nextAttemptAt: new Date(Date.now() + 15_000).toISOString() }, "Waiting for a free run slot in this project"],
-		["memory", "memory_tight", { state: "waiting", attempts: 0, reason: "memory_tight" }, "Waiting while memory is tight"],
-		["issue", "issue_unreadable", { state: "waiting", attempts: 0, reason: "issue_unreadable", nextAttemptAt: new Date(Date.now() + 60_000).toISOString() }, "Waiting to read the issue again"],
-		["mode off", "lado_mode_off", { state: "waiting", attempts: 0, reason: "lado_mode_off" }, "Waiting until LADO mode is on"],
-		["retry", "retry", { state: "waiting", attempts: 1, reason: "retry", nextAttemptAt: new Date(Date.now() + 120_000).toISOString() }, "Trying again in 2 min. · Attempt 1 of 3"],
-		["retry due", "retry", { state: "waiting", attempts: 2, reason: "retry" }, "Waiting to try again · Attempt 2 of 3"],
-		["held after a try", "slot_global", { state: "waiting", attempts: 1, reason: "slot_global" }, "Waiting for a free run slot · Attempt 1 of 3"],
+		["slot", "slot_global", entry({ state: "waiting", reason: "slot_global" }), "Waiting for a free run slot"],
+		["project slot", "slot_project", entry({ state: "waiting", reason: "slot_project" }), "Waiting for a free run slot in this project"],
+		["memory", "memory_tight", entry({ state: "waiting", reason: "memory_tight" }), "Waiting while memory is tight"],
+		["issue", "issue_unreadable", entry({ state: "waiting", reason: "issue_unreadable", nextAttemptAt: new Date(Date.now() + 60_000).toISOString() }), "Waiting to read the issue again"],
+		["mode off", "lado_mode_off", entry({ state: "waiting", reason: "lado_mode_off" }), "Waiting until LADO mode is on"],
+		["retry due", "retry", entry({ state: "waiting", attempts: 2, reason: "retry" }), "Waiting to try again · Attempt 2 of 3"],
+		["held after a try", "slot_global", entry({ state: "waiting", attempts: 1, reason: "slot_global" }), "Waiting for a free run slot · Attempt 1 of 3"],
+		// The task's worker of an earlier approval still runs; LADO looks again in a minute.
+		["earlier run", "run_live", entry({ state: "waiting", reason: "run_live", nextAttemptAt: new Date(Date.now() + 60_000).toISOString() }), "An earlier run of this task is still going"],
 	];
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue(cases.map(([name, stateReason, queue], index) => ({
 		...task,
@@ -223,6 +229,60 @@ test("the second line says what a queued task waits for and which attempt starts
 		// The time of a project slot or an issue read is the next look, not a retry.
 		expect(within(card).getByTestId("lado-task-reason"), name).toHaveTextContent(line);
 	}
+});
+
+// The line names the clock time of the next try: a relative time would stand
+// still on a board nobody refreshes.
+test("a retry names the clock time it tries again at", async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	try {
+		vi.setSystemTime(new Date(2026, 9, 26, 14, 30));
+		const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+		vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{
+			...task,
+			id: "lado-task-retry",
+			state: "queued",
+			stateReason: "retry",
+			queue: entry({ state: "waiting", attempts: 1, reason: "retry", nextAttemptAt: new Date(2026, 9, 26, 14, 32).toISOString() }),
+			plan: approvedPlan,
+			issue: { ...task.issue, title: "Retry" },
+		}]);
+		renderLane();
+
+		const card = (await screen.findByText("Retry")).closest("[data-testid='lado-task-card']") as HTMLElement;
+		expect(within(card).getByTestId("lado-task-reason")).toHaveTextContent("Trying again at 02:32 PM · Attempt 1 of 3");
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+// The dispatcher takes the oldest approval first, so the lane shows them in
+// that order, whatever order the issues came in.
+test("the Queued lane lists tasks in the order LADO starts them", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	const queued = (id: string, createdAt: string, enqueuedAt: string): lado.LadoTask => ({
+		...task,
+		id,
+		state: "queued",
+		plan: approvedPlan,
+		createdAt,
+		queue: entry({ enqueuedAt }),
+		issue: { ...task.issue, title: id },
+	});
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		queued("lado-task-newest-issue", "2026-10-19T09:00:00Z", "2026-10-19T10:00:00.5Z"),
+		queued("lado-task-first-approved", "2026-10-18T09:00:00Z", "2026-10-19T09:30:00Z"),
+		queued("lado-task-second-approved", "2026-10-17T09:00:00Z", "2026-10-19T10:00:00Z"),
+	]);
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-queued-lane");
+	await within(lane).findByText("lado-task-first-approved");
+	expect(within(lane).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual([
+		"lado-task-first-approved",
+		"lado-task-second-approved",
+		"lado-task-newest-issue",
+	]);
 });
 
 test("the second line says why an approval needs the human again", async () => {

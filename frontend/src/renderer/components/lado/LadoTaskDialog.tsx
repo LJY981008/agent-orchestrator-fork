@@ -24,7 +24,7 @@ import {
 	type LadoTask,
 	type LadoTaskView,
 } from "../../lib/lado";
-import { ladoErrorText, ladoPlanProblemText, ladoReasonText } from "../../lib/lado-errors";
+import { ladoErrorText, ladoPlanProblemText, ladoQueueErrorText, ladoReasonText } from "../../lib/lado-errors";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import { ChatMarkdown } from "../chat/ChatMarkdown";
@@ -361,8 +361,10 @@ function TaskViewBody({
 
 /**
  * Why an approved plan needs the developer again. Changed rules and rules that
- * block the run point to the Rules tab; the queue's other reasons say
- * themselves, except an edited issue, which the view already reports.
+ * block the run point to the Rules tab, and a base workers cannot start from
+ * to Request changes, since only a new plan fixes it; the queue's other
+ * reasons say themselves, except an edited issue, which the view already
+ * reports.
  */
 function approvalNotice(task: LadoTask, view: LadoTaskView, t: TFunction): string | null {
 	const reason = task.stateReason;
@@ -371,7 +373,8 @@ function approvalNotice(task: LadoTask, view: LadoTaskView, t: TFunction): strin
 		return reason === "issue_edited" && view.issueChangedSincePlan ? null : ladoReasonText(t, reason);
 	}
 	if (task.state === "blocked") {
-		return !reason || reason === "blocking_snapshot" ? t("lado.view.rulesBlocked") : ladoReasonText(t, reason);
+		if (!reason || reason === "blocking_snapshot") return t("lado.view.rulesBlocked");
+		return reason === "base_ref_mismatch" ? t("lado.view.baseRefMismatch") : ladoReasonText(t, reason);
 	}
 	return null;
 }
@@ -399,7 +402,8 @@ function QueueStatus({ task }: { task: LadoTask }) {
 
 /**
  * The run above the footer's actions: its state, why it failed, and the
- * worker's session and PR. Opening the session leaves the board for it.
+ * worker's session and PR, with what the last attempt ran into under it.
+ * Opening the session leaves the board for it.
  */
 function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 	const { t } = useTranslation();
@@ -408,6 +412,7 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 	const failed = task.state === "failed";
 	const status = failed ? { label: t("lado.task.state.failed"), tone: "attention" as const } : ladoTaskStatus(task, t);
 	const reason = failed ? ladoReasonText(t, task.stateReason) : "";
+	const error = failed && task.queue?.error ? ladoQueueErrorText(t, task.queue.error) : "";
 	const execution = task.execution;
 	// Spaces for the text read aloud; the flex gap lays the row out.
 	const separator = (
@@ -417,42 +422,53 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 		</>
 	);
 	return (
-		<div className="flex min-w-0 basis-full flex-wrap items-center gap-x-2 gap-y-1 text-caption leading-4" role="status" data-testid="lado-run-status">
-			<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
-			<span className="font-medium text-foreground">{status.label}</span>
-			{reason ? (
-				<>
-					{separator}
-					<span className="text-settings-muted">{reason}</span>
-				</>
-			) : null}
-			{execution ? (
-				<>
-					{separator}
-					<button
-						type="button"
-						className="rounded-sm text-foreground underline-offset-2 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-ring"
-						onClick={() => {
-							onClose();
-							navigateToSession(task.projectId, execution.sessionId);
-						}}
-					>
-						{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
-						<span className="text-caption leading-4">{t("lado.view.openSession")}</span>
-					</button>
-				</>
-			) : null}
-			{execution?.pr ? (
-				<>
-					{separator}
-					<ProductExternalLink
-						href={execution.pr.url}
-						ariaLabel={t("lado.view.openPR", { number: execution.pr.number })}
-						className="font-mono text-settings-muted hover:text-foreground"
-					>
-						{t("lado.view.prNumber", { number: execution.pr.number })}
-					</ProductExternalLink>
-				</>
+		<div className="flex min-w-0 basis-full flex-col gap-1 text-caption leading-4" data-testid="lado-run-status">
+			<div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+				{/* Only the state is announced; the session and the PR are controls. */}
+				<span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1" role="status">
+					<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
+					<span className="font-medium text-foreground">{status.label}</span>
+					{reason ? (
+						<>
+							{separator}
+							<span className="text-settings-muted">{reason}</span>
+						</>
+					) : null}
+				</span>
+				{execution ? (
+					<>
+						{separator}
+						<button
+							type="button"
+							className="rounded-sm text-foreground underline-offset-2 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+							onClick={() => {
+								onClose();
+								navigateToSession(task.projectId, execution.sessionId);
+							}}
+						>
+							{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
+							<span className="text-caption leading-4">{t("lado.view.openSession")}</span>
+						</button>
+					</>
+				) : null}
+				{execution?.pr ? (
+					<>
+						{separator}
+						<ProductExternalLink
+							href={execution.pr.url}
+							ariaLabel={t("lado.view.openPR", { number: execution.pr.number })}
+							className="font-mono text-settings-muted hover:text-foreground"
+						>
+							{t("lado.view.prNumber", { number: execution.pr.number })}
+						</ProductExternalLink>
+					</>
+				) : null}
+			</div>
+			{/* Under the label, past the dot and its gap; the whole text on hover. */}
+			{error ? (
+				<p className="truncate pl-3.5 text-settings-muted" title={error} data-testid="lado-run-error">
+					{error}
+				</p>
 			) : null}
 		</div>
 	);

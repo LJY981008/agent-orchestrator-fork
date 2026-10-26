@@ -1,5 +1,5 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
-// approvals, rules, the queue, its runs and the dispatch settings. Rule changes
+// approvals, rules, runs and the dispatch settings. Rule changes
 // that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -14,7 +14,6 @@ import {
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
 	fetchLadoProjectSettings,
-	fetchLadoQueue,
 	fetchLadoRule,
 	fetchLadoRules,
 	fetchLadoTasks,
@@ -29,8 +28,6 @@ import {
 	ladoProjectIssuesQueryKey,
 	ladoProjectRepositoriesQueryKey,
 	ladoProjectSettingsQueryKey,
-	ladoQueueQueryKey,
-	ladoQueueQueryRoot,
 	ladoRuleQueryKey,
 	ladoRulesQueryKey,
 	ladoTasksQueryKey,
@@ -82,7 +79,6 @@ export function useSetLadoMode(projectId: string) {
 			queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings);
 			// Queued work waits while the mode is off, and goes on when it is on again.
 			void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
-			void queryClient.invalidateQueries({ queryKey: ladoQueueQueryRoot });
 		},
 		retry: false,
 	});
@@ -265,16 +261,6 @@ export function useDeleteLadoRule() {
 	return useMutation({
 		mutationFn: (ruleId: string) => deleteLadoRule(ruleId),
 		onSuccess: () => invalidateLadoRuleQueries(queryClient),
-		retry: false,
-	});
-}
-
-/** The open queue entries of one project, or of every project without an id. */
-export function useLadoQueue(projectId?: string, enabled = true) {
-	return useQuery({
-		queryKey: ladoQueueQueryKey(projectId),
-		queryFn: () => fetchLadoQueue(projectId),
-		enabled,
 		retry: false,
 	});
 }

@@ -651,7 +651,10 @@ describe("turning LADO mode off", () => {
 			expect.objectContaining({
 				type: "question",
 				message: "Turn off LADO mode for Demo app?",
-				detail: "Project id: demo\n\nQueued tasks wait until it is on again; running workers keep running.",
+				// What turning it off allows, then what happens to the queue and the runs.
+				detail:
+					"Project ID: demo\n\nAfter that, this project's workers can start without an approved plan. " +
+					"Queued tasks wait until it is on again; running workers keep running.",
 				buttons: ["Cancel", "Turn off"],
 				defaultId: 0,
 				cancelId: 0,
@@ -751,13 +754,28 @@ describe("turning LADO mode off", () => {
 		});
 	});
 
+	it("names the project ID and what turning the mode off allows, in every language", async () => {
+		for (const locale of ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"] as const) {
+			const { setMode, dialog } = setup({ locale: () => locale });
+			await setMode({ projectId: "demo", ladoMode: false });
+			const detail = dialogOptions(dialog).detail ?? "";
+			expect(detail, locale).toBe(trayCatalogs[locale]["lado.presence.modeOffDetail"].replace("{{id}}", "demo"));
+			// "ID", not "id", whatever the language.
+			expect(detail.split("\n")[0], locale).toMatch(/\bID\b|-ID\b/);
+		}
+		expect(trayCatalogs.ko["lado.presence.modeOffDetail"]).toBe(
+			"프로젝트 ID: {{id}}\n\n그 뒤로 이 프로젝트의 워커는 승인한 계획 없이도 시작할 수 있습니다. " +
+				"대기열의 작업은 LADO 모드를 다시 켤 때까지 기다리고, 실행 중인 워커는 계속 실행됩니다.",
+		);
+	});
+
 	it("keeps a project name from faking the dialog's lines, in the current language", async () => {
-		const name = "Demo\nProject id: other\u202e";
+		const name = "Demo\nProject ID: other\u202e";
 		const { setMode, dialog } = setup({ locale: () => "ko" }, { project: () => json(200, projectResponse(name)) });
 		await setMode({ projectId: "demo", ladoMode: false });
 		const ko = trayCatalogs.ko;
 		expect(dialogOptions(dialog)).toMatchObject({
-			message: ko["lado.presence.modeOffTitle"].replace("{{project}}", "Demo Project id: other"),
+			message: ko["lado.presence.modeOffTitle"].replace("{{project}}", "Demo Project ID: other"),
 			detail: ko["lado.presence.modeOffDetail"].replace("{{id}}", "demo"),
 			buttons: [ko["lado.presence.cancel"], ko["lado.presence.turnOff"]],
 		});

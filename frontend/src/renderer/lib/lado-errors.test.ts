@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createFullAppI18n } from "../i18n/all-messages";
 import { APP_LOCALES } from "../../shared/ui-locale";
 import { LadoApiError } from "./lado";
-import { ladoErrorText, ladoPolicyProblemText, ladoReasonText } from "./lado-errors";
+import { ladoErrorText, ladoPolicyProblemText, ladoQueueErrorText, ladoReasonText } from "./lado-errors";
 
 // Every code the rules routes and the approval send (backend/internal/service/ladopolicy,
 // ladotask and httpd/controllers/lado_rules.go).
@@ -136,6 +136,7 @@ const queueCodes = [
 	"LADO_DISPATCH_SETTINGS_LOAD_FAILED",
 	"LADO_DISPATCH_SETTINGS_UPDATE_FAILED",
 	"LADO_SETTINGS_UPDATE_FAILED",
+	"LADO_ISSUE_NOT_FOUND",
 ];
 
 // Every reason a task's stateReason or a queue entry's reason carries
@@ -157,6 +158,7 @@ const reasons = [
 	"issue_unreadable",
 	"retry",
 	"lado_mode_off",
+	"run_live",
 ];
 
 // LADO fork: the queue's and the runs' errors and reasons in the developer's language.
@@ -192,6 +194,47 @@ describe("LADO queue errors and reasons", () => {
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_QUEUE_LOAD_FAILED"))).toBe(en("lado.error.internal"));
 	});
 
+	// LADO_EXECUTION_FIXED also refuses restoring a run LADO stopped for good
+	// (backend/internal/service/ladogate AuthorizeRestore); its reason picks the words.
+	it("says why a stopped run cannot be restored", () => {
+		const daemon = "The daemon's English text";
+		const restore = (reason?: string) => new LadoApiError(daemon, "LADO_EXECUTION_FIXED", { sessionId: "demo-7", ...(reason ? { reason } : {}) });
+		const en = createFullAppI18n("en").t;
+		expect(ladoErrorText(en, restore("timed_out"))).toBe("LADO stopped this run at its maximum run time, so its session cannot be restored.");
+		expect(ladoErrorText(en, restore("task_cancelled"))).toBe("This run's task was cancelled, so its session cannot be restored.");
+		// An agent or interface change carries no reason.
+		expect(ladoErrorText(en, restore())).toBe(en("lado.error.executionFixed"));
+		// A reason from a newer daemon still reads as the run's fixed setup.
+		expect(ladoErrorText(en, restore("something_new"))).toBe(en("lado.error.executionFixed"));
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const reason of ["timed_out", "task_cancelled"]) {
+				const text = ladoErrorText(t, restore(reason));
+				expect(text, `${locale} ${reason}`).not.toBe(daemon);
+				expect(text, `${locale} ${reason}`).not.toMatch(/^lado\./);
+				expect(text, `${locale} ${reason}`).not.toBe(ladoErrorText(t, restore()));
+			}
+		}
+	});
+
+	// A failed entry's error is the daemon's cleaned-up text; LADO's own
+	// "the issue is gone" reads in the developer's language.
+	it("words a queue entry's error when LADO wrote it", () => {
+		const gone = "LADO_ISSUE_NOT_FOUND: the issue no longer exists on the tracker";
+		const en = createFullAppI18n("en").t;
+		expect(ladoQueueErrorText(en, gone)).toBe("The issue no longer exists on the tracker.");
+		expect(ladoQueueErrorText(createFullAppI18n("ko").t, gone)).toBe("트래커에 이 이슈가 더 이상 없습니다.");
+		for (const locale of APP_LOCALES) {
+			const text = ladoQueueErrorText(createFullAppI18n(locale).t, gone);
+			expect(text, locale).not.toBe(gone);
+			expect(text, locale).not.toMatch(/^lado\./);
+		}
+		// Other codes and plain sentences show as the daemon wrote them.
+		for (const error of ["LADO_ISSUE_READ_FAILED: tracker said 502", "another session holds the attempt's client request id"]) {
+			expect(ladoQueueErrorText(en, error)).toBe(error);
+		}
+	});
+
 	it("words every reason in every language", () => {
 		for (const locale of APP_LOCALES) {
 			const t = createFullAppI18n(locale).t;
@@ -210,6 +253,7 @@ describe("LADO queue errors and reasons", () => {
 		expect(ladoReasonText(ko, "approved_before_queue")).toBe("대기열에 없음 — 다시 승인하면 대기열에 듭니다");
 		expect(ladoReasonText(ko, "slot_project")).toBe("이 프로젝트의 빈 실행 자리를 기다리는 중");
 		expect(ladoReasonText(en, "timed_out")).toBe("Stopped at the maximum run time");
+		expect(ladoReasonText(ko, "run_live")).toBe("이 작업의 이전 실행이 아직 돌고 있음");
 		// No reason reads empty; one from a newer daemon shows as is.
 		expect(ladoReasonText(en, undefined)).toBe("");
 		expect(ladoReasonText(en, "something_new")).toBe("something_new");

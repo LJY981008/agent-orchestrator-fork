@@ -88,7 +88,7 @@ test("shows the snapshot the run works under", async () => {
 	// The hash the run's board card names.
 	expect(within(fact(panel, "Rules")).getByText("1a2b3c4")).toHaveClass("font-mono");
 	expect(fact(panel, "Base")).toHaveTextContent("Moved 2 commits since the plan");
-	expect(fact(panel, "Deadline")).toHaveTextContent("Stops in 5 hr.");
+	expect(fact(panel, "Deadline")).toHaveTextContent(/^Stops at /);
 
 	// The worker's rule text stays folded until asked for.
 	const toggle = within(panel).getByRole("button", { name: "Rule text for the worker" });
@@ -106,6 +106,38 @@ test("renders nothing for a session LADO did not start", async () => {
 	await waitFor(() => expect(lado.fetchLadoExecution).toHaveBeenCalledWith("demo-7"));
 	await waitFor(() => expect(container).toBeEmptyDOMElement());
 	expect(screen.queryByText("LADO run")).not.toBeInTheDocument();
+});
+
+// A clock time stays true in a panel nobody refreshes, where "in 5 hr." would not.
+test("names the deadline's clock time, with the date when it is not today", async () => {
+	vi.useFakeTimers({ toFake: ["Date"] });
+	try {
+		vi.setSystemTime(new Date(2026, 9, 26, 14, 30));
+		vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution({ deadlineAt: new Date(2026, 9, 26, 18, 5).toISOString() }));
+		renderPanel();
+		const today = await screen.findByTestId("lado-execution-panel");
+		expect(fact(today, "Deadline")).toHaveTextContent("Stops at 06:05 PM");
+		cleanup();
+
+		vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution({ deadlineAt: new Date(2026, 9, 27, 8, 0).toISOString() }));
+		renderPanel();
+		const tomorrow = await screen.findByTestId("lado-execution-panel");
+		expect(fact(tomorrow, "Deadline")).toHaveTextContent("Stops at Oct 27, 08:00 AM");
+	} finally {
+		vi.useRealTimers();
+	}
+});
+
+// Once the worker opened a PR, LADO no longer stops it at the deadline.
+test("says the time limit no longer applies once a PR was opened", async () => {
+	const pr = { url: "https://github.com/acme/demo/pull/45", number: 45, merged: false, closed: false };
+	for (const deadlineAt of [new Date(Date.now() + 3_600_000).toISOString(), new Date(Date.now() - 60_000).toISOString()]) {
+		vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution({ pr, deadlineAt }));
+		renderPanel();
+		const panel = await screen.findByTestId("lado-execution-panel");
+		expect(fact(panel, "Deadline")).toHaveTextContent("A PR was opened, so the time limit no longer applies");
+		cleanup();
+	}
 });
 
 test("says when LADO stopped the run at its deadline", async () => {

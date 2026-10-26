@@ -3572,7 +3572,7 @@
 	"lado.task.state.failed": "失败",
 	"lado.task.state.completed": "已完成",
 	"lado.presence.modeOffTitle": "关闭 {{project}} 的 LADO 模式？",
-	"lado.presence.modeOffDetail": "项目 ID：{{id}}\n\n队列中的任务会等到 LADO 模式重新开启；正在运行的 worker 会继续运行。",
+	"lado.presence.modeOffDetail": "项目 ID：{{id}}\n\n此后，此项目的 worker 无需你批准的计划即可启动。队列中的任务会等到 LADO 模式重新开启；正在运行的 worker 会继续运行。",
 	"lado.presence.turnOff": "关闭",
 	"lado.runs.title": "运行",
 	"lado.runs.note": "仅适用于已开启 LADO 模式的项目中已批准的任务。",
@@ -3606,5 +3606,12 @@
 	"lado.run.deadline": "截止",
 	"lado.run.stops": "{{time}}停止",
 	"lado.run.baseAhead_one": "比计划时多 {{count}} 个提交",
-	"lado.run.baseAhead_other": "比计划时多 {{count}} 个提交"
+	"lado.run.baseAhead_other": "比计划时多 {{count}} 个提交",
+	"lado.reason.run_live": "此任务之前的运行仍在进行",
+	"lado.run.prOpen": "已创建 PR，不再适用时间上限",
+	"lado.view.baseRefMismatch": "计划的基准分支不是 worker 的起始分支。请使用“请求修改”让计划得到修正。",
+	"lado.error.issueNotFound": "跟踪器上已不存在此 Issue。",
+	"lado.error.restoreTimedOut": "LADO 已在最长运行时间到达时停止此运行，因此无法恢复其会话。",
+	"lado.error.restoreCancelled": "此运行的任务已取消，因此无法恢复其会话。",
+	"lado.project.modeOffUnavailable": "关闭 LADO 模式需要 AO 桌面应用。请打开应用并在其中关闭。"
 }

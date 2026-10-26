@@ -7,9 +7,7 @@ import {
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
 	fetchLadoExecution,
-	fetchLadoQueue,
 	LadoApiError,
-	ladoTimeUntil,
 	setLadoMode,
 	updateLadoDispatchSettings,
 	updateLadoProjectSettings,
@@ -135,21 +133,10 @@ describe("fetchLadoEffective", () => {
 	});
 });
 
-// LADO fork: the queue, its runs and the dispatch settings (step 6).
-describe("the queue, runs and dispatch settings", () => {
+// LADO fork: the runs and the dispatch settings (step 6).
+describe("runs and dispatch settings", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
-	});
-
-	it("lists one project's queue, or every project's", async () => {
-		const entry = { id: "lado-queue-1", taskId: "lado-task-1", projectId: "demo", state: "waiting", reason: "slot_project", attempts: 0 };
-		get.mockResolvedValue({ data: { entries: [entry] }, error: undefined });
-		await expect(fetchLadoQueue("demo")).resolves.toEqual([entry]);
-		await fetchLadoQueue();
-		expect(get.mock.calls).toEqual([
-			["/api/v1/lado/queue", { params: { query: { projectId: "demo" } } }],
-			["/api/v1/lado/queue", { params: { query: {} } }],
-		]);
 	});
 
 	it("reads a session's run, and null for a session LADO did not start", async () => {
@@ -271,32 +258,5 @@ describe("setLadoMode", () => {
 			params: { path: { projectId: "demo" } },
 			body: { ladoMode: false },
 		});
-	});
-});
-
-describe("ladoTimeUntil", () => {
-	const now = Date.parse("2026-10-23T10:00:00Z");
-	const at = (ms: number) => new Date(now + ms).toISOString();
-
-	it("says when a wait or a run limit ends, in whole units up to hours", () => {
-		const cases: [number, string][] = [
-			[30_000, "in 30 sec."],
-			[59_500, "in 1 min."],
-			[120_000, "in 2 min."],
-			[59 * 60_000, "in 59 min."],
-			[60 * 60_000, "in 1 hr."],
-			// Between whole hours the nearest one, so an hour and a half left is never "in 1 hr.".
-			[89 * 60_000, "in 1 hr."],
-			[90 * 60_000, "in 2 hr."],
-			[5 * 3_600_000, "in 5 hr."],
-			[24 * 3_600_000, "in 24 hr."],
-		];
-		for (const [ms, text] of cases) expect(ladoTimeUntil(at(ms), "en", now), String(ms)).toBe(text);
-	});
-
-	it("says now once the moment passed, and nothing for a time that does not parse", () => {
-		expect(ladoTimeUntil(at(-5_000), "en", now)).toBe("now");
-		expect(ladoTimeUntil(at(0), "ko", now)).toBe("지금");
-		expect(ladoTimeUntil("soon", "en", now)).toBeNull();
 	});
 });

@@ -28,7 +28,7 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 	const [cancelling, setCancelling] = useState<LadoTask | null>(null);
 	const [openTaskId, setOpenTaskId] = useState<string | null>(null);
 	const all = (tasks.data ?? []).filter(inLanes);
-	const queued = orderTasks(all.filter(isQueued));
+	const queued = orderQueue(all.filter(isQueued));
 	const planned = orderTasks(all.filter((task) => !isQueued(task)));
 	const cardProps = {
 		repositories: repositories.data ?? [],
@@ -151,6 +151,13 @@ function orderTasks(tasks: LadoTask[]): LadoTask[] {
 		const closed = Number(left.state === "closed_unmerged") - Number(right.state === "closed_unmerged");
 		return closed || right.createdAt.localeCompare(left.createdAt);
 	});
+}
+
+// In the order the dispatcher takes them: the oldest approval first. The
+// times are compared as instants, since the daemon trims fractional seconds.
+function orderQueue(tasks: LadoTask[]): LadoTask[] {
+	const enqueued = (task: LadoTask) => Date.parse(task.queue?.enqueuedAt ?? "") || 0;
+	return [...tasks].sort((left, right) => enqueued(left) - enqueued(right));
 }
 
 function LadoTaskCard({

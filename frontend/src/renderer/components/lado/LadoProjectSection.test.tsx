@@ -169,6 +169,25 @@ describe("LadoProjectSection", () => {
 		expect(modeSwitch()).toBeEnabled();
 	});
 
+	// In a browser the daemon answers itself; without the desktop app it has
+	// no way to confirm, and the words must be about turning the mode off.
+	it("says in a browser that turning the mode off needs the desktop app", async () => {
+		vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue(on);
+		put().mockResolvedValue({
+			data: undefined,
+			error: { code: "LADO_PRESENCE_UNAVAILABLE", message: "Approvals need the AO desktop app." },
+		} as never);
+		const user = userEvent.setup();
+		renderSection();
+
+		await user.click(await screen.findByRole("switch", { name: "LADO mode" }));
+		const alert = await screen.findByRole("alert");
+		expect(alert).toHaveTextContent("Turning LADO mode off needs the AO desktop app. Open the app, then turn it off there.");
+		expect(alert).not.toHaveTextContent(/approve/i);
+		expect(rowOf(modeSwitch())).toContainElement(alert);
+		expect(modeSwitch()).toBeChecked();
+	});
+
 	it("saves the project's cap, also while LADO mode is off", async () => {
 		const user = userEvent.setup();
 		renderSection();

@@ -2,8 +2,9 @@
 // §3.2): one status line with a dot, and a second line for what a queued task
 // waits for or why a task needs the human again or failed.
 import type { TFunction } from "i18next";
-import { LADO_MAX_ATTEMPTS, ladoTimeUntil, type LadoTask } from "../../lib/lado";
+import { LADO_MAX_ATTEMPTS, type LadoTask } from "../../lib/lado";
 import { ladoReasonText } from "../../lib/lado-errors";
+import { formatResetTime } from "../settings/CodexAccountDetails";
 
 export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "merged";
 
@@ -61,16 +62,17 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
  * starts it, or why a task needs the human again or failed. Null when the
  * status line says it all, or when a new plan is on its way.
  */
-export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string, now: number = Date.now()): string | null {
+export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): string | null {
 	const reason = task.stateReason;
 	switch (task.state) {
 		case "queued":
 		case "dispatching": {
 			const parts: string[] = [];
 			// Only a retry waits for a time of its own; the other waits end when a
-			// slot, memory or the issue frees up.
-			const retryAt = reason === "retry" && task.queue?.nextAttemptAt ? ladoTimeUntil(task.queue.nextAttemptAt, locale, now) : null;
-			if (retryAt) parts.push(t("lado.lane.retryAt", { time: retryAt }));
+			// slot, memory or the issue frees up. The clock time stays true on a
+			// card nobody refreshes, where "in 2 min." would not.
+			const retryAt = reason === "retry" ? formatResetTime(task.queue?.nextAttemptAt, locale) : null;
+			if (retryAt) parts.push(t("lado.lane.retryAt", { time: retryAt.visible }));
 			else if (reason) parts.push(ladoReasonText(t, reason));
 			const attempts = task.queue?.attempts ?? 0;
 			if (attempts > 0) parts.push(t("lado.lane.attempt", { attempt: attempts, max: LADO_MAX_ATTEMPTS }));

@@ -129,9 +129,25 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_DISPATCH_SETTINGS_LOAD_FAILED: "lado.error.internal",
 	LADO_DISPATCH_SETTINGS_UPDATE_FAILED: "lado.error.internal",
 	LADO_SETTINGS_UPDATE_FAILED: "lado.error.internal",
+	// A queue entry's error when the tracker no longer has the task's issue.
+	LADO_ISSUE_NOT_FOUND: "lado.error.issueNotFound",
 	// The app sends includeArchived as a boolean; anything else is a bug.
 	INVALID_QUERY: "lado.error.internal",
 };
+
+// LADO_EXECUTION_FIXED also refuses restoring a run LADO stopped for good;
+// its reason says why, and an agent or interface change has none.
+const restoreKeys: Partial<Record<string, LadoErrorKey>> = {
+	timed_out: "lado.error.restoreTimedOut",
+	task_cancelled: "lado.error.restoreCancelled",
+};
+
+function errorKey(code: string, details: Record<string, unknown> | undefined): LadoErrorKey | undefined {
+	if (code === "LADO_EXECUTION_FIXED" && typeof details?.reason === "string") {
+		return restoreKeys[details.reason] ?? errorKeys[code];
+	}
+	return errorKeys[code];
+}
 
 const problemKeys: Partial<Record<string, LadoProblemKey>> = {
 	token_missing: "lado.problem.tokenMissing",
@@ -173,10 +189,25 @@ function detailValues(t: TFunction, details: Record<string, unknown> | undefined
  */
 export function ladoErrorText(t: TFunction, error: unknown, fallback: LadoErrorKey = "lado.error.unreachable"): string {
 	if (error instanceof LadoApiError && error.code) {
-		const key = errorKeys[error.code];
+		const key = errorKey(error.code, error.details);
 		return key ? t(key, detailValues(t, error.details)) : error.message;
 	}
 	return t(fallback);
+}
+
+// The codes that lead a queue entry's error and say all there is to say, so
+// the app words them; any other error is the daemon's own text.
+const queueErrorCodes = new Set(["LADO_ISSUE_NOT_FOUND"]);
+
+/**
+ * Why a task's last attempt failed, as its queue entry records it: the daemon
+ * cleans the text up (one line, no secrets) and leads it with the error code
+ * when there is one. LADO's own errors read in the developer's language.
+ */
+export function ladoQueueErrorText(t: TFunction, error: string): string {
+	const code = /^([A-Z][A-Z0-9_]*):/.exec(error)?.[1];
+	const key = code && queueErrorCodes.has(code) ? errorKeys[code] : undefined;
+	return key ? t(key) : error;
 }
 
 /** A failed connection check, translated, with what the tool printed if any. */
@@ -316,6 +347,7 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	issue_unreadable: "lado.reason.issue_unreadable",
 	retry: "lado.reason.retry",
 	lado_mode_off: "lado.reason.lado_mode_off",
+	run_live: "lado.reason.run_live",
 };
 
 /**

@@ -3561,7 +3561,7 @@
 	"lado.rules.editor.deletedRule": "삭제된 규칙 <code>{{id}}</code>",
 	"lado.rules.editor.editsKept": "그사이 규칙이 바뀌었습니다. 편집한 내용은 남겨 두었으니 확인한 뒤 다시 저장하세요.",
 	"lado.error.taskAlreadyQueued": "이 계획은 승인되어 워커를 기다리고 있습니다. 새 리비전만 이 승인을 대신할 수 있습니다.",
-	"lado.error.taskRunning": "이 작업의 워커가 아직 실행 중이거나 작업이 이미 머지되었습니다. LADO는 작업마다 워커 하나만 실행하므로 지금은 계획을 승인할 수 없습니다.",
+	"lado.error.taskRunning": "이 작업의 워커가 아직 실행 중이거나 작업이 이미 병합되었습니다. LADO는 작업마다 워커 하나만 실행하므로 지금은 계획을 승인할 수 없습니다.",
 	"lado.error.approvalAboveCeiling": "승인한 작업을 실행하는 워커입니다. 권한 모드는 권한 상한을 넘을 수 없습니다(상한: {{ceiling}}).",
 	"lado.error.executionFixed": "승인한 작업을 실행하는 워커입니다. 에이전트와 인터페이스는 승인한 그대로 유지됩니다.",
 	"lado.error.executionNotFound": "이 세션은 LADO 실행이 아닙니다.",
@@ -3590,7 +3590,7 @@
 	"lado.task.state.failed": "실패",
 	"lado.task.state.completed": "완료",
 	"lado.presence.modeOffTitle": "{{project}} 프로젝트의 LADO 모드를 끌까요?",
-	"lado.presence.modeOffDetail": "프로젝트 id: {{id}}\n\n대기열의 작업은 LADO 모드를 다시 켤 때까지 기다리고, 실행 중인 워커는 계속 실행됩니다.",
+	"lado.presence.modeOffDetail": "프로젝트 ID: {{id}}\n\n그 뒤로 이 프로젝트의 워커는 승인한 계획 없이도 시작할 수 있습니다. 대기열의 작업은 LADO 모드를 다시 켤 때까지 기다리고, 실행 중인 워커는 계속 실행됩니다.",
 	"lado.presence.turnOff": "끄기",
 	"lado.runs.title": "실행",
 	"lado.runs.note": "LADO 모드가 켜진 프로젝트에서 승인한 작업에만 적용됩니다.",
@@ -3624,5 +3624,12 @@
 	"lado.run.deadline": "마감",
 	"lado.run.stops": "{{time}} 종료",
 	"lado.run.baseAhead_one": "계획보다 {{count}}커밋 앞섬",
-	"lado.run.baseAhead_other": "계획보다 {{count}}커밋 앞섬"
+	"lado.run.baseAhead_other": "계획보다 {{count}}커밋 앞섬",
+	"lado.reason.run_live": "이 작업의 이전 실행이 아직 돌고 있음",
+	"lado.run.prOpen": "PR이 열려 시간 상한을 적용하지 않습니다",
+	"lado.view.baseRefMismatch": "계획의 기준 브랜치가 워커가 시작하는 브랜치와 다릅니다. 수정 요청으로 계획을 고치세요.",
+	"lado.error.issueNotFound": "트래커에 이 이슈가 더 이상 없습니다.",
+	"lado.error.restoreTimedOut": "LADO가 최대 실행 시간에 이 실행을 멈췄으므로 세션을 복원할 수 없습니다.",
+	"lado.error.restoreCancelled": "이 실행의 작업이 취소되어 세션을 복원할 수 없습니다.",
+	"lado.project.modeOffUnavailable": "LADO 모드를 끄려면 AO 데스크톱 앱이 필요합니다. 앱을 연 뒤 앱에서 끄세요."
 }

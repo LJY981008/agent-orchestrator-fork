@@ -29,6 +29,12 @@ export function LadoProjectSection({ projectId }: { projectId: string }) {
 		setCap.reset();
 		setMode.mutate(on);
 	};
+	// Without the desktop app, the daemon answers a browser's turn-off with the
+	// code whose text asks to approve; this row turns a mode off.
+	const modeErrorText = (error: unknown) =>
+		error instanceof LadoApiError && error.code === "LADO_PRESENCE_UNAVAILABLE"
+			? t("lado.project.modeOffUnavailable")
+			: ladoErrorText(t, error);
 	// The daemon refuses a cap out of range with the dispatch settings' code,
 	// whose text also asks for a run time; this page has none to choose.
 	const capErrorText = (error: unknown) =>
@@ -65,7 +71,7 @@ export function LadoProjectSection({ projectId }: { projectId: string }) {
 						{t("lado.project.modeHint")}
 						{setMode.isError ? (
 							<span role="alert" className="block text-error">
-								{ladoErrorText(t, setMode.error)}
+								{modeErrorText(setMode.error)}
 							</span>
 						) : null}
 					</>

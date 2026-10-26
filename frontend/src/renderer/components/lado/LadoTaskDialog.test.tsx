@@ -358,6 +358,8 @@ function approvedTask(fields: Partial<lado.LadoTask>): lado.LadoTask {
 	return { ...task, state: "queued", plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id }, ...fields };
 }
 
+const enqueuedAt = "2026-10-20T10:00:00Z";
+
 const execution: lado.LadoTaskExecution = {
 	sessionId: "demo-7",
 	planRevisionId: revision.id,
@@ -391,6 +393,11 @@ test("a running task shows its run with the session and PR, from the project's t
 	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-working)]");
 	expect(within(run).getByRole("link", { name: "Open PR #45" })).toHaveAttribute("href", "https://github.com/acme/demo/pull/45");
 	expect(within(run).getByText("PR #45")).toBeInTheDocument();
+	// The live region reads the run's state; the session and the PR are controls, not status text.
+	const status = within(run).getByRole("status");
+	expect(status).toHaveTextContent("Running");
+	expect(status).not.toContainElement(within(run).getByRole("button", { name: "Open session" }));
+	expect(status).not.toContainElement(within(run).getByRole("link", { name: "Open PR #45" }));
 	// Approved and running: nothing to approve, no queue to show.
 	expect(within(dialog).queryByRole("button", { name: "Approve plan" })).not.toBeInTheDocument();
 	expect(within(dialog).queryByTestId("lado-queue-status")).not.toBeInTheDocument();
@@ -421,7 +428,7 @@ test("a failed run says why and can be approved again", async () => {
 });
 
 test("a task that failed before any worker started says why, with no session to open", async () => {
-	mockApproved(approvedTask({ state: "failed", stateReason: "attempts_exhausted", queue: { state: "failed", attempts: 3, error: "LADO_SPAWN_FAILED: no agent" } }));
+	mockApproved(approvedTask({ state: "failed", stateReason: "attempts_exhausted", queue: { state: "failed", attempts: 3, enqueuedAt, error: "LADO_SPAWN_FAILED: no agent" } }));
 	renderDialog();
 	const dialog = await screen.findByTestId("lado-task-dialog");
 
@@ -429,8 +436,27 @@ test("a task that failed before any worker started says why, with no session to 
 	expect(run).toHaveTextContent("Failed");
 	expect(run).toHaveTextContent("The worker did not start after 3 attempts");
 	expect(within(run).queryByRole("button", { name: "Open session" })).not.toBeInTheDocument();
+	// What the last attempt ran into, as the daemon put it, under the status line.
+	const error = within(run).getByTestId("lado-run-error");
+	expect(error).toHaveTextContent("LADO_SPAWN_FAILED: no agent");
+	expect(error).toHaveAttribute("title", "LADO_SPAWN_FAILED: no agent");
+	expect(error).toHaveClass("truncate", "text-settings-muted");
+	expect(within(run).getByRole("status")).not.toContainElement(error);
 	await within(dialog).findByTestId("lado-plan");
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeEnabled();
+});
+
+test("a task whose issue the tracker no longer has says so in the developer's language", async () => {
+	mockApproved(approvedTask({
+		state: "failed",
+		stateReason: "attempts_exhausted",
+		queue: { state: "failed", attempts: 1, enqueuedAt, error: "LADO_ISSUE_NOT_FOUND: the issue no longer exists on the tracker" },
+	}));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const error = within(await within(dialog).findByTestId("lado-run-status")).getByTestId("lado-run-error");
+	expect(error).toHaveTextContent(/^The issue no longer exists on the tracker\.$/);
 });
 
 test("a failed task whose worker still runs cannot be approved, and says why", async () => {
@@ -447,7 +473,7 @@ test("a failed task whose worker still runs cannot be approved, and says why", a
 });
 
 test("a queued task shows where it waits instead of the approve button", async () => {
-	mockApproved(approvedTask({ stateReason: "slot_global", queue: { state: "waiting", attempts: 1, reason: "slot_global" } }));
+	mockApproved(approvedTask({ stateReason: "slot_global", queue: { state: "waiting", attempts: 1, enqueuedAt, reason: "slot_global" } }));
 	renderDialog();
 	const dialog = await screen.findByTestId("lado-task-dialog");
 	await within(dialog).findByTestId("lado-plan");
@@ -463,7 +489,7 @@ test("a queued task shows where it waits instead of the approve button", async (
 
 test("a starting task shows that LADO starts its worker", async () => {
 	// The older run of a task approved again stays its newest execution.
-	mockApproved(approvedTask({ state: "dispatching", queue: { state: "dispatching", attempts: 1 }, execution: { ...execution, sessionEnded: true } }));
+	mockApproved(approvedTask({ state: "dispatching", queue: { state: "dispatching", attempts: 1, enqueuedAt }, execution: { ...execution, sessionEnded: true } }));
 	renderDialog();
 	const dialog = await screen.findByTestId("lado-task-dialog");
 	await within(dialog).findByTestId("lado-plan");
@@ -493,8 +519,11 @@ test("a plan whose base is not the workers' base says so instead of pointing at 
 	const dialog = await screen.findByTestId("lado-task-dialog");
 	await within(dialog).findByTestId("lado-plan");
 
-	expect(within(dialog).getByText("The plan's base is not the branch workers start from")).toHaveAttribute("role", "status");
+	expect(
+		within(dialog).getByText("The plan's base is not the branch workers start from. Use Request changes to have the plan fixed."),
+	).toHaveAttribute("role", "status");
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
+	expect(within(dialog).getByRole("button", { name: "Request changes" })).toBeEnabled();
 });
 
 test("work that closed without a merge shows the run and takes no decisions", async () => {
