@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -79,6 +80,7 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 	stale := filepath.Join(cfg.StateDir, "lado", "homes", "mer-gone")
 	writeLadoFile(t, filepath.Join(stale, "claude", "CLAUDE.md"), "old\n")
 	sessions, codex := &ladoSetupSink{}, &ladoCodexAgent{}
+	var reviewerSection reviewcore.LadoSystemSection
 	log := slog.New(slog.DiscardHandler)
 
 	_, _, rules, _, setup := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{setup: ladoSetupDeps{
@@ -87,11 +89,12 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 		agents:   ladoAgents{domain.HarnessCodex: codex},
 		// Claude Code runs on this machine; the test's setup sees no program.
 		processes: func(context.Context) ([]procmem.Process, error) { return nil, nil },
+		reviewers: func(section reviewcore.LadoSystemSection) { reviewerSection = section },
 	}}, log)
 
-	if setup == nil || sessions.home != ports.LadoSetupHome(setup) || sessions.chat == nil || sessions.prompt == nil || codex.overrides == nil {
-		t.Fatalf("hooks: home %v (service %p), chat set %v, prompt set %v, Codex options set %v",
-			sessions.home, setup, sessions.chat != nil, sessions.prompt != nil, codex.overrides != nil)
+	if setup == nil || sessions.home != ports.LadoSetupHome(setup) || sessions.chat == nil || sessions.prompt == nil || codex.overrides == nil || reviewerSection == nil {
+		t.Fatalf("hooks: home %v (service %p), chat set %v, prompt set %v, Codex options set %v, reviewer section set %v",
+			sessions.home, setup, sessions.chat != nil, sessions.prompt != nil, codex.overrides != nil, reviewerSection != nil)
 	}
 
 	select {
@@ -160,6 +163,17 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(configDir, "CLAUDE.md")); err != nil || string(data) != "# managed\n" ||
 		!strings.HasPrefix(configDir, filepath.Join(cfg.StateDir, "lado", "homes")) || vars["CLAUDE_SECURESTORAGE_CONFIG_DIR"] != folders.claudeDir {
 		t.Fatalf("Claude Code home %v holds CLAUDE.md %q (%v)", vars, data, err)
+	}
+	// AO's reviewers get the adopted instructions of their own tool.
+	for _, c := range []struct {
+		worker  domain.SessionID
+		harness domain.AgentHarness
+		want    string
+	}{{worker.ID, domain.HarnessCodex, "Answer in Korean."}, {worker.ID, domain.HarnessClaudeCode, "# managed"}, {claude.ID, domain.HarnessClaudeCode, "# managed"}} {
+		section, err := reviewerSection(ctx, c.worker, c.harness)
+		if err != nil || !strings.HasPrefix(section, "## User instructions (managed by LADO)") || !strings.HasSuffix(section, c.want) {
+			t.Fatalf("%s reviewer section for %s = %q, %v; want it to end with %q", c.harness, c.worker, section, err, c.want)
+		}
 	}
 
 	// The rule policy resolves the setup, and the setup reads the rules'
