@@ -1,8 +1,9 @@
-// LADO fork: Project settings → LADO (docs/LJY-PRD/TDD.md §5.3 and §9). The
-// project's LADO mode and how many of its approved tasks run at once. The
-// daemon refuses turning the mode on while tracker intake is on; turning it
-// off asks the desktop app to confirm, and a cancelled confirmation leaves it
-// on. The cap saves at once, also while the mode is off.
+// LADO fork: Project settings → LADO (docs/LJY-PRD/TDD.md §5.3, §7.1, §8.2
+// and §9). The project's LADO mode and how many of its approved tasks run at
+// once, then its check commands and whether its base branches are protected.
+// The daemon refuses turning the mode on while tracker intake is on; turning
+// it off asks the desktop app to confirm, and a cancelled confirmation leaves
+// it on. The cap saves at once, also while the mode is off.
 import { useTranslation } from "react-i18next";
 import { useLadoProjectSettings, useSetLadoMode, useUpdateLadoProjectSettings } from "../../hooks/useLado";
 import { LadoApiError } from "../../lib/lado";
@@ -12,6 +13,8 @@ import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { SettingsRow } from "../settings/SettingsRow";
 import { SettingsSection } from "../settings/SettingsSection";
 import { Switch } from "../ui/switch";
+import { LadoProjectChecksCard } from "./LadoProjectChecksCard";
+import { LadoProjectProtectionCard } from "./LadoProjectProtectionCard";
 
 export function LadoProjectSection({ projectId }: { projectId: string }) {
 	const { t } = useTranslation();
@@ -63,40 +66,44 @@ export function LadoProjectSection({ projectId }: { projectId: string }) {
 		);
 	}
 	return (
-		<SettingsSection title={t("lado.project.title")} titleHidden grouped>
-			<SettingsRow
-				label={t("lado.project.mode")}
-				description={
-					<>
-						{t("lado.project.modeHint")}
-						{setMode.isError ? (
+		<div className="flex w-full flex-col gap-(--size-settings-section-gap)">
+			<SettingsSection title={t("lado.project.title")} titleHidden grouped>
+				<SettingsRow
+					label={t("lado.project.mode")}
+					description={
+						<>
+							{t("lado.project.modeHint")}
+							{setMode.isError ? (
+								<span role="alert" className="block text-error">
+									{modeErrorText(setMode.error)}
+								</span>
+							) : null}
+						</>
+					}
+				>
+					<Switch aria-label={t("lado.project.mode")} checked={data.ladoMode} disabled={busy} onCheckedChange={changeMode} />
+				</SettingsRow>
+				<SettingsRow
+					label={t("lado.project.maxConcurrent")}
+					description={
+						setCap.isError ? (
 							<span role="alert" className="block text-error">
-								{modeErrorText(setMode.error)}
+								{capErrorText(setCap.error)}
 							</span>
-						) : null}
-					</>
-				}
-			>
-				<Switch aria-label={t("lado.project.mode")} checked={data.ladoMode} disabled={busy} onCheckedChange={changeMode} />
-			</SettingsRow>
-			<SettingsRow
-				label={t("lado.project.maxConcurrent")}
-				description={
-					setCap.isError ? (
-						<span role="alert" className="block text-error">
-							{capErrorText(setCap.error)}
-						</span>
-					) : undefined
-				}
-			>
-				<SettingsOptionMenu
-					aria-label={t("lado.project.maxConcurrent")}
-					value={String(cap)}
-					options={ladoConcurrentRunOptions}
-					disabled={busy}
-					onChange={changeCap}
-				/>
-			</SettingsRow>
-		</SettingsSection>
+						) : undefined
+					}
+				>
+					<SettingsOptionMenu
+						aria-label={t("lado.project.maxConcurrent")}
+						value={String(cap)}
+						options={ladoConcurrentRunOptions}
+						disabled={busy}
+						onChange={changeCap}
+					/>
+				</SettingsRow>
+			</SettingsSection>
+			<LadoProjectChecksCard projectId={projectId} settings={data} />
+			<LadoProjectProtectionCard projectId={projectId} />
+		</div>
 	);
 }

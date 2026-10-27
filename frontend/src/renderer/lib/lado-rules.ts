@@ -11,6 +11,7 @@ import {
 	changeLadoCeiling,
 	createLadoRule,
 	invalidateLadoRuleQueries,
+	LADO_PROTECTED_PATHS_RULE_ID,
 	setLadoBinding,
 	updateLadoRule,
 	type LadoBindingInput,
@@ -29,6 +30,12 @@ export const LADO_RULE_PLAN_APPROVAL = "plan.approval.required";
 export const LADO_RULE_PERMISSION_CEILING = "agent.permission.ceiling";
 export const LADO_RULE_KOREAN_COMMITS = "git.commit.message.korean";
 export const LADO_RULE_SETUP_PRESENCE = "setup.change.requires_presence";
+// The gates of a pull request (step 8): LADO's verification and the
+// integration approval enforce them.
+export const LADO_RULE_INTEGRATION_APPROVAL = "integration.approval.required";
+export const LADO_RULE_NO_DIRECT_WRITE = "git.protected_branch.no_direct_write";
+export const LADO_RULE_TESTS_MUST_PASS = "test.command.must_pass";
+export const LADO_RULE_PROTECTED_PATHS = LADO_PROTECTED_PATHS_RULE_ID;
 
 type BuiltinKeys = { seedName: string; name: MessageKey; description: MessageKey };
 
@@ -54,6 +61,26 @@ const builtinRules: Partial<Record<string, BuiltinKeys>> = {
 		seedName: "Local setup changes need the desktop app's confirmation",
 		name: "lado.rules.builtin.setupPresence.name",
 		description: "lado.rules.builtin.setupPresence.description",
+	},
+	[LADO_RULE_INTEGRATION_APPROVAL]: {
+		seedName: "Integration approval required",
+		name: "lado.rules.builtin.integrationApproval.name",
+		description: "lado.rules.builtin.integrationApproval.description",
+	},
+	[LADO_RULE_NO_DIRECT_WRITE]: {
+		seedName: "No direct writes to the base branch",
+		name: "lado.rules.builtin.noDirectWrite.name",
+		description: "lado.rules.builtin.noDirectWrite.description",
+	},
+	[LADO_RULE_TESTS_MUST_PASS]: {
+		seedName: "Tests must pass",
+		name: "lado.rules.builtin.testsMustPass.name",
+		description: "lado.rules.builtin.testsMustPass.description",
+	},
+	[LADO_RULE_PROTECTED_PATHS]: {
+		seedName: "Protected paths",
+		name: "lado.rules.builtin.protectedPaths.name",
+		description: "lado.rules.builtin.protectedPaths.description",
 	},
 };
 
