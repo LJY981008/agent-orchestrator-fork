@@ -329,11 +329,12 @@ func (s *Service) ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRev
 
 // approvable refuses an approval that would start a second worker for the
 // task: any approval while the session of the task's newest execution lives,
-// whatever its PR or deadline did, or after its work merged, and approving the
-// revision of a queued or dispatching task again. That task's approval covers
-// the latest revision, the only one ApprovePlan accepts; a newer revision
-// makes the task Planned, and its approval supersedes the queued entry. A task
-// that needs review, is blocked or failed approves its latest revision again.
+// whatever its PR or deadline did, while its PR is verified or integrated, or
+// after its work merged, and approving the revision of a queued or
+// dispatching task again. That task's approval covers the latest revision,
+// the only one ApprovePlan accepts; a newer revision makes the task Planned,
+// and its approval supersedes the queued entry. A task that needs review, is
+// blocked or failed approves its latest revision again.
 // The task's state must carry the rules as they are now (withPolicy), so a
 // queued task whose rules changed reads as needing review.
 func approvable(task domain.LadoTask) error {
@@ -341,7 +342,8 @@ func approvable(task domain.LadoTask) error {
 	details := map[string]any{"taskId": string(task.ID), "state": string(state)}
 	live := task.Execution.SessionID != "" && !task.Execution.SessionTerminated
 	switch {
-	case live || state == domain.LadoTaskRunning || state == domain.LadoTaskCompleted:
+	case live || state == domain.LadoTaskRunning || state == domain.LadoTaskValidating || state == domain.LadoTaskIntegrationPending ||
+		state == domain.LadoTaskIntegrating || state == domain.LadoTaskCompleted:
 		return apierr.Conflict("LADO_TASK_RUNNING", "This task's worker still runs, or its work merged. LADO runs one worker per task, so no plan can be approved now.", details)
 	case state == domain.LadoTaskQueued || state == domain.LadoTaskDispatching:
 		return apierr.Conflict("LADO_TASK_ALREADY_QUEUED", "This plan is approved and waits for its worker. Only a newer revision can replace it.", details)

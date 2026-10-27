@@ -23,18 +23,24 @@ type LadoPresenceProof struct {
 }
 
 // Actions that need human presence. LadoPresenceRuleChange is a change to
-// a protected rule's settings, such as the permission ceiling's mode. The
-// setup actions sign an adoption plan's sha256 (LadoPresenceSetupAdopt), an
-// adoption id (LadoPresenceSetupRestore), and the sha256 of a setup change
-// that can run code or widen access (LadoPresenceSetupChange,
-// LadoSetupNeedsPresence).
+// a protected rule's settings, such as the permission ceiling's mode or the
+// protected paths. The setup actions sign an adoption plan's sha256
+// (LadoPresenceSetupAdopt), an adoption id (LadoPresenceSetupRestore), and
+// the sha256 of a setup change that can run code or widen access
+// (LadoPresenceSetupChange, LadoSetupNeedsPresence).
+// LadoPresenceIntegrationApprove approves the integration of one PR head,
+// its subject "<session>@<head>", and LadoPresenceCheckCommands changes a
+// project's check commands, which the daemon runs outside any agent
+// sandbox.
 const (
-	LadoPresencePlanApprove  = "plan.approve"
-	LadoPresenceModeOff      = "project.lado_mode_off"
-	LadoPresenceRuleChange   = "rule.protected_change"
-	LadoPresenceSetupAdopt   = "setup.adopt"
-	LadoPresenceSetupRestore = "setup.restore"
-	LadoPresenceSetupChange  = "setup.change"
+	LadoPresencePlanApprove        = "plan.approve"
+	LadoPresenceModeOff            = "project.lado_mode_off"
+	LadoPresenceRuleChange         = "rule.protected_change"
+	LadoPresenceSetupAdopt         = "setup.adopt"
+	LadoPresenceSetupRestore       = "setup.restore"
+	LadoPresenceSetupChange        = "setup.change"
+	LadoPresenceIntegrationApprove = "integration.approve"
+	LadoPresenceCheckCommands      = "project.check_commands"
 )
 
 // ErrLadoPresenceReplayed means the proof's nonce was already used.

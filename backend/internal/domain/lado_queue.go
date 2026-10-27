@@ -209,24 +209,60 @@ type LadoExecution struct {
 	PlanBaseSHA      string
 	DispatchBaseSHA  string
 	BaseCommitsAhead *int
-	StartedAt        time.Time
+	// BaseBranch and BaseRemote are the base branch and its remote the
+	// dispatcher resolved, and DispatchLocalBaseSHA the commit of the local
+	// branch then, empty without one (docs/LJY-PRD/TDD.md §7.3).
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSHA string
+	StartedAt            time.Time
 	// DeadlineAt is when LADO stops the run, zero without a limit; TimedOutAt
 	// is when it did.
 	DeadlineAt time.Time
 	TimedOutAt time.Time
+	// SettledAt is when verification settled the execution's merged or
+	// closed PR, zero while it still verifies.
+	SettledAt time.Time
 	// SessionTerminated and PR are read with the execution from AO's session
 	// and PR rows.
 	SessionTerminated bool
 	PR                LadoExecutionPR
+	// Verification and Integration are read with the execution from LADO's
+	// verification records and integration approvals.
+	Verification LadoExecutionVerification
+	Integration  LadoExecutionIntegration
 }
 
 // LadoExecutionPR is the newest PR of an execution's session, zero while the
-// session has none.
+// session has none. HeadSHA is the PR's head as AO last observed it, and
+// TargetBranch the branch it merges into.
 type LadoExecutionPR struct {
-	URL    string
-	Number int
-	Merged bool
-	Closed bool
+	URL          string
+	Number       int
+	Merged       bool
+	Closed       bool
+	HeadSHA      string
+	TargetBranch string
+	Title        string
+}
+
+// LadoExecutionVerification is the verification record of an execution's PR
+// at its current head: the head the record is for and its overall outcome
+// and reason (LadoVerification.Overall). It is zero while that head has no
+// record.
+type LadoExecutionVerification struct {
+	HeadSHA string
+	Outcome LadoVerifyOutcome
+	Reason  string
+}
+
+// LadoExecutionIntegration is what an execution's integration approvals say:
+// whether the PR's current head has one and how posting its commit status
+// went, and, once the PR merged, whether the merged head had one.
+type LadoExecutionIntegration struct {
+	HeadApproved       bool
+	StatusState        LadoIntegrationStatusState
+	MergedHeadApproved bool
 }
 
 // LadoDispatchSettings are the dispatcher's settings for every project

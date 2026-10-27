@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -80,6 +81,22 @@ const (
 	// which can run commands or widen access need the desktop app's
 	// confirmation (LadoSetupNeedsPresence).
 	LadoRuleSetupPresence LadoRuleID = "setup.change.requires_presence"
+	// LadoRuleIntegrationApproval is the protected gate that a PR head
+	// merges only with the developer's integration approval
+	// (docs/LJY-PRD/TDD.md §7.1, §7.2).
+	LadoRuleIntegrationApproval LadoRuleID = "integration.approval.required"
+	// LadoRuleNoDirectWrite is the protected gate that workers never write
+	// to the base branch, locally or on the remote (docs/LJY-PRD/TDD.md
+	// §7.1, §7.3).
+	LadoRuleNoDirectWrite LadoRuleID = "git.protected_branch.no_direct_write"
+	// LadoRuleTestsMustPass is the protected gate that the required CI
+	// checks and the project's check commands pass on the head
+	// (docs/LJY-PRD/TDD.md §8.1, §8.2).
+	LadoRuleTestsMustPass LadoRuleID = "test.command.must_pass"
+	// LadoRuleProtectedPaths is the protected gate whose
+	// LadoProtectedPathsConfig names the paths a PR changes only when its
+	// approved plan names them.
+	LadoRuleProtectedPaths LadoRuleID = "paths.protected"
 )
 
 // LadoRuleContent is what one rule version says (docs/LJY-PRD/HARNESS.md
@@ -228,6 +245,62 @@ var LadoCeilingModes = []PermissionMode{PermissionModeAcceptEdits, PermissionMod
 // LadoCeilingModes, lowest first, and 0 for any other mode.
 func LadoPermissionRank(m PermissionMode) int {
 	return slices.Index(LadoCeilingModes, m) + 1
+}
+
+// LadoProtectedPathsConfig is the Config of LadoRuleProtectedPaths: globs in
+// the syntax of a plan's affected_paths, relative to the project root.
+type LadoProtectedPathsConfig struct {
+	Globs []string `json:"globs"`
+}
+
+// DefaultLadoProtectedPaths returns the globs LadoRuleProtectedPaths starts
+// with: CI configuration and the agents' instructions and settings.
+func DefaultLadoProtectedPaths() []string {
+	return []string{
+		".github/**", ".gitlab-ci.yml", ".gitlab/**", "**/CLAUDE.md", "**/AGENTS.md",
+		".claude/**", ".codex/**", ".mcp.json", ".ao/**",
+	}
+}
+
+// LadoProtectedPathsMax is the most globs LadoRuleProtectedPaths may hold.
+const LadoProtectedPathsMax = 50
+
+// ErrLadoProtectedPathsInvalid means a protected path list is out of range or
+// holds a glob that a plan could not name in affected_paths. The services
+// report it as LADO_PROTECTED_PATHS_INVALID.
+var ErrLadoProtectedPathsInvalid = errors.New("invalid protected paths")
+
+// ValidateLadoProtectedPaths refuses an empty list, more than
+// LadoProtectedPathsMax globs, and a glob that is not a valid affected_paths
+// entry: blank or padded with spaces, absolute, with "..", a backslash, a
+// drive letter or NUL, or not a valid pattern.
+func ValidateLadoProtectedPaths(globs []string) error {
+	if len(globs) == 0 || len(globs) > LadoProtectedPathsMax {
+		return fmt.Errorf("%w: want 1 to %d globs, got %d", ErrLadoProtectedPathsInvalid, LadoProtectedPathsMax, len(globs))
+	}
+	for i, glob := range globs {
+		if glob == "" || strings.TrimSpace(glob) != glob || !validLadoAffectedPath(glob) {
+			return fmt.Errorf("%w: glob %d %q", ErrLadoProtectedPathsInvalid, i, glob)
+		}
+	}
+	return nil
+}
+
+// LadoCommitLocaleConfig is the Config of LadoRuleKoreanCommits from its
+// version 2: the language commit messages must use, and the Conventional
+// Commit types whose prefix the validator strips before judging a subject.
+type LadoCommitLocaleConfig struct {
+	Language      string   `json:"language"`
+	AllowPrefixes []string `json:"allowPrefixes"`
+}
+
+// DefaultLadoCommitLocaleConfig is the Korean commit rule's config: Korean,
+// with the common Conventional Commit types.
+func DefaultLadoCommitLocaleConfig() LadoCommitLocaleConfig {
+	return LadoCommitLocaleConfig{
+		Language:      "ko",
+		AllowPrefixes: []string{"feat", "fix", "docs", "refactor", "test", "chore", "style", "perf", "build", "ci", "revert"},
+	}
 }
 
 // ErrLadoRuleChanged means the rule got a newer version than the one an edit

@@ -1006,6 +1006,43 @@ func TestApprovalAgainFollowsTheTaskState(t *testing.T) {
 	}
 }
 
+// A run whose PR is open refuses approvals like a running one, also once its
+// session ended: LADO verifies the PR's head, waits for the integration
+// approval, or integrates it.
+func TestApprovalRefusedWhileThePRIsVerifiedOrIntegrated(t *testing.T) {
+	head := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name  string
+		edit  func(*domain.LadoExecution)
+		state domain.LadoTaskState
+	}{
+		{"no record yet", func(*domain.LadoExecution) {}, domain.LadoTaskValidating},
+		{"record passes", func(e *domain.LadoExecution) {
+			e.Verification = domain.LadoExecutionVerification{HeadSHA: head, Outcome: domain.LadoVerifyPass}
+		}, domain.LadoTaskIntegrationPending},
+		{"head approved", func(e *domain.LadoExecution) {
+			e.Verification = domain.LadoExecutionVerification{HeadSHA: head, Outcome: domain.LadoVerifyConfirm}
+			e.Integration = domain.LadoExecutionIntegration{HeadApproved: true, StatusState: domain.LadoIntegrationStatusPosted}
+		}, domain.LadoTaskIntegrating},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := domain.LadoTask{ID: "lado-task-1", IssueRef: "github:acme/demo#1", Issue: domain.LadoObservedIssue{State: domain.IssueOpen}}
+			task.Execution = domain.LadoExecution{
+				SessionID: "demo-7", TaskID: task.ID, SessionTerminated: true,
+				PR: domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8, HeadSHA: head},
+			}
+			tc.edit(&task.Execution)
+			if got := task.State(); got != tc.state {
+				t.Fatalf("state = %q, want %q", got, tc.state)
+			}
+			err := approvable(task)
+			if details := apiDetails(err); apiCode(err) != "LADO_TASK_RUNNING" || apiKind(err) != apierr.KindConflict || details["state"] != string(tc.state) {
+				t.Fatalf("approvable = %v (details %v), want 409 LADO_TASK_RUNNING in state %s", err, details, tc.state)
+			}
+		})
+	}
+}
+
 // A project's task list resolves the rules once for all its approved tasks,
 // as the board reads the list again at every change.
 func TestListResolvesTheRulesOfApprovedTasksAtOnce(t *testing.T) {
