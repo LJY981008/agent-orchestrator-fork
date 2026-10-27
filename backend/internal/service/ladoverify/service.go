@@ -50,6 +50,7 @@ type Store interface {
 	FinishLadoCheckRun(ctx context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage string, at time.Time) error
 	CancelRunningLadoCheckRuns(ctx context.Context, at time.Time) (int, error)
 	ListLadoCheckRuns(ctx context.Context, session domain.SessionID, headSHA string) ([]domain.LadoCheckRun, error)
+	GetLadoCheckRun(ctx context.Context, id string) (domain.LadoCheckRun, bool, error)
 	GetLadoVerification(ctx context.Context, session domain.SessionID, headSHA string) (domain.LadoVerification, bool, error)
 	UpsertLadoVerification(ctx context.Context, v domain.LadoVerification) (bool, error)
 	ListLadoExecutionReviews(ctx context.Context, session domain.SessionID) ([]domain.LadoExecutionReview, error)

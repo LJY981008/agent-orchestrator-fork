@@ -109,6 +109,7 @@ func (c *LadoController) getRule(w http.ResponseWriter, r *http.Request) {
 			Instruction:   v.Content.Instruction,
 			Enforcement:   ladoStrings(v.Content.Enforcement),
 			Ceiling:       ladoRuleCeiling(v.RuleID, v.Content),
+			Paths:         ladoRulePaths(v.RuleID, v.Content),
 			ConflictsWith: ladoStrings(v.Content.Conflicts),
 			SHA256:        v.SHA256,
 			Actor:         v.Actor,
@@ -123,7 +124,8 @@ func (c *LadoController) updateRule(w http.ResponseWriter, r *http.Request) {
 		apispec.NotImplemented(w, r, "PATCH", ladoRulePath)
 		return
 	}
-	// A ceiling change needs a presence proof over these exact bytes.
+	// A ceiling or protected paths change needs a presence proof over these
+	// exact bytes.
 	body, ok := readLadoPresenceBody(w, r, maxLadoSmallBody)
 	if !ok {
 		return
@@ -149,6 +151,9 @@ func (c *LadoController) updateRule(w http.ResponseWriter, r *http.Request) {
 	if req.Ceiling != nil {
 		mode := domain.PermissionMode(req.Ceiling.Mode)
 		in.CeilingMode = &mode
+	}
+	if req.Paths != nil {
+		in.Paths = &domain.LadoProtectedPathsConfig{Globs: req.Paths.Globs}
 	}
 	result, err := c.Rules.Update(r.Context(), ladoRuleID(r), in)
 	if err != nil {
@@ -246,6 +251,18 @@ func ladoRuleCeiling(id domain.LadoRuleID, content domain.LadoRuleContent) *Lado
 	return &LadoRuleCeiling{Mode: string(cfg.Mode)}
 }
 
+// ladoRulePaths returns the protected paths' globs, nil for any other rule.
+func ladoRulePaths(id domain.LadoRuleID, content domain.LadoRuleContent) *LadoRulePaths {
+	if id != domain.LadoRuleProtectedPaths {
+		return nil
+	}
+	var cfg domain.LadoProtectedPathsConfig
+	if json.Unmarshal(content.Config, &cfg) != nil {
+		return nil
+	}
+	return &LadoRulePaths{Globs: ladoOrEmptyStrings(cfg.Globs)}
+}
+
 func ladoRuleResponse(view ladopolicy.RuleView) LadoRuleResponse {
 	rule := view.Rule
 	content := rule.Version.Content
@@ -272,6 +289,7 @@ func ladoRuleResponse(view ladopolicy.RuleView) LadoRuleResponse {
 		Enforcement:   ladoStrings(content.Enforcement),
 		Strength:      string(content.Strength()),
 		Ceiling:       ladoRuleCeiling(rule.ID, content),
+		Paths:         ladoRulePaths(rule.ID, content),
 		ConflictsWith: ladoStrings(content.Conflicts),
 		Global:        string(rule.Global),
 		Overrides:     overrides,

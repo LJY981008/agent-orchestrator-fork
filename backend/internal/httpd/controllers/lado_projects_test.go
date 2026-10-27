@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
@@ -63,7 +64,7 @@ func TestLadoAPI_GetProjectSettings(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status = %d, body %s", status, body)
 	}
-	if got := decodeLadoSettings(t, body); got != (controllers.LadoProjectSettingsResponse{ProjectID: "mer", LadoMode: true}) {
+	if got := decodeLadoSettings(t, body); !reflect.DeepEqual(got, controllers.LadoProjectSettingsResponse{ProjectID: "mer", LadoMode: true, CheckCommands: []controllers.LadoCheckCommandBody{}}) {
 		t.Fatalf("response = %+v", got)
 	}
 	if svc.gotID != "mer" {

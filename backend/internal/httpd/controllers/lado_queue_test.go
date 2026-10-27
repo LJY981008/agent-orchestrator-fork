@@ -375,15 +375,21 @@ func TestLadoAPI_ProjectSettingsMaxConcurrent(t *testing.T) {
 		return settings(body)
 	}
 
-	if got := current(); got != (controllers.LadoProjectSettingsResponse{ProjectID: "mer", MaxConcurrent: 1}) {
+	// sameSettings compares settings without check commands, which keep
+	// their default time limit.
+	sameSettings := func(got controllers.LadoProjectSettingsResponse, want controllers.LadoProjectSettingsResponse) bool {
+		want.CheckCommands, want.CheckTimeoutMinutes = []controllers.LadoCheckCommandBody{}, 30
+		return reflect.DeepEqual(got, want)
+	}
+	if got := current(); !sameSettings(got, controllers.LadoProjectSettingsResponse{ProjectID: "mer", MaxConcurrent: 1}) {
 		t.Fatalf("settings before = %+v, want LADO mode off with cap 1", got)
 	}
 	// The cap alone changes without presence and keeps the mode.
-	if got := settings(put(`{"maxConcurrent":3}`, http.StatusOK)); got != (controllers.LadoProjectSettingsResponse{ProjectID: "mer", MaxConcurrent: 3}) {
+	if got := settings(put(`{"maxConcurrent":3}`, http.StatusOK)); !sameSettings(got, controllers.LadoProjectSettingsResponse{ProjectID: "mer", MaxConcurrent: 3}) {
 		t.Fatalf("cap only = %+v, want cap 3 with LADO mode off", got)
 	}
 	// The mode alone keeps the cap.
-	if got := settings(put(`{"ladoMode":true}`, http.StatusOK)); got != (controllers.LadoProjectSettingsResponse{ProjectID: "mer", LadoMode: true, MaxConcurrent: 3}) {
+	if got := settings(put(`{"ladoMode":true}`, http.StatusOK)); !sameSettings(got, controllers.LadoProjectSettingsResponse{ProjectID: "mer", LadoMode: true, MaxConcurrent: 3}) {
 		t.Fatalf("mode only = %+v, want LADO mode on with cap 3", got)
 	}
 	if code := ladoErrorCode(t, put(`{}`, http.StatusBadRequest)); code != "LADO_SETTINGS_EMPTY" {

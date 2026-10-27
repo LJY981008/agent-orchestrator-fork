@@ -43,10 +43,13 @@ type LadoTaskQueueResponse struct {
 
 // LadoExecutionPRResponse is the newest PR of an execution's session.
 type LadoExecutionPRResponse struct {
-	URL    string `json:"url"`
-	Number int    `json:"number"`
-	Merged bool   `json:"merged"`
-	Closed bool   `json:"closed" description:"Closed without a merge."`
+	URL          string `json:"url"`
+	Number       int    `json:"number"`
+	Merged       bool   `json:"merged"`
+	Closed       bool   `json:"closed" description:"Closed without a merge."`
+	HeadSHA      string `json:"headSha,omitempty" description:"The PR's head as AO last observed it, which LADO verifies; omitted until AO observed it."`
+	TargetBranch string `json:"targetBranch,omitempty" description:"The branch the PR merges into."`
+	Title        string `json:"title,omitempty"`
 }
 
 // LadoTaskExecutionResponse is a task's newest execution: the worker session
@@ -132,6 +135,9 @@ type LadoExecutionResponse struct {
 	TimedOutAt   *time.Time                    `json:"timedOutAt,omitempty" description:"When LADO stopped the run at its deadline."`
 	SessionEnded bool                          `json:"sessionEnded"`
 	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
+	// Verification and Integration are those of the PR's current head.
+	Verification *LadoVerificationResponse        `json:"verification,omitempty" description:"What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying."`
+	Integration  *LadoIntegrationApprovalResponse `json:"integration,omitempty" description:"The integration approval of the PR's current head; omitted without one."`
 }
 
 // LadoDispatchSettingsResponse is the dispatcher's settings for every

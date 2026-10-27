@@ -50,13 +50,14 @@ type APIDeps struct {
 	ShellTerminals     controllers.ShellTerminalService
 	Cues               controllers.CueService
 	// LADO fork: LADO's project settings, repository connections, tasks,
-	// rules, queue and local setup (docs/LJY-PRD/TDD.md §13).
+	// rules, queue, local setup and verification (docs/LJY-PRD/TDD.md §13).
 	LadoProjects    controllers.LadoProjectService
 	LadoConnections controllers.LadoConnectionService
 	LadoTasks       controllers.LadoTaskService
 	LadoRules       controllers.LadoRuleService
 	LadoQueue       controllers.LadoQueueService
 	LadoSetup       controllers.LadoSetupService
+	LadoVerify      controllers.LadoVerifyService
 	// LadoPresence checks the human-presence proofs LADO's approval routes
 	// need (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 	LadoPresence controllers.LadoPresence
@@ -212,7 +213,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Presence: deps.LadoPresence},
+		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Presence: deps.LadoPresence},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},

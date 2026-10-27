@@ -1030,6 +1030,7 @@ func Run() error {
 		LadoRules:          ladoRules,
 		LadoQueue:          ladoQueue,
 		LadoSetup:          ladoSetup,
+		LadoVerify:         ladoVerify,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

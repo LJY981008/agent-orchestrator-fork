@@ -26,6 +26,11 @@ type LadoRuleCeiling struct {
 	Mode string `json:"mode" enum:"accept-edits,auto,bypass-permissions" description:"The highest permission mode a LADO execution may run with."`
 }
 
+// LadoRulePaths is the protected paths' setting.
+type LadoRulePaths struct {
+	Globs []string `json:"globs" description:"1 to 50 globs, each relative with / separators, no .. and path.Match syntax per segment; ** matches any number of segments and a glob without a wildcard covers everything below it. A changed path one matches fails verification unless the approved plan's affected_paths names it."`
+}
+
 // LadoRuleOverrideResponse forces a rule on or off for one project or task.
 type LadoRuleOverrideResponse struct {
 	Scope   string `json:"scope" enum:"project,task"`
@@ -49,6 +54,7 @@ type LadoRuleResponse struct {
 	Enforcement   []string                   `json:"enforcement" description:"How LADO applies the rule: prompt, validator, tool_policy or workflow_gate."`
 	Strength      string                     `json:"strength" enum:"prevents,detects,advisory"`
 	Ceiling       *LadoRuleCeiling           `json:"ceiling,omitempty" description:"The permission ceiling's setting; only that rule has one."`
+	Paths         *LadoRulePaths             `json:"paths,omitempty" description:"The protected paths' globs; only paths.protected has them."`
 	ConflictsWith []string                   `json:"conflictsWith" description:"Rules that cannot be on together with this one."`
 	Global        string                     `json:"global" enum:"on,off" description:"The Global binding, which applies to every LADO project."`
 	Overrides     []LadoRuleOverrideResponse `json:"overrides" description:"Project and task bindings; a scope without one inherits."`
@@ -71,6 +77,7 @@ type LadoRuleVersionResponse struct {
 	Instruction   string           `json:"instruction"`
 	Enforcement   []string         `json:"enforcement"`
 	Ceiling       *LadoRuleCeiling `json:"ceiling,omitempty"`
+	Paths         *LadoRulePaths   `json:"paths,omitempty"`
 	ConflictsWith []string         `json:"conflictsWith"`
 	SHA256        string           `json:"sha256"`
 	Actor         string           `json:"actor" description:"Who made the version: lado for a built-in's seed, api for an unverified caller, human or human:dev-presence for a confirmed change."`
@@ -124,8 +131,9 @@ type CreateLadoRuleRequest struct {
 }
 
 // UpdateLadoRuleRequest changes a rule. An omitted field keeps its value.
-// Changing the permission ceiling needs a human-presence proof in
-// X-LADO-Presence, which the desktop app adds after the developer confirms.
+// Changing the permission ceiling or the protected paths needs a
+// human-presence proof in X-LADO-Presence, which the desktop app adds after
+// the developer confirms.
 type UpdateLadoRuleRequest struct {
 	BaseVersion   int              `json:"baseVersion" description:"The version the change started from; a newer one refuses the change."`
 	Name          *string          `json:"name,omitempty"`
@@ -133,6 +141,7 @@ type UpdateLadoRuleRequest struct {
 	Instruction   *string          `json:"instruction,omitempty"`
 	ConflictsWith *[]string        `json:"conflictsWith,omitempty"`
 	Ceiling       *LadoRuleCeiling `json:"ceiling,omitempty" description:"The permission ceiling's new mode; only that rule takes one."`
+	Paths         *LadoRulePaths   `json:"paths,omitempty" description:"The protected paths' new globs; only paths.protected takes them. Invalid globs refuse with LADO_PROTECTED_PATHS_INVALID and the first one's index and reason."`
 	Archived      *bool            `json:"archived,omitempty" description:"Archive or unarchive the rule."`
 	Reason        string           `json:"reason,omitempty" description:"Goes into the audit log."`
 	DryRun        bool             `json:"dryRun,omitempty" description:"Show the change and what it reaches without making it; needs no presence proof."`

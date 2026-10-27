@@ -77,7 +77,19 @@ func (c *LadoController) getExecution(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ladoExecutionResponse(view))
+	resp := ladoExecutionResponse(view)
+	// What LADO verified about the PR's current head and its integration
+	// approval, when verification is wired.
+	if c.Verify != nil {
+		head, err := c.Verify.Head(r.Context(), view.Execution.SessionID, view.Execution.PR.HeadSHA)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		resp.Verification = ladoHeadVerificationResponse(head)
+		resp.Integration = ladoIntegrationApprovalResponse(head.Approval)
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (c *LadoController) getDispatchSettings(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +197,10 @@ func ladoExecutionPRResponse(pr domain.LadoExecutionPR) *LadoExecutionPRResponse
 	if pr.URL == "" {
 		return nil
 	}
-	return &LadoExecutionPRResponse{URL: pr.URL, Number: pr.Number, Merged: pr.Merged, Closed: pr.Closed}
+	return &LadoExecutionPRResponse{
+		URL: pr.URL, Number: pr.Number, Merged: pr.Merged, Closed: pr.Closed,
+		HeadSHA: pr.HeadSHA, TargetBranch: pr.TargetBranch, Title: pr.Title,
+	}
 }
 
 func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {

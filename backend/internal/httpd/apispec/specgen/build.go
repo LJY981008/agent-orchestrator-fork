@@ -3517,6 +3517,7 @@ func prOperations() []operation {
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusUnprocessableEntity, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}}, // LADO fork: LADO_MERGE_GATE_FAILED
 				{http.StatusNotImplemented, envelope.APIError{}},
 			},
 		},

@@ -3427,7 +3427,185 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: 'Get the execution a worker session runs: its task, plan, rule snapshot,
-        base and run'
+        base and run, and what LADO verified about its PR''s current head'
+      tags:
+      - lado
+  /api/v1/lado/executions/{sessionId}/checks/{checkRunId}/log:
+    get:
+      operationId: getLadoCheckLog
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      - description: The check run, as the commands item's details name it.
+        in: path
+        name: checkRunId
+        required: true
+        schema:
+          description: The check run, as the commands item's details name it.
+          type: string
+      responses:
+        "200":
+          content:
+            text/plain:
+              schema:
+                type: string
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Get the end of a check command run's output, at most 1 MiB, as plain
+        text
+      tags:
+      - lado
+  /api/v1/lado/executions/{sessionId}/checks/run:
+    post:
+      operationId: runLadoChecks
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      responses:
+        "202":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRunChecksResponse'
+          description: Accepted
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Run the project's check commands again on the current head of an execution's
+        PR
+      tags:
+      - lado
+  /api/v1/lado/executions/{sessionId}/integration-approve:
+    post:
+      operationId: approveLadoIntegration
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApproveLadoIntegrationRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoIntegrationApproveResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Approve the integration of the head of an execution's PR with a human-presence
+        proof, or preview it with dryRun; LADO then posts the lado/integration status
+        and never merges
       tags:
       - lado
   /api/v1/lado/plans/{revisionId}:
@@ -3592,6 +3770,57 @@ paths:
       summary: List the open issues without a task in each of a project's repositories
       tags:
       - lado
+  /api/v1/lado/projects/{projectId}/protection:
+    get:
+      operationId: getLadoProjectProtection
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      - description: Read the rules from the host past LADO's ten-minute cache.
+        in: query
+        name: refresh
+        schema:
+          description: Read the rules from the host past LADO's ten-minute cache.
+          type: boolean
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectProtectionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the protection of the base branch of each of a project's repositories
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/repositories:
     get:
       operationId: listLadoProjectRepositories
@@ -3743,8 +3972,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Change a project's LADO mode or its cap on running executions; turning
-        LADO mode off needs a human-presence proof
+      summary: Change a project's LADO mode, its cap on running executions or its
+        check commands and their time limit; turning LADO mode off and changing the
+        check commands need a human-presence proof
       tags:
       - lado
   /api/v1/lado/queue:
@@ -4019,7 +4249,8 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Edit, archive or unarchive a rule, or show what the change reaches
-        with dryRun; the permission ceiling's mode needs a human-presence proof
+        with dryRun; the permission ceiling's mode and the protected paths' globs
+        need a human-presence proof
       tags:
       - lado
   /api/v1/lado/setup/adoptions:
@@ -6635,6 +6866,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Unprocessable Entity
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
         "501":
           content:
             application/json:
@@ -15148,6 +15385,35 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ApproveLadoIntegrationRequest:
+      properties:
+        acknowledge:
+          description: 'The confirm codes the developer acknowledged: exactly the
+            record''s, from the dry run''s confirm. A dry run needs none.'
+          items:
+            type: string
+          type: array
+        dryRun:
+          description: Read the PR's live head, the base branch and its rules again
+            and answer the head's record, its hash and the codes to confirm, without
+            a presence proof and without approving.
+          type: boolean
+        headSha:
+          description: The head the developer approves; another live head refuses
+            the approval.
+          minLength: 40
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+        verificationSha256:
+          description: The hash of the record the developer saw, from the dry run;
+            another record refuses the approval. A dry run needs none.
+          type: string
+      required:
+      - prUrl
+      - headSha
+      type: object
     ApproveLadoPlanRequest:
       properties:
         policySha256:
@@ -18917,6 +19183,52 @@ components:
       - aoSystemSha256
       - accepted
       type: object
+    LadoBranchProtectionResponse:
+      properties:
+        branch:
+          description: The base branch workers start from; empty when LADO could not
+            tell it.
+          type: string
+        checkedAt:
+          description: When LADO asked the host.
+          format: date-time
+          type:
+          - "null"
+          - string
+        error:
+          description: Why the rules could not be read, without secrets.
+          type: string
+        missing:
+          description: 'What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration,
+            non_fast_forward, deletion.'
+          items:
+            type: string
+          type: array
+        repository:
+          description: Canonical id of the repository, such as github:owner/repo.
+          type: string
+        requiredChecks:
+          description: The checks the rules require, lado/integration left out.
+          items:
+            type: string
+          type: array
+        state:
+          description: 'protected: the rules require a pull request, the lado/integration
+            status, no force pushes and no deletion; unknown: they could not be read;
+            unsupported: LADO does not read GitLab''s protection, it only detects.'
+          enum:
+          - protected
+          - unprotected
+          - unknown
+          - unsupported
+          type: string
+      required:
+      - repository
+      - branch
+      - state
+      - missing
+      - requiredChecks
+      type: object
     LadoCapabilityResponse:
       properties:
         class:
@@ -18934,6 +19246,24 @@ components:
       required:
       - class
       - status
+      type: object
+    LadoCheckCommandBody:
+      properties:
+        command:
+          description: Run with sh -c (cmd /c on Windows) in the execution's worktree,
+            outside any agent sandbox.
+          maxLength: 2000
+          minLength: 1
+          type: string
+        name:
+          description: Unique within the project; evidence names a command by it.
+          maxLength: 40
+          minLength: 1
+          pattern: ^[A-Za-z0-9][A-Za-z0-9 ._-]*$
+          type: string
+      required:
+      - name
+      - command
       type: object
     LadoConnectionCheckResponse:
       properties:
@@ -19224,6 +19554,56 @@ components:
       - conflicts
       - accepted
       type: object
+    LadoEvidenceCriterionResponse:
+      properties:
+        index:
+          description: The criterion's 1-based position in the plan's acceptanceCriteria.
+          type: integer
+        refs:
+          items:
+            $ref: '#/components/schemas/LadoEvidenceRefResponse'
+          type: array
+        state:
+          description: 'linked: an entry names a record of the head; stale: the evidence
+            file describes another head; claimed: entries, none of them a record;
+            inferred: the file does not list the criterion.'
+          enum:
+          - linked
+          - stale
+          - claimed
+          - inferred
+          type: string
+      required:
+      - index
+      - state
+      - refs
+      type: object
+    LadoEvidenceRefResponse:
+      properties:
+        key:
+          description: 'pr_check: the check''s name; lado_check_run: the check run
+            id; commit: the commit; claim: what the entry named.'
+          type: string
+        kind:
+          description: 'claim: the entry matched no record of the head.'
+          enum:
+          - pr_check
+          - review_run
+          - artifact_version
+          - lado_check_run
+          - commit
+          - claim
+          - none
+          type: string
+        sha:
+          description: The head for a check or a check run, the commit for a commit;
+            empty for a claim.
+          type: string
+      required:
+      - kind
+      - key
+      - sha
+      type: object
     LadoExecutionBaseResponse:
       properties:
         commitsAhead:
@@ -19244,10 +19624,19 @@ components:
         closed:
           description: Closed without a merge.
           type: boolean
+        headSha:
+          description: The PR's head as AO last observed it, which LADO verifies;
+            omitted until AO observed it.
+          type: string
         merged:
           type: boolean
         number:
           type: integer
+        targetBranch:
+          description: The branch the PR merges into.
+          type: string
+        title:
+          type: string
         url:
           type: string
       required:
@@ -19287,6 +19676,10 @@ components:
           type:
           - "null"
           - string
+        integration:
+          $ref: '#/components/schemas/LadoIntegrationApprovalResponse'
+          description: The integration approval of the PR's current head; omitted
+            without one.
         plan:
           $ref: '#/components/schemas/LadoExecutionPlanResponse'
         pr:
@@ -19309,6 +19702,10 @@ components:
           type:
           - "null"
           - string
+        verification:
+          $ref: '#/components/schemas/LadoVerificationResponse'
+          description: What LADO verified about the PR's current head; omitted until
+            LADO computed it, while the task is validating with verifying.
       required:
       - sessionId
       - task
@@ -19455,6 +19852,77 @@ components:
       - projectId
       - title
       - issueRef
+      type: object
+    LadoIntegrationApprovalResponse:
+      properties:
+        acknowledged:
+          description: The confirm codes the developer acknowledged, sorted.
+          items:
+            type: string
+          type: array
+        actor:
+          description: human, or human:dev-presence for a proof made without the desktop
+            app's key.
+          type: string
+        approvedAt:
+          format: date-time
+          type: string
+        headSha:
+          type: string
+        id:
+          type: string
+        statusAttempts:
+          description: Attempts to post the status so far; LADO stops after 12.
+          type: integer
+        statusError:
+          description: Why the last post failed, without secrets.
+          type: string
+        statusPostedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        statusState:
+          description: How posting the lado/integration commit status went; not_applicable
+            on GitLab, which gets none.
+          enum:
+          - pending
+          - posted
+          - failed
+          - not_applicable
+          type: string
+        verificationSha256:
+          description: The record hash the approval signed.
+          type: string
+      required:
+      - id
+      - headSha
+      - verificationSha256
+      - acknowledged
+      - actor
+      - approvedAt
+      - statusState
+      - statusAttempts
+      type: object
+    LadoIntegrationApproveResponse:
+      properties:
+        approval:
+          $ref: '#/components/schemas/LadoIntegrationApprovalResponse'
+          description: The recorded approval; omitted for a dry run.
+        confirm:
+          description: 'The record''s confirm codes, sorted: what an approval sends
+            as acknowledge.'
+          items:
+            type: string
+          type: array
+        verification:
+          $ref: '#/components/schemas/LadoVerificationResponse'
+        verificationSha256:
+          type: string
+      required:
+      - verification
+      - verificationSha256
+      - confirm
       type: object
     LadoIssueCommentResponse:
       properties:
@@ -19868,6 +20336,18 @@ components:
       - issues
       - failures
       type: object
+    LadoProjectProtectionResponse:
+      properties:
+        projectId:
+          type: string
+        repositories:
+          items:
+            $ref: '#/components/schemas/LadoBranchProtectionResponse'
+          type: array
+      required:
+      - projectId
+      - repositories
+      type: object
     LadoProjectRepositoriesResponse:
       properties:
         repositories:
@@ -19879,6 +20359,15 @@ components:
       type: object
     LadoProjectSettingsResponse:
       properties:
+        checkCommands:
+          description: The commands LADO runs, in order, on each head of an execution's
+            PR.
+          items:
+            $ref: '#/components/schemas/LadoCheckCommandBody'
+          type: array
+        checkTimeoutMinutes:
+          description: Each check command's time limit in minutes, 5 to 120.
+          type: integer
         ladoMode:
           description: Whether the project's workers are under LADO's worker gate.
           type: boolean
@@ -19891,6 +20380,8 @@ components:
       - projectId
       - ladoMode
       - maxConcurrent
+      - checkCommands
+      - checkTimeoutMinutes
       type: object
     LadoQueueItemResponse:
       properties:
@@ -19972,6 +20463,21 @@ components:
           type: array
       required:
       - entries
+      type: object
+    LadoReflogEntryResponse:
+      properties:
+        commit:
+          type: string
+        selector:
+          description: The entry's reflog selector.
+          type: string
+        subject:
+          description: The reflog entry's message.
+          type: string
+      required:
+      - selector
+      - commit
+      - subject
       type: object
     LadoRepositoryFailureResponse:
       properties:
@@ -20095,6 +20601,19 @@ components:
       - state
       - label
       type: object
+    LadoRulePaths:
+      properties:
+        globs:
+          description: 1 to 50 globs, each relative with / separators, no .. and path.Match
+            syntax per segment; ** matches any number of segments and a glob without
+            a wildcard covers everything below it. A changed path one matches fails
+            verification unless the approved plan's affected_paths names it.
+          items:
+            type: string
+          type: array
+      required:
+      - globs
+      type: object
     LadoRuleResponse:
       properties:
         archived:
@@ -20144,6 +20663,9 @@ components:
           items:
             $ref: '#/components/schemas/LadoRuleOverrideResponse'
           type: array
+        paths:
+          $ref: '#/components/schemas/LadoRulePaths'
+          description: The protected paths' globs; only paths.protected has them.
         protected:
           description: 'Always on: it takes no binding and is never archived; only
             the permission ceiling''s mode changes.'
@@ -20236,6 +20758,8 @@ components:
           type: string
         number:
           type: integer
+        paths:
+          $ref: '#/components/schemas/LadoRulePaths'
         sha256:
           type: string
       required:
@@ -20249,6 +20773,21 @@ components:
       - sha256
       - actor
       - createdAt
+      type: object
+    LadoRunChecksResponse:
+      properties:
+        commands:
+          description: 'The commands that run, in order: all of the project''s but
+            those still running, which finish first. Empty when the project has none.'
+          items:
+            type: string
+          type: array
+        headSha:
+          description: The head the commands run on.
+          type: string
+      required:
+      - headSha
+      - commands
       type: object
     LadoSSHCheckResponse:
       properties:
@@ -20756,7 +21295,8 @@ components:
           additionalProperties:
             type: string
           description: 'The values the app shows: item or origin, and by code event,
-            matcher, rule, key, mode, ceiling, plugin and path.'
+            matcher, rule, key, mode, ceiling, plugin, path and commands, the protected
+            git commands an allow rule covers, comma-separated.'
           type: object
         itemId:
           description: The managed item; empty for setup without an item, which path
@@ -21775,10 +22315,13 @@ components:
           description: 'Derived task state. review_required: the plan needs a new
             approval; blocked: the plan or the setup must change first; queued: the
             approved plan waits for the dispatcher; dispatching: LADO starts its worker;
-            running: the worker session lives or its PR is open; failed: the worker
-            did not start, timed out or ended without a PR; completed: the PR merged;
-            closed_unmerged: the PR or the issue closed without a merge. approved
-            is no longer sent.'
+            running: the worker session lives without a PR; validating: LADO verifies
+            the open PR''s current head, and stateReason says what it waits for or
+            what fails; integration_pending: the head passed, or needs confirming,
+            and waits for the developer''s integration approval; integrating: the
+            head''s integration is approved; failed: the worker did not start, timed
+            out or ended without a PR; completed: the PR merged; closed_unmerged:
+            the PR or the issue closed without a merge. approved is no longer sent.'
           enum:
           - draft
           - planned
@@ -21788,6 +22331,9 @@ components:
           - queued
           - dispatching
           - running
+          - validating
+          - integration_pending
+          - integrating
           - failed
           - completed
           - cancelled
@@ -21795,7 +22341,11 @@ components:
           type: string
         stateReason:
           description: Why the task needs review, is blocked or failed, or what its
-            queued plan waits for, for the app to translate.
+            queued plan waits for; for validating, verifying while LADO has not verified
+            the head yet, else the code of the verification item that fails or waits;
+            status_not_posted for integrating while LADO could not post the lado/integration
+            status; merged_without_approval for completed when the merged head had
+            no integration approval. For the app to translate.
           enum:
           - rules_changed
           - issue_edited
@@ -21814,6 +22364,20 @@ components:
           - retry
           - lado_mode_off
           - run_live
+          - verifying
+          - checks_pending
+          - checks_failed
+          - commands_running
+          - worktree_not_at_head
+          - commands_failed
+          - command_timed_out
+          - worktree_missing
+          - commit_messages_failed
+          - protected_path
+          - review_pending
+          - changes_requested
+          - status_not_posted
+          - merged_without_approval
           type: string
       required:
       - id
@@ -21882,6 +22446,320 @@ components:
       - entered
       - stored
       - permissions
+      type: object
+    LadoVerificationResponse:
+      properties:
+        computedAt:
+          format: date-time
+          type: string
+        evidence:
+          description: Each acceptance criterion's evidence, from the evidence item.
+          items:
+            $ref: '#/components/schemas/LadoEvidenceCriterionResponse'
+          type: array
+        headSha:
+          type: string
+        items:
+          items:
+            $ref: '#/components/schemas/LadoVerifyItemResponse'
+          type: array
+        outcome:
+          description: fail if any item fails, else wait if any waits, else confirm
+            if any needs confirming, else pass.
+          enum:
+          - pass
+          - wait
+          - fail
+          - confirm
+          type: string
+        prUrl:
+          type: string
+        reason:
+          description: The code of the first item that fails, else of the first that
+            waits; omitted otherwise.
+          enum:
+          - verifying
+          - checks_pending
+          - checks_failed
+          - commands_running
+          - worktree_not_at_head
+          - commands_failed
+          - command_timed_out
+          - worktree_missing
+          - commit_messages_failed
+          - protected_path
+          - review_pending
+          - changes_requested
+          type: string
+        sha256:
+          description: The record's hash, which an integration approval signs as verificationSha256.
+          type: string
+      required:
+      - headSha
+      - prUrl
+      - outcome
+      - sha256
+      - items
+      - evidence
+      - computedAt
+      type: object
+    LadoVerifyCheckResponse:
+      properties:
+        name:
+          type: string
+        required:
+          description: The base branch's rules require the check. When they name none,
+            every check counts as required.
+          type: boolean
+        status:
+          description: 'AO''s status of the check: passed, failed, cancelled, skipped,
+            queued, in_progress or unknown.'
+          type: string
+      required:
+      - name
+      - status
+      - required
+      type: object
+    LadoVerifyCommandRunResponse:
+      properties:
+        checkRunId:
+          description: The run, for its log; omitted while the command has not run
+            on the head.
+          type: string
+        durationMs:
+          description: How long the finished run took; 0 while it runs.
+          format: int64
+          type: integer
+        exitCode:
+          description: null until the command exited.
+          type:
+          - "null"
+          - integer
+        name:
+          type: string
+        status:
+          description: Omitted while the command has not run on the head. A cancelled
+            run runs again.
+          enum:
+          - running
+          - passed
+          - failed
+          - timed_out
+          - cancelled
+          - error
+          type: string
+      required:
+      - name
+      - exitCode
+      - durationMs
+      type: object
+    LadoVerifyCommitResponse:
+      properties:
+        result:
+          description: 'body_unclear: the subject is Korean and the body reads as
+            English.'
+          enum:
+          - ok
+          - not_korean
+          - unclear
+          - body_unclear
+          type: string
+        sha:
+          type: string
+        subject:
+          type: string
+      required:
+      - sha
+      - subject
+      - result
+      type: object
+    LadoVerifyItemDetailsResponse:
+      properties:
+        alreadyOnBase:
+          description: 'base_branch: the remote base held the head before any approval.'
+          type: boolean
+        branch:
+          description: 'base_branch and protection: the base branch.'
+          type: string
+        checks:
+          description: 'required_checks: every check recorded for the head, lado/integration
+            left out.'
+          items:
+            $ref: '#/components/schemas/LadoVerifyCheckResponse'
+          type: array
+        commits:
+          description: 'commit_messages: the commits after the merge-base.'
+          items:
+            $ref: '#/components/schemas/LadoVerifyCommitResponse'
+          type: array
+        criteria:
+          description: 'evidence: each acceptance criterion''s evidence.'
+          items:
+            $ref: '#/components/schemas/LadoEvidenceCriterionResponse'
+          type: array
+        error:
+          description: 'protection: why the rules could not be read, without secrets.'
+          type: string
+        fileHead:
+          description: 'evidence: the head the file says it describes.'
+          type: string
+        fileSha256:
+          type: string
+        fileVersion:
+          description: 'evidence: the pinned version of lado/evidence.md; omitted
+            without one.'
+          type: integer
+        harness:
+          description: 'review: the reviewer harness.'
+          type: string
+        missing:
+          description: 'protection: what the base branch''s rules lack: pull_request,
+            required_status_checks:lado/integration, non_fast_forward, deletion.'
+          items:
+            type: string
+          type: array
+        moved:
+          description: 'base_branch: local moves of the base branch since the run
+            started that the remote does not hold.'
+          items:
+            $ref: '#/components/schemas/LadoReflogEntryResponse'
+          type: array
+        note:
+          description: 'review: what LADO noted, such as AO choosing the reviewer.'
+          type: string
+        outsideCount:
+          description: 'paths: how many changed paths are outside the plan.'
+          type: integer
+        outsidePlan:
+          description: 'paths: the first 50 changed paths no affected_paths entry
+            matches.'
+          items:
+            type: string
+          type: array
+        prTitle:
+          $ref: '#/components/schemas/LadoVerifyTextResponse'
+          description: 'commit_messages: the PR title.'
+        protected:
+          description: 'paths: changed paths a protected glob matches that the plan
+            does not name.'
+          items:
+            type: string
+          type: array
+        provider:
+          description: 'protection: the repository''s host.'
+          enum:
+          - github
+          - gitlab
+          type: string
+        remote:
+          description: 'base_branch: the base branch''s remote.'
+          type: string
+        repo:
+          description: 'protection: the repository, as owner/name.'
+          type: string
+        required:
+          description: 'required_checks: the check names the base branch''s rules
+            require.'
+          items:
+            type: string
+          type: array
+        requiredChecks:
+          description: 'protection: the checks the rules require.'
+          items:
+            type: string
+          type: array
+        rounds:
+          description: 'review: the review rounds LADO started for the execution,
+            at most 3.'
+          type: integer
+        rulesetRead:
+          description: 'required_checks: LADO read the rules, now or before.'
+          type: boolean
+        runId:
+          description: 'review: the review run that decides.'
+          type: string
+        runs:
+          description: 'commands: each check command''s newest run on the head.'
+          items:
+            $ref: '#/components/schemas/LadoVerifyCommandRunResponse'
+          type: array
+        verdict:
+          description: 'review: that run''s verdict, approved or changes_requested.'
+          type: string
+      type: object
+    LadoVerifyItemResponse:
+      properties:
+        code:
+          description: 'Omitted for a plain pass. not_required: the item does not
+            apply to the execution; verifying: LADO could not compute the item yet.'
+          enum:
+          - not_required
+          - verifying
+          - checks_pending
+          - checks_failed
+          - none_reported
+          - commands_running
+          - worktree_not_at_head
+          - commands_failed
+          - command_timed_out
+          - worktree_missing
+          - no_tests
+          - none_configured
+          - commit_messages_failed
+          - commit_messages_unclear
+          - protected_path
+          - outside_plan
+          - base_moved
+          - reflog_off
+          - already_on_base
+          - no_local_branch
+          - unprotected
+          - protection_unknown
+          - unprotected_gitlab
+          - review_pending
+          - changes_requested
+          - review_inconclusive
+          type: string
+        details:
+          $ref: '#/components/schemas/LadoVerifyItemDetailsResponse'
+        kind:
+          enum:
+          - required_checks
+          - commands
+          - commit_messages
+          - paths
+          - base_branch
+          - protection
+          - review
+          - evidence
+          type: string
+        outcome:
+          description: info never decides; evidence is always info.
+          enum:
+          - pass
+          - wait
+          - fail
+          - confirm
+          - info
+          type: string
+      required:
+      - kind
+      - outcome
+      - details
+      type: object
+    LadoVerifyTextResponse:
+      properties:
+        result:
+          enum:
+          - ok
+          - not_korean
+          - unclear
+          type: string
+        text:
+          type: string
+      required:
+      - text
+      - result
       type: object
     LinkPreviewResponse:
       properties:
@@ -25753,6 +26631,25 @@ components:
       type: object
     UpdateLadoProjectSettingsRequest:
       properties:
+        checkCommands:
+          description: Replace the check commands, 0 to 10. A change needs a human-presence
+            proof, because the daemon runs them outside any agent sandbox; an invalid
+            list refuses with LADO_CHECK_COMMANDS_INVALID and its index, field and
+            reason.
+          items:
+            $ref: '#/components/schemas/LadoCheckCommandBody'
+          maxItems: 10
+          type:
+          - "null"
+          - array
+        checkTimeoutMinutes:
+          description: Each check command's time limit in minutes. It changes without
+            a presence proof.
+          maximum: 120
+          minimum: 5
+          type:
+          - "null"
+          - integer
         ladoMode:
           description: Put the project's workers under LADO's worker gate. Turning
             it on refuses while tracker intake is on; turning it off needs a human-presence
@@ -25805,6 +26702,11 @@ components:
           type:
           - "null"
           - string
+        paths:
+          $ref: '#/components/schemas/LadoRulePaths'
+          description: The protected paths' new globs; only paths.protected takes
+            them. Invalid globs refuse with LADO_PROTECTED_PATHS_INVALID and the first
+            one's index and reason.
         reason:
           description: Goes into the audit log.
           type: string

@@ -1045,6 +1045,17 @@ func (s *verifyStore) ListLadoCheckRuns(_ context.Context, session domain.Sessio
 	return s.runsOf(session, head), nil
 }
 
+func (s *verifyStore) GetLadoCheckRun(_ context.Context, id string) (domain.LadoCheckRun, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, run := range s.runs {
+		if run.ID == id {
+			return run, true, nil
+		}
+	}
+	return domain.LadoCheckRun{}, false, nil
+}
+
 func (s *verifyStore) runsOf(session domain.SessionID, head string) []domain.LadoCheckRun {
 	s.mu.Lock()
 	defer s.mu.Unlock()
