@@ -567,6 +567,31 @@ func (s *Store) LadoSetupVersionsForClientRequest(ctx context.Context, clientReq
 	return pinned, true, nil
 }
 
+// LadoSetupPinnedAt returns when the rule snapshot of the execution a client
+// request id names was taken, which is when its setup was pinned; false when
+// the id names no execution.
+func (s *Store) LadoSetupPinnedAt(ctx context.Context, clientRequestID string) (time.Time, bool, error) {
+	entryID, _, ok := domain.ParseLadoClientRequestID(clientRequestID)
+	if !ok {
+		return time.Time{}, false, nil
+	}
+	entry, err := s.qr.GetLadoQueueEntry(ctx, string(entryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read LADO queue entry: %w", err)
+	}
+	at, err := s.qr.GetLadoPolicySnapshotCreatedAt(ctx, entry.PolicySnapshotID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("read LADO policy snapshot: %w", err)
+	}
+	return at.UTC(), true, nil
+}
+
 // endLadoSetupRow runs end, an update that ends one live row at the given time
 // and counts the rows it changed, together with its audit event. A row that
 // does not exist or ended before changes none and is refused with notLive. A

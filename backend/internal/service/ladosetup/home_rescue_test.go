@@ -157,7 +157,8 @@ func TestExecutionHomeUsesPinsWithoutLiveItems(t *testing.T) {
 	f := newAdoption(t)
 	ids := itemIDs(f.mustAdopt(f.service(), claudeMove(domain.LadoSetupKindInstructions, "CLAUDE.md")))
 	request, early := domain.LadoClientRequestID("lado-queue-1", 1), domain.LadoClientRequestID("lado-queue-2", 1)
-	f.deps.Store = &pinningStore{recordingStore: f.store, request: request, unpinned: early, pins: map[domain.LadoSetupItemID]int{ids["CLAUDE.md"]: 1}}
+	pins := &pinningStore{recordingStore: f.store, request: request, unpinned: early, pins: map[domain.LadoSetupItemID]int{ids["CLAUDE.md"]: 1}, pinnedAt: scanAt.Add(-time.Hour)}
+	f.deps.Store = pins
 	svc := f.service()
 	deleteItem := func(id domain.LadoSetupItemID) {
 		at := scanAt.Add(time.Hour)
@@ -178,11 +179,18 @@ func TestExecutionHomeUsesPinsWithoutLiveItems(t *testing.T) {
 	}
 
 	// An execution approved before the adoption pinned nothing: it gets the
-	// setup as it is now.
+	// items made since as they are now.
 	cmd := itemIDs(f.mustAdopt(svc, claudeMove(domain.LadoSetupKindCommand, "c.md")))["c.md"]
 	mustPrepare(t, svc, ports.LadoSetupHomeInput{SessionID: "early", ProjectID: "p", ClientRequestID: early})
 	wantFile(t, filepath.Join(f.sessionHome("early"), "commands", "c.md"), "command c\n", 0o600)
 	wantMissing(t, filepath.Join(f.sessionHome("early"), "CLAUDE.md"))
+	// One approved after them pinned none because they are off for its
+	// task: it gets none.
+	pins.pinnedAt = scanAt.Add(time.Hour)
+	if env := mustPrepare(t, svc, ports.LadoSetupHomeInput{SessionID: "late", ProjectID: "p", ClientRequestID: early}); env != nil {
+		t.Fatalf("env %v for an execution whose task turned the items off, want none", env)
+	}
+	pins.pinnedAt = scanAt.Add(-time.Hour)
 	// With nothing live and nothing pinned, it launches as it would without
 	// LADO.
 	deleteItem(cmd)

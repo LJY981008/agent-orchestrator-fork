@@ -165,9 +165,10 @@ func (s *Service) OwnsHome(configDir string) bool {
 // snapshot pinned, live or not since, so a later change never reaches it;
 // any other session gets the current versions that are on for its project
 // (decision c), and only while a live managed item of the tool exists
-// (decision a). An execution whose snapshot pinned none, approved before the
-// adoption, gets the current versions too: the closest to what it found in
-// the original places when it was approved.
+// (decision a). An execution whose snapshot pinned none gets the current
+// versions of the items made after the snapshot, as when it was approved
+// before the adoption: the closest to what it found in the original places
+// then. The items the snapshot saw and did not pin are off for its task.
 func (s *Service) sessionItems(ctx context.Context, tool domain.LadoSetupTool, project domain.ProjectID, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error) {
 	execution := false
 	if clientRequestID != "" {
@@ -185,12 +186,19 @@ func (s *Service) sessionItems(ctx context.Context, tool domain.LadoSetupTool, p
 		return nil, false, fmt.Errorf("list the managed setup items: %w", err)
 	}
 	live = itemsOf(live, tool)
+	if execution {
+		at, _, err := s.deps.Store.LadoSetupPinnedAt(ctx, clientRequestID)
+		if err != nil {
+			return nil, false, fmt.Errorf("read when an execution's setup was pinned: %w", err)
+		}
+		live = slices.DeleteFunc(live, func(iv domain.LadoSetupItemWithVersion) bool { return !iv.Item.CreatedAt.After(at) })
+		if len(live) > 0 {
+			s.deps.Log.Warn("LADO gives an execution whose rules pinned no setup the items made since, as they are now",
+				"clientRequest", clientRequestID, "tool", tool, "items", len(live))
+		}
+	}
 	if len(live) == 0 {
 		return nil, false, nil
-	}
-	if execution {
-		s.deps.Log.Warn("LADO gives an execution whose rules pinned no setup the current setup, as it was approved before the adoption",
-			"clientRequest", clientRequestID, "tool", tool)
 	}
 	off, err := s.offForProject(ctx, project)
 	if err != nil {

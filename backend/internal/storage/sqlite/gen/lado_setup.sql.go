@@ -109,6 +109,19 @@ func (q *Queries) DeletePendingLadoSetupAdoption(ctx context.Context, id string)
 	return result.RowsAffected()
 }
 
+const getLadoPolicySnapshotCreatedAt = `-- name: GetLadoPolicySnapshotCreatedAt :one
+SELECT created_at FROM lado_policy_snapshots
+WHERE id = ?
+`
+
+// When a snapshot was taken: the time its setup pins were taken.
+func (q *Queries) GetLadoPolicySnapshotCreatedAt(ctx context.Context, id string) (time.Time, error) {
+	row := q.db.QueryRowContext(ctx, getLadoPolicySnapshotCreatedAt, id)
+	var created_at time.Time
+	err := row.Scan(&created_at)
+	return created_at, err
+}
+
 const getLadoSetupAdoption = `-- name: GetLadoSetupAdoption :one
 SELECT id, created_at, actor, os, plan_sha256, manifest_sha256, state, error_message,
     restored_at, restore_report

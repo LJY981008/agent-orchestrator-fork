@@ -177,6 +177,11 @@ JOIN lado_setup_items i ON i.id = v.item_id
 WHERE p.snapshot_id = ?
 ORDER BY i.tool, i.kind, i.name, i.id;
 
+-- name: GetLadoPolicySnapshotCreatedAt :one
+-- When a snapshot was taken: the time its setup pins were taken.
+SELECT created_at FROM lado_policy_snapshots
+WHERE id = ?;
+
 -- name: CountLadoPolicySnapshotSetupForItem :one
 -- How many snapshot pins name a version of the item.
 SELECT COUNT(*)

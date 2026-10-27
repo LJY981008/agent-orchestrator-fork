@@ -383,6 +383,15 @@ type pinningStore struct {
 	*recordingStore
 	request, unpinned string
 	pins              map[domain.LadoSetupItemID]int
+	// pinnedAt is when both executions' rules were approved.
+	pinnedAt time.Time
+}
+
+func (p *pinningStore) LadoSetupPinnedAt(ctx context.Context, id string) (time.Time, bool, error) {
+	if id != "" && (id == p.request || id == p.unpinned) {
+		return p.pinnedAt, true, nil
+	}
+	return p.recordingStore.LadoSetupPinnedAt(ctx, id)
 }
 
 func (p *pinningStore) LadoSetupVersionsForClientRequest(ctx context.Context, id string) ([]domain.LadoSetupItemWithVersion, bool, error) {

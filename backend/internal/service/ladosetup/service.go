@@ -48,6 +48,7 @@ type Store interface {
 	ListLadoSetupGlobalBindings(ctx context.Context) ([]domain.LadoSetupBinding, error)
 	ListLadoSetupBindings(ctx context.Context, scope domain.LadoRuleScope, scopeID string) ([]domain.LadoSetupBinding, error)
 	LadoSetupVersionsForClientRequest(ctx context.Context, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error)
+	LadoSetupPinnedAt(ctx context.Context, clientRequestID string) (time.Time, bool, error)
 	ListLiveLadoConflictAcceptances(ctx context.Context) ([]domain.LadoConflictAcceptance, error)
 	CreateLadoSetupItem(ctx context.Context, item domain.LadoSetupItem, version domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
 	DeleteLadoSetupItem(ctx context.Context, id domain.LadoSetupItemID, at time.Time, event domain.LadoAuditEvent) error
