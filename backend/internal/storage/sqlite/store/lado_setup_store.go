@@ -19,11 +19,12 @@ import (
 
 // RecordLadoSetupAdoption stores an adoption with the items it adopted, the
 // first version of each, its presence proof and its audit event in one
-// transaction. Each item takes the adoption's id and each version number 1;
-// every item needs exactly one of the versions. An item whose tool, kind and
-// name a live item holds is refused with domain.ErrLadoSetupItemExists, and a
-// proof whose nonce was used before with domain.ErrLadoPresenceReplayed. When
-// any part fails, nothing is kept.
+// transaction: BeginLadoSetupAdoption and CompleteLadoSetupAdoption at once.
+// Each item takes the adoption's id and each version number 1; every item
+// needs exactly one of the versions. An item whose tool, kind and name a live
+// item holds is refused with domain.ErrLadoSetupItemExists, and a proof whose
+// nonce was used before with domain.ErrLadoPresenceReplayed. When any part
+// fails, nothing is kept.
 func (s *Store) RecordLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error {
 	if err := checkLadoSetupFirstVersions(items, versions); err != nil {
 		return fmt.Errorf("record LADO setup adoption: %w", err)
@@ -33,37 +34,142 @@ func (s *Store) RecordLadoSetupAdoption(ctx context.Context, adoption domain.Lad
 	}
 	defer s.writeMu.Unlock()
 	err := s.inTx(ctx, "record LADO setup adoption", func(q *gen.Queries) error {
-		if err := insertLadoPresenceProofIfAny(ctx, q, proof); err != nil {
+		state := adoption.State
+		adoption.State = domain.LadoSetupAdoptionPending
+		if err := beginLadoSetupAdoptionTx(ctx, q, adoption, proof); err != nil {
 			return err
 		}
-		if err := q.InsertLadoSetupAdoption(ctx, gen.InsertLadoSetupAdoptionParams{
-			ID:             string(adoption.ID),
-			CreatedAt:      adoption.CreatedAt.UTC(),
-			Actor:          adoption.Actor,
-			Os:             adoption.OS,
-			PlanSha256:     adoption.PlanSHA256,
-			ManifestSha256: adoption.ManifestSHA256,
-			State:          string(adoption.State),
-			ErrorMessage:   adoption.ErrorMessage,
-		}); err != nil {
-			return err
-		}
-		for _, item := range items {
-			item.AdoptionID = adoption.ID
-			if err := insertLadoSetupItemTx(ctx, q, item); err != nil {
-				return err
-			}
-		}
-		for _, v := range versions {
-			v.Version = 1
-			if err := insertLadoSetupItemVersionTx(ctx, q, v); err != nil {
-				return err
-			}
-		}
-		_, err := appendLadoAuditEventTx(ctx, q, event)
-		return err
+		adoption.State = state
+		return completeLadoSetupAdoptionTx(ctx, q, adoption, items, versions, event)
 	})
 	return unwrapLadoSentinel(err)
+}
+
+// BeginLadoSetupAdoption records a pending adoption with its presence proof
+// in one transaction, before it removes the first original. A proof whose
+// nonce was used before is refused with domain.ErrLadoPresenceReplayed, and
+// nothing is kept.
+func (s *Store) BeginLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, proof *domain.LadoPresenceProof) error {
+	if adoption.State != domain.LadoSetupAdoptionPending {
+		return fmt.Errorf("begin LADO setup adoption: state %q, want pending", adoption.State)
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	err := s.inTx(ctx, "begin LADO setup adoption", func(q *gen.Queries) error {
+		return beginLadoSetupAdoptionTx(ctx, q, adoption, proof)
+	})
+	return unwrapLadoSentinel(err)
+}
+
+// CompleteLadoSetupAdoption ends a pending adoption as adoption.State,
+// completed or partial with its error message, and stores the items whose
+// originals it removed, their first versions and its audit event in one
+// transaction, as RecordLadoSetupAdoption does. An adoption that is not
+// pending is refused.
+func (s *Store) CompleteLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent) error {
+	if err := checkLadoSetupFirstVersions(items, versions); err != nil {
+		return fmt.Errorf("complete LADO setup adoption: %w", err)
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	err := s.inTx(ctx, "complete LADO setup adoption", func(q *gen.Queries) error {
+		return completeLadoSetupAdoptionTx(ctx, q, adoption, items, versions, event)
+	})
+	return unwrapLadoSentinel(err)
+}
+
+// AbandonLadoSetupAdoption removes a pending adoption that removed nothing.
+// Its proof stays used.
+func (s *Store) AbandonLadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	n, err := s.qw.DeletePendingLadoSetupAdoption(ctx, string(id))
+	if err != nil {
+		return fmt.Errorf("abandon LADO setup adoption: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("LADO setup adoption %s is not pending", id)
+	}
+	return nil
+}
+
+// MarkInterruptedLadoSetupAdoptions marks every pending adoption partial with
+// message: a daemon stopped while it removed originals. The daemon calls it
+// when it starts, before any adoption can run. It returns how many it marked.
+func (s *Store) MarkInterruptedLadoSetupAdoptions(ctx context.Context, message string) (int64, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkPendingLadoSetupAdoptionsInterrupted(ctx, message)
+	if err != nil {
+		return 0, fmt.Errorf("mark interrupted LADO setup adoptions: %w", err)
+	}
+	return n, nil
+}
+
+// LadoPresenceProofUsed reports whether a presence proof with nonce was
+// stored, so a reused proof can be refused before the work it would allow.
+// Storing it later refuses a reuse in any case.
+func (s *Store) LadoPresenceProofUsed(ctx context.Context, nonce string) (bool, error) {
+	n, err := s.qr.CountLadoPresenceProofsByNonce(ctx, nonce)
+	if err != nil {
+		return false, fmt.Errorf("read LADO presence proof: %w", err)
+	}
+	return n > 0, nil
+}
+
+func beginLadoSetupAdoptionTx(ctx context.Context, q *gen.Queries, adoption domain.LadoSetupAdoption, proof *domain.LadoPresenceProof) error {
+	if err := insertLadoPresenceProofIfAny(ctx, q, proof); err != nil {
+		return err
+	}
+	return q.InsertLadoSetupAdoption(ctx, gen.InsertLadoSetupAdoptionParams{
+		ID:             string(adoption.ID),
+		CreatedAt:      adoption.CreatedAt.UTC(),
+		Actor:          adoption.Actor,
+		Os:             adoption.OS,
+		PlanSha256:     adoption.PlanSHA256,
+		ManifestSha256: adoption.ManifestSHA256,
+		State:          string(adoption.State),
+		ErrorMessage:   adoption.ErrorMessage,
+	})
+}
+
+func completeLadoSetupAdoptionTx(ctx context.Context, q *gen.Queries, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent) error {
+	if adoption.State != domain.LadoSetupAdoptionCompleted && adoption.State != domain.LadoSetupAdoptionPartial {
+		return fmt.Errorf("an adoption ends completed or partial, not %q", adoption.State)
+	}
+	n, err := q.CompleteLadoSetupAdoption(ctx, gen.CompleteLadoSetupAdoptionParams{
+		State:        string(adoption.State),
+		ErrorMessage: adoption.ErrorMessage,
+		ID:           string(adoption.ID),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("LADO setup adoption %s is not pending", adoption.ID)
+	}
+	for _, item := range items {
+		item.AdoptionID = adoption.ID
+		if err := insertLadoSetupItemTx(ctx, q, item); err != nil {
+			return err
+		}
+	}
+	for _, v := range versions {
+		v.Version = 1
+		if err := insertLadoSetupItemVersionTx(ctx, q, v); err != nil {
+			return err
+		}
+	}
+	_, err = appendLadoAuditEventTx(ctx, q, event)
+	return err
 }
 
 // MarkLadoSetupAdoptionPartial records that removing an adoption's originals

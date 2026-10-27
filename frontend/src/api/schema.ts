@@ -7097,10 +7097,10 @@ export interface components {
              */
             restoredAt?: null | string;
             /**
-             * @description partial: removing the originals stopped; what moved is managed, and restore puts back what was removed.
+             * @description pending: removing the originals is under way. partial: removing them stopped, or a daemon stopped meanwhile; what moved is managed, and restore puts back what was removed.
              * @enum {string}
              */
-            state: "completed" | "partial";
+            state: "pending" | "completed" | "partial";
         };
         LadoSetupBackupEntryResponse: {
             /** @enum {string} */

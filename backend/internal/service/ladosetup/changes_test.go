@@ -227,12 +227,15 @@ func TestChangeDryRunWritesNothing(t *testing.T) {
 	f.svc.SetPolicy(policy)
 
 	db, lado, home := f.dbState(), treeState(t, f.state), f.homeState()
-	edit := f.dryRun(Change{Op: OpEdit, ItemID: ids["CLAUDE.md"], BaseVersion: 1, Content: jsonText("# me, edited in the app\n")})
-	if edit.Before == nil || edit.Before.Text != "# me\n" || edit.After == nil || edit.After.Text != "# me, edited in the app\n" ||
+	// The edited CLAUDE.md waits for keep or revert before an edit.
+	_, err := f.svc.Apply(ctx, Change{Op: OpEdit, ItemID: ids["CLAUDE.md"], BaseVersion: 1, Content: jsonText("# me, edited in the app\n"), DryRun: true}, nil)
+	wantAPIError(t, err, CodeDriftPending)
+	edit := f.dryRun(Change{Op: OpEdit, ItemID: ids["model"], BaseVersion: 1, Content: json.RawMessage(`"sonnet"`)})
+	if edit.Before == nil || edit.Before.Text != `"opus"` || edit.After == nil || edit.After.Text != `"sonnet"` ||
 		edit.Version == nil || edit.Version.ID != "" || edit.Version.Version != 2 || edit.NeedsPresence {
 		t.Fatalf("edit dry run %+v", edit)
 	}
-	if len(edit.Impact.Projects) != 1 || len(policy.seen) != 2 || policy.seen[0].Item == nil || policy.seen[0].Item.Version.SHA256 != sumOf([]byte("# me, edited in the app\n")) {
+	if len(edit.Impact.Projects) != 1 || len(policy.seen) != 2 || policy.seen[0].Item == nil || policy.seen[0].Item.Version.SHA256 != sumOf([]byte(`"sonnet"`)) {
 		t.Fatalf("impact %+v from the changes %+v", edit.Impact, policy.seen)
 	}
 	create := f.dryRun(Change{Op: OpCreate, Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindSkill, Name: "fresh", Content: jsonText(freshSkill)})

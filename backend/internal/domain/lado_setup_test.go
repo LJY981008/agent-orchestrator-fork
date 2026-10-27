@@ -391,6 +391,7 @@ func TestLadoSetupCodesAreStable(t *testing.T) {
 			{string(domain.LadoSetupModeExec), "exec"},
 		},
 		"adoption state": {
+			{string(domain.LadoSetupAdoptionPending), "pending"},
 			{string(domain.LadoSetupAdoptionCompleted), "completed"},
 			{string(domain.LadoSetupAdoptionPartial), "partial"},
 		},
@@ -426,6 +427,7 @@ func TestLadoSetupCodesAreStable(t *testing.T) {
 			{string(domain.LadoSetupReasonRepoTracked), "repo_tracked"},
 			{string(domain.LadoSetupReasonManagedSettings), "managed_settings"},
 			{string(domain.LadoSetupReasonSymlink), "symlink"},
+			{string(domain.LadoSetupReasonRootIsLink), "root_is_link"},
 			{string(domain.LadoSetupReasonUnreadable), "unreadable"},
 		},
 		"action": {

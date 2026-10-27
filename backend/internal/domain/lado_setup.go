@@ -135,6 +135,11 @@ type LadoSetupAdoptionState string
 
 // Adoption states.
 const (
+	// LadoSetupAdoptionPending means the adoption is removing the originals.
+	// It is recorded, with its presence proof, before the first removal, so a
+	// daemon that stops in between leaves a row that restore can undo; the
+	// next start marks it partial.
+	LadoSetupAdoptionPending LadoSetupAdoptionState = "pending"
 	// LadoSetupAdoptionCompleted means every moved original was removed.
 	LadoSetupAdoptionCompleted LadoSetupAdoptionState = "completed"
 	// LadoSetupAdoptionPartial means removing the originals stopped with an
@@ -454,6 +459,10 @@ const (
 	// holds one. LADO never adopts through a link: removing or rewriting it
 	// would change the link or what it points to.
 	LadoSetupReasonSymlink LadoSetupReason = "symlink"
+	// LadoSetupReasonRootIsLink is an entry under a tool folder or file that
+	// is itself a symbolic link, as into a dotfiles repository. Adoption
+	// would remove what the link points to, so LADO adopts nothing there.
+	LadoSetupReasonRootIsLink LadoSetupReason = "root_is_link"
 	// LadoSetupReasonUnreadable is something LADO could not read as setup: a
 	// file it may not open, a settings file that does not parse, or content
 	// a version cannot hold, such as a special file, a file name that is not

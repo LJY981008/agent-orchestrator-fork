@@ -148,7 +148,8 @@ func TestInventoryDoesNotAdoptThroughALinkedSettingsFile(t *testing.T) {
 	if env.KeptInPlace != nil {
 		t.Fatalf("env that is not adopted keeps %v in place", env.KeptInPlace)
 	}
-	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationClaudeJSON, domain.LadoSetupKindMCPServer, "figma"), domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
+	// ~/.claude.json is a root of its own: a link there is a linked root.
+	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationClaudeJSON, domain.LadoSetupKindMCPServer, "figma"), domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonRootIsLink)
 	wantStatus(t, entryAt(t, inv, domain.LadoSetupLocationCodexHome, domain.LadoSetupKindMCPServer, "figma"), domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonSymlink)
 	wantStatus(t, entryAtPath(t, inv, filepath.Join(h.codex, "config.toml")+"#model"), domain.LadoSetupStatusNotManaged, domain.LadoSetupReasonAOSetsPerSession)
 }

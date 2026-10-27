@@ -254,7 +254,7 @@ func (sc *scanner) claudeJSON() {
 	}
 	others := len(keys)
 	if value, ok := keys[claudeMCPKey]; ok {
-		sc.claudeServers(path, value, info.Mode()&fs.ModeSymlink != 0)
+		sc.claudeServers(path, value, info.Mode()&fs.ModeSymlink != 0 && !sc.linked[domain.LadoSetupLocationClaudeJSON])
 		others--
 	}
 	if others > 0 {

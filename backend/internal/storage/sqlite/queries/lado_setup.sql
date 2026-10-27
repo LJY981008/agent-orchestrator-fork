@@ -3,6 +3,28 @@ INSERT INTO lado_setup_adoptions (
     id, created_at, actor, os, plan_sha256, manifest_sha256, state, error_message
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
+-- name: CompleteLadoSetupAdoption :execrows
+-- Compare-and-set: a pending adoption ends once, completed or partial.
+UPDATE lado_setup_adoptions
+SET state = ?, error_message = ?
+WHERE id = ? AND state = 'pending';
+
+-- name: DeletePendingLadoSetupAdoption :execrows
+-- A pending adoption that removed nothing leaves no row.
+DELETE FROM lado_setup_adoptions
+WHERE id = ? AND state = 'pending';
+
+-- name: MarkPendingLadoSetupAdoptionsInterrupted :execrows
+-- The adoptions a daemon that stopped left pending. Restore stays available.
+UPDATE lado_setup_adoptions
+SET state = 'partial', error_message = ?
+WHERE state = 'pending';
+
+-- name: CountLadoPresenceProofsByNonce :one
+-- Whether a presence proof was used, read before an adoption rescans.
+SELECT COUNT(*) FROM lado_presence_proofs
+WHERE nonce = ?;
+
 -- name: MarkLadoSetupAdoptionPartial :execrows
 -- An adoption that stopped while removing the originals. The items it
 -- recorded stay live, and restore stays available.

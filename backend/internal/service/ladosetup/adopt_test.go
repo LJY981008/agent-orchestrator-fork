@@ -96,8 +96,8 @@ type recordingStore struct {
 	events []domain.LadoAuditEvent
 }
 
-func (r *recordingStore) RecordLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error {
-	err := r.Store.RecordLadoSetupAdoption(ctx, adoption, items, versions, event, proof)
+func (r *recordingStore) CompleteLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent) error {
+	err := r.Store.CompleteLadoSetupAdoption(ctx, adoption, items, versions, event)
 	if err == nil {
 		r.events = append(r.events, event)
 	}
@@ -970,30 +970,39 @@ func TestAdoptionPlanMismatchWritesNothing(t *testing.T) {
 // that records nothing: the store refuses the adoption (here, a replayed
 // presence proof). The removed originals come back from the backup, and the
 // managed folder loses the unrecorded items.
+// failingStore fails to record adoptions, after doing to the original
+// folders what it is given.
+type failingStore struct {
+	*recordingStore
+	before func()
+}
+
+func (f *failingStore) CompleteLadoSetupAdoption(context.Context, domain.LadoSetupAdoption, []domain.LadoSetupItem, []domain.LadoSetupItemVersion, domain.LadoAuditEvent) error {
+	if f.before != nil {
+		f.before()
+	}
+	return errors.New("the database is gone")
+}
+
 func TestAdoptionPutsBackWhenRecordFails(t *testing.T) {
 	f := newAdoption(t)
-	svc := f.service()
-	presence := f.presence()
-	adoptWith := func(entries ...AdoptEntry) error {
-		p := f.preview(svc, entries...)
-		_, err := svc.Adopt(context.Background(), AdoptRequest{Entries: entries, PlanSHA256: p.PlanSHA256, Presence: presence})
-		return err
-	}
-	if err := adoptWith(claudeMove(domain.LadoSetupKindInstructions, "CLAUDE.md")); err != nil {
-		t.Fatal(err)
-	}
+	f.mustAdopt(f.service(), claudeMove(domain.LadoSetupKindInstructions, "CLAUDE.md"))
 	original := []string{filepath.Join(f.claude, "agents", "a.md"), filepath.Join(f.claude, "skills", "review"), filepath.Join(f.claude, "settings.json")}
 	before := map[string]map[string]string{}
 	for _, path := range original {
 		before[path] = treeState(t, path)
 	}
-	err := adoptWith(
+	f.deps.Store = &failingStore{recordingStore: f.store}
+	_, err := f.adopt(f.service(),
 		claudeMove(domain.LadoSetupKindAgent, "a.md"),
 		claudeMove(domain.LadoSetupKindSkill, "review"),
 		claudeMove(domain.LadoSetupKindSetting, "model"),
 		claudeMove(domain.LadoSetupKindSetting, "env"),
 	)
-	wantAPIError(t, err, "LADO_PRESENCE_REPLAYED")
+	details := wantAPIError(t, err, CodeAdoptionFailed)
+	if details["stage"] != stageRecord || details["putBackFailed"] != nil {
+		t.Fatalf("details %v, want the record stage with everything put back", details)
+	}
 	for _, path := range original {
 		if diffs := diffStates(before[path], treeState(t, path)); len(diffs) > 0 {
 			t.Fatalf("%s was not put back as it was:\n%s", path, strings.Join(diffs, "\n"))
@@ -1007,5 +1016,9 @@ func TestAdoptionPutsBackWhenRecordFails(t *testing.T) {
 	}
 	if got := liveItemNames(t, f.store); !slices.Equal(got, []string{"instructions:CLAUDE.md"}) {
 		t.Fatalf("live items %v", got)
+	}
+	// Everything went back, so the pending adoption leaves no row.
+	if list := adoptions(t, f.store); len(list) != 1 || list[0].State != domain.LadoSetupAdoptionCompleted {
+		t.Fatalf("adoptions %+v, want the first one only", list)
 	}
 }

@@ -34,6 +34,8 @@ type scanner struct {
 	deps    Deps
 	entries []domain.LadoSetupEntry
 	roots   []Root
+	// linked are the locations whose root is itself a symbolic link.
+	linked map[domain.LadoSetupLocation]bool
 }
 
 func (s *Service) scan(ctx context.Context) (Inventory, error) {
@@ -48,7 +50,7 @@ func (s *Service) scan(ctx context.Context) (Inventory, error) {
 			return Inventory{}, fmt.Errorf("list the setup adoptions: %w", err)
 		}
 	}
-	sc := &scanner{deps: s.deps}
+	sc := &scanner{deps: s.deps, linked: linkedRoots(s.deps)}
 	sc.managed(items)
 	sc.claudeDir(ctx)
 	sc.claudeJSON()
@@ -129,9 +131,35 @@ func (sc *scanner) add(e domain.LadoSetupEntry, status domain.LadoSetupStatus, r
 	sc.entries = append(sc.entries, e)
 }
 
+// linkedRoots are the locations whose root, the Claude folder,
+// ~/.claude.json or the Codex folder, is a symbolic link, as into a dotfiles
+// repository: adopting there would remove what the link points to. A
+// ~/.claude.json inside a linked Claude folder lies behind the link as well.
+// Only the root itself counts, not the folders above it.
+func linkedRoots(deps Deps) map[domain.LadoSetupLocation]bool {
+	isLink := func(p string) bool {
+		info, err := os.Lstat(p)
+		return p != "" && err == nil && info.Mode()&fs.ModeSymlink != 0
+	}
+	linked := map[domain.LadoSetupLocation]bool{
+		domain.LadoSetupLocationClaudeDir:  isLink(deps.ClaudeDir),
+		domain.LadoSetupLocationClaudeJSON: isLink(deps.ClaudeJSON),
+		domain.LadoSetupLocationCodexHome:  isLink(deps.CodexHome),
+	}
+	if linked[domain.LadoSetupLocationClaudeDir] && deps.ClaudeJSON != "" && filepath.Dir(filepath.Clean(deps.ClaudeJSON)) == filepath.Clean(deps.ClaudeDir) {
+		linked[domain.LadoSetupLocationClaudeJSON] = true
+	}
+	return linked
+}
+
 // adoptable appends an entry LADO can adopt, with its content's size and sum
-// and what the adoption preview proposes for it.
+// and what the adoption preview proposes for it. Under a linked root it is
+// not adoptable.
 func (sc *scanner) adoptable(e domain.LadoSetupEntry, size int64, sum string) {
+	if sc.linked[e.Location] {
+		sc.add(e, domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonRootIsLink)
+		return
+	}
 	e.Status, e.Size, e.SHA256 = domain.LadoSetupStatusAdoptable, size, sum
 	e.DefaultAction = domain.LadoSetupDefaultAction(e.Tool, e.Kind, e.Name)
 	sc.entries = append(sc.entries, e)

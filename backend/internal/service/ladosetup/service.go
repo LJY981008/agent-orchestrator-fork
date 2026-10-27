@@ -35,7 +35,14 @@ type Store interface {
 	ListLadoSetupAdoptions(ctx context.Context) ([]domain.LadoSetupAdoption, error)
 	LadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) (domain.LadoSetupAdoption, bool, error)
 	ListLadoSetupItemsForAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) ([]domain.LadoSetupItem, error)
-	RecordLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
+	// An adoption is recorded pending with its proof before it removes an
+	// original, and completed, partial or abandoned after.
+	BeginLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, proof *domain.LadoPresenceProof) error
+	CompleteLadoSetupAdoption(ctx context.Context, adoption domain.LadoSetupAdoption, items []domain.LadoSetupItem, versions []domain.LadoSetupItemVersion, event domain.LadoAuditEvent) error
+	AbandonLadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID) error
+	MarkLadoSetupAdoptionPartial(ctx context.Context, id domain.LadoSetupAdoptionID, message string) error
+	MarkInterruptedLadoSetupAdoptions(ctx context.Context, message string) (int64, error)
+	LadoPresenceProofUsed(ctx context.Context, nonce string) (bool, error)
 	RestoreLadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdoptionID, report json.RawMessage, at time.Time, event domain.LadoAuditEvent, proof *domain.LadoPresenceProof) error
 	AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error)
 	ListLadoSetupGlobalBindings(ctx context.Context) ([]domain.LadoSetupBinding, error)

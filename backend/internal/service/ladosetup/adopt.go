@@ -40,6 +40,9 @@ const (
 	// CodeChanged is a plan hash that is not the current one: the setup
 	// changed after the preview.
 	CodeChanged = "LADO_SETUP_CHANGED"
+	// CodeRootIsLink is an entry under a tool folder or file that is itself
+	// a symbolic link (domain.LadoSetupReasonRootIsLink); details name it.
+	CodeRootIsLink = "LADO_SETUP_ROOT_IS_LINK"
 	// CodeOSUnverified is an OS where delivery of a tool's setup was not
 	// measured (domain.LadoSetupDeliveryVerified).
 	CodeOSUnverified = "LADO_SETUP_OS_UNVERIFIED"
@@ -273,6 +276,9 @@ type stageError struct {
 	// names the developer's home.
 	path string
 	err  error
+	// putBackFailed are the originals, by their paths under their roots,
+	// that an adoption the store did not record could not put back.
+	putBackFailed []string
 }
 
 func (e *stageError) Error() string {
@@ -295,6 +301,12 @@ func (s *Service) Adopt(ctx context.Context, req AdoptRequest) (AdoptResult, err
 		}
 		return AdoptResult{Preview: plan.preview}, nil
 	}
+	// The desktop app's confirmation comes first: its proof lives a minute,
+	// and the rescan below can take longer.
+	ap, err := s.adoptionApproval(ctx, req)
+	if err != nil {
+		return AdoptResult{}, err
+	}
 	if err := s.lockWrite(ctx); err != nil {
 		return AdoptResult{}, err
 	}
@@ -303,8 +315,7 @@ func (s *Service) Adopt(ctx context.Context, req AdoptRequest) (AdoptResult, err
 	if err != nil {
 		return AdoptResult{}, err
 	}
-	ap, err := s.confirm(req, plan)
-	if err != nil {
+	if err := s.confirm(req, plan); err != nil {
 		return AdoptResult{}, err
 	}
 	id := domain.LadoSetupAdoptionID(s.deps.NewID())
@@ -316,11 +327,19 @@ func (s *Service) Adopt(ctx context.Context, req AdoptRequest) (AdoptResult, err
 	if err != nil {
 		return AdoptResult{}, s.adoptionFailed(id, err, false)
 	}
+	// The adoption and its proof are recorded before the first removal: a
+	// reused proof stops here, and a daemon that stops while removing leaves
+	// a row that restore can undo.
+	adoption, err := s.begin(ctx, copied, ap)
+	if err != nil {
+		s.discardManaged(copied.items)
+		return AdoptResult{}, err
+	}
 	// From the first removal on, the adoption runs to its record: a caller
 	// that goes away must not leave originals removed and nothing recorded.
 	ctx = context.WithoutCancel(ctx)
 	removed := s.removeOriginals(ctx, copied)
-	rec, err := s.record(ctx, removed, ap)
+	rec, err := s.record(ctx, adoption, removed, ap)
 	if err != nil {
 		return AdoptResult{}, s.adoptionFailed(id, err, false)
 	}
@@ -456,6 +475,11 @@ func findAdoptable(inv Inventory, r AdoptEntry) (domain.LadoSetupEntry, error) {
 	for _, e := range inv.Entries {
 		if !isOriginal(e.Location) || e.Tool != r.Tool || e.Kind != r.Kind || e.Name != r.Name {
 			continue
+		}
+		if e.Reason == domain.LadoSetupReasonRootIsLink {
+			return domain.LadoSetupEntry{}, apierr.Conflict(CodeRootIsLink,
+				"This folder is a link to another place, such as a dotfiles repository. LADO does not adopt through it, so nothing there is removed.",
+				map[string]any{"tool": string(r.Tool), "kind": string(r.Kind), "name": r.Name, "root": string(e.Location)})
 		}
 		if e.Status != domain.LadoSetupStatusAdoptable {
 			return domain.LadoSetupEntry{}, refuse(string(e.Reason))
@@ -605,17 +629,46 @@ func planSHA256(goos string, entries []planEntry) string {
 	return sha256Hex(data)
 }
 
+// adoptionApproval checks the desktop app's confirmation of the plan the
+// request names, before anything is scanned: the proof's signature and
+// expiry, and that it was not used before.
+func (s *Service) adoptionApproval(ctx context.Context, req AdoptRequest) (approval, error) {
+	if err := checkAdoptEntries(req.Entries); err != nil {
+		return approval{}, err
+	}
+	if req.PlanSHA256 == "" {
+		return approval{}, apierr.Invalid(CodeAdoptionInvalid, "Preview the adoption first, then confirm it.", nil)
+	}
+	if req.Presence == nil {
+		return approval{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED",
+			"Adopt your local setup in the AO desktop app. It asks you to confirm, then sends the adoption itself.")
+	}
+	if err := s.available(); err != nil {
+		return approval{}, err
+	}
+	proof, err := req.Presence(domain.LadoPresenceSetupAdopt, req.PlanSHA256)
+	if err != nil {
+		return approval{}, err
+	}
+	used, err := s.deps.Store.LadoPresenceProofUsed(ctx, proof.Nonce)
+	if err != nil {
+		return approval{}, err
+	}
+	if used {
+		return approval{}, ladopresence.Replayed()
+	}
+	return approvalOf(proof), nil
+}
+
 // confirm checks that the request applies the current plan and that nothing
-// holds it back, then takes the desktop app's confirmation.
-func (s *Service) confirm(req AdoptRequest, plan adoptionPlan) (approval, error) {
+// holds it back.
+func (s *Service) confirm(req AdoptRequest, plan adoptionPlan) error {
 	p := plan.preview
 	switch {
-	case req.PlanSHA256 == "":
-		return approval{}, apierr.Invalid(CodeAdoptionInvalid, "Preview the adoption first, then confirm it.", nil)
 	case req.PlanSHA256 != p.PlanSHA256:
-		return approval{}, setupChanged(p.PlanSHA256)
+		return setupChanged(p.PlanSHA256)
 	case len(plan.moves()) == 0:
-		return approval{}, apierr.Invalid(CodeAdoptionInvalid, "Choose at least one entry to move.", nil)
+		return apierr.Invalid(CodeAdoptionInvalid, "Choose at least one entry to move.", nil)
 	}
 	for _, c := range p.Conflicts {
 		if c.Code == ConflictHookPathMoved {
@@ -623,27 +676,19 @@ func (s *Service) confirm(req AdoptRequest, plan adoptionPlan) (approval, error)
 			for k, v := range c.Details {
 				details[k] = v
 			}
-			return approval{}, apierr.Conflict(ConflictHookPathMoved,
+			return apierr.Conflict(ConflictHookPathMoved,
 				"A command names a file that would move, and LADO cannot rewrite it. Move the setting that holds it too, or keep the file in place.", details)
 		}
 	}
 	pre := p.Preconditions
 	if len(pre.Unverified) > 0 {
-		return approval{}, apierr.Conflict(CodeOSUnverified, "Adoption is not available on this OS yet: LADO has not checked that sessions get the adopted setup here.",
+		return apierr.Conflict(CodeOSUnverified, "Adoption is not available on this OS yet: LADO has not checked that sessions get the adopted setup here.",
 			map[string]any{"os": pre.OS, "tools": pre.Unverified})
 	}
 	if len(pre.Sessions) > 0 || len(pre.Processes) > 0 {
-		return approval{}, apierr.Conflict(CodeToolRunning, "Close the Claude Code and Codex sessions and programs listed, then adopt again.", runningDetails(pre))
+		return apierr.Conflict(CodeToolRunning, "Close the Claude Code and Codex sessions and programs listed, then adopt again.", runningDetails(pre))
 	}
-	if req.Presence == nil {
-		return approval{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED",
-			"Adopt your local setup in the AO desktop app. It asks you to confirm, then sends the adoption itself.")
-	}
-	proof, err := req.Presence(domain.LadoPresenceSetupAdopt, p.PlanSHA256)
-	if err != nil {
-		return approval{}, err
-	}
-	return approvalOf(proof), nil
+	return nil
 }
 
 // approvalOf is the approval a presence proof gives: the developer, or the
@@ -964,19 +1009,9 @@ type recorded struct {
 	approval approval
 }
 
-// record stores the adoption with the items whose originals are gone, their
-// first versions, the presence proof and the audit event in one
-// transaction. A removal that stopped records a partial adoption; one that
-// removed nothing records nothing. When nothing is recorded, the removed
-// originals are put back and the managed folder loses this adoption's
-// items.
-func (s *Service) record(ctx context.Context, r removal, ap approval) (recorded, error) {
-	s.stage(stageRecord)
-	c := r.copied
-	if len(r.removed) == 0 {
-		s.discardManaged(c.items)
-		return recorded{}, r.failure
-	}
+// begin records the adoption pending with its presence proof, before any
+// original is removed. A proof used meanwhile is refused here.
+func (s *Service) begin(ctx context.Context, c managedCopy, ap approval) (domain.LadoSetupAdoption, error) {
 	adoption := domain.LadoSetupAdoption{
 		ID:             c.backup.manifest.AdoptionID,
 		CreatedAt:      s.now(),
@@ -984,8 +1019,35 @@ func (s *Service) record(ctx context.Context, r removal, ap approval) (recorded,
 		OS:             s.deps.GOOS,
 		PlanSHA256:     c.backup.plan.preview.PlanSHA256,
 		ManifestSHA256: c.backup.sha256,
-		State:          domain.LadoSetupAdoptionCompleted,
+		State:          domain.LadoSetupAdoptionPending,
 	}
+	proof := ap.proof
+	if err := s.deps.Store.BeginLadoSetupAdoption(ctx, adoption, &proof); err != nil {
+		if errors.Is(err, domain.ErrLadoPresenceReplayed) {
+			return domain.LadoSetupAdoption{}, ladopresence.Replayed()
+		}
+		return domain.LadoSetupAdoption{}, s.adoptionFailed(adoption.ID, &stageError{stage: stageRecord, err: err}, false)
+	}
+	return adoption, nil
+}
+
+// record ends the pending adoption with the items whose originals are gone,
+// their first versions and the audit event in one transaction. A removal
+// that stopped records a partial adoption; one that removed nothing leaves
+// no adoption. When the store cannot record it, the removed originals are put
+// back and the managed folder loses this adoption's items; what cannot be put
+// back keeps the adoption partial, so restore finds it in the backup.
+func (s *Service) record(ctx context.Context, adoption domain.LadoSetupAdoption, r removal, ap approval) (recorded, error) {
+	s.stage(stageRecord)
+	c := r.copied
+	if len(r.removed) == 0 {
+		s.discardManaged(c.items)
+		if err := s.deps.Store.AbandonLadoSetupAdoption(ctx, adoption.ID); err != nil {
+			s.deps.Log.Warn("LADO could not drop an adoption that removed nothing", "adoption", adoption.ID, "err", err)
+		}
+		return recorded{}, r.failure
+	}
+	adoption.State = domain.LadoSetupAdoptionCompleted
 	if r.failure != nil {
 		adoption.State = domain.LadoSetupAdoptionPartial
 		adoption.ErrorMessage = fmt.Sprintf("Adoption stopped while removing %s: %s. Restore puts back what was moved.", r.failure.path, plainError(r.failure.err))
@@ -1016,14 +1078,16 @@ func (s *Service) record(ctx context.Context, r removal, ap approval) (recorded,
 		"dev":              ap.proof.Dev,
 	})
 	event := domain.LadoAuditEvent{At: adoption.CreatedAt, Actor: ap.actor, Action: actionAdopted, SubjectKind: subjectAdoption, SubjectID: string(adoption.ID), Payload: payload}
-	proof := ap.proof
-	if err := s.deps.Store.RecordLadoSetupAdoption(ctx, adoption, items, versions, event, &proof); err != nil {
-		s.putBack(r)
+	if err := s.deps.Store.CompleteLadoSetupAdoption(ctx, adoption, items, versions, event); err != nil {
+		failed := s.putBack(r)
 		s.discardManaged(c.items)
-		if errors.Is(err, domain.ErrLadoPresenceReplayed) {
-			return recorded{}, ladopresence.Replayed()
+		if len(failed) == 0 {
+			err = errors.Join(err, s.deps.Store.AbandonLadoSetupAdoption(ctx, adoption.ID))
+		} else if merr := s.deps.Store.MarkLadoSetupAdoptionPartial(ctx, adoption.ID,
+			"LADO could not record this adoption and could not put back every original it removed. Restore puts back the rest from the backup."); merr != nil {
+			s.deps.Log.Error("LADO could not mark an unrecorded adoption partial; the daemon does when it starts again", "adoption", adoption.ID, "err", merr)
 		}
-		return recorded{}, &stageError{stage: stageRecord, err: err}
+		return recorded{}, &stageError{stage: stageRecord, err: err, putBackFailed: failed}
 	}
 	if r.failure != nil {
 		s.discardManaged(c.items[len(r.removed):])
@@ -1031,13 +1095,40 @@ func (s *Service) record(ctx context.Context, r removal, ap approval) (recorded,
 	return recorded{removal: r, adoption: adoption, approval: ap}, nil
 }
 
+// interruptedMessage is the error of an adoption a daemon stopped while it
+// removed originals.
+const interruptedMessage = "Adoption was interrupted: the daemon stopped while it removed originals. Restore puts back what was removed."
+
+// RecoverAdoptions marks partial the adoptions a daemon that stopped left
+// pending, so restore offers them. The daemon calls it when it starts; it
+// waits for an adoption in progress, whose row is its own.
+func (s *Service) RecoverAdoptions(ctx context.Context) error {
+	if s.deps.Store == nil {
+		return nil
+	}
+	if err := s.lockWrite(ctx); err != nil {
+		return err
+	}
+	defer s.unlockWrite()
+	n, err := s.deps.Store.MarkInterruptedLadoSetupAdoptions(ctx, interruptedMessage)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		s.deps.Log.Warn("LADO found adoptions a stopped daemon left unfinished; restore puts back what they removed", "adoptions", n)
+	}
+	return nil
+}
+
 // putBack undoes a removal the store did not record: removed files and
 // folders come back from the backup, and a key file LADO rewrote gets its
-// backed-up bytes again unless it changed since. What cannot be put back is
-// logged; the backup keeps it.
-func (s *Service) putBack(r removal) {
+// backed-up bytes again unless it changed since. It returns, by their paths
+// under their roots, the originals it could not put back; the backup keeps
+// them.
+func (s *Service) putBack(r removal) []string {
 	dir := r.copied.backup.dir
 	restored := map[string]bool{}
+	var failed []string
 	for i := len(r.removed) - 1; i >= 0; i-- {
 		be := r.removed[i].entry
 		var err error
@@ -1054,8 +1145,11 @@ func (s *Service) putBack(r removal) {
 		if err != nil {
 			s.deps.Log.Error("LADO could not put back an original it removed; the backup keeps it",
 				"backup", dir, "path", be.RelPath, "err", err)
+			failed = append(failed, be.RelPath)
 		}
 	}
+	slices.Sort(failed)
+	return failed
 }
 
 func putBackKeyFile(dir string, be backupEntry, written string) error {
@@ -1158,6 +1252,10 @@ func (s *Service) adoptionFailed(id domain.LadoSetupAdoptionID, err error, recor
 	case recorded:
 		details["state"] = string(domain.LadoSetupAdoptionPartial)
 		message = "The adoption stopped while removing originals. What was moved is managed now, and Restore puts it back."
+	case len(se.putBackFailed) > 0:
+		details["putBackFailed"] = se.putBackFailed
+		details["state"] = string(domain.LadoSetupAdoptionPartial)
+		message = "LADO could not record the adoption, and it could not put back every original it removed. The backup keeps them, and Restore puts them back."
 	case se.stage == stageRecord:
 		message = "LADO could not record the adoption, so it put back what it had removed."
 	}

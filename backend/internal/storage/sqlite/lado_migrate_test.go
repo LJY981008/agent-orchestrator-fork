@@ -493,6 +493,9 @@ func TestLadoMigrateCreatesSetupTables(t *testing.T) {
 	hash := strings.Repeat("a", 64)
 	mustExec(t, db, `INSERT INTO lado_setup_adoptions (id, created_at, actor, os, plan_sha256, state)
 		VALUES ('adoption', CURRENT_TIMESTAMP, 'human', 'linux', ?, 'completed')`, hash)
+	// An adoption is recorded pending before it removes the first original.
+	mustExec(t, db, `INSERT INTO lado_setup_adoptions (id, created_at, actor, os, plan_sha256, state)
+		VALUES ('adoption-pending', CURRENT_TIMESTAMP, 'human', 'linux', ?, 'pending')`, hash)
 	insertItem := func(id, kind string, adoptionID any) error {
 		_, err := db.Exec(`INSERT INTO lado_setup_items (id, tool, kind, name, origin_path, adoption_id, created_at)
 			VALUES (?, 'claude-code', ?, 'review', '/home/u/.claude/skills/review', ?, CURRENT_TIMESTAMP)`, id, kind, adoptionID)

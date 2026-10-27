@@ -146,13 +146,17 @@ func installLadoCodexOverrides(agents ports.AgentResolver, sessions ladoSessionR
 	})
 }
 
-// startLadoSetup scans the local setup once, then removes the config homes
-// of ended sessions, in the background, so the daemon starts without waiting.
-// A failure is logged. The channel closes when both are done.
+// startLadoSetup marks partial the adoptions a stopped daemon left pending,
+// scans the local setup once, then removes the config homes of ended
+// sessions, in the background, so the daemon starts without waiting. A
+// failure is logged. The channel closes when all are done.
 func startLadoSetup(ctx context.Context, setup *ladosetup.Service, log *slog.Logger) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		if err := setup.RecoverAdoptions(ctx); err != nil {
+			log.Warn("LADO could not mark the adoptions a stopped daemon left unfinished", "err", err)
+		}
 		if _, err := setup.Scan(ctx); err != nil {
 			log.Warn("LADO could not scan the local setup", "err", err)
 		}

@@ -92,7 +92,7 @@ type LadoSetupAdoptionResponse struct {
 	OS             string     `json:"os" description:"The GOOS the adoption ran on."`
 	PlanSHA256     string     `json:"planSha256" description:"Hash of the adoption plan the desktop app's confirmation signed."`
 	ManifestSHA256 string     `json:"manifestSha256" description:"Hash of the backup's manifest."`
-	State          string     `json:"state" enum:"completed,partial" description:"partial: removing the originals stopped; what moved is managed, and restore puts back what was removed."`
+	State          string     `json:"state" enum:"pending,completed,partial" description:"pending: removing the originals is under way. partial: removing them stopped, or a daemon stopped meanwhile; what moved is managed, and restore puts back what was removed."`
 	ErrorMessage   string     `json:"errorMessage" description:"Why a partial adoption stopped."`
 	RestoredAt     *time.Time `json:"restoredAt,omitempty" description:"When the adoption was restored; omitted before."`
 	ItemCount      int        `json:"itemCount" description:"How many items the adoption recorded."`

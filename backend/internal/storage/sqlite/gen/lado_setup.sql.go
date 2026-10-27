@@ -11,6 +11,27 @@ import (
 	"time"
 )
 
+const completeLadoSetupAdoption = `-- name: CompleteLadoSetupAdoption :execrows
+UPDATE lado_setup_adoptions
+SET state = ?, error_message = ?
+WHERE id = ? AND state = 'pending'
+`
+
+type CompleteLadoSetupAdoptionParams struct {
+	State        string
+	ErrorMessage string
+	ID           string
+}
+
+// Compare-and-set: a pending adoption ends once, completed or partial.
+func (q *Queries) CompleteLadoSetupAdoption(ctx context.Context, arg CompleteLadoSetupAdoptionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeLadoSetupAdoption, arg.State, arg.ErrorMessage, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const countLadoPolicySnapshotSetupForItem = `-- name: CountLadoPolicySnapshotSetupForItem :one
 SELECT COUNT(*)
 FROM lado_policy_snapshot_setup p
@@ -21,6 +42,19 @@ WHERE v.item_id = ?
 // How many snapshot pins name a version of the item.
 func (q *Queries) CountLadoPolicySnapshotSetupForItem(ctx context.Context, itemID string) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countLadoPolicySnapshotSetupForItem, itemID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countLadoPresenceProofsByNonce = `-- name: CountLadoPresenceProofsByNonce :one
+SELECT COUNT(*) FROM lado_presence_proofs
+WHERE nonce = ?
+`
+
+// Whether a presence proof was used, read before an adoption rescans.
+func (q *Queries) CountLadoPresenceProofsByNonce(ctx context.Context, nonce string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLadoPresenceProofsByNonce, nonce)
 	var count int64
 	err := row.Scan(&count)
 	return count, err
@@ -55,6 +89,20 @@ type DeleteLadoSetupBindingParams struct {
 
 func (q *Queries) DeleteLadoSetupBinding(ctx context.Context, arg DeleteLadoSetupBindingParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, deleteLadoSetupBinding, arg.ItemID, arg.Scope, arg.ScopeID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const deletePendingLadoSetupAdoption = `-- name: DeletePendingLadoSetupAdoption :execrows
+DELETE FROM lado_setup_adoptions
+WHERE id = ? AND state = 'pending'
+`
+
+// A pending adoption that removed nothing leaves no row.
+func (q *Queries) DeletePendingLadoSetupAdoption(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, deletePendingLadoSetupAdoption, id)
 	if err != nil {
 		return 0, err
 	}
@@ -739,6 +787,21 @@ type MarkLadoSetupItemsRestoredForAdoptionParams struct {
 // is delivered again. Their versions stay.
 func (q *Queries) MarkLadoSetupItemsRestoredForAdoption(ctx context.Context, arg MarkLadoSetupItemsRestoredForAdoptionParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markLadoSetupItemsRestoredForAdoption, arg.RestoredAt, arg.AdoptionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const markPendingLadoSetupAdoptionsInterrupted = `-- name: MarkPendingLadoSetupAdoptionsInterrupted :execrows
+UPDATE lado_setup_adoptions
+SET state = 'partial', error_message = ?
+WHERE state = 'pending'
+`
+
+// The adoptions a daemon that stopped left pending. Restore stays available.
+func (q *Queries) MarkPendingLadoSetupAdoptionsInterrupted(ctx context.Context, errorMessage string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markPendingLadoSetupAdoptionsInterrupted, errorMessage)
 	if err != nil {
 		return 0, err
 	}

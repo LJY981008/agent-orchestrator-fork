@@ -62,6 +62,10 @@ const (
 	// CodeFolderItem is an edit of a folder item. Its files are edited in the
 	// managed folder, and drift keeps the edit.
 	CodeFolderItem = "LADO_SETUP_FOLDER_ITEM"
+	// CodeDriftPending is an edit or a delete of an item whose managed copy
+	// holds a change that was neither kept nor reverted; details name the
+	// item.
+	CodeDriftPending = "LADO_SETUP_DRIFT_PENDING"
 	// CodeConflictNotFound is an acceptance of a warning the item's content
 	// does not give.
 	CodeConflictNotFound = "LADO_SETUP_CONFLICT_NOT_FOUND"
@@ -522,6 +526,10 @@ func (s *Service) prepareEdit(ctx context.Context, c Change) (*preparedChange, e
 				"This item is a folder. Edit its files in LADO's managed folder, then keep the change from drift.", itemDetails(it))
 		}
 	}
+	// Before the dry run: its before is the version, not the managed copy.
+	if err := s.refuseOverDrift(ctx, iv); err != nil {
+		return nil, err
+	}
 	if c.BaseVersion != latest.Version {
 		return nil, itemChanged(it, latest.Version)
 	}
@@ -551,6 +559,9 @@ func (s *Service) prepareDelete(ctx context.Context, c Change) (*preparedChange,
 	if err != nil {
 		return nil, err
 	}
+	if err := s.refuseOverDrift(ctx, iv); err != nil {
+		return nil, err
+	}
 	it, latest := iv.Item, iv.Version
 	pins, err := s.deps.Store.CountLadoSetupItemPins(ctx, it.ID)
 	if err != nil {
@@ -559,6 +570,19 @@ func (s *Service) prepareDelete(ctx context.Context, c Change) (*preparedChange,
 	p := &preparedChange{op: OpDelete, item: it, latest: latest, pins: pins, change: ladopolicy.SetupChange{Remove: it.ID}}
 	p.before = s.beforeView(it, latest, &p.warnings)
 	return p, nil
+}
+
+// refuseOverDrift refuses to edit or delete an item whose managed copy no
+// longer holds its latest version: the edit would write over the change,
+// and the delete would take it away. Keep or revert it first; bindings and
+// acceptances write no content and go on.
+func (s *Service) refuseOverDrift(ctx context.Context, iv domain.LadoSetupItemWithVersion) error {
+	if len(s.editedDrift(ctx, []domain.LadoSetupItemWithVersion{iv})) == 0 {
+		return nil
+	}
+	return apierr.Conflict(CodeDriftPending,
+		"This item was changed in LADO's managed folder. Keep or revert that change first, then edit or delete the item.",
+		map[string]any{"item": string(iv.Item.ID)})
 }
 
 // prepareBinding checks a binding. Turning an item that can run code or

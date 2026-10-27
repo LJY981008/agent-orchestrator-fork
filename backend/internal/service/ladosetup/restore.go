@@ -55,6 +55,16 @@ const (
 	RestoreKeyKept = "key_kept"
 	// RestoreFailed could not put the original back; Error says why.
 	RestoreFailed = "failed"
+	// RestoreSkippedDeleted is the original of an item deleted in LADO,
+	// which restore leaves out: deleting it there meant to stop it.
+	RestoreSkippedDeleted = "skipped_deleted"
+)
+
+// Notes on a restored entry.
+const (
+	// RestoreNoteKeptInLado is an item LADO changed after the adoption. The
+	// original went back as it was adopted; the later versions stay in LADO.
+	RestoreNoteKeptInLado = "kept_in_lado"
 )
 
 // Restore stages, in a failure's details.
@@ -98,6 +108,8 @@ type RestoredEntry struct {
 	Status string                   `json:"status"`
 	Beside string                   `json:"beside,omitempty"`
 	Error  string                   `json:"error,omitempty"`
+	// Note is RestoreNoteKeptInLado, or empty.
+	Note string `json:"note,omitempty"`
 }
 
 // RestoreResult is a restore.
@@ -119,10 +131,14 @@ type restoreTarget struct {
 	entries []restoreEntry
 }
 
-// restoreEntry is a backup entry with the item the adoption recorded for it.
+// restoreEntry is a backup entry with the item the adoption recorded for it,
+// which is empty for an adoption interrupted before it recorded any.
 type restoreEntry struct {
 	entry backupEntry
 	item  domain.LadoSetupItem
+	// skip leaves out the original of an item deleted in LADO, and changed
+	// marks an item that got versions after the adoption.
+	skip, changed bool
 }
 
 // Restore puts back what an adoption removed, after the desktop app's
@@ -202,17 +218,67 @@ func (s *Service) restoreTarget(ctx context.Context, id domain.LadoSetupAdoption
 		recorded[name{it.Tool, it.Kind, it.Name}] = it
 	}
 	t := restoreTarget{adoption: adoption, dir: dir}
+	if len(items) == 0 {
+		// A daemon stopped this adoption before it recorded its items.
+		t.entries, err = s.removedOriginals(ctx, dir, m)
+		if err != nil {
+			return restoreTarget{}, s.backupUnreadable(id, err)
+		}
+		return t, nil
+	}
 	for _, be := range m.Entries {
 		key := name{be.Tool, be.Kind, be.Name}
-		if it, ok := recorded[key]; ok {
-			t.entries = append(t.entries, restoreEntry{entry: be, item: it})
-			delete(recorded, key)
+		it, ok := recorded[key]
+		if !ok {
+			continue
 		}
+		delete(recorded, key)
+		re := restoreEntry{entry: be, item: it, skip: !it.DeletedAt.IsZero()}
+		if !re.skip {
+			_, versions, _, err := s.deps.Store.LadoSetupItem(ctx, it.ID)
+			if err != nil {
+				return restoreTarget{}, fmt.Errorf("read the adoption's item %s: %w", it.ID, err)
+			}
+			re.changed = len(versions) > 1
+		}
+		t.entries = append(t.entries, re)
 	}
 	if len(recorded) > 0 {
 		return restoreTarget{}, s.backupUnreadable(id, fmt.Errorf("the backup has no original of %d of the adoption's items", len(recorded)))
 	}
 	return t, nil
+}
+
+// removedOriginals are the backup entries of an adoption without items whose
+// original is gone from its place: a file or folder whose path is free, or a
+// key that is not in its file as it was. Its backup copy must be whole.
+func (s *Service) removedOriginals(ctx context.Context, dir string, m backupManifest) ([]restoreEntry, error) {
+	var out []restoreEntry
+	for _, be := range m.Entries {
+		if be.Action != domain.LadoSetupActionMove {
+			continue
+		}
+		if _, err := checkBackupCopy(ctx, dir, be); err != nil {
+			return nil, err
+		}
+		var removed bool
+		switch be.Type {
+		case backupTypeKeys:
+			orig, err := readRegularNoLink(be.copyPath(dir))
+			if err != nil {
+				return nil, err
+			}
+			cur, err := readRegularNoLink(be.Path)
+			removed = errors.Is(err, fs.ErrNotExist) || (err == nil && !keyInPlace(be, orig, cur))
+		default:
+			_, err := os.Lstat(be.Path)
+			removed = errors.Is(err, fs.ErrNotExist)
+		}
+		if removed {
+			out = append(out, restoreEntry{entry: be})
+		}
+	}
+	return out, nil
 }
 
 // readBackupManifest reads an adoption's backup folder and manifest, which
@@ -241,8 +307,8 @@ func (s *Service) readBackupManifest(adoption domain.LadoSetupAdoption) (string,
 func (s *Service) confirmRestore(ctx context.Context, t restoreTarget, presence func(action, subject string) (domain.LadoPresenceProof, error)) (approval, Preconditions, error) {
 	var tools []domain.LadoSetupTool
 	for _, re := range t.entries {
-		if !slices.Contains(tools, re.item.Tool) {
-			tools = append(tools, re.item.Tool)
+		if !re.skip && !slices.Contains(tools, re.entry.Tool) {
+			tools = append(tools, re.entry.Tool)
 		}
 	}
 	slices.Sort(tools)
@@ -277,11 +343,20 @@ func (s *Service) putBackOriginals(ctx context.Context, t restoreTarget) (Restor
 		be := re.entry
 		out := &report.Entries[i]
 		*out = RestoredEntry{ItemID: re.item.ID, Tool: be.Tool, Kind: be.Kind, Name: be.Name, Root: be.Root, Path: be.RelPath}
+		if re.changed {
+			out.Note = RestoreNoteKeptInLado
+		}
+		if be.Type == backupTypeKeys {
+			out.Path += "#" + keySuffix(be)
+		}
+		if re.skip {
+			out.Status = RestoreSkippedDeleted
+			continue
+		}
 		if be.Type != backupTypeKeys {
 			s.putBackFile(ctx, t.dir, be, out, written)
 			continue
 		}
-		out.Path += "#" + keySuffix(be)
 		if _, ok := keys[be.Path]; !ok {
 			files = append(files, be.Path)
 		}
@@ -828,6 +903,7 @@ func (s *Service) recordRestore(ctx context.Context, t restoreTarget, report Res
 		"restored":         counts[RestoreRestored],
 		"restoredBeside":   counts[RestoreBeside],
 		"keyKept":          counts[RestoreKeyKept],
+		"skippedDeleted":   counts[RestoreSkippedDeleted],
 		"processesIgnored": pre.ProcessesIgnored,
 		"proof":            ap.proof.Nonce,
 		"dev":              ap.proof.Dev,

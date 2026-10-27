@@ -18,7 +18,7 @@ CREATE TABLE lado_setup_adoptions (
     os              TEXT NOT NULL CHECK (os <> ''),
     plan_sha256     TEXT NOT NULL CHECK (length(plan_sha256) = 64),
     manifest_sha256 TEXT NOT NULL DEFAULT '',
-    state           TEXT NOT NULL CHECK (state IN ('completed', 'partial')),
+    state           TEXT NOT NULL CHECK (state IN ('pending', 'completed', 'partial')),
     error_message   TEXT NOT NULL DEFAULT '',
     restored_at     TIMESTAMP,
     restore_report  TEXT NOT NULL DEFAULT '' CHECK (restore_report = '' OR json_valid(restore_report))
