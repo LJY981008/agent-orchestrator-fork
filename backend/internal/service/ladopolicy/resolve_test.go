@@ -70,6 +70,14 @@ func withContent(rule domain.LadoRule, content domain.LadoRuleContent) domain.La
 	return rule
 }
 
+// withoutPromptRules returns rules without the ones whose text reaches the
+// worker, such as the protected gates of a pull request.
+func withoutPromptRules(rules []domain.LadoRule) []domain.LadoRule {
+	return slices.DeleteFunc(rules, func(rule domain.LadoRule) bool {
+		return rule.Version.Content.Has(domain.LadoEnforcementPrompt)
+	})
+}
+
 // ruleIn returns the rule with id in rules, to change in place.
 func ruleIn(t *testing.T, rules []domain.LadoRule, id domain.LadoRuleID) *domain.LadoRule {
 	t.Helper()
@@ -275,8 +283,9 @@ func TestResolveBindings(t *testing.T) {
 			promptRule("b.later", "B", "b", 5), promptRule("a.later", "A", "a", 5), promptRule("c.earlier", "C", "c", -1))
 		slices.Reverse(rules)
 		want := []domain.LadoRuleID{
-			"c.earlier", domain.LadoRulePermissionCeiling, domain.LadoRuleKoreanCommits, domain.LadoRulePlanApproval, domain.LadoRuleSetupPresence,
-			"a.later", "b.later",
+			"c.earlier", domain.LadoRulePermissionCeiling, domain.LadoRuleKoreanCommits, domain.LadoRuleNoDirectWrite,
+			domain.LadoRuleIntegrationApproval, domain.LadoRuleProtectedPaths, domain.LadoRulePlanApproval, domain.LadoRuleSetupPresence,
+			domain.LadoRuleTestsMustPass, "a.later", "b.later",
 		}
 		if got := entryIDs(ladopolicy.Resolve(taskInput(rules, claudeCode))); !slices.Equal(got, want) {
 			t.Errorf("entries %v, want %v", got, want)
@@ -289,7 +298,12 @@ func TestResolveCapabilities(t *testing.T) {
 		prompt     = ladopolicy.CapabilityPrompt
 		permission = ladopolicy.CapabilityPermissionMode
 	)
-	korean := []domain.LadoRuleID{domain.LadoRuleKoreanCommits}
+	// prompted are the rules whose text reaches the worker: the Korean rule
+	// and the protected gates of a pull request.
+	prompted := []domain.LadoRuleID{
+		domain.LadoRuleKoreanCommits, domain.LadoRuleNoDirectWrite, domain.LadoRuleIntegrationApproval,
+		domain.LadoRuleProtectedPaths, domain.LadoRuleTestsMustPass,
+	}
 	ceiling := []domain.LadoRuleID{domain.LadoRulePermissionCeiling}
 	agentProblem := func(code string, severity domain.LadoProblemSeverity, rules []domain.LadoRuleID, agent domain.AgentHarness, class ladopolicy.CapabilityClass) domain.LadoPolicyProblem {
 		return domain.LadoPolicyProblem{Code: code, Severity: severity, Rules: rules, Details: map[string]string{"agent": string(agent), "capability": string(class)}}
@@ -303,8 +317,9 @@ func TestResolveCapabilities(t *testing.T) {
 	cases := []struct {
 		name  string
 		agent ladopolicy.AgentChoice
-		// promptRules turns the Korean commit rule on, so the worker gets
-		// rule text.
+		// promptRules turns the Korean commit rule on; without it the input
+		// leaves out every rule with prompt enforcement, so the worker gets
+		// no rule text.
 		promptRules  bool
 		projectScope bool
 		wantCaps     []ladopolicy.Capability
@@ -316,7 +331,7 @@ func TestResolveCapabilities(t *testing.T) {
 			agent: chosen(domain.HarnessCursor), promptRules: true,
 			wantCaps: both(ladopolicy.CapabilityUnsupported, ladopolicy.CapabilityUnverified),
 			wantProblems: []domain.LadoPolicyProblem{
-				agentProblem("LADO_AGENT_CAPABILITY_UNSUPPORTED", blocking, korean, domain.HarnessCursor, prompt),
+				agentProblem("LADO_AGENT_CAPABILITY_UNSUPPORTED", blocking, prompted, domain.HarnessCursor, prompt),
 				agentProblem("LADO_AGENT_CAPABILITY_UNVERIFIED", blocking, ceiling, domain.HarnessCursor, permission),
 			},
 		},
@@ -334,7 +349,7 @@ func TestResolveCapabilities(t *testing.T) {
 			wantCaps: both(ladopolicy.CapabilityDegraded, ladopolicy.CapabilityUnverified),
 			wantProblems: []domain.LadoPolicyProblem{
 				agentProblem("LADO_AGENT_CAPABILITY_UNVERIFIED", blocking, ceiling, domain.HarnessFX, permission),
-				agentProblem("LADO_AGENT_CAPABILITY_DEGRADED", warning, korean, domain.HarnessFX, prompt),
+				agentProblem("LADO_AGENT_CAPABILITY_DEGRADED", warning, prompted, domain.HarnessFX, prompt),
 			},
 		},
 		{
@@ -343,7 +358,7 @@ func TestResolveCapabilities(t *testing.T) {
 			wantCaps: both(ladopolicy.CapabilityUnverified, ladopolicy.CapabilityUnverified),
 			wantProblems: []domain.LadoPolicyProblem{
 				agentProblem("LADO_AGENT_CAPABILITY_UNVERIFIED", blocking, ceiling, domain.HarnessGemini, permission),
-				agentProblem("LADO_AGENT_CAPABILITY_UNVERIFIED", blocking, korean, domain.HarnessGemini, prompt),
+				agentProblem("LADO_AGENT_CAPABILITY_UNVERIFIED", blocking, prompted, domain.HarnessGemini, prompt),
 			},
 		},
 		{
@@ -371,6 +386,8 @@ func TestResolveCapabilities(t *testing.T) {
 			rules := seeded()
 			if c.promptRules {
 				ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
+			} else {
+				rules = withoutPromptRules(rules)
 			}
 			in := taskInput(rules, c.agent)
 			if c.projectScope {

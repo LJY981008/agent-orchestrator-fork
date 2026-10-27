@@ -111,7 +111,7 @@ func TestSnapshotIsDeterministic(t *testing.T) {
 
 	// Empty lists encode as [], never as null.
 	empty := ladopolicy.Resolve(ladopolicy.Input{ProjectID: projectA})
-	for _, field := range []string{`"rules":[]`, `"aoRules":[]`, `"setup":[]`, `"aoSystem":{"sha256":""}`, `"acceptedConflicts":[]`, `"workflowGates":[]`, `"capabilities":[]`} {
+	for _, field := range []string{`"rules":[]`, `"aoRules":[]`, `"setup":[]`, `"aoSystem":{"sha256":""}`, `"acceptedConflicts":[]`, `"workflowGates":[]`, `"validators":[]`, `"capabilities":[]`} {
 		if !bytes.Contains(empty.JSON, []byte(field)) {
 			t.Errorf("no %s in %s", field, empty.JSON)
 		}
@@ -143,9 +143,14 @@ func TestSnapshotIsDeterministic(t *testing.T) {
 	}
 }
 
-// TestSnapshotFormatIsLadoPolicy2 pins the lado-policy/2 bytes: a change to a
-// field, its name or its place needs a new format name.
-func TestSnapshotFormatIsLadoPolicy2(t *testing.T) {
+// protectedGlobsLine ends the protected paths' section of the worker's text
+// when the seeded globs apply.
+const protectedGlobsLine = "Protected paths: `.github/**`, `.gitlab-ci.yml`, `.gitlab/**`, `**/CLAUDE.md`, `**/AGENTS.md`, `.claude/**`, `.codex/**`, `.mcp.json`, `.ao/**`"
+
+// TestSnapshotFormatIsLadoPolicy3 pins the lado-policy/3 bytes: a change to a
+// field, its name or its place needs a new format name. The validators come
+// right after the workflow gates.
+func TestSnapshotFormatIsLadoPolicy3(t *testing.T) {
 	in := fullInput(t)
 	shas := []string{}
 	for _, rule := range in.Rules {
@@ -155,8 +160,11 @@ func TestSnapshotFormatIsLadoPolicy2(t *testing.T) {
 		shas = append(shas, "<"+string(item.ItemID)+">", item.SHA256)
 	}
 	want := strings.NewReplacer(append(shas, "<Use pnpm.>", hexSHA256("Use pnpm."), "<Run make test.>", hexSHA256("Run make test."),
-		"<korean>", koreanCommitsInstruction, "<installed>", hexSHA256("review 1.2.0"), "<ao system>", hexSHA256("ao system"))...).Replace(`{
-		"compiler": "lado-policy/2",
+		"<korean>", koreanCommitsInstruction, "<no direct write>", noDirectWriteInstruction, "<integration>", integrationApprovalInstruction,
+		"<protected>", protectedPathsInstruction, "<protected globs>", protectedGlobsLine, "<tests>", testsMustPassInstruction,
+		"<korean config>", koreanCommitsConfig, "<protected config>", protectedPathsConfig,
+		"<installed>", hexSHA256("review 1.2.0"), "<ao system>", hexSHA256("ao system"))...).Replace(`{
+		"compiler": "lado-policy/3",
 		"aoBuild": "1.0.0",
 		"projectId": "proj-a",
 		"taskId": "task-a",
@@ -167,13 +175,25 @@ func TestSnapshotFormatIsLadoPolicy2(t *testing.T) {
 			 "name": "Permission ceiling", "protected": true, "enforcement": ["tool_policy"], "strength": "prevents",
 			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
 			{"ruleId": "git.commit.message.korean", "versionId": "ver-git.commit.message.korean-1", "version": 1, "sha256": "<git.commit.message.korean>",
-			 "name": "Commit messages in Korean", "protected": false, "enforcement": ["prompt"], "strength": "advisory",
+			 "name": "Commit messages in Korean", "protected": false, "enforcement": ["prompt", "validator"], "strength": "detects",
+			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
+			{"ruleId": "git.protected_branch.no_direct_write", "versionId": "ver-git.protected_branch.no_direct_write-1", "version": 1, "sha256": "<git.protected_branch.no_direct_write>",
+			 "name": "No direct writes to the base branch", "protected": true, "enforcement": ["workflow_gate", "prompt"], "strength": "prevents",
+			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
+			{"ruleId": "integration.approval.required", "versionId": "ver-integration.approval.required-1", "version": 1, "sha256": "<integration.approval.required>",
+			 "name": "Integration approval required", "protected": true, "enforcement": ["workflow_gate", "prompt"], "strength": "prevents",
+			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
+			{"ruleId": "paths.protected", "versionId": "ver-paths.protected-1", "version": 1, "sha256": "<paths.protected>",
+			 "name": "Protected paths", "protected": true, "enforcement": ["validator", "prompt"], "strength": "detects",
 			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
 			{"ruleId": "plan.approval.required", "versionId": "ver-plan.approval.required-1", "version": 1, "sha256": "<plan.approval.required>",
 			 "name": "Plan approval required", "protected": true, "enforcement": ["workflow_gate"], "strength": "prevents",
 			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
 			{"ruleId": "setup.change.requires_presence", "versionId": "ver-setup.change.requires_presence-1", "version": 1, "sha256": "<setup.change.requires_presence>",
 			 "name": "Local setup changes need the desktop app's confirmation", "protected": true, "enforcement": ["workflow_gate"], "strength": "prevents",
+			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
+			{"ruleId": "test.command.must_pass", "versionId": "ver-test.command.must_pass-1", "version": 1, "sha256": "<test.command.must_pass>",
+			 "name": "Tests must pass", "protected": true, "enforcement": ["validator", "prompt"], "strength": "detects",
 			 "source": {"scope": "global", "scopeId": "", "state": "on"}},
 			{"ruleId": "team.style", "versionId": "ver-team.style-1", "version": 1, "sha256": "<team.style>",
 			 "name": "Small commits", "protected": false, "enforcement": ["prompt"], "strength": "advisory",
@@ -201,8 +221,13 @@ func TestSnapshotFormatIsLadoPolicy2(t *testing.T) {
 		"acceptedConflicts": [
 			{"code": "LADO_SETUP_DENIES_GIT", "itemId": "setup-permissions", "detail": "Bash(git push:*)", "acceptanceId": "lado-acceptance-1"}
 		],
-		"prompt": "## LADO rules\n\nThe developer approved these rules for this run. Follow them together with the project rules above.\n\n### Commit messages in Korean\n\n<korean>\n\n### Small commits\n\nKeep each commit to one change.",
-		"workflowGates": ["plan.approval.required", "setup.change.requires_presence"],
+		"prompt": "## LADO rules\n\nThe developer approved these rules for this run. Follow them together with the project rules above.\n\n### Commit messages in Korean\n\n<korean>\n\n### No direct writes to the base branch\n\n<no direct write>\n\n### Integration approval required\n\n<integration>\n\n### Protected paths\n\n<protected>\n<protected globs>\n\n### Tests must pass\n\n<tests>\n\n### Small commits\n\nKeep each commit to one change.",
+		"workflowGates": ["git.protected_branch.no_direct_write", "integration.approval.required", "plan.approval.required", "setup.change.requires_presence"],
+		"validators": [
+			{"ruleId": "git.commit.message.korean", "kind": "commit_message_locale", "config": <korean config>},
+			{"ruleId": "paths.protected", "kind": "protected_paths", "config": <protected config>},
+			{"ruleId": "test.command.must_pass", "kind": "checks_must_pass", "config": {}}
+		],
 		"capabilities": [{"class": "prompt", "status": "supported"}, {"class": "permission_mode", "status": "supported"}],
 		"problems": [
 			{"code": "LADO_SETUP_HOOK_SHARES_AO_EVENT", "severity": "info", "details": {"event": "SessionStart", "item": "setup-hooks"}},
@@ -217,14 +242,18 @@ func TestSnapshotFormatIsLadoPolicy2(t *testing.T) {
 	if !bytes.Equal(r.JSON, compact.Bytes()) {
 		t.Errorf("snapshot\n%s\nwant\n%s", r.JSON, compact.Bytes())
 	}
-	if ladopolicy.Compiler != "lado-policy/2" {
+	if ladopolicy.Compiler != "lado-policy/3" {
 		t.Errorf("Compiler = %q", ladopolicy.Compiler)
 	}
 	wantRules := []domain.LadoPolicySnapshotRule{
 		{RuleID: domain.LadoRulePermissionCeiling, VersionID: "ver-agent.permission.ceiling-1"},
 		{RuleID: domain.LadoRuleKoreanCommits, VersionID: "ver-git.commit.message.korean-1"},
+		{RuleID: domain.LadoRuleNoDirectWrite, VersionID: "ver-git.protected_branch.no_direct_write-1"},
+		{RuleID: domain.LadoRuleIntegrationApproval, VersionID: "ver-integration.approval.required-1"},
+		{RuleID: domain.LadoRuleProtectedPaths, VersionID: "ver-paths.protected-1"},
 		{RuleID: domain.LadoRulePlanApproval, VersionID: "ver-plan.approval.required-1"},
 		{RuleID: domain.LadoRuleSetupPresence, VersionID: "ver-setup.change.requires_presence-1"},
+		{RuleID: domain.LadoRuleTestsMustPass, VersionID: "ver-test.command.must_pass-1"},
 		{RuleID: "team.style", VersionID: "ver-team.style-1"},
 	}
 	if got := r.SnapshotRules(); !reflect.DeepEqual(got, wantRules) {
@@ -370,7 +399,7 @@ func TestSnapshotHashFollowsWhatApplies(t *testing.T) {
 }
 
 func TestPromptText(t *testing.T) {
-	const golden = `## LADO rules
+	golden := strings.Replace(`## LADO rules
 
 The developer approved these rules for this run. Follow them together with the project rules above.
 
@@ -378,10 +407,27 @@ The developer approved these rules for this run. Follow them together with the p
 
 Write Git commit subjects and bodies primarily in Korean. Conventional Commit prefixes such as feat, fix, docs, refactor, test and chore may stay in English.
 
+### No direct writes to the base branch
+
+Never push to, reset or update the base branch, locally or on the remote; work only on your own branch and open a pull request.
+
+### Integration approval required
+
+Never merge your pull request or ask anyone to merge it; the developer approves the integration in LADO.
+
+### Protected paths
+
+Do not change protected paths unless the approved plan names them.
+<protected globs>
+
+### Tests must pass
+
+Before you push, run the project's tests and checks; LADO runs the project's check commands and reads the required CI checks on your pull request's head.
+
 ### Tests before commits
 
 Run the unit tests before each commit.
-Fix what fails before you commit.`
+Fix what fails before you commit.`, "<protected globs>", protectedGlobsLine, 1)
 
 	rules := seeded()
 	ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
@@ -396,7 +442,7 @@ Fix what fails before you commit.`
 		t.Errorf("snapshot prompt %q, want %q", r.Content.Prompt, r.Prompt)
 	}
 
-	if got := ladopolicy.Resolve(taskInput(seeded(), claudeCode)).Prompt; got != "" {
+	if got := ladopolicy.Resolve(taskInput(withoutPromptRules(seeded()), claudeCode)).Prompt; got != "" {
 		t.Errorf("prompt %q without prompt rules, want empty", got)
 	}
 
@@ -408,7 +454,7 @@ Fix what fails before you commit.`
 	})
 	blank := promptRule("team.blank", "Blank", "   ", 2)
 	blank.Global = domain.LadoBindingOn
-	if got := ladopolicy.Resolve(taskInput(append(seeded(), off, validator, blank), claudeCode)).Prompt; got != "" {
+	if got := ladopolicy.Resolve(taskInput(append(withoutPromptRules(seeded()), off, validator, blank), claudeCode)).Prompt; got != "" {
 		t.Errorf("prompt %q, want empty", got)
 	}
 
@@ -417,5 +463,199 @@ Fix what fails before you commit.`
 	split.Global = domain.LadoBindingOn
 	if got := ladopolicy.Resolve(taskInput([]domain.LadoRule{split}, claudeCode)).Prompt; !strings.HasSuffix(got, "\n\n### Tests before commits\n\nRun them.") {
 		t.Errorf("prompt %q, want one heading line", got)
+	}
+}
+
+// TestProtectedPathsPromptListsGlobs checks that the worker's text ends the
+// protected paths' section with the globs of the version that applies, and
+// that no other section gets the line.
+func TestProtectedPathsPromptListsGlobs(t *testing.T) {
+	const section = "### Protected paths\n\n" + protectedPathsInstruction + "\n"
+	r := ladopolicy.Resolve(taskInput(seeded(), claudeCode))
+	if want := section + protectedGlobsLine + "\n\n### Tests must pass\n\n"; !strings.Contains(r.Prompt, want) {
+		t.Errorf("prompt\n%s\nwant it to hold\n%s", r.Prompt, want)
+	}
+	if n := strings.Count(r.Prompt, "Protected paths: "); n != 1 {
+		t.Errorf("%d lines of protected paths, want 1:\n%s", n, r.Prompt)
+	}
+	if r.Content.Prompt != r.Prompt {
+		t.Errorf("snapshot prompt %q, want the worker's text %q", r.Content.Prompt, r.Prompt)
+	}
+
+	// After a change the worker reads the new globs, in the order they were
+	// set.
+	rules := seeded()
+	paths := ruleIn(t, rules, domain.LadoRuleProtectedPaths)
+	content := paths.Version.Content
+	content.Config = json.RawMessage(`{"globs":["infra/**","Makefile","docs/*.md"]}`)
+	*paths = withContent(*paths, content)
+	r = ladopolicy.Resolve(taskInput(rules, claudeCode))
+	if want := section + "Protected paths: `infra/**`, `Makefile`, `docs/*.md`\n\n### Tests must pass"; !strings.Contains(r.Prompt, want) {
+		t.Errorf("prompt\n%s\nwant it to hold\n%s", r.Prompt, want)
+	}
+	if strings.Contains(r.Prompt, ".github/**") {
+		t.Errorf("the seeded globs are still in the prompt:\n%s", r.Prompt)
+	}
+
+	// A version without globs ends with its instruction.
+	content.Config = json.RawMessage(`{}`)
+	*paths = withContent(*paths, content)
+	r = ladopolicy.Resolve(taskInput(rules, claudeCode))
+	if want := "### Protected paths\n\n" + protectedPathsInstruction + "\n\n### Tests must pass"; !strings.Contains(r.Prompt, want) || strings.Contains(r.Prompt, "Protected paths: ") {
+		t.Errorf("prompt\n%s\nwant the section without a line of globs", r.Prompt)
+	}
+}
+
+// TestValidatorsFollowTheOnRules checks the snapshot's validators: one per on
+// rule with validator enforcement, in rule order, with its version's config.
+// The two protected gates always give theirs; the Korean commit rule gives
+// one only while it is on and its version has validator enforcement.
+func TestValidatorsFollowTheOnRules(t *testing.T) {
+	type validator struct {
+		RuleID domain.LadoRuleID
+		Kind   ladopolicy.ValidatorKind
+		Config string
+	}
+	validators := func(list []ladopolicy.SnapshotValidator) []validator {
+		got := []validator{}
+		for _, v := range list {
+			got = append(got, validator{v.RuleID, v.Kind, string(v.Config)})
+		}
+		return got
+	}
+	paths := validator{domain.LadoRuleProtectedPaths, ladopolicy.ValidatorProtectedPaths, protectedPathsConfig}
+	checks := validator{domain.LadoRuleTestsMustPass, ladopolicy.ValidatorChecksMustPass, `{}`}
+	korean := func(config string) validator {
+		return validator{domain.LadoRuleKoreanCommits, ladopolicy.ValidatorCommitMessageLocale, config}
+	}
+	setKorean := func(t *testing.T, rules []domain.LadoRule, change func(*domain.LadoRuleContent)) {
+		t.Helper()
+		rule := ruleIn(t, rules, domain.LadoRuleKoreanCommits)
+		content := rule.Version.Content
+		change(&content)
+		*rule = withContent(*rule, content)
+	}
+	cases := []struct {
+		name  string
+		rules func(t *testing.T) []domain.LadoRule
+		// project resolves for the project instead of task-a.
+		project bool
+		want    []validator
+	}{
+		{
+			name:  "the Korean rule is off at first",
+			rules: func(*testing.T) []domain.LadoRule { return seeded() },
+			want:  []validator{paths, checks},
+		},
+		{
+			name: "an on Korean rule adds its validator with its config",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
+				return rules
+			},
+			want: []validator{korean(koreanCommitsConfig), paths, checks},
+		},
+		{
+			name: "a project resolves the same validators",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
+				return rules
+			},
+			project: true,
+			want:    []validator{korean(koreanCommitsConfig), paths, checks},
+		},
+		{
+			name: "the task's force_off leaves it out",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				rule := ruleIn(t, rules, domain.LadoRuleKoreanCommits)
+				rule.Global = domain.LadoBindingOn
+				rule.Overrides = []domain.LadoRuleBinding{taskBinding(taskA, domain.LadoBindingForceOff)}
+				return rules
+			},
+			want: []validator{paths, checks},
+		},
+		{
+			name: "the config is the version's as it is",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
+				setKorean(t, rules, func(c *domain.LadoRuleContent) {
+					c.Config = json.RawMessage(`{"language": "ko", "allowPrefixes": ["feat"]}`)
+				})
+				return rules
+			},
+			want: []validator{korean(`{"language":"ko","allowPrefixes":["feat"]}`), paths, checks},
+		},
+		{
+			name: "a validator version without settings checks with the defaults",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
+				setKorean(t, rules, func(c *domain.LadoRuleContent) { c.Config = nil })
+				return rules
+			},
+			want: []validator{korean(koreanCommitsConfig), paths, checks},
+		},
+		{
+			name: "a Korean rule the developer edited before step 8 has no validator",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				ruleIn(t, rules, domain.LadoRuleKoreanCommits).Global = domain.LadoBindingOn
+				setKorean(t, rules, func(c *domain.LadoRuleContent) {
+					c.Instruction = "커밋 메시지는 한국어로 쓴다."
+					c.Enforcement = []domain.LadoEnforcement{domain.LadoEnforcementPrompt}
+					c.Config = nil
+				})
+				return rules
+			},
+			want: []validator{paths, checks},
+		},
+		{
+			name: "changed protected paths are the validator's config",
+			rules: func(t *testing.T) []domain.LadoRule {
+				rules := seeded()
+				rule := ruleIn(t, rules, domain.LadoRuleProtectedPaths)
+				content := rule.Version.Content
+				content.Config = json.RawMessage(`{"globs":["infra/**"]}`)
+				*rule = withContent(*rule, content)
+				return rules
+			},
+			want: []validator{{domain.LadoRuleProtectedPaths, ladopolicy.ValidatorProtectedPaths, `{"globs":["infra/**"]}`}, checks},
+		},
+		{
+			name: "a rule LADO has no validator for gives none",
+			rules: func(*testing.T) []domain.LadoRule {
+				own := withContent(domain.LadoRule{ID: "team.checked", Global: domain.LadoBindingOn, CreatedAt: seededAt}, domain.LadoRuleContent{
+					Name: "Checked", Instruction: "Checked after the run.", Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementValidator},
+				})
+				return append(seeded(), own)
+			},
+			want: []validator{paths, checks},
+		},
+		{
+			name:  "without rules there are none",
+			rules: func(*testing.T) []domain.LadoRule { return nil },
+			want:  []validator{},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			in := taskInput(c.rules(t), claudeCode)
+			if c.project {
+				in.TaskID = ""
+			}
+			r := ladopolicy.Resolve(in)
+			if got := validators(r.Content.Validators); !reflect.DeepEqual(got, c.want) {
+				t.Errorf("validators %+v, want %+v", got, c.want)
+			}
+			// The validators are part of the snapshot's bytes.
+			var decoded ladopolicy.SnapshotContent
+			if err := json.Unmarshal(r.JSON, &decoded); err != nil || !reflect.DeepEqual(validators(decoded.Validators), c.want) {
+				t.Errorf("decoded validators %+v (err %v), want %+v", decoded.Validators, err, c.want)
+			}
+		})
 	}
 }

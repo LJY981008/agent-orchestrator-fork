@@ -50,6 +50,7 @@ const (
 	actionDeleted          = "rule.deleted"
 	actionBindingSet       = "rule.binding_set"
 	actionProtectedChanged = "rule.protected_changed"
+	actionBuiltinUpgraded  = "rule.builtin_upgraded"
 )
 
 // builtinPayload is the payload of a built-in rule's rule.created.
@@ -125,13 +126,17 @@ func New(deps Deps) *Service {
 }
 
 // EnsureBuiltins seeds the built-in rules that do not exist yet, each as
-// version 1 by "lado" with its audit event. A rule that exists keeps its
-// versions and bindings, so the developer's changes survive restarts.
+// version 1 by "lado" with its audit event, and upgrades a built-in whose
+// active version is an earlier built-in version, unchanged: the current
+// content becomes its next version by "lado", with the audit event
+// rule.builtin_upgraded. A rule the developer changed keeps its versions, and
+// every rule keeps its bindings, so the developer's changes survive restarts.
 func (s *Service) EnsureBuiltins(ctx context.Context) error {
 	now := s.now()
-	builtins := Builtins()
-	seeds := make([]domain.LadoRuleSeed, 0, len(builtins))
-	for _, rule := range builtins {
+	defs := builtinDefs()
+	seeds := make([]domain.LadoRuleSeed, 0, len(defs))
+	for _, def := range defs {
+		rule := def.rule
 		rule.CreatedAt = now
 		rule.Version.ID = s.newVersionID()
 		rule.Version.CreatedAt = now
@@ -146,6 +151,35 @@ func (s *Service) EnsureBuiltins(ctx context.Context) error {
 	}
 	if len(added) > 0 {
 		s.deps.Log.Info("LADO seeded built-in rules", "rules", added)
+	}
+	rules, err := s.deps.Store.ListLadoRules(ctx, true)
+	if err != nil {
+		return fmt.Errorf("read LADO rules: %w", err)
+	}
+	var upgraded []domain.LadoRuleID
+	for _, def := range defs {
+		rule, ok := findRule(rules, def.rule.ID)
+		if !ok || !rule.Builtin || !slices.ContainsFunc(def.previous, func(c domain.LadoRuleContent) bool { return c.SHA256() == rule.Version.SHA256 }) {
+			continue
+		}
+		next := s.newVersion(rule.ID, rule.Version.Number+1, def.rule.Version.Content, builtinActor, now)
+		// The store adds the version only while the one compared is active.
+		_, err := s.deps.Store.AddLadoRuleVersion(ctx, next, rule.Version.Number, nil, s.event(builtinActor, actionBuiltinUpgraded, rule.ID, now, map[string]any{
+			"from": rule.Version.Number,
+			"to":   next.Number,
+		}))
+		switch {
+		case errors.Is(err, domain.ErrLadoRuleChanged):
+			// The developer changed the rule meanwhile, which keeps it.
+			s.deps.Log.Info("LADO left a built-in rule as the developer changed it", "rule", rule.ID)
+		case err != nil:
+			return fmt.Errorf("upgrade LADO built-in rule %s: %w", rule.ID, err)
+		default:
+			upgraded = append(upgraded, rule.ID)
+		}
+	}
+	if len(upgraded) > 0 {
+		s.deps.Log.Info("LADO upgraded built-in rules", "rules", upgraded)
 	}
 	return nil
 }
@@ -278,6 +312,9 @@ type UpdateInput struct {
 	// CeilingMode is the permission ceiling's new mode. Only that rule takes
 	// one, and only with presence.
 	CeilingMode *domain.PermissionMode
+	// Paths are the protected paths' new globs. Only that rule takes them,
+	// and only with presence.
+	Paths *domain.LadoProtectedPathsConfig
 	// Archived archives or unarchives the rule.
 	Archived *bool
 	// Reason goes into the audit log.
@@ -291,11 +328,11 @@ type UpdateInput struct {
 
 // Update changes a rule's content, which adds a version when the content's
 // hash changes, and archives or unarchives it. A protected rule refuses both:
-// only the permission ceiling's mode changes, with a human-presence proof
-// (docs/LJY-PRD/HARNESS.md §14).
+// only the permission ceiling's mode and the protected paths change, with a
+// human-presence proof (docs/LJY-PRD/HARNESS.md §14).
 func (s *Service) Update(ctx context.Context, id domain.LadoRuleID, in UpdateInput) (ChangeResult, error) {
 	edits := in.Name != nil || in.Category != nil || in.Instruction != nil || in.Conflicts != nil || in.Archived != nil
-	if !edits && in.CeilingMode == nil {
+	if !edits && in.CeilingMode == nil && in.Paths == nil {
 		return ChangeResult{}, apierr.Invalid("LADO_RULE_UPDATE_EMPTY", "Send a change to the rule.", nil)
 	}
 	rules, err := s.rules(ctx)
@@ -306,16 +343,21 @@ func (s *Service) Update(ctx context.Context, id domain.LadoRuleID, in UpdateInp
 	switch {
 	case !ok:
 		return ChangeResult{}, ruleNotFound(id)
-	case rule.Protected && (edits || id != domain.LadoRulePermissionCeiling):
+	case rule.Protected && (edits || (id != domain.LadoRulePermissionCeiling && id != domain.LadoRuleProtectedPaths)):
 		return ChangeResult{}, ruleProtected(id)
 	case in.CeilingMode != nil && id != domain.LadoRulePermissionCeiling:
 		return ChangeResult{}, apierr.Invalid("LADO_RULE_CEILING_INVALID", "Only the permission ceiling has a mode.", map[string]any{"rule": string(id)})
+	case in.Paths != nil && id != domain.LadoRuleProtectedPaths:
+		return ChangeResult{}, apierr.Invalid("LADO_PROTECTED_PATHS_INVALID", "Only the protected paths rule has paths.", map[string]any{"rule": string(id)})
 	case in.BaseVersion != rule.Version.Number:
 		return ChangeResult{}, ruleChanged(in.BaseVersion)
 	}
 	now := s.now()
 	if in.CeilingMode != nil {
 		return s.changeCeiling(ctx, rules, rule, in, now)
+	}
+	if in.Paths != nil {
+		return s.changeProtectedPaths(ctx, rules, rule, in, now)
 	}
 	content := rule.Version.Content
 	if in.Name != nil {
@@ -395,9 +437,57 @@ func (s *Service) changeCeiling(ctx context.Context, rules []domain.LadoRule, ru
 		return ChangeResult{}, apierr.Invalid("LADO_RULE_CEILING_INVALID", "Choose accept-edits, auto or bypass-permissions as the permission ceiling.",
 			map[string]any{"mode": string(mode)})
 	}
+	var from domain.LadoCeilingConfig
+	_ = json.Unmarshal(rule.Version.Content.Config, &from)
+	return s.changeSetting(ctx, rules, rule, in, now, settingChange{
+		config: domain.LadoCeilingConfig{Mode: mode},
+		from:   from.Mode,
+		to:     mode,
+		where:  "Change the permission ceiling in the AO desktop app.",
+	})
+}
+
+// changeProtectedPaths sets the globs of the protected paths. The change
+// needs a human-presence proof, because the globs decide which paths a
+// worker changes only when the approved plan names them; a dry run needs
+// none. Each glob is trimmed, then checked as an affected_paths entry.
+func (s *Service) changeProtectedPaths(ctx context.Context, rules []domain.LadoRule, rule domain.LadoRule, in UpdateInput, now time.Time) (ChangeResult, error) {
+	globs := make([]string, 0, len(in.Paths.Globs))
+	for _, glob := range in.Paths.Globs {
+		globs = append(globs, strings.TrimSpace(glob))
+	}
+	if err := checkProtectedPaths(globs); err != nil {
+		return ChangeResult{}, err
+	}
+	var from domain.LadoProtectedPathsConfig
+	_ = json.Unmarshal(rule.Version.Content.Config, &from)
+	if from.Globs == nil {
+		from.Globs = []string{}
+	}
+	return s.changeSetting(ctx, rules, rule, in, now, settingChange{
+		config: domain.LadoProtectedPathsConfig{Globs: globs},
+		from:   from.Globs,
+		to:     globs,
+		where:  "Change the protected paths in the AO desktop app.",
+	})
+}
+
+// settingChange is a new setting of a protected rule: its config, what the
+// audit event records it changed from and to, and where the developer makes
+// the change.
+type settingChange struct {
+	config   any
+	from, to any
+	where    string
+}
+
+// changeSetting gives a protected rule the config of change as its next
+// version, made by the human whose presence the request proves, with the
+// audit event rule.protected_changed. A config the rule has already changes
+// nothing; a dry run shows the change and its impact without presence.
+func (s *Service) changeSetting(ctx context.Context, rules []domain.LadoRule, rule domain.LadoRule, in UpdateInput, now time.Time, change settingChange) (ChangeResult, error) {
 	content := rule.Version.Content
-	// A mode always encodes.
-	content.Config, _ = json.Marshal(domain.LadoCeilingConfig{Mode: mode})
+	content.Config = configJSON(change.config)
 	content = content.Normalize()
 	if content.SHA256() == rule.Version.Content.SHA256() {
 		return ChangeResult{Rule: s.views(ctx, rule)[0], Impact: noImpact(), Applied: !in.DryRun}, nil
@@ -412,8 +502,7 @@ func (s *Service) changeCeiling(ctx context.Context, rules []domain.LadoRule, ru
 		return ChangeResult{Rule: s.views(ctx, after)[0], Impact: impact}, nil
 	}
 	if in.Presence == nil {
-		return ChangeResult{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED",
-			"Change the permission ceiling in the AO desktop app. It asks you to confirm, then sends the change itself.")
+		return ChangeResult{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED", change.where+" It asks you to confirm, then sends the change itself.")
 	}
 	proof, err := in.Presence(domain.LadoPresenceRuleChange, string(rule.ID))
 	if err != nil {
@@ -422,11 +511,9 @@ func (s *Service) changeCeiling(ctx context.Context, rules []domain.LadoRule, ru
 	if proof.Dev {
 		after.Version.Actor = actorDevPresence
 	}
-	var from domain.LadoCeilingConfig
-	_ = json.Unmarshal(rule.Version.Content.Config, &from)
 	updated, err := s.deps.Store.AddLadoRuleVersion(ctx, after.Version, rule.Version.Number, &proof, s.event(after.Version.Actor, actionProtectedChanged, rule.ID, now, map[string]any{
-		"from":    from.Mode,
-		"to":      mode,
+		"from":    change.from,
+		"to":      change.to,
 		"version": after.Version.Number,
 		"proof":   proof.Nonce,
 		"dev":     proof.Dev,
@@ -439,6 +526,29 @@ func (s *Service) changeCeiling(ctx context.Context, rules []domain.LadoRule, ru
 		return ChangeResult{}, s.versionFailed(err, in.BaseVersion)
 	}
 	return ChangeResult{Rule: s.views(ctx, updated)[0], Impact: impact, Applied: true}, nil
+}
+
+// checkProtectedPaths refuses globs that domain.ValidateLadoProtectedPaths
+// refuses, as LADO_PROTECTED_PATHS_INVALID with the index of the glob at
+// fault and a reason: required for no globs, too_many from the first glob
+// over the limit, invalid for a glob a plan could not name in
+// affected_paths.
+func checkProtectedPaths(globs []string) error {
+	if domain.ValidateLadoProtectedPaths(globs) == nil {
+		return nil
+	}
+	index, reason := 0, "required"
+	switch {
+	case len(globs) == 0:
+	case len(globs) > domain.LadoProtectedPathsMax:
+		index, reason = domain.LadoProtectedPathsMax, "too_many"
+	default:
+		reason = "invalid"
+		index = max(0, slices.IndexFunc(globs, func(glob string) bool { return domain.ValidateLadoProtectedPaths([]string{glob}) != nil }))
+	}
+	return apierr.Invalid("LADO_PROTECTED_PATHS_INVALID",
+		fmt.Sprintf("Name 1 to %d protected paths, each relative to the project root as a plan's affected_paths names them.", domain.LadoProtectedPathsMax),
+		map[string]any{"index": index, "reason": reason})
 }
 
 // Delete removes a user rule that no approval's snapshot used. Built-in
@@ -1133,7 +1243,7 @@ func ruleNotFound(id domain.LadoRuleID) error {
 
 func ruleProtected(id domain.LadoRuleID) error {
 	return apierr.New(apierr.KindForbidden, "LADO_RULE_PROTECTED",
-		"This rule is protected: it is always on, and only the permission ceiling's mode can change.", map[string]any{"rule": string(id)})
+		"This rule is protected: it is always on, and only the permission ceiling's mode and the protected paths can change.", map[string]any{"rule": string(id)})
 }
 
 func ruleChanged(base int) error {

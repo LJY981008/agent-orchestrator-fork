@@ -70,6 +70,17 @@ type serviceFixture struct {
 
 func newServiceFixture(t *testing.T) *serviceFixture {
 	t.Helper()
+	fx := newBareServiceFixture(t)
+	if err := fx.svc.EnsureBuiltins(context.Background()); err != nil {
+		t.Fatalf("EnsureBuiltins: %v", err)
+	}
+	return fx
+}
+
+// newBareServiceFixture is newServiceFixture before the daemon seeds the
+// built-in rules.
+func newBareServiceFixture(t *testing.T) *serviceFixture {
+	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
 	store := sqlitetest.MustOpenAt(t, dir)
@@ -103,9 +114,6 @@ func newServiceFixture(t *testing.T) *serviceFixture {
 		},
 		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
-	if err := fx.svc.EnsureBuiltins(ctx); err != nil {
-		t.Fatalf("EnsureBuiltins: %v", err)
-	}
 	return fx
 }
 
@@ -771,6 +779,168 @@ func TestCeilingChangeRefusesReplayedProof(t *testing.T) {
 	}
 }
 
+// HARNESS §14: the protected paths change only with the desktop app's
+// confirmation, as the ceiling does; a dry run shows the change without one.
+// The worker's text and the validator follow the new globs.
+func TestProtectedPathsChangeNeedsPresence(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	id := domain.LadoRuleProtectedPaths
+	task := fx.approvedTask(t, "claude-code")
+	seeded := fx.rule(t, id).Version
+	globs := &domain.LadoProtectedPathsConfig{Globs: []string{".github/**", " infra/** ", "Makefile"}}
+	const changed = `{"globs":[".github/**","infra/**","Makefile"]}`
+	before := fx.rows(t)
+
+	_, err := fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 1, Paths: globs})
+	wantAPIError(t, err, apierr.KindForbidden, "LADO_PRESENCE_REQUIRED")
+	invalid := apierr.Forbidden("LADO_PRESENCE_INVALID", "The confirmation could not be verified.")
+	_, err = fx.svc.Update(ctx, id, UpdateInput{
+		BaseVersion: 1, Paths: globs,
+		Presence: func(string, string) (domain.LadoPresenceProof, error) { return domain.LadoPresenceProof{}, invalid },
+	})
+	if !errors.Is(err, invalid) {
+		t.Fatalf("a refused proof = %v, want the presence check's error", err)
+	}
+
+	// Globs a plan could not name are refused before presence, with the
+	// index of the glob at fault.
+	tooMany := make([]string, domain.LadoProtectedPathsMax+1)
+	for i := range tooMany {
+		tooMany[i] = fmt.Sprintf("dir%d/**", i)
+	}
+	for _, c := range []struct {
+		globs  []string
+		index  int
+		reason string
+	}{
+		{nil, 0, "required"},
+		{[]string{"docs/**", "/etc/**"}, 1, "invalid"},
+		{[]string{"docs/**", "src/../../outside"}, 1, "invalid"},
+		{[]string{"docs/**", "   "}, 1, "invalid"},
+		{[]string{`C:\repo\**`}, 0, "invalid"},
+		{tooMany, domain.LadoProtectedPathsMax, "too_many"},
+	} {
+		_, err := fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 1, Paths: &domain.LadoProtectedPathsConfig{Globs: c.globs}, Presence: fx.presence("never-used-AAAAAAAAAAAAAAAA", false, nil)})
+		wantAPIError(t, err, apierr.KindInvalid, "LADO_PROTECTED_PATHS_INVALID")
+		var apiErr *apierr.Error
+		if errors.As(err, &apiErr); apiErr.Details["index"] != c.index || apiErr.Details["reason"] != c.reason {
+			t.Fatalf("globs %q: details = %v, want index %d, reason %s", c.globs, apiErr.Details, c.index, c.reason)
+		}
+	}
+
+	// Only this rule has paths, and its other content stays protected.
+	bypass := domain.PermissionModeBypassPermissions
+	for _, attempt := range []struct {
+		name string
+		id   domain.LadoRuleID
+		in   UpdateInput
+		kind apierr.Kind
+		code string
+	}{
+		{"paths for the Korean rule", domain.LadoRuleKoreanCommits, UpdateInput{BaseVersion: 1, Paths: globs}, apierr.KindInvalid, "LADO_PROTECTED_PATHS_INVALID"},
+		{"paths for the ceiling", domain.LadoRulePermissionCeiling, UpdateInput{BaseVersion: 1, Paths: globs}, apierr.KindInvalid, "LADO_PROTECTED_PATHS_INVALID"},
+		{"paths for another gate", domain.LadoRuleTestsMustPass, UpdateInput{BaseVersion: 1, Paths: globs}, apierr.KindForbidden, "LADO_RULE_PROTECTED"},
+		{"its instruction", id, UpdateInput{BaseVersion: 1, Instruction: ptr("Change anything.")}, apierr.KindForbidden, "LADO_RULE_PROTECTED"},
+		{"paths and an archive", id, UpdateInput{BaseVersion: 1, Paths: globs, Archived: ptr(true)}, apierr.KindForbidden, "LADO_RULE_PROTECTED"},
+		{"a ceiling mode", id, UpdateInput{BaseVersion: 1, CeilingMode: &bypass}, apierr.KindInvalid, "LADO_RULE_CEILING_INVALID"},
+		{"a stale base", id, UpdateInput{BaseVersion: 2, Paths: globs}, apierr.KindConflict, "LADO_RULE_CHANGED"},
+	} {
+		attempt.in.Presence = fx.presence("never-used-AAAAAAAAAAAAAAAA", false, nil)
+		_, err := fx.svc.Update(ctx, attempt.id, attempt.in)
+		var apiErr *apierr.Error
+		if !errors.As(err, &apiErr) || apiErr.Kind != attempt.kind || apiErr.Code != attempt.code {
+			t.Fatalf("%s: error = %#v, want %s", attempt.name, err, attempt.code)
+		}
+	}
+	if after := fx.rows(t); after != before {
+		t.Fatalf("rows after refused changes = %+v, want %+v", after, before)
+	}
+
+	// A dry run shows the version and what it reaches, needs no presence and
+	// keeps nothing.
+	preview, err := fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 1, Paths: globs, DryRun: true})
+	if err != nil || preview.Applied || preview.Rule.Rule.Version.Number != 2 || string(preview.Rule.Rule.Version.Content.Config) != changed {
+		t.Fatalf("dry run = (%+v, %v), want version 2 shown and not applied", preview, err)
+	}
+	if want := []ImpactTask{{ID: task.ID, ProjectID: "demo", Title: task.Issue.Title, IssueRef: task.IssueRef}}; !reflect.DeepEqual(preview.Impact.Tasks, want) {
+		t.Fatalf("dry run impact = %+v, want the approved task", preview.Impact.Tasks)
+	}
+	if after := fx.rows(t); after != before {
+		t.Fatalf("rows after a dry run = %+v, want %+v", after, before)
+	}
+
+	// With a proof the globs become version 2 by the human.
+	nonce := "paths-nonce-AAAAAAAAAAAAAAAA"
+	var asked []string
+	got, err := fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 1, Paths: globs, Reason: "infra is shared", Presence: fx.presence(nonce, false, &asked)})
+	if err != nil || !got.Applied {
+		t.Fatalf("Update = (%+v, %v), want applied", got, err)
+	}
+	if want := []string{"rule.protected_change paths.protected"}; !slices.Equal(asked, want) {
+		t.Fatalf("presence asked for %v, want %v", asked, want)
+	}
+	v := got.Rule.Rule.Version
+	if v.Number != 2 || v.Actor != "human" || string(v.Content.Config) != changed || v.Content.Name != seeded.Content.Name ||
+		v.Content.Instruction != seeded.Content.Instruction || !slices.Equal(v.Content.Enforcement, seeded.Content.Enforcement) {
+		t.Fatalf("version = %+v, want version 2 by human with only the globs changed", v)
+	}
+	event := fx.lastEvent(t)
+	want := map[string]any{
+		"from":    []any{".github/**", ".gitlab-ci.yml", ".gitlab/**", "**/CLAUDE.md", "**/AGENTS.md", ".claude/**", ".codex/**", ".mcp.json", ".ao/**"},
+		"to":      []any{".github/**", "infra/**", "Makefile"},
+		"version": float64(2), "proof": nonce, "dev": false, "reason": "infra is shared",
+	}
+	if event.Action != "rule.protected_changed" || event.Actor != "human" || event.Subject != string(id) || !reflect.DeepEqual(event.Payload, want) {
+		t.Fatalf("audit event = %+v, want rule.protected_changed by human with %v", event, want)
+	}
+	var action, subject string
+	if err := fx.raw.QueryRow(`SELECT action, subject_id FROM lado_presence_proofs WHERE nonce = ?`, nonce).Scan(&action, &subject); err != nil ||
+		action != domain.LadoPresenceRuleChange || subject != string(id) {
+		t.Fatalf("stored proof = (%q, %q, %v), want the rule change's", action, subject, err)
+	}
+	view, err := fx.svc.Effective(ctx, EffectiveInput{TaskID: task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newGlobs := func(v SnapshotValidator) bool {
+		return v.Kind == ValidatorProtectedPaths && string(v.Config) == changed
+	}
+	if !strings.Contains(view.Prompt, "Protected paths: `.github/**`, `infra/**`, `Makefile`") || !slices.ContainsFunc(view.Content.Validators, newGlobs) {
+		t.Fatalf("effective = prompt %q, validators %+v; want the new globs", view.Prompt, view.Content.Validators)
+	}
+	if view.Approved == nil || view.Approved.Matches || !slices.Equal(view.Approved.Changed, []domain.LadoRuleID{id}) {
+		t.Fatalf("approved = %+v, want the task's approval to need review for the protected paths", view.Approved)
+	}
+
+	// A proof is used once.
+	before = fx.rows(t)
+	_, err = fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 2, Paths: &domain.LadoProtectedPathsConfig{Globs: []string{".github/**"}}, Presence: fx.presence(nonce, false, nil)})
+	wantAPIError(t, err, apierr.KindForbidden, "LADO_PRESENCE_REPLAYED")
+	if after := fx.rows(t); after != before {
+		t.Fatalf("rows after a replayed proof = %+v, want %+v", after, before)
+	}
+	// The globs the rule has already change nothing and need no presence.
+	same, err := fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 2, Paths: globs})
+	if err != nil || !same.Applied || same.Rule.Rule.Version.Number != 2 {
+		t.Fatalf("the same globs = (%+v, %v), want nothing to change", same, err)
+	}
+	if after := fx.rows(t); after != before {
+		t.Fatalf("rows after the same globs = %+v, want %+v", after, before)
+	}
+
+	// Development presence is recorded as such.
+	if _, err := fx.svc.Update(ctx, id, UpdateInput{BaseVersion: 2, Paths: &domain.LadoProtectedPathsConfig{Globs: []string{".github/**"}}, Presence: fx.presence("dev-nonce-AAAAAAAAAAAAAAAA", true, nil)}); err != nil {
+		t.Fatal(err)
+	}
+	if v := fx.rule(t, id).Version; v.Number != 3 || v.Actor != "human:dev-presence" || string(v.Content.Config) != `{"globs":[".github/**"]}` {
+		t.Fatalf("version = %+v, want version 3 by human:dev-presence", v)
+	}
+	if event := fx.lastEvent(t); event.Actor != "human:dev-presence" || event.Payload["dev"] != true {
+		t.Fatalf("audit event = %+v, want a development change", event)
+	}
+}
+
 func TestDryRunWritesNothing(t *testing.T) {
 	fx := newServiceFixture(t)
 	ctx := context.Background()
@@ -808,8 +978,8 @@ func TestDryRunWritesNothing(t *testing.T) {
 	if got := fx.rule(t, domain.LadoRuleKoreanCommits); got.Global != domain.LadoBindingOff {
 		t.Fatalf("Korean rule = %+v, want it still off", got)
 	}
-	if rules, err := fx.svc.List(ctx, true); err != nil || len(rules) != 5 {
-		t.Fatalf("List = %d rules, %v, want the 4 built-in and 1 user rule", len(rules), err)
+	if rules, err := fx.svc.List(ctx, true); err != nil || len(rules) != 9 {
+		t.Fatalf("List = %d rules, %v, want the 8 built-in and 1 user rule", len(rules), err)
 	}
 	// Asking for what is already so writes nothing either.
 	same, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: user.ID, Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff})
@@ -1001,8 +1171,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		t.Fatalf("second EnsureBuiltins: %v", err)
 	}
 
-	if rows := fx.rows(t); rows.rules != 4 || rows.versions != 4 || rows.bindings != 4 {
-		t.Fatalf("rows = %+v, want 4 rules with one version and one binding each", rows)
+	if rows := fx.rows(t); rows.rules != 8 || rows.versions != 8 || rows.bindings != 8 {
+		t.Fatalf("rows = %+v, want 8 rules with one version and one binding each", rows)
 	}
 	var seeded []auditRow
 	for _, event := range fx.events(t) {
@@ -1010,8 +1180,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 			seeded = append(seeded, event)
 		}
 	}
-	if len(seeded) != 4 {
-		t.Fatalf("rule.created events = %+v, want 4", seeded)
+	if len(seeded) != 8 {
+		t.Fatalf("rule.created events = %+v, want 8", seeded)
 	}
 	for _, event := range seeded {
 		if event.Actor != "lado" || !reflect.DeepEqual(event.Payload, map[string]any{"version": float64(1), "builtin": true}) {
@@ -1019,14 +1189,18 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		}
 	}
 	rules, err := fx.svc.List(ctx, true)
-	if err != nil || len(rules) != 4 {
-		t.Fatalf("List = %+v, %v, want 4 rules", rules, err)
+	if err != nil || len(rules) != 8 {
+		t.Fatalf("List = %+v, %v, want 8 rules", rules, err)
 	}
 	global := map[domain.LadoRuleID]domain.LadoBindingState{
-		domain.LadoRulePlanApproval:      domain.LadoBindingOn,
-		domain.LadoRulePermissionCeiling: domain.LadoBindingOn,
-		domain.LadoRuleKoreanCommits:     domain.LadoBindingOn, // the developer's change stays
-		domain.LadoRuleSetupPresence:     domain.LadoBindingOn,
+		domain.LadoRulePlanApproval:        domain.LadoBindingOn,
+		domain.LadoRulePermissionCeiling:   domain.LadoBindingOn,
+		domain.LadoRuleKoreanCommits:       domain.LadoBindingOn, // the developer's change stays
+		domain.LadoRuleSetupPresence:       domain.LadoBindingOn,
+		domain.LadoRuleIntegrationApproval: domain.LadoBindingOn,
+		domain.LadoRuleNoDirectWrite:       domain.LadoBindingOn,
+		domain.LadoRuleTestsMustPass:       domain.LadoBindingOn,
+		domain.LadoRuleProtectedPaths:      domain.LadoBindingOn,
 	}
 	for _, view := range rules {
 		rule := view.Rule
@@ -1035,6 +1209,164 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 			t.Fatalf("rule = %+v, want a built-in seeded once", rule)
 		}
 	}
+}
+
+// stepSevenKorean is the Korean commit rule as steps 5 to 7 seeded it, its
+// built-in version 1: text for the worker only.
+var stepSevenKorean = domain.LadoRuleContent{
+	Name:        "Commit messages in Korean",
+	Category:    "git",
+	Instruction: "Write Git commit subjects and bodies primarily in Korean. Conventional Commit prefixes such as feat, fix, docs, refactor, test and chore may stay in English.",
+	Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementPrompt},
+}
+
+// seedStepSevenBuiltins seeds the built-in rules as the daemon of step 7 did:
+// the Korean commit rule at its built-in version 1 and no gates of a pull
+// request.
+func (fx *serviceFixture) seedStepSevenBuiltins(t *testing.T) {
+	t.Helper()
+	var seeds []domain.LadoRuleSeed
+	for _, rule := range Builtins() {
+		switch rule.ID {
+		case domain.LadoRulePlanApproval, domain.LadoRulePermissionCeiling, domain.LadoRuleSetupPresence:
+		case domain.LadoRuleKoreanCommits:
+			rule = builtin(domain.LadoRule{ID: rule.ID, Global: rule.Global}, stepSevenKorean)
+		default:
+			continue
+		}
+		rule.CreatedAt = fx.now
+		rule.Version.ID = domain.LadoRuleVersionID("step7-" + string(rule.ID))
+		rule.Version.CreatedAt = fx.now
+		seeds = append(seeds, domain.LadoRuleSeed{Rule: rule, Event: domain.LadoAuditEvent{
+			At: fx.now, Actor: "lado", Action: "rule.created", SubjectKind: "rule", SubjectID: string(rule.ID), Payload: json.RawMessage(builtinPayload),
+		}})
+	}
+	if added, err := fx.store.EnsureLadoBuiltinRules(context.Background(), seeds); err != nil || len(added) != 4 {
+		t.Fatalf("seed the step 7 built-ins = %v, %v", added, err)
+	}
+}
+
+// upgradeEvents returns the audit log's rule.builtin_upgraded events.
+func (fx *serviceFixture) upgradeEvents(t *testing.T) []auditRow {
+	t.Helper()
+	var upgrades []auditRow
+	for _, event := range fx.events(t) {
+		if event.Action == "rule.builtin_upgraded" {
+			upgrades = append(upgrades, event)
+		}
+	}
+	return upgrades
+}
+
+// HARNESS §5, §14: the Korean commit rule's built-in version 2 adds the commit
+// message validator. A store that holds version 1 unchanged gets version 2 as
+// its next version by lado, once; a rule the developer changed keeps its
+// versions; a store without the rule seeds version 2's content directly.
+func TestEnsureBuiltinsUpgradesAnUnchangedKoreanRule(t *testing.T) {
+	ctx := context.Background()
+	current := Builtins()[2].Version.Content
+	if Builtins()[2].ID != domain.LadoRuleKoreanCommits || current.SHA256() == stepSevenKorean.SHA256() {
+		t.Fatalf("the third built-in is %s with content %+v, want the Korean rule's version 2", Builtins()[2].ID, current)
+	}
+	versions := func(t *testing.T, fx *serviceFixture) []domain.LadoRuleVersion {
+		t.Helper()
+		got, err := fx.store.ListLadoRuleVersions(ctx, domain.LadoRuleKoreanCommits)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	t.Run("unchanged version 1 gets version 2", func(t *testing.T) {
+		fx := newBareServiceFixture(t)
+		fx.seedStepSevenBuiltins(t)
+		// The developer turned the rule on; the binding stays.
+		if _, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: domain.LadoRuleKoreanCommits, Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOn}); err != nil {
+			t.Fatal(err)
+		}
+		fx.now = fx.now.Add(time.Hour)
+		if err := fx.svc.EnsureBuiltins(ctx); err != nil {
+			t.Fatalf("EnsureBuiltins: %v", err)
+		}
+
+		got := versions(t, fx)
+		if len(got) != 2 || got[0].SHA256 != stepSevenKorean.SHA256() || got[0].Actor != "lado" {
+			t.Fatalf("versions = %+v, want version 1 kept and one more", got)
+		}
+		if v := got[1]; v.Number != 2 || v.Actor != "lado" || v.SHA256 != current.SHA256() || !v.CreatedAt.Equal(fx.now) ||
+			!slices.Equal(v.Content.Enforcement, []domain.LadoEnforcement{domain.LadoEnforcementPrompt, domain.LadoEnforcementValidator}) ||
+			string(v.Content.Config) != `{"language":"ko","allowPrefixes":["feat","fix","docs","refactor","test","chore","style","perf","build","ci","revert"]}` ||
+			v.Content.Instruction != stepSevenKorean.Instruction || v.Content.Name != stepSevenKorean.Name {
+			t.Fatalf("version 2 = %+v, want the built-in's version 2 by lado", v)
+		}
+		if rule := fx.rule(t, domain.LadoRuleKoreanCommits); rule.Global != domain.LadoBindingOn || rule.Version.Number != 2 || !rule.CreatedAt.Equal(serviceEpoch) {
+			t.Fatalf("rule = %+v, want version 2 active, still on and created at the first seed", rule)
+		}
+		upgrades := fx.upgradeEvents(t)
+		want := map[string]any{"from": float64(1), "to": float64(2)}
+		if len(upgrades) != 1 || upgrades[0].Actor != "lado" || upgrades[0].Subject != string(domain.LadoRuleKoreanCommits) || !reflect.DeepEqual(upgrades[0].Payload, want) {
+			t.Fatalf("upgrade events = %+v, want one by lado for the Korean rule with %v", upgrades, want)
+		}
+		// The gates of a pull request are seeded on the same start.
+		if rows := fx.rows(t); rows.rules != 8 || rows.versions != 9 {
+			t.Fatalf("rows = %+v, want 8 rules and 9 versions", rows)
+		}
+		view, err := fx.svc.Effective(ctx, EffectiveInput{ProjectID: "demo"})
+		if err != nil || !slices.ContainsFunc(view.Content.Validators, func(v SnapshotValidator) bool { return v.Kind == ValidatorCommitMessageLocale }) {
+			t.Fatalf("validators = %+v, %v, want the commit message validator", view.Content.Validators, err)
+		}
+
+		// A second start writes nothing.
+		before := fx.rows(t)
+		fx.now = fx.now.Add(time.Hour)
+		if err := fx.svc.EnsureBuiltins(ctx); err != nil {
+			t.Fatalf("second EnsureBuiltins: %v", err)
+		}
+		if after := fx.rows(t); after != before {
+			t.Fatalf("rows after a second start = %+v, want %+v", after, before)
+		}
+	})
+
+	t.Run("a rule the developer changed keeps its versions", func(t *testing.T) {
+		fx := newBareServiceFixture(t)
+		fx.seedStepSevenBuiltins(t)
+		edited, err := fx.svc.Update(ctx, domain.LadoRuleKoreanCommits, UpdateInput{BaseVersion: 1, Instruction: ptr("커밋 메시지는 한국어로 쓴다.")})
+		if err != nil || !edited.Applied {
+			t.Fatalf("Update = (%+v, %v)", edited, err)
+		}
+		if err := fx.svc.EnsureBuiltins(ctx); err != nil {
+			t.Fatalf("EnsureBuiltins: %v", err)
+		}
+		got := versions(t, fx)
+		if len(got) != 2 || got[1].Actor != "api" || got[1].Content.Instruction != "커밋 메시지는 한국어로 쓴다." ||
+			!slices.Equal(got[1].Content.Enforcement, []domain.LadoEnforcement{domain.LadoEnforcementPrompt}) || string(got[1].Content.Config) != `{}` {
+			t.Fatalf("versions = %+v, want the developer's version 2 active, without the validator", got)
+		}
+		if upgrades := fx.upgradeEvents(t); len(upgrades) != 0 {
+			t.Fatalf("upgrade events = %+v, want none", upgrades)
+		}
+		if rows := fx.rows(t); rows.rules != 8 {
+			t.Fatalf("rows = %+v, want the gates seeded next to the kept rule", rows)
+		}
+	})
+
+	t.Run("a missing rule is seeded at version 2's content", func(t *testing.T) {
+		fx := newServiceFixture(t)
+		got := versions(t, fx)
+		if len(got) != 1 || got[0].Number != 1 || got[0].Actor != "lado" || got[0].SHA256 != current.SHA256() {
+			t.Fatalf("versions = %+v, want one version by lado with the current content", got)
+		}
+		if upgrades := fx.upgradeEvents(t); len(upgrades) != 0 {
+			t.Fatalf("upgrade events = %+v, want none", upgrades)
+		}
+		before := fx.rows(t)
+		if err := fx.svc.EnsureBuiltins(ctx); err != nil {
+			t.Fatalf("second EnsureBuiltins: %v", err)
+		}
+		if after := fx.rows(t); after != before {
+			t.Fatalf("rows after a second start = %+v, want %+v", after, before)
+		}
+	})
 }
 
 // HARNESS 15.7: an agent that cannot take the rules' text blocks the task.
@@ -1050,12 +1382,17 @@ func TestEffectiveBlocksAnUnsupportedAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The protected gates of a pull request reach the worker as text too.
 	unsupported := domain.LadoPolicyProblem{
-		Code: ProblemCapabilityUnsupported, Severity: domain.LadoSeverityBlocking, Rules: []domain.LadoRuleID{domain.LadoRuleKoreanCommits},
+		Code: ProblemCapabilityUnsupported, Severity: domain.LadoSeverityBlocking,
+		Rules: []domain.LadoRuleID{
+			domain.LadoRuleKoreanCommits, domain.LadoRuleNoDirectWrite, domain.LadoRuleIntegrationApproval,
+			domain.LadoRuleProtectedPaths, domain.LadoRuleTestsMustPass,
+		},
 		Details: map[string]string{"agent": "cursor", "capability": string(CapabilityPrompt)},
 	}
 	if !view.Blocking() || !slices.ContainsFunc(view.Problems, func(p domain.LadoPolicyProblem) bool { return reflect.DeepEqual(p, unsupported) }) {
-		t.Fatalf("problems = %+v, want the Korean rule blocking cursor", view.Problems)
+		t.Fatalf("problems = %+v, want the prompt rules blocking cursor", view.Problems)
 	}
 	if want := (AgentChoice{Harness: "cursor", Source: AgentFromTask}); view.Agent != want || view.Task == nil || view.Task.ID != task.ID || view.Approved != nil {
 		t.Fatalf("view = %+v, want cursor from the task and no approval", view)
@@ -1086,10 +1423,12 @@ func TestSnapshotMatchesCurrentSHA(t *testing.T) {
 	if !strings.HasPrefix(string(snapshot.ID), "lado-snapshot-") || hex.EncodeToString(sum[:]) != snapshot.SHA256 || snapshot.Blocking {
 		t.Fatalf("snapshot = %+v, want a new id and the hash of its content, not blocking", snapshot)
 	}
-	wantRules := []domain.LadoPolicySnapshotRule{
-		{RuleID: domain.LadoRulePermissionCeiling, VersionID: fx.rule(t, domain.LadoRulePermissionCeiling).Version.ID},
-		{RuleID: domain.LadoRulePlanApproval, VersionID: fx.rule(t, domain.LadoRulePlanApproval).Version.ID},
-		{RuleID: domain.LadoRuleSetupPresence, VersionID: fx.rule(t, domain.LadoRuleSetupPresence).Version.ID},
+	wantRules := []domain.LadoPolicySnapshotRule{}
+	for _, id := range []domain.LadoRuleID{
+		domain.LadoRulePermissionCeiling, domain.LadoRuleNoDirectWrite, domain.LadoRuleIntegrationApproval, domain.LadoRuleProtectedPaths,
+		domain.LadoRulePlanApproval, domain.LadoRuleSetupPresence, domain.LadoRuleTestsMustPass,
+	} {
+		wantRules = append(wantRules, domain.LadoPolicySnapshotRule{RuleID: id, VersionID: fx.rule(t, id).Version.ID})
 	}
 	if !reflect.DeepEqual(snapshot.Rules, wantRules) {
 		t.Fatalf("snapshot rules = %+v, want the protected rules' versions %+v", snapshot.Rules, wantRules)
