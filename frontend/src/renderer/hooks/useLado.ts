@@ -1,12 +1,16 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
-// approvals, rules, runs and the dispatch settings. Rule changes
+// approvals, rules, runs, their verification and integration, branch
+// protection and the dispatch settings. Rule changes
 // that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+	approveLadoIntegration,
 	approveLadoPlan,
 	cancelLadoTask,
+	changeLadoProtectedPaths,
 	createLadoTask,
 	deleteLadoRule,
+	fetchLadoCheckLog,
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
 	fetchLadoExecution,
@@ -14,28 +18,38 @@ import {
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
 	fetchLadoProjectSettings,
+	fetchLadoProtection,
 	fetchLadoRule,
 	fetchLadoRules,
 	fetchLadoTasks,
 	fetchLadoTaskView,
 	importLadoTasks,
 	invalidateLadoRuleQueries,
+	ladoCheckLogQueryKey,
 	ladoDispatchSettingsQueryKey,
 	ladoEffectiveQueryKey,
 	ladoExecutionQueryKey,
+	ladoExecutionQueryRoot,
 	ladoPlanQueryKey,
 	ladoPlanQueryRoot,
 	ladoProjectIssuesQueryKey,
 	ladoProjectRepositoriesQueryKey,
 	ladoProjectSettingsQueryKey,
+	ladoProtectionQueryKey,
 	ladoRuleQueryKey,
 	ladoRulesQueryKey,
 	ladoTasksQueryKey,
 	ladoTaskViewQueryKey,
+	ladoTaskViewQueryRoot,
+	mergeLadoPR,
 	requestLadoPlan,
+	runLadoChecks,
 	setLadoMode,
+	updateLadoCheckTimeout,
 	updateLadoDispatchSettings,
+	updateLadoProjectChecks,
 	updateLadoProjectSettings,
+	type LadoCheckCommand,
 	type LadoDispatchSettingsInput,
 } from "../lib/lado";
 
@@ -90,6 +104,64 @@ export function useUpdateLadoProjectSettings(projectId: string) {
 	return useMutation({
 		mutationFn: (input: { maxConcurrent: number }) => updateLadoProjectSettings(projectId, input),
 		onSuccess: (settings) => queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings),
+		retry: false,
+	});
+}
+
+/**
+ * Replaces the project's check commands. Resolves to null when the developer
+ * cancelled the desktop confirmation; nothing changed then.
+ */
+export function useUpdateLadoProjectChecks(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (commands: LadoCheckCommand[]) => updateLadoProjectChecks(projectId, commands),
+		onSuccess: (settings) => {
+			if (!settings) return;
+			queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings);
+			// Runs check their current heads with the new commands.
+			void queryClient.invalidateQueries({ queryKey: ladoExecutionQueryRoot });
+			void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
+		},
+		retry: false,
+	});
+}
+
+/** Changes how long each of the project's check commands may run, in minutes. */
+export function useUpdateLadoCheckTimeout(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (minutes: number) => updateLadoCheckTimeout(projectId, minutes),
+		onSuccess: (settings) => queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings),
+		retry: false,
+	});
+}
+
+/**
+ * Whether each of the project's repositories protects its base branch as
+ * LADO needs. Nothing announces a change on the host, so it reads again when
+ * stale; useRefreshLadoProtection asks the host at once.
+ */
+export function useLadoProtection(projectId: string | undefined, enabled = true) {
+	return useQuery({
+		queryKey: ladoProtectionQueryKey(projectId ?? ""),
+		queryFn: () => fetchLadoProtection(projectId ?? ""),
+		enabled: enabled && Boolean(projectId),
+		staleTime: 60_000,
+		retry: false,
+	});
+}
+
+/** Check again: the daemon reads the branch rules from the host instead of its cache. */
+export function useRefreshLadoProtection(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => fetchLadoProtection(projectId, true),
+		onSuccess: (protection) => {
+			queryClient.setQueryData(ladoProtectionQueryKey(projectId), protection);
+			// The protection item of every run's verification reads the same rules.
+			void queryClient.invalidateQueries({ queryKey: ladoExecutionQueryRoot });
+		},
 		retry: false,
 	});
 }
@@ -271,6 +343,79 @@ export function useLadoExecution(sessionId: string | null | undefined, enabled =
 		queryKey: ladoExecutionQueryKey(sessionId ?? ""),
 		queryFn: () => fetchLadoExecution(sessionId ?? ""),
 		enabled: enabled && Boolean(sessionId),
+		retry: false,
+	});
+}
+
+/** A check command run's output, read when its log opens; a finished run's output does not change. */
+export function useLadoCheckLog(sessionId: string, checkRunId: string | null | undefined, enabled = true) {
+	return useQuery({
+		queryKey: ladoCheckLogQueryKey(sessionId, checkRunId ?? ""),
+		queryFn: () => fetchLadoCheckLog(sessionId, checkRunId ?? ""),
+		enabled: enabled && Boolean(sessionId && checkRunId),
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+}
+
+// What an integration approval, a merge or a new check run moves: the run's
+// panel, its task's lanes and the open task view.
+function useInvalidateLadoRun(projectId: string, sessionId: string) {
+	const queryClient = useQueryClient();
+	return () => {
+		void queryClient.invalidateQueries({ queryKey: ladoExecutionQueryKey(sessionId) });
+		void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
+		void queryClient.invalidateQueries({ queryKey: ladoTaskViewQueryRoot });
+	};
+}
+
+/**
+ * Approves the integration of the run's current pull request head. Resolves
+ * to null when the developer cancelled the desktop confirmation.
+ */
+export function useApproveLadoIntegration(projectId: string, sessionId: string) {
+	const invalidate = useInvalidateLadoRun(projectId, sessionId);
+	return useMutation({
+		mutationFn: () => approveLadoIntegration(sessionId),
+		onSuccess: (result) => {
+			if (result) invalidate();
+		},
+		retry: false,
+	});
+}
+
+/** Runs the project's check commands again for the run's current head. */
+export function useRunLadoChecks(projectId: string, sessionId: string) {
+	const invalidate = useInvalidateLadoRun(projectId, sessionId);
+	return useMutation({
+		mutationFn: () => runLadoChecks(sessionId),
+		onSuccess: invalidate,
+		retry: false,
+	});
+}
+
+/** Merges the run's pull request at its approved head through AO's merge route. */
+export function useMergeLadoPR(projectId: string, sessionId: string) {
+	const invalidate = useInvalidateLadoRun(projectId, sessionId);
+	return useMutation({
+		mutationFn: (pr: { number: number; url: string; headSha: string }) => mergeLadoPR(pr),
+		onSuccess: invalidate,
+		retry: false,
+	});
+}
+
+/**
+ * Replaces the protected paths' globs. Resolves to null when the developer
+ * cancelled the desktop confirmation. A change reaches every approval's
+ * rules, like the ceiling's.
+ */
+export function useChangeLadoProtectedPaths() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (globs: string[]) => changeLadoProtectedPaths(globs),
+		onSuccess: (rule) => {
+			if (rule) invalidateLadoRuleQueries(queryClient);
+		},
 		retry: false,
 	});
 }

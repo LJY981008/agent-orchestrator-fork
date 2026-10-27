@@ -469,7 +469,7 @@ test("a failed task whose worker still runs cannot be approved, and says why", a
 	await within(dialog).findByTestId("lado-run-status");
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
 	expect(
-		within(dialog).getByText("This task's worker still runs, or its work merged. LADO runs one worker per task, so no plan can be approved now."),
+		within(dialog).getByText("This task's worker still runs, LADO is verifying or integrating its work, or its work merged. LADO runs one worker per task, so no plan can be approved now."),
 	).toHaveAttribute("role", "status");
 });
 

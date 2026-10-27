@@ -2,7 +2,9 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { LADO_DESKTOP_GET_CHANNEL, LADO_DESKTOP_SET_CHANNEL, type LadoDesktopSettings, type LadoDesktopSettingsPatch } from "./shared/lado-desktop";
 import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
+	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
 	LADO_PRESENCE_RESTORE_SETUP_CHANNEL,
@@ -11,6 +13,9 @@ import {
 	type LadoPresenceAdoptSetupResult,
 	type LadoPresenceApproveRequest,
 	type LadoPresenceApproveResult,
+	type LadoPresenceCheckCommand,
+	type LadoPresenceChecksResult,
+	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeRequest,
 	type LadoPresenceModeResult,
 	type LadoPresenceRestoreSetupResult,
@@ -835,10 +840,10 @@ const api = {
 				ipcRenderer.invoke(LADO_PRESENCE_APPROVE_PLAN_CHANNEL, {
 					revisionId,
 				} satisfies LadoPresenceApproveRequest) as Promise<LadoPresenceApproveResult | null>,
-			changeRule: (ruleId: string, mode: LadoCeilingMode) =>
+			changeRule: (ruleId: string, change: LadoCeilingMode | { globs: string[] }) =>
 				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_RULE_CHANNEL, {
 					ruleId,
-					ceiling: { mode },
+					...(typeof change === "string" ? { ceiling: { mode: change } } : { paths: change }),
 				} satisfies LadoPresenceRuleChangeRequest) as Promise<LadoPresenceRuleChangeResult | null>,
 			setLadoMode: (projectId: string, on: boolean) =>
 				ipcRenderer.invoke(LADO_PRESENCE_SET_LADO_MODE_CHANNEL, {
@@ -852,6 +857,11 @@ const api = {
 				ipcRenderer.invoke(LADO_PRESENCE_RESTORE_SETUP_CHANNEL, { adoptionId }) as Promise<LadoPresenceRestoreSetupResult | null>,
 			changeSetup: (request: LadoPresenceSetupChangeRequest) =>
 				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_SETUP_CHANNEL, request) as Promise<LadoPresenceSetupChangeResult | null>,
+			// A run whose integration to approve, or a project's check commands.
+			approveIntegration: (sessionId: string) =>
+				ipcRenderer.invoke(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL, { sessionId }) as Promise<LadoPresenceIntegrationResult | null>,
+			changeProjectChecks: (projectId: string, commands: LadoPresenceCheckCommand[]) =>
+				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL, { projectId, commands }) as Promise<LadoPresenceChecksResult | null>,
 		},
 	},
 };

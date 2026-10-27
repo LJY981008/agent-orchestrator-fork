@@ -1,8 +1,9 @@
 // LADO human-presence approvals shared by Electron main, preload and the
 // renderer (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md). The
-// renderer names the plan revision, the rule and mode, the project, the
-// setup entries to adopt, the adoption to restore, or the setup change, and
-// nothing else.
+// renderer names the plan revision, the rule and mode or protected paths, the
+// project and its mode or check commands, the setup entries to adopt, the
+// adoption to restore, the setup change, or the run whose integration to
+// approve, and nothing else.
 // Main reads the subject from the daemon, asks the human in a native dialog,
 // and signs the request itself, so the renderer never holds the key.
 import type { components } from "../api/schema";
@@ -13,6 +14,8 @@ export const LADO_PRESENCE_SET_LADO_MODE_CHANNEL = "lado:presence:setLadoMode";
 export const LADO_PRESENCE_ADOPT_SETUP_CHANNEL = "lado:presence:adoptSetup";
 export const LADO_PRESENCE_RESTORE_SETUP_CHANNEL = "lado:presence:restoreSetup";
 export const LADO_PRESENCE_CHANGE_SETUP_CHANNEL = "lado:presence:changeSetup";
+export const LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL = "lado:presence:approveIntegration";
+export const LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL = "lado:presence:changeProjectChecks";
 
 export type LadoPresenceApproveRequest = { revisionId: string };
 
@@ -31,8 +34,16 @@ export type LadoCeilingMode = components["schemas"]["LadoRuleCeiling"]["mode"];
 /** The permission ceiling's modes, lowest first; "default" is never a ceiling. */
 export const LADO_CEILING_MODES: readonly LadoCeilingMode[] = ["accept-edits", "auto", "bypass-permissions"];
 
-/** Only the permission ceiling's mode needs the human; every other rule change does not. */
-export type LadoPresenceRuleChangeRequest = { ruleId: string; ceiling: { mode: LadoCeilingMode } };
+/** The protected paths' globs, which only the paths.protected rule has. */
+export type LadoPresenceRulePaths = components["schemas"]["LadoRulePaths"];
+
+/**
+ * Only the permission ceiling's mode and the protected paths need the human;
+ * every other rule change does not.
+ */
+export type LadoPresenceRuleChangeRequest =
+	| { ruleId: string; ceiling: { mode: LadoCeilingMode } }
+	| { ruleId: string; paths: LadoPresenceRulePaths };
 
 export type LadoPresenceRule = components["schemas"]["LadoRuleResponse"];
 
@@ -95,3 +106,27 @@ export type LadoPresenceSetupChangeResult =
 	| { status: "changed"; change: LadoPresenceSetupChange }
 	| { status: "cancelled" }
 	| LadoPresenceFailure;
+
+/**
+ * The run whose pull request head to approve for integration. Main reads the
+ * run, sends the dry run itself and signs what that dry run verified.
+ */
+export type LadoPresenceIntegrationRequest = { sessionId: string };
+
+export type LadoPresenceIntegration = components["schemas"]["LadoIntegrationApproveResponse"];
+
+export type LadoPresenceIntegrationResult =
+	| { status: "approved"; integration: LadoPresenceIntegration }
+	| { status: "cancelled" }
+	| LadoPresenceFailure;
+
+export type LadoPresenceCheckCommand = components["schemas"]["LadoCheckCommandBody"];
+
+/**
+ * The project's check commands as they should be, in order. The daemon runs
+ * them outside any agent sandbox, so changing them needs the human; the time
+ * limit does not.
+ */
+export type LadoPresenceChecksRequest = { projectId: string; commands: LadoPresenceCheckCommand[] };
+
+export type LadoPresenceChecksResult = LadoPresenceModeResult;

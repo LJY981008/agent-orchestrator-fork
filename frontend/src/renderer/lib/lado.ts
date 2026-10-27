@@ -1,6 +1,7 @@
 // LADO fork: daemon calls for repository connections, issue-backed tasks, plans,
-// approvals, rules and runs (docs/LJY-PRD/TDD.md §5.1-§5.3 and
-// §13, docs/LJY-PRD/HARNESS.md §3-§8). LADO routes live on this computer's
+// approvals, rules, runs, their verification and integration approval
+// (docs/LJY-PRD/TDD.md §5.1-§5.3, §7, §8 and §13, docs/LJY-PRD/HARNESS.md
+// §3-§8 and §14). LADO routes live on this computer's
 // daemon only; remote hosts never serve them.
 import type { QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
@@ -56,6 +57,27 @@ export type LadoDispatchSettingsInput = components["schemas"]["UpdateLadoDispatc
 /** A maximum run time the daemon accepts, in minutes; 0 means no limit. */
 export type LadoRunMinutes = LadoDispatchSettings["maxRunMinutes"];
 type LadoProjectSettingsInput = components["schemas"]["UpdateLadoProjectSettingsRequest"];
+/** What LADO verified on a run's pull request head (docs/LJY-PRD/TDD.md §8). */
+export type LadoVerification = components["schemas"]["LadoVerificationResponse"];
+export type LadoVerifyItem = components["schemas"]["LadoVerifyItemResponse"];
+export type LadoVerifyItemDetails = components["schemas"]["LadoVerifyItemDetailsResponse"];
+export type LadoVerifyKind = LadoVerifyItem["kind"];
+export type LadoVerifyOutcome = LadoVerifyItem["outcome"];
+/** An item's code; a plain pass has none. */
+export type LadoVerifyCode = NonNullable<LadoVerifyItem["code"]>;
+export type LadoVerifyCommandRun = components["schemas"]["LadoVerifyCommandRunResponse"];
+export type LadoEvidenceCriterion = components["schemas"]["LadoEvidenceCriterionResponse"];
+/** The current head's integration approval, with how posting its status went. */
+export type LadoIntegrationApproval = components["schemas"]["LadoIntegrationApprovalResponse"];
+export type LadoIntegrationResult = components["schemas"]["LadoIntegrationApproveResponse"];
+export type LadoRunChecksResult = components["schemas"]["LadoRunChecksResponse"];
+export type LadoProjectProtection = components["schemas"]["LadoProjectProtectionResponse"];
+export type LadoBranchProtection = components["schemas"]["LadoBranchProtectionResponse"];
+export type LadoCheckCommand = components["schemas"]["LadoCheckCommandBody"];
+type LadoIntegrationInput = components["schemas"]["ApproveLadoIntegrationRequest"];
+
+/** The protected rule whose globs keep workers away from protected paths. */
+export const LADO_PROTECTED_PATHS_RULE_ID = "paths.protected";
 
 /**
  * A failed LADO call. It keeps the daemon's error code and details, so the
@@ -97,7 +119,10 @@ export const ladoEffectiveQueryRoot = ["lado", "effective"] as const;
 /** A project's rules, and its tasks' rules, share the project's prefix. */
 export const ladoEffectiveProjectQueryKey = (projectId: string) => ["lado", "effective", projectId] as const;
 export const ladoEffectiveQueryKey = (projectId: string, taskId: string) => ["lado", "effective", projectId, taskId] as const;
+export const ladoExecutionQueryRoot = ["lado", "execution"] as const;
 export const ladoExecutionQueryKey = (sessionId: string) => ["lado", "execution", sessionId] as const;
+export const ladoCheckLogQueryKey = (sessionId: string, checkRunId: string) => ["lado", "check-log", sessionId, checkRunId] as const;
+export const ladoProtectionQueryKey = (projectId: string) => ["lado", "protection", projectId] as const;
 export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
 
 /**
@@ -139,6 +164,29 @@ export async function setLadoMode(projectId: string, on: boolean): Promise<LadoP
 		}
 	}
 	return putLadoProjectSettings(projectId, { ladoMode: on }, on ? "Could not turn on LADO mode" : "Could not turn off LADO mode");
+}
+
+/**
+ * Replaces the project's check commands. The daemon runs them in each run's
+ * worktree outside any agent sandbox, so in the desktop app the main process
+ * names the change, asks the developer to confirm and signs it; null means
+ * the developer cancelled. In a browser the call goes to the daemon directly,
+ * which accepts it only in development.
+ */
+export async function updateLadoProjectChecks(projectId: string, commands: LadoCheckCommand[]): Promise<LadoProjectSettings | null> {
+	// The bridge answers null when there is no desktop main process to ask.
+	const result = (await aoBridge.lado?.presence?.changeProjectChecks(projectId, commands)) ?? null;
+	if (result) {
+		if (result.status === "cancelled") return null;
+		if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
+		return result.settings;
+	}
+	return putLadoProjectSettings(projectId, { checkCommands: commands }, "Could not change the check commands");
+}
+
+/** Changes how long each check command may run, in minutes; it needs no confirmation. */
+export async function updateLadoCheckTimeout(projectId: string, minutes: number): Promise<LadoProjectSettings> {
+	return putLadoProjectSettings(projectId, { checkTimeoutMinutes: minutes }, "Could not change the check time limit");
 }
 
 /** Changes how many executions run at once in the project; it needs no confirmation. */
@@ -413,8 +461,28 @@ export async function changeLadoCeiling(ruleId: string, mode: LadoCeilingMode): 
 }
 
 /**
- * The execution a worker session runs: its task, plan, rule snapshot, base
- * and run. Null for a session LADO did not start.
+ * Replaces the protected paths' globs. Like the ceiling, the desktop app's
+ * main process reads the rule, asks the developer to confirm and signs the
+ * change; null means the developer cancelled. In a browser the call reads
+ * the active version and patches it directly, which the daemon accepts only
+ * in development.
+ */
+export async function changeLadoProtectedPaths(globs: string[]): Promise<LadoRule | null> {
+	const result = (await aoBridge.lado?.presence?.changeRule(LADO_PROTECTED_PATHS_RULE_ID, { globs })) ?? null;
+	if (result) {
+		if (result.status === "cancelled") return null;
+		if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
+		return result.rule;
+	}
+	const { rule } = await fetchLadoRule(LADO_PROTECTED_PATHS_RULE_ID);
+	const changed = await updateLadoRule(LADO_PROTECTED_PATHS_RULE_ID, { baseVersion: rule.version, paths: { globs } });
+	return changed.rule ?? rule;
+}
+
+/**
+ * The execution a worker session runs: its task, plan, rule snapshot, base,
+ * run, pull request, the verification of its current head and that head's
+ * integration approval. Null for a session LADO did not start.
  */
 export async function fetchLadoExecution(sessionId: string): Promise<LadoExecution | null> {
 	const { data, error } = await apiClient.GET("/api/v1/lado/executions/{sessionId}", {
@@ -425,6 +493,91 @@ export async function fetchLadoExecution(sessionId: string): Promise<LadoExecuti
 		throw ladoError(error, "Could not load the run");
 	}
 	return data;
+}
+
+/**
+ * Approves the integration of a run's pull request head (docs/LJY-PRD/TDD.md
+ * §7.1). In the desktop app the main process reads the run, sends the dry
+ * run, asks the developer to confirm what it verified, then signs and sends
+ * the approval itself; null means the developer cancelled. In a browser the
+ * call sends the dry run and then the approval with the dry run's values,
+ * which the daemon accepts only in development (AO_LADO_DEV_PRESENCE=1).
+ */
+export async function approveLadoIntegration(sessionId: string): Promise<LadoIntegrationResult | null> {
+	// The bridge answers null when there is no desktop main process to ask.
+	const result = (await aoBridge.lado?.presence?.approveIntegration(sessionId)) ?? null;
+	if (result) {
+		if (result.status === "cancelled") return null;
+		if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
+		return result.integration;
+	}
+	const execution = await fetchLadoExecution(sessionId);
+	if (!execution) throw new LadoApiError("This session is not a LADO run.", "LADO_EXECUTION_NOT_FOUND", { sessionId });
+	const { pr } = execution;
+	if (!pr || pr.merged || pr.closed) {
+		throw new LadoApiError("This run has no open pull request to integrate.", "LADO_EXECUTION_NO_PR", { sessionId });
+	}
+	const preview = await postLadoIntegration(sessionId, { prUrl: pr.url, headSha: pr.headSha ?? "", dryRun: true });
+	return postLadoIntegration(sessionId, {
+		prUrl: preview.verification.prUrl,
+		headSha: preview.verification.headSha,
+		verificationSha256: preview.verificationSha256,
+		acknowledge: preview.confirm,
+	});
+}
+
+async function postLadoIntegration(sessionId: string, body: LadoIntegrationInput): Promise<LadoIntegrationResult> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/executions/{sessionId}/integration-approve", {
+		params: { path: { sessionId } },
+		body,
+	});
+	if (error) throw ladoError(error, "Could not approve the integration");
+	return data;
+}
+
+/** Runs every check command again for the run's current head; the run's verification waits for them. */
+export async function runLadoChecks(sessionId: string): Promise<LadoRunChecksResult> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/executions/{sessionId}/checks/run", {
+		params: { path: { sessionId } },
+	});
+	if (error) throw ladoError(error, "Could not run the checks again");
+	return data;
+}
+
+/** A check command run's combined output, its last 1 MiB; it can be empty. */
+export async function fetchLadoCheckLog(sessionId: string, checkRunId: string): Promise<string> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/executions/{sessionId}/checks/{checkRunId}/log", {
+		params: { path: { sessionId, checkRunId } },
+		parseAs: "text",
+	});
+	if (error) throw ladoError(error, "Could not load the check's output");
+	return data ?? "";
+}
+
+/**
+ * Whether each of the project's repositories protects its base branch as
+ * LADO needs (docs/LJY-PRD/TDD.md §7.1). With refresh the daemon reads the
+ * rules from the host again instead of keeping its cached read.
+ */
+export async function fetchLadoProtection(projectId: string, refresh = false): Promise<LadoProjectProtection> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/protection", {
+		params: { path: { projectId }, query: refresh ? { refresh: true } : {} },
+	});
+	if (error) throw ladoError(error, "Could not read the branch protection");
+	return data;
+}
+
+/**
+ * Merges a run's pull request at its approved head through AO's merge route;
+ * LADO's merge gate lets it through only with an integration approval of that
+ * head (docs/LJY-PRD/TDD.md §7.2).
+ */
+export async function mergeLadoPR(pr: { number: number; url: string; headSha: string }): Promise<void> {
+	const { error } = await apiClient.POST("/api/v1/prs/{id}/merge", {
+		params: { path: { id: String(pr.number) } },
+		body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
+	});
+	if (error) throw ladoError(error, "Could not merge the pull request");
 }
 
 /** The cap on running executions, their maximum run time and the memory hold. */

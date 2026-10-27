@@ -14,7 +14,10 @@ export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "
  * queue reads as ready, and one whose worker LADO is starting as working. An
  * approval that needs review again (its rules or its issue changed, or it was
  * never queued), whose rules block the run (blocked), or whose run failed
- * needs the human again, unless a new plan it waits for is requested.
+ * needs the human again, unless a new plan it waits for is requested. A
+ * pull request LADO verifies reads as working; one waiting for the
+ * integration approval takes the needs-you color, an approved head as ready,
+ * and work merged without that approval needs the human's attention.
  */
 export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
 	switch (task.state) {
@@ -31,8 +34,16 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
 			return { label: t("lado.task.state.dispatching"), tone: "working" };
 		case "running":
 			return { label: t("lado.task.state.running"), tone: "working" };
+		case "validating":
+			return { label: t("lado.task.state.validating"), tone: "working" };
+		case "integration_pending":
+			return { label: t("lado.task.state.integrationPending"), tone: "attention" };
+		case "integrating":
+			return { label: t("lado.task.state.integrating"), tone: "ready" };
 		case "completed":
-			return { label: t("lado.task.state.completed"), tone: "merged" };
+			return task.stateReason === "merged_without_approval"
+				? { label: t("lado.task.state.completed"), tone: "attention" }
+				: { label: t("lado.task.state.completed"), tone: "merged" };
 		case "review_required":
 			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
 			// Only changed rules make it a rules review; the second line says why otherwise.
@@ -59,7 +70,9 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
 
 /**
  * The card's second line: what a queued task waits for and which attempt
- * starts it, or why a task needs the human again or failed. Null when the
+ * starts it, why a task needs the human again or failed, what LADO's
+ * verification of its pull request waits for or found, why an approved head
+ * has no status yet, or that its work merged without approval. Null when the
  * status line says it all, or when a new plan is on its way.
  */
 export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): string | null {
@@ -85,6 +98,11 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 		case "failed":
 			if (task.plan.requestPending) return null;
 			return reason ? ladoReasonText(t, reason) : null;
+		case "validating":
+		case "integrating":
+			return reason ? ladoReasonText(t, reason) : null;
+		case "completed":
+			return reason === "merged_without_approval" ? ladoReasonText(t, reason) : null;
 		default:
 			return null;
 	}

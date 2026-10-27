@@ -47,8 +47,8 @@ vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled
 vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ customCoder: false, selfServeBilling: false }) }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "unauthenticated", session: null }) }));
 
-const off: lado.LadoProjectSettings = { projectId: "demo", ladoMode: false, maxConcurrent: 1 };
-const on: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1 };
+const off: lado.LadoProjectSettings = { projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 };
+const on: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 };
 
 const put = () => vi.mocked(apiClient.PUT);
 // The desktop app's confirmation of turning LADO mode off (lib/lado.ts setLadoMode).
@@ -224,7 +224,7 @@ describe("LadoProjectSection", () => {
 	it("adds a LADO page to every local project, before Rules, and to no remote or cloud one", async () => {
 		const user = userEvent.setup();
 		localWorkspacesState.ids = ["demo", "plain"];
-		vi.mocked(lado.fetchLadoProjectSettings).mockImplementation(async (projectId) => ({ projectId, ladoMode: projectId === "demo", maxConcurrent: 1 }));
+		vi.mocked(lado.fetchLadoProjectSettings).mockImplementation(async (projectId) => ({ projectId, ladoMode: projectId === "demo", maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 }));
 		const navNames = () => within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button").map((button) => button.textContent);
 
 		// A local project outside LADO mode turns it on here; Rules follows.

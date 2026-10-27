@@ -450,6 +450,8 @@ if (typeof window !== "undefined") {
 				adoptSetup: async () => null,
 				restoreSetup: async () => null,
 				changeSetup: async () => null,
+				approveIntegration: async () => null,
+				changeProjectChecks: async () => null,
 			},
 		},
 	};

@@ -1,11 +1,14 @@
-// LADO fork: plan approval, permission ceiling changes, turning LADO mode
-// off, and adopting, restoring and changing local setup, through the human
-// at the desktop app (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
+// LADO fork: plan approval, permission ceiling and protected path changes,
+// turning LADO mode off, changing a project's check commands, adopting,
+// restoring and changing local setup, and approving a run's integration,
+// through the human at the desktop app
+// (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 // Any local process can call the daemon's loopback API, so these must come
-// from here. The renderer names a plan revision, the ceiling and a mode, a
-// project, setup entries, an adoption or a setup change; main reads the
-// subject from the daemon itself, so the renderer cannot misstate it, shows a
-// native confirmation naming it, and on confirm signs and sends the request.
+// from here. The renderer names a plan revision, the ceiling and a mode or the
+// protected paths, a project, setup entries, an adoption, a setup change or a
+// run; main reads the subject from the daemon itself, so the renderer cannot
+// misstate it, shows a native confirmation naming it, and on confirm signs
+// and sends the request.
 // An approval also signs the hash of the rules that apply to the task right
 // now. The key is derived in memory from the per-launch desktop token and
 // never leaves main.
@@ -16,7 +19,9 @@ import type { BaseWindow, Dialog, IpcMain, IpcMainInvokeEvent, MessageBoxOptions
 import {
 	LADO_CEILING_MODES,
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
+	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
 	LADO_PRESENCE_RESTORE_SETUP_CHANNEL,
@@ -25,7 +30,11 @@ import {
 	type LadoPresenceAdoptSetupResult,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
+	type LadoPresenceCheckCommand,
+	type LadoPresenceChecksResult,
 	type LadoPresenceFailure,
+	type LadoPresenceIntegration,
+	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeResult,
 	type LadoPresenceProjectSettings,
 	type LadoPresenceRestoreSetupResult,
@@ -51,18 +60,33 @@ const REQUEST_TIMEOUT_MS = 10_000;
 // An adoption's preview scans the tools' folders and every project, and the
 // adoption and the restore copy and remove files: they get longer.
 const SETUP_TIMEOUT_MS = 120_000;
+// An integration's dry run and approval fetch the base branch (at most 30 s)
+// and read the remote branch rules.
+const INTEGRATION_TIMEOUT_MS = 60_000;
 const REVISION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 // Setup items, adoptions and tasks have uuid-like ids, as plan revisions do.
 const SETUP_ID = REVISION_ID;
 // AO's project id alphabet (backend/internal/service/project), within a
 // folder name's length; AO also refuses "..".
 const PROJECT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
+// AO's session ids take the project's prefix and the same alphabet.
+const SESSION_ID = PROJECT_ID;
 const SHA256_HEX = /^[0-9a-f]{64}$/;
-// The one rule whose change needs the human (docs/LJY-PRD/HARNESS.md §14).
+// The rules whose change needs the human (docs/LJY-PRD/HARNESS.md §14).
 const CEILING_RULE_ID = "agent.permission.ceiling";
+const PROTECTED_PATHS_RULE_ID = "paths.protected";
+// The daemon's limits (backend/internal/domain): globs of the protected
+// paths, and the check commands with their names and commands in characters.
+const MAX_PROTECTED_PATHS = 50;
+const MAX_CHECK_COMMANDS = 10;
+const MAX_CHECK_NAME = 40;
+const MAX_CHECK_COMMAND = 2000;
+const CHECK_NAME = /^[A-Za-z0-9][A-Za-z0-9 ._-]*$/;
 // Line breaks or direction overrides in an issue title or a project name
 // could fake the dialog's other lines.
 const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]+/g;
+// One such character, for refusing a value outright.
+const UNSAFE_CHAR = new RegExp(UNSAFE_TEXT.source);
 const SETUP_ADOPTIONS_PATH = "/api/v1/lado/setup/adoptions";
 const SETUP_ITEMS_PATH = "/api/v1/lado/setup/items";
 const SETUP_BINDINGS_PATH = "/api/v1/lado/setup/bindings";
@@ -85,6 +109,10 @@ const SETUP_UNMOVABLE: Partial<Record<string, string>> = {
 const ANSWER_UNREADABLE = "LADO_PRESENCE_ANSWER_UNREADABLE";
 // How much of a change's content its confirmation quotes, in characters.
 const MAX_CONTENT_EXCERPT = 300;
+// How many paths, commits or entries an integration's confirmation names for
+// each thing to confirm, and how much of each.
+const MAX_EXAMPLES = 3;
+const MAX_EXAMPLE_CHARS = 120;
 // A project's or task's binding: it follows the wider scope, or forces the item.
 const SCOPED_BINDING_STATES: readonly unknown[] = ["inherit", "force_on", "force_off"];
 const SETUP_TOOLS = ["claude-code", "codex"] as const;
@@ -165,6 +193,28 @@ type ChangeSubject = {
 	name: string;
 	content: string;
 	blocking: number;
+};
+
+// The protected paths as the daemon has them, from LadoRuleResponse.
+type PathsSubject = { rule: LadoPresenceRule; version: number; globs: string[] };
+// The run an integration approval names, from LadoExecutionResponse; pr is
+// null when it has no open pull request.
+type IntegrationRun = {
+	title: string;
+	pr: { number: number; url: string; headSha: string; branch: string } | null;
+	approvedHead: string;
+};
+type VerifyItem = { kind: string; outcome: string; code: string; details: Record<string, unknown> };
+// What the integration's dry run verified and the approval signs, from
+// LadoIntegrationApproveResponse; reasons are the codes that hold it back.
+type VerifiedSubject = {
+	prUrl: string;
+	headSha: string;
+	sha256: string;
+	outcome: "pass" | "wait" | "fail" | "confirm";
+	confirm: string[];
+	reasons: string[];
+	items: VerifyItem[];
 };
 
 const MODE_KEYS: Record<LadoCeilingMode, PresenceMessageKey> = {
@@ -253,6 +303,8 @@ export function registerLadoPresenceIpc(deps: LadoPresenceDeps): void {
 	handle(LADO_PRESENCE_ADOPT_SETUP_CHANNEL, adoptSetup, "The adoption failed.");
 	handle(LADO_PRESENCE_RESTORE_SETUP_CHANNEL, restoreSetup, "The restore failed.");
 	handle(LADO_PRESENCE_CHANGE_SETUP_CHANNEL, changeSetup, "The setup change failed.");
+	handle(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL, approveIntegration, "The integration approval failed.");
+	handle(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL, changeProjectChecks, "The check commands change failed.");
 }
 
 async function approvePlan(
@@ -322,12 +374,14 @@ async function changeRule(
 	if (!deps.isTrustedSender(sender)) {
 		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can change a rule.");
 	}
-	// The rule id and the mode are all the renderer gives; anything else it sends is ignored.
+	// The rule id and the mode or the globs are all the renderer gives;
+	// anything else it sends is ignored.
 	const request = record(input);
 	const ruleId = request?.ruleId;
+	if (ruleId === PROTECTED_PATHS_RULE_ID) return changeProtectedPaths(deps, record(request?.paths)?.globs);
 	const mode = record(request?.ceiling)?.mode;
 	if (ruleId !== CEILING_RULE_ID) {
-		return failure("LADO_RULE_CEILING_INVALID", "Only the permission ceiling's mode changes here.");
+		return failure("LADO_RULE_CEILING_INVALID", "Only the permission ceiling's mode and the protected paths change here.");
 	}
 	if (!isCeilingMode(mode)) {
 		return failure("LADO_RULE_CEILING_INVALID", "Choose accept-edits, auto or bypass-permissions as the permission ceiling.");
@@ -355,6 +409,53 @@ async function changeRule(
 
 	// The daemon checks the proof against exactly these bytes.
 	const body = JSON.stringify({ baseVersion: ceiling.version, ceiling: { mode } });
+	const sent = await callDaemon(deps, rulePath, signed(deps, "PATCH", rulePath, body));
+	if (!sent.ok) return sent.failure;
+	const changed = record(record(sent.body)?.rule);
+	if (!changed) return failure(ANSWER_UNREADABLE, "The change was sent, but the AO daemon's answer could not be read.");
+	return { status: "changed", rule: changed as LadoPresenceRule };
+}
+
+// The protected paths keep workers away from CI, agent instructions and
+// LADO's own files unless the approved plan names them, so only the human may
+// change them. Main reads the rule, names the globs added and removed, then
+// signs the change.
+async function changeProtectedPaths(deps: LadoPresenceDeps, value: unknown): Promise<LadoPresenceRuleChangeResult> {
+	const globs = protectedGlobs(value);
+	if (!globs.ok) {
+		return failure("LADO_PROTECTED_PATHS_INVALID", "Give 1 to 50 protected paths, each a relative path or pattern.", globs.details);
+	}
+	const rulePath = `/api/v1/lado/rules/${encodeURIComponent(PROTECTED_PATHS_RULE_ID)}`;
+	const read = await callDaemon(deps, rulePath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const rule = record(record(read.body)?.rule);
+	if (rule?.id !== PROTECTED_PATHS_RULE_ID || rule.protected !== true) {
+		return failure("LADO_PROTECTED_PATHS_INVALID", "The AO daemon does not have this rule as the protected paths.", {
+			rule: PROTECTED_PATHS_RULE_ID,
+		});
+	}
+	const current = pathsSubject(rule);
+	if (!current) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this rule could not be read.");
+	// Nothing would change, so there is nothing to confirm.
+	if (current.globs.join("\0") === globs.globs.join("\0")) return { status: "changed", rule: current.rule };
+	const added = globs.globs.filter((glob) => !current.globs.includes(glob));
+	const removed = current.globs.filter((glob) => !globs.globs.includes(glob));
+	const t = await translator(deps);
+	const detail = [
+		[
+			...(added.length > 0 ? [t("lado.presence.paths.added", { globs: excerpt(added.join(", ")) })] : []),
+			...(removed.length > 0 ? [t("lado.presence.paths.removed", { globs: excerpt(removed.join(", ")) })] : []),
+		].join("\n"),
+		t("lado.presence.paths.detail"),
+	]
+		.filter(Boolean)
+		.join("\n\n");
+	if (!(await confirm(deps, t, t("lado.presence.paths.title"), detail, t("lado.presence.change")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon checks the proof against exactly these bytes.
+	const body = JSON.stringify({ baseVersion: current.version, paths: { globs: globs.globs } });
 	const sent = await callDaemon(deps, rulePath, signed(deps, "PATCH", rulePath, body));
 	if (!sent.ok) return sent.failure;
 	const changed = record(record(sent.body)?.rule);
@@ -614,6 +715,134 @@ async function changeSetup(
 	const changed = record(sent.body);
 	if (changed?.applied !== true) return failure(ANSWER_UNREADABLE, "The change was sent, but the AO daemon's answer could not be read.");
 	return { status: "changed", change: changed as LadoPresenceSetupChange };
+}
+
+// Approving a head's integration lets its pull request merge
+// (docs/LJY-PRD/TDD.md §7.1), so only the human may do it. Main reads the run
+// and sends the dry run itself, does not ask while LADO still verifies the
+// head or a check failed, names the pull request, the head and what needs
+// confirming, then signs exactly what the dry run verified.
+async function approveIntegration(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceIntegrationResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can approve an integration.");
+	}
+	// The session id is all the renderer gives; anything else it sends is ignored.
+	const sessionId = record(input)?.sessionId;
+	if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId) || sessionId.includes("..")) {
+		return failure("LADO_SESSION_ID_INVALID", "Invalid session id.");
+	}
+	const executionPath = `/api/v1/lado/executions/${encodeURIComponent(sessionId)}`;
+	const read = await callDaemon(deps, executionPath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const run = integrationRun(read.body, sessionId);
+	if (!run) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this run could not be read.");
+	// The daemon refuses these as well; asking the human first would only
+	// waste a confirmation.
+	if (!run.pr) return failure("LADO_EXECUTION_NO_PR", "This run has no open pull request to integrate.", { sessionId });
+	if (!run.pr.headSha) {
+		return failure("LADO_INTEGRATION_NOT_READY", "LADO has not verified this pull request's head yet.", { reasons: ["verifying"] });
+	}
+	if (run.approvedHead === run.pr.headSha) {
+		return failure("LADO_INTEGRATION_ALREADY_APPROVED", "The integration of this head is approved already.");
+	}
+	// The dry run reads the live head, the remote rules and the base branch
+	// again and verifies the head as the approval would.
+	const approvePath = `${executionPath}/integration-approve`;
+	const preview = await callDaemon(
+		deps,
+		approvePath,
+		jsonRequest("POST", JSON.stringify({ prUrl: run.pr.url, headSha: run.pr.headSha, dryRun: true })),
+		INTEGRATION_TIMEOUT_MS,
+	);
+	if (!preview.ok) return preview.failure;
+	const verified = verifiedSubject(preview.body, run.pr);
+	if (!verified) return failure(ANSWER_UNREADABLE, "The AO daemon's dry run of this approval could not be read.");
+	if (verified.outcome === "wait" || verified.outcome === "fail") {
+		return failure("LADO_INTEGRATION_NOT_READY", "LADO is still verifying this head, or a check on it failed.", {
+			reasons: verified.reasons,
+		});
+	}
+	const t = await translator(deps);
+	const title = t("lado.presence.integration.title", { number: run.pr.number, branch: run.pr.branch || "—" });
+	if (!(await confirm(deps, t, title, integrationDetail(t, run.title, verified), t("lado.presence.integration.approve")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon reads the head and verifies it again, and approves only when
+	// the head, the verification's hash and what needs confirming still match
+	// these bytes; it checks the proof against them.
+	const body = JSON.stringify({
+		prUrl: verified.prUrl,
+		headSha: verified.headSha,
+		verificationSha256: verified.sha256,
+		acknowledge: verified.confirm,
+	});
+	const sent = await callDaemon(deps, approvePath, signed(deps, "POST", approvePath, body), INTEGRATION_TIMEOUT_MS);
+	if (!sent.ok) return sent.failure;
+	const integration = record(sent.body);
+	if (!record(integration?.approval)) {
+		return failure(ANSWER_UNREADABLE, "The approval was sent, but the AO daemon's answer could not be read.");
+	}
+	return { status: "approved", integration: integration as LadoPresenceIntegration };
+}
+
+// A project's check commands run in every run's worktree outside any agent
+// sandbox, so only the human may change them. Main reads the project's
+// settings, names the commands added, changed and removed, then signs a
+// settings change that holds only the commands; the time limit needs no
+// confirmation and the renderer sends it itself.
+async function changeProjectChecks(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceChecksResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can change the check commands.");
+	}
+	// The project id and the commands are all the renderer gives; anything else it sends is ignored.
+	const request = record(input);
+	const projectId = request?.projectId;
+	if (typeof projectId !== "string" || !PROJECT_ID.test(projectId) || projectId.includes("..")) {
+		return failure("LADO_PROJECT_ID_INVALID", "Invalid project id.");
+	}
+	const commands = checkCommands(request?.commands);
+	if (!commands.ok) {
+		return failure(
+			"LADO_CHECK_COMMANDS_INVALID",
+			"Give at most 10 check commands, each with a unique name and a command.",
+			commands.details,
+		);
+	}
+	const settingsPath = `/api/v1/lado/projects/${encodeURIComponent(projectId)}/settings`;
+	const read = await callDaemon(deps, settingsPath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const settings = projectSettings(read.body, projectId);
+	const current = settings ? checkCommands(settings.checkCommands) : null;
+	if (!settings || !current?.ok) {
+		return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this project's LADO settings could not be read.");
+	}
+	// Nothing would change, so there is nothing to confirm.
+	if (JSON.stringify(current.commands) === JSON.stringify(commands.commands)) return { status: "changed", settings };
+	const t = await translator(deps);
+	const detail = [
+		checkChangeLines(t, current.commands, commands.commands).join("\n"),
+		t("lado.presence.checks.detail", { id: projectId }),
+	].join("\n\n");
+	if (!(await confirm(deps, t, t("lado.presence.checks.title"), detail, t("lado.presence.change")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon checks the proof against exactly these bytes.
+	const body = JSON.stringify({ checkCommands: commands.commands });
+	const sent = await callDaemon(deps, settingsPath, signed(deps, "PUT", settingsPath, body));
+	if (!sent.ok) return sent.failure;
+	const changed = projectSettings(sent.body, projectId);
+	if (!changed) return failure(ANSWER_UNREADABLE, "The check commands were changed, but the AO daemon's answer could not be read.");
+	return { status: "changed", settings: changed };
 }
 
 // A request carrying a fresh proof. Signed after the confirmation, which can
@@ -1034,6 +1263,233 @@ function changeSubject(body: unknown, change: SetupChange): ChangeSubject | null
 	};
 }
 
+// The protected paths' globs and the change's base version, from the rule's
+// LadoRuleResponse; a rule without paths has none yet.
+function pathsSubject(rule: Record<string, unknown>): PathsSubject | null {
+	const { version } = rule;
+	if (!isVersion(version)) return null;
+	const globs = rule.paths === undefined ? [] : record(rule.paths)?.globs;
+	if (!isStringList(globs)) return null;
+	return { rule: rule as LadoPresenceRule, version, globs };
+}
+
+// The globs as the daemon keeps them: trimmed, 1 to 50 of them. A glob with
+// a control or direction character could fake the dialog's other lines, and
+// the daemon refuses it as no path anyway. The details are the daemon's.
+function protectedGlobs(value: unknown): { ok: true; globs: string[] } | { ok: false; details: { index: number; reason: string } } {
+	if (!Array.isArray(value) || value.length === 0) return { ok: false, details: { index: 0, reason: "required" } };
+	if (value.length > MAX_PROTECTED_PATHS) return { ok: false, details: { index: MAX_PROTECTED_PATHS, reason: "too_many" } };
+	const globs: string[] = [];
+	for (const [index, glob] of value.entries()) {
+		if (typeof glob !== "string" || glob.trim() === "") return { ok: false, details: { index, reason: "required" } };
+		if (UNSAFE_CHAR.test(glob)) return { ok: false, details: { index, reason: "invalid" } };
+		globs.push(glob.trim());
+	}
+	return { ok: true, globs };
+}
+
+// The commands as the daemon takes them (backend/internal/domain
+// ValidateLadoCheckCommands), each with exactly its name and command, or the
+// first problem with the details the daemon would send.
+function checkCommands(
+	value: unknown,
+): { ok: true; commands: LadoPresenceCheckCommand[] } | { ok: false; details: { index: number; field: string; reason: string } } {
+	if (!Array.isArray(value)) return { ok: false, details: { index: 0, field: "", reason: "invalid" } };
+	if (value.length > MAX_CHECK_COMMANDS) return { ok: false, details: { index: MAX_CHECK_COMMANDS, field: "", reason: "too_many" } };
+	const commands: LadoPresenceCheckCommand[] = [];
+	for (const [index, item] of value.entries()) {
+		const entry = record(item);
+		const { name, command } = entry ?? {};
+		const problem = (field: string, reason: string) => ({ ok: false as const, details: { index, field, reason } });
+		if (typeof name !== "string" || name === "") return problem("name", "required");
+		if (Array.from(name).length > MAX_CHECK_NAME) return problem("name", "too_long");
+		if (!CHECK_NAME.test(name)) return problem("name", "invalid");
+		if (commands.some((earlier) => earlier.name.toLowerCase() === name.toLowerCase())) return problem("name", "duplicate");
+		if (typeof command !== "string" || command.trim() === "") return problem("command", "required");
+		if (Array.from(command).length > MAX_CHECK_COMMAND) return problem("command", "too_long");
+		if (command.includes("\0")) return problem("command", "invalid");
+		commands.push({ name, command });
+	}
+	return { ok: true, commands };
+}
+
+// What a change of the check commands does: one line for each command added
+// or changed, with the command it runs, one for each removed, and the order
+// they run in when that changes.
+function checkChangeLines(
+	t: Translate,
+	from: readonly LadoPresenceCheckCommand[],
+	to: readonly LadoPresenceCheckCommand[],
+): string[] {
+	const before = new Map(from.map((entry) => [entry.name, entry.command]));
+	const after = new Set(to.map((entry) => entry.name));
+	const lines: string[] = [];
+	for (const { name, command } of to) {
+		const old = before.get(name);
+		if (old === undefined) lines.push(t("lado.presence.checks.added", { name, command: excerpt(command) }));
+		else if (old !== command) lines.push(t("lado.presence.checks.changed", { name, command: excerpt(command) }));
+	}
+	for (const { name } of from) if (!after.has(name)) lines.push(t("lado.presence.checks.removed", { name }));
+	const kept = to.filter((entry) => before.has(entry.name)).map((entry) => entry.name);
+	const was = from.filter((entry) => after.has(entry.name)).map((entry) => entry.name);
+	if (kept.join("\0") !== was.join("\0")) {
+		lines.push(t("lado.presence.checks.order", { names: to.map((entry) => entry.name).join(", ") }));
+	}
+	return lines;
+}
+
+// The run an integration names, from LadoExecutionResponse: its task's title,
+// its open pull request, and the head an approval already names. A merged or
+// closed pull request has nothing left to integrate.
+function integrationRun(body: unknown, sessionId: string): IntegrationRun | null {
+	const run = record(body);
+	const task = record(run?.task);
+	if (run?.sessionId !== sessionId || typeof task?.title !== "string") return null;
+	const pr = run.pr === undefined ? null : record(run.pr);
+	const integration = run.integration === undefined ? null : record(run.integration);
+	if ((run.pr !== undefined && !pr) || (run.integration !== undefined && typeof integration?.headSha !== "string")) return null;
+	const approvedHead = typeof integration?.headSha === "string" ? integration.headSha.toLowerCase() : "";
+	if (!pr) return { title: oneLine(task.title), pr: null, approvedHead };
+	const { number, url, merged, closed, headSha = "", targetBranch = "" } = pr;
+	if (
+		typeof number !== "number" ||
+		typeof url !== "string" ||
+		url === "" ||
+		typeof merged !== "boolean" ||
+		typeof closed !== "boolean" ||
+		typeof headSha !== "string" ||
+		typeof targetBranch !== "string"
+	) {
+		return null;
+	}
+	return {
+		title: oneLine(task.title),
+		pr: merged || closed ? null : { number, url, headSha: headSha.toLowerCase(), branch: oneLine(targetBranch) },
+		approvedHead,
+	};
+}
+
+// The dry run's verification, from LadoIntegrationApproveResponse: about the
+// pull request and head asked for, hashed, with its items in order and the
+// codes to acknowledge.
+function verifiedSubject(body: unknown, pr: { url: string; headSha: string }): VerifiedSubject | null {
+	const answer = record(body);
+	const verification = record(answer?.verification);
+	const sha256 = answer?.verificationSha256;
+	const confirmed = answer?.confirm;
+	const items = verification?.items;
+	const outcome = verification?.outcome;
+	const headSha = verification?.headSha;
+	if (
+		!verification ||
+		typeof sha256 !== "string" ||
+		!SHA256_HEX.test(sha256) ||
+		!isStringList(confirmed) ||
+		!Array.isArray(items) ||
+		verification.prUrl !== pr.url ||
+		typeof headSha !== "string" ||
+		headSha.toLowerCase() !== pr.headSha ||
+		(outcome !== "pass" && outcome !== "wait" && outcome !== "fail" && outcome !== "confirm")
+	) {
+		return null;
+	}
+	const parsed: VerifyItem[] = [];
+	for (const value of items) {
+		const item = record(value);
+		if (typeof item?.kind !== "string" || typeof item.outcome !== "string") return null;
+		parsed.push({ kind: item.kind, outcome: item.outcome, code: text(item.code) ?? "", details: record(item.details) ?? {} });
+	}
+	// What holds the approval back, in the items' order, as the daemon names it.
+	const held = parsed.filter((item) => item.outcome === "wait" || item.outcome === "fail").map((item) => item.code || "verifying");
+	const reasons = held.length > 0 ? [...new Set(held)] : [text(verification.reason) ?? "verifying"];
+	return { prUrl: pr.url, headSha, sha256, outcome, confirm: confirmed, reasons, items: parsed };
+}
+
+// The integration's confirmation: the task, the head, how many items passed,
+// one line for each thing to confirm, and what happens next. Each line is
+// cleaned on its own.
+function integrationDetail(t: Translate, task: string, verified: VerifiedSubject): string {
+	const counted = verified.items.filter((item) => item.outcome !== "info");
+	const lines = [
+		t("lado.presence.integration.task", { task }),
+		t("lado.presence.integration.head", { head: verified.headSha.slice(0, 12) }),
+		t("lado.presence.integration.passed", {
+			passed: counted.filter((item) => item.outcome === "pass").length,
+			total: counted.length,
+		}),
+		...verified.items.filter((item) => item.outcome === "confirm").map((item) => confirmLine(t, item)),
+	];
+	// GitLab gets no status; a branch whose rules do not require the status
+	// lets a pull request merge without the approval, which LADO only notices.
+	const protection = verified.items.find((item) => item.kind === "protection");
+	const next = [
+		...(protection?.details.provider === "gitlab" ? [] : [t("lado.presence.integration.nextStatus")]),
+		...(protection && protection.outcome !== "pass" ? [t("lado.presence.integration.nextUnprotected")] : []),
+	];
+	return [lines.join("\n"), next.join(" ")].join("\n\n");
+}
+
+// One thing to confirm, with how many there are and up to three examples.
+function confirmLine(t: Translate, item: VerifyItem): string {
+	const { details } = item;
+	switch (item.code) {
+		case "outside_plan": {
+			const paths = stringList(details.outsidePlan);
+			const count = typeof details.outsideCount === "number" ? details.outsideCount : paths.length;
+			return t("lado.presence.integration.outsidePlan", { count, examples: examples(paths, count) });
+		}
+		case "commit_messages_unclear": {
+			const commits = recordList(details.commits)
+				.filter((commit) => commit.result === "unclear" || commit.result === "body_unclear")
+				.map((commit) => `${String(commit.sha ?? "").slice(0, 7)} ${String(commit.subject ?? "")}`);
+			const title = record(details.prTitle);
+			if (title?.result === "unclear") commits.push(t("lado.presence.integration.prTitle", { title: String(title.text ?? "") }));
+			return t("lado.presence.integration.commitsUnclear", { count: commits.length, examples: examples(commits, commits.length) });
+		}
+		case "base_moved": {
+			const moved = recordList(details.moved).map((entry) => `${String(entry.commit ?? "").slice(0, 7)} ${String(entry.subject ?? "")}`);
+			return t("lado.presence.integration.baseMoved", { count: moved.length, examples: examples(moved, moved.length) });
+		}
+		case "reflog_off":
+			return t("lado.presence.integration.reflogOff", { branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS) });
+		case "already_on_base":
+			return t("lado.presence.integration.alreadyOnBase", { branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS) });
+		case "unprotected": {
+			const missing = stringList(details.missing);
+			return t("lado.presence.integration.unprotected", { count: missing.length, examples: examples(missing, missing.length) });
+		}
+		case "protection_unknown":
+			return t("lado.presence.integration.protectionUnknown", { error: excerpt(String(details.error ?? ""), MAX_EXAMPLE_CHARS) });
+		case "unprotected_gitlab":
+			return t("lado.presence.integration.unprotectedGitlab");
+		case "review_inconclusive":
+			return t("lado.presence.integration.reviewInconclusive", { count: typeof details.rounds === "number" ? details.rounds : 0 });
+		case "no_tests":
+			return t("lado.presence.integration.noTests");
+		default:
+			// A code from a newer daemon still names what is acknowledged.
+			return t("lado.presence.integration.otherCode", { code: excerpt(item.code, MAX_EXAMPLE_CHARS) });
+	}
+}
+
+// Up to three values as one line, each cleaned on its own; "…" says more exist.
+function examples(values: readonly string[], count: number): string {
+	const shown = values.slice(0, MAX_EXAMPLES).map((value) => excerpt(value, MAX_EXAMPLE_CHARS));
+	return count > shown.length ? `${shown.join(", ")}, …` : shown.join(", ");
+}
+
+function isStringList(value: unknown): value is string[] {
+	return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function stringList(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+	return Array.isArray(value) ? value.map(record).filter((item): item is Record<string, unknown> => item !== null) : [];
+}
+
 // What the change does, as the dialog names it; inheritsOn is what an
 // inherit binding turns the item to.
 function changeLine(t: Translate, change: SetupChange, inheritsOn: boolean): string {
@@ -1059,11 +1515,11 @@ function changeLine(t: Translate, change: SetupChange, inheritsOn: boolean): str
 	}
 }
 
-// Content as one line of at most MAX_CONTENT_EXCERPT characters: control and
-// direction characters could fake the dialog's other lines.
-function excerpt(value: string): string {
+// Content as one line of at most max characters: control and direction
+// characters could fake the dialog's other lines.
+function excerpt(value: string, max = MAX_CONTENT_EXCERPT): string {
 	const characters = Array.from(value.replace(UNSAFE_TEXT, " ").replace(/\s+/g, " ").trim());
-	return characters.length > MAX_CONTENT_EXCERPT ? `${characters.slice(0, MAX_CONTENT_EXCERPT).join("")}…` : characters.join("");
+	return characters.length > max ? `${characters.slice(0, max).join("")}…` : characters.join("");
 }
 
 function isSetupTool(value: unknown): value is SetupTool {

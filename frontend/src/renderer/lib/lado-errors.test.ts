@@ -3,8 +3,10 @@ import { createFullAppI18n } from "../i18n/all-messages";
 import { APP_LOCALES } from "../../shared/ui-locale";
 import { LadoApiError } from "./lado";
 import {
+	ladoCheckCommandProblemText,
 	ladoErrorText,
 	ladoPolicyProblemText,
+	ladoProtectedPathProblemText,
 	ladoQueueErrorText,
 	ladoReasonText,
 	ladoSetupConflictText,
@@ -171,6 +173,21 @@ const reasons = [
 	"retry",
 	"lado_mode_off",
 	"run_live",
+	// Validating, Integrating and Completed (step 8).
+	"verifying",
+	"checks_pending",
+	"checks_failed",
+	"commands_running",
+	"worktree_not_at_head",
+	"commands_failed",
+	"command_timed_out",
+	"worktree_missing",
+	"commit_messages_failed",
+	"protected_path",
+	"review_pending",
+	"changes_requested",
+	"status_not_posted",
+	"merged_without_approval",
 ];
 
 // LADO fork: the queue's and the runs' errors and reasons in the developer's language.
@@ -365,6 +382,7 @@ const setupReasons = [
 
 // The conflict checks (backend/internal/service/ladosetup/conflicts.go).
 const setupConflicts = [
+	"LADO_SETUP_ALLOWS_PROTECTED",
 	"LADO_SETUP_MCP_NAME_TAKEN",
 	"LADO_SETUP_SKILL_NAME_TAKEN",
 	"LADO_SETUP_ENV_RESERVED",
@@ -572,6 +590,7 @@ describe("LADO local setup errors", () => {
 			mode: "bypassPermissions",
 			ceiling: "auto",
 			item: "item-1",
+			commands: "git push, git reset",
 		};
 		for (const locale of APP_LOCALES) {
 			const t = createFullAppI18n(locale).t;
@@ -596,11 +615,147 @@ describe("LADO local setup errors", () => {
 		expect(ladoSetupConflictText(ko, { code: "LADO_SETUP_ENV_RESERVED", details: { key: "AO_SESSION" } })).toBe(
 			"env 설정이 AO가 세션마다 정하는 AO_SESSION 변수를 설정합니다.",
 		);
+		expect(
+			ladoSetupConflictText(en, {
+				code: "LADO_SETUP_ALLOWS_PROTECTED",
+				details: { rule: "Bash(git:*)", commands: "git push, git update-ref, git merge, git reset", item: "item-1" },
+			}),
+		).toBe(
+			"The allow rule Bash(git:*) lets workers run git push, git update-ref, git merge, git reset, which LADO's protected rules forbid. " +
+				"LADO enforces those rules elsewhere, so you can accept it.",
+		);
+		expect(ladoSetupConflictText(ko, { code: "LADO_SETUP_ALLOWS_PROTECTED", details: { rule: "Bash(*)", commands: "gh pr merge" } })).toBe(
+			"허용 규칙(Bash(*))이 LADO의 보호 규칙이 금지하는 명령을 허용합니다: gh pr merge. LADO가 다른 곳에서 막으므로 수락할 수 있습니다.",
+		);
 		// A code from a newer daemon shows as is.
 		expect(ladoSetupConflictText(en, { code: "LADO_SETUP_SOMETHING_NEW" })).toBe("LADO_SETUP_SOMETHING_NEW");
 		// The rules that apply list setup conflicts among their problems.
 		expect(ladoPolicyProblemText(en, { code: "LADO_SETUP_MCP_NAME_TAKEN", rules: [], details: { item: "item-1" } })).toBe(
 			"An MCP server named ao takes the name of AO's own tool server.",
 		);
+	});
+});
+
+// Every code the verification, integration and protected paths routes, the
+// merge gate and the desktop app's main process send (backend/internal/service/ladoverify,
+// ladoproject, ladopolicy and httpd/controllers/lado_verify.go; src/main/lado-presence.ts).
+const verifyCodes = [
+	"LADO_INTEGRATION_NOT_READY",
+	"LADO_INTEGRATION_HEAD_CHANGED",
+	"LADO_VERIFICATION_CHANGED",
+	"LADO_INTEGRATION_ALREADY_APPROVED",
+	"LADO_INTEGRATION_ACK_MISMATCH",
+	"LADO_VERIFY_UNAVAILABLE",
+	"LADO_VERIFY_FAILED",
+	"LADO_EXECUTION_NO_PR",
+	"LADO_CHECK_RUN_NOT_FOUND",
+	"LADO_CHECK_COMMANDS_INVALID",
+	"LADO_PROTECTED_PATHS_INVALID",
+	"LADO_INTEGRATION_APPROVAL_REQUIRED",
+	"LADO_MERGE_GATE_FAILED",
+	"LADO_SESSION_ID_INVALID",
+];
+
+// LADO fork: verification, check commands, protected paths, the integration
+// approval and the merge gate in the developer's language (step 8).
+describe("LADO verification errors", () => {
+	const daemon = "The daemon's English text";
+	const en = createFullAppI18n("en").t;
+	const ko = createFullAppI18n("ko").t;
+	const details = {
+		reasons: ["checks_pending", "commands_failed"],
+		headSha: "a".repeat(40),
+		currentHeadSha: "1234567890abcdef1234567890abcdef12345678",
+		index: 1,
+		field: "name",
+		reason: "duplicate",
+		required: ["outside_plan"],
+		given: [],
+		sessionId: "demo-7",
+	};
+
+	it("translates every verification code in every language", () => {
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const code of verifyCodes) {
+				const text = ladoErrorText(t, new LadoApiError(daemon, code, code === "LADO_PROTECTED_PATHS_INVALID" ? { index: 1, reason: "invalid" } : details));
+				expect(text, `${locale} ${code}`).not.toBe(daemon);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\.|{{|}}/);
+			}
+		}
+	});
+
+	it("names what holds an integration back, the new head, and the merge gate's refusal", () => {
+		const notReady = new LadoApiError(daemon, "LADO_INTEGRATION_NOT_READY", { reasons: ["checks_pending", "commands_failed"] });
+		expect(ladoErrorText(en, notReady)).toBe("LADO cannot approve this integration yet: Waiting for required checks; A check command failed.");
+		expect(ladoErrorText(ko, notReady)).toBe("아직 통합을 승인할 수 없습니다: 필수 검사를 기다리는 중; 검사 명령이 실패함.");
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_INTEGRATION_HEAD_CHANGED", details))).toBe(
+			"The pull request has a new head, 1234567. LADO verifies it before you approve.",
+		);
+		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_INTEGRATION_APPROVAL_REQUIRED", { prUrl: "x", headSha: "y", sessionId: "demo-7" }))).toBe(
+			"병합하기 전에 LADO에서 이 head의 통합을 승인하세요.",
+		);
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_EXECUTION_NO_PR", { sessionId: "demo-7" }))).toBe(
+			"This run has no open pull request to integrate.",
+		);
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_VERIFY_FAILED"))).toBe(en("lado.error.internal"));
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SESSION_ID_INVALID"))).toBe(en("lado.error.executionNotFound"));
+	});
+
+	it("names the check command row and its problem, or the problem of the whole list", () => {
+		const invalid = (problem: Record<string, unknown>) => new LadoApiError(daemon, "LADO_CHECK_COMMANDS_INVALID", problem);
+		expect(ladoErrorText(en, invalid({ index: 1, field: "name", reason: "duplicate" }))).toBe("Check command 2: Another command has this name.");
+		expect(ladoErrorText(ko, invalid({ index: 0, field: "command", reason: "required" }))).toBe("검사 명령 1: 실행할 명령을 입력하세요.");
+		expect(ladoErrorText(en, invalid({ index: 10, field: "", reason: "too_many" }))).toBe("Add at most 10 check commands.");
+		expect(ladoErrorText(en, invalid({ index: -1, field: "checkTimeoutMinutes", reason: "invalid" }))).toBe(
+			"Choose a time limit between 5 and 120 minutes.",
+		);
+		// A problem from a newer daemon shows the daemon's own words.
+		expect(ladoErrorText(en, invalid({ index: 0, field: "name", reason: "something_new" }))).toBe(daemon);
+		const problems = [
+			["name", "required"],
+			["name", "too_long"],
+			["name", "invalid"],
+			["name", "duplicate"],
+			["command", "required"],
+			["command", "too_long"],
+			["command", "invalid"],
+			["", "too_many"],
+			["checkTimeoutMinutes", "invalid"],
+		];
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			const texts = problems.map(([field, reason]) => ladoCheckCommandProblemText(t, { field, reason }));
+			for (const text of texts) expect(text, locale).not.toMatch(/^lado\.|^$/);
+			expect(new Set(texts).size, locale).toBe(problems.length);
+		}
+		expect(ladoCheckCommandProblemText(en, { field: "name", reason: "something_new" })).toBe("");
+	});
+
+	it("names the protected path and its problem, or a rule that takes no paths", () => {
+		const invalid = (problem: Record<string, unknown>) => new LadoApiError(daemon, "LADO_PROTECTED_PATHS_INVALID", problem);
+		expect(ladoErrorText(en, invalid({ index: 2, reason: "invalid" }))).toBe(
+			"Protected path 3: Use a relative path or pattern, without .., a leading / or a backslash.",
+		);
+		expect(ladoErrorText(ko, invalid({ index: 0, reason: "required" }))).toBe("보호 경로 1: 경로나 패턴을 입력하세요.");
+		expect(ladoErrorText(en, invalid({ index: 50, reason: "too_many" }))).toBe("Use at most 50 protected paths.");
+		expect(ladoErrorText(en, invalid({ rule: "agent.permission.ceiling" }))).toBe("Only the Protected paths rule takes paths.");
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const reason of ["required", "too_many", "invalid"]) {
+				expect(ladoProtectedPathProblemText(t, { reason }), `${locale} ${reason}`).not.toMatch(/^lado\.|^$/);
+			}
+		}
+	});
+
+	it("words the verification reasons in Korean and English", () => {
+		expect(ladoReasonText(en, "verifying")).toBe("LADO is verifying the pull request's head");
+		expect(ladoReasonText(ko, "verifying")).toBe("LADO가 풀 리퀘스트 head를 검증하는 중");
+		expect(ladoReasonText(en, "worktree_not_at_head")).toBe("Waiting for the worktree to match the PR head");
+		expect(ladoReasonText(ko, "commit_messages_failed")).toBe("커밋 메시지가 한국어가 아님");
+		expect(ladoReasonText(en, "merged_without_approval")).toBe("Merged without an integration approval");
+		expect(ladoReasonText(ko, "status_not_posted")).toBe("LADO가 아직 통합 상태를 게시하지 못함");
+		// A refused plan approval also names verification and integration.
+		expect(en("lado.error.taskRunning")).toContain("verifying or integrating");
 	});
 });

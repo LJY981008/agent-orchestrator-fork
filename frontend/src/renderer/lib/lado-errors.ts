@@ -1,6 +1,7 @@
 // LADO fork: LADO's daemon errors, connection check problems, rules problems,
-// local setup's reasons, conflicts and warnings, and the reasons behind a
-// task's or a queue entry's state in the developer's language. The daemon
+// local setup's reasons, conflicts and warnings, check command and protected
+// path problems, and the reasons behind a task's or a queue entry's state in
+// the developer's language. The daemon
 // answers in English with a stable code; the app translates the code and
 // fills in the details the daemon sends.
 import { agentLabel } from "@aoagents/product-ui";
@@ -171,6 +172,23 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_SETUP_ADOPTION_ID_INVALID: "lado.error.setupNotFound",
 	// The app sends the setup routes' bodies as the API defines them.
 	INVALID_JSON: "lado.error.internal",
+	// Verification, check commands, protected paths, the integration approval
+	// and the merge gate (step 8).
+	LADO_INTEGRATION_NOT_READY: "lado.error.integrationNotReady",
+	LADO_INTEGRATION_HEAD_CHANGED: "lado.error.integrationHeadChanged",
+	LADO_VERIFICATION_CHANGED: "lado.error.verificationChanged",
+	LADO_INTEGRATION_ALREADY_APPROVED: "lado.error.integrationAlreadyApproved",
+	LADO_INTEGRATION_ACK_MISMATCH: "lado.error.integrationAckMismatch",
+	LADO_VERIFY_UNAVAILABLE: "lado.error.verifyUnavailable",
+	LADO_VERIFY_FAILED: "lado.error.internal",
+	LADO_EXECUTION_NO_PR: "lado.error.executionNoPr",
+	LADO_CHECK_RUN_NOT_FOUND: "lado.error.checkRunNotFound",
+	LADO_CHECK_COMMANDS_INVALID: "lado.error.checkCommandsInvalid",
+	LADO_PROTECTED_PATHS_INVALID: "lado.error.protectedPathsInvalid",
+	LADO_INTEGRATION_APPROVAL_REQUIRED: "lado.error.integrationApprovalRequired",
+	LADO_MERGE_GATE_FAILED: "lado.error.mergeGateFailed",
+	// The desktop app's main process, before it reaches the daemon.
+	LADO_SESSION_ID_INVALID: "lado.error.executionNotFound",
 };
 
 // LADO_EXECUTION_FIXED also refuses restoring a run LADO stopped for good;
@@ -187,7 +205,18 @@ const setupStageKeys: Partial<Record<string, Partial<Record<string, LadoErrorKey
 	LADO_SETUP_RESTORE_FAILED: { manifest: "lado.error.setupRestoreBackupUnreadable", record: "lado.error.setupRestoreNotRecorded" },
 };
 
-function errorKey(code: string, details: Record<string, unknown> | undefined): LadoErrorKey | undefined {
+function errorKey(code: string, details: Record<string, unknown> | undefined): MessageKey | undefined {
+	// A problem with the whole list or the time limit says it all; one with a
+	// row names the row. One from a newer daemon shows the daemon's own words.
+	if (code === "LADO_CHECK_COMMANDS_INVALID") {
+		const problem = checkCommandProblemKey(details);
+		return problem && wholeCheckProblems.has(problem) ? problem : problem && errorKeys[code];
+	}
+	if (code === "LADO_PROTECTED_PATHS_INVALID") {
+		if (typeof details?.rule === "string") return "lado.error.protectedPathsRule";
+		const problem = typeof details?.reason === "string" ? protectedPathProblemKeys[details.reason] : undefined;
+		return problem === "lado.protectedPaths.problem.tooMany" ? problem : problem && errorKeys[code];
+	}
 	if (code === "LADO_EXECUTION_FIXED" && typeof details?.reason === "string") {
 		return restoreKeys[details.reason] ?? errorKeys[code];
 	}
@@ -246,7 +275,18 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 		? toolIds.filter((tool): tool is string => typeof tool === "string").map((tool) => agentLabel(tool))
 		: [];
 	const setup = code.startsWith("LADO_SETUP_");
+	// A row's number counts from one; what holds an integration back reads as
+	// the task reasons it names.
+	const index = details?.index;
+	const reasons = details?.reasons;
 	return {
+		number: typeof index === "number" ? String(index + 1) : "",
+		problem:
+			code === "LADO_PROTECTED_PATHS_INVALID" ? ladoProtectedPathProblemText(t, details ?? {}) : ladoCheckCommandProblemText(t, details ?? {}),
+		reasons: Array.isArray(reasons)
+			? reasons.filter((reason): reason is string => typeof reason === "string").map((reason) => ladoReasonText(t, reason)).join("; ")
+			: "",
+		head: text("currentHeadSha").slice(0, 7),
 		reason: setup ? ladoSetupReasonText(t, text("reason"), details) : text("reason"),
 		min: text("min"),
 		max: text("max"),
@@ -439,6 +479,21 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	retry: "lado.reason.retry",
 	lado_mode_off: "lado.reason.lado_mode_off",
 	run_live: "lado.reason.run_live",
+	// Validating, Integrating and Completed (step 8).
+	verifying: "lado.reason.verifying",
+	checks_pending: "lado.reason.checks_pending",
+	checks_failed: "lado.reason.checks_failed",
+	commands_running: "lado.reason.commands_running",
+	worktree_not_at_head: "lado.reason.worktree_not_at_head",
+	commands_failed: "lado.reason.commands_failed",
+	command_timed_out: "lado.reason.command_timed_out",
+	worktree_missing: "lado.reason.worktree_missing",
+	commit_messages_failed: "lado.reason.commit_messages_failed",
+	protected_path: "lado.reason.protected_path",
+	review_pending: "lado.reason.review_pending",
+	changes_requested: "lado.reason.changes_requested",
+	status_not_posted: "lado.reason.status_not_posted",
+	merged_without_approval: "lado.reason.merged_without_approval",
 };
 
 /**
@@ -546,6 +601,7 @@ const setupConflictKeys: Partial<Record<string, LadoSetupConflictKey>> = {
 	LADO_SETUP_PROJECT_OVERRIDES: "lado.setup.conflict.projectOverrides",
 	LADO_SETUP_PLUGIN_HOOKS_UNREADABLE: "lado.setup.conflict.pluginHooksUnreadable",
 	LADO_SETUP_PATH_USED_IN_PLACE: "lado.setup.conflict.pathUsedInPlace",
+	LADO_SETUP_ALLOWS_PROTECTED: "lado.setup.conflict.allowsProtected",
 };
 
 // Claude Code's own names of the permission modes a defaultMode can ask for.
@@ -572,6 +628,7 @@ export function ladoSetupConflictText(t: TFunction, conflict: { code: string; de
 		matcher: detail("matcher"),
 		path: detail("path"),
 		plugin: detail("plugin"),
+		commands: detail("commands"),
 		mode: modeLabel(t, claudeModes[mode] ?? mode),
 		ceiling: modeLabel(t, detail("ceiling")),
 	});
@@ -622,4 +679,58 @@ const setupWarningKeys: Partial<Record<string, LadoSetupWarningKey>> = {
 export function ladoSetupWarningText(t: TFunction, code: string): string {
 	const key = setupWarningKeys[code];
 	return key ? t(key) : code;
+}
+
+type LadoCheckProblemKey = Extract<MessageKey, `lado.checkCommand.problem.${string}`>;
+
+// LADO_CHECK_COMMANDS_INVALID's details: the field and the reason
+// (backend/internal/domain ValidateLadoCheckCommands); too_many has no field,
+// and the time limit is a field of its own.
+const checkCommandProblemKeys: Partial<Record<string, LadoCheckProblemKey>> = {
+	"name:required": "lado.checkCommand.problem.nameRequired",
+	"name:too_long": "lado.checkCommand.problem.nameTooLong",
+	"name:invalid": "lado.checkCommand.problem.nameInvalid",
+	"name:duplicate": "lado.checkCommand.problem.nameDuplicate",
+	"command:required": "lado.checkCommand.problem.commandRequired",
+	"command:too_long": "lado.checkCommand.problem.commandTooLong",
+	"command:invalid": "lado.checkCommand.problem.commandInvalid",
+	":too_many": "lado.checkCommand.problem.tooMany",
+	"checkTimeoutMinutes:invalid": "lado.checkCommand.problem.timeoutInvalid",
+};
+
+// The problems that are not about one row.
+const wholeCheckProblems = new Set<MessageKey>(["lado.checkCommand.problem.tooMany", "lado.checkCommand.problem.timeoutInvalid"]);
+
+function checkCommandProblemKey(details: Record<string, unknown> | undefined): LadoCheckProblemKey | undefined {
+	const field = typeof details?.field === "string" ? details.field : "";
+	return typeof details?.reason === "string" ? checkCommandProblemKeys[`${field}:${details.reason}`] : undefined;
+}
+
+/**
+ * What is wrong with a check command, the list or the time limit, from the
+ * details of LADO_CHECK_COMMANDS_INVALID ({index, field, reason}), as the
+ * row or the time limit shows it. A problem from a newer daemon reads empty.
+ */
+export function ladoCheckCommandProblemText(t: TFunction, details: Record<string, unknown>): string {
+	const key = checkCommandProblemKey(details);
+	return key ? t(key) : "";
+}
+
+type LadoProtectedPathProblemKey = Extract<MessageKey, `lado.protectedPaths.problem.${string}`>;
+
+// LADO_PROTECTED_PATHS_INVALID's reasons (backend/internal/service/ladopolicy).
+const protectedPathProblemKeys: Partial<Record<string, LadoProtectedPathProblemKey>> = {
+	required: "lado.protectedPaths.problem.required",
+	too_many: "lado.protectedPaths.problem.tooMany",
+	invalid: "lado.protectedPaths.problem.invalid",
+};
+
+/**
+ * What is wrong with a protected path, from the details of
+ * LADO_PROTECTED_PATHS_INVALID ({index, reason}). A reason from a newer
+ * daemon reads empty.
+ */
+export function ladoProtectedPathProblemText(t: TFunction, details: Record<string, unknown>): string {
+	const key = typeof details.reason === "string" ? protectedPathProblemKeys[details.reason] : undefined;
+	return key ? t(key) : "";
 }
