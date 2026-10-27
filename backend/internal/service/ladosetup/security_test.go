@@ -337,3 +337,78 @@ url = "https://mcp.example/sse"
 	}
 	noSecret("checkCodexOverride", err, nil)
 }
+
+// Codex reads AGENTS.override.md in place of AGENTS.md, so while both are
+// in the Codex folder an adoption takes them together, with one action. The
+// instructions section then holds the override, as Codex would.
+func TestAgentsPairIsAdoptedTogether(t *testing.T) {
+	ctx := context.Background()
+	f := newChangeFixture(t)
+	f.write(filepath.Join(f.codex, "AGENTS.override.md"), "override rules\n")
+	agents := codexMove(domain.LadoSetupKindInstructions, "AGENTS.md")
+	override := codexMove(domain.LadoSetupKindInstructions, "AGENTS.override.md")
+	kept := override
+	kept.Action = domain.LadoSetupActionKeep
+	for _, tc := range []struct {
+		entries    []AdoptEntry
+		name, pair string
+	}{
+		{[]AdoptEntry{agents}, "AGENTS.md", "AGENTS.override.md"},
+		{[]AdoptEntry{override}, "AGENTS.override.md", "AGENTS.md"},
+		{[]AdoptEntry{agents, kept}, "AGENTS.md", "AGENTS.override.md"},
+	} {
+		for _, dryRun := range []bool{true, false} {
+			home := f.homeState()
+			// A real request carries a plan hash and a proof; the pair is
+			// checked when the plan is built again.
+			_, err := f.svc.Adopt(ctx, AdoptRequest{Entries: tc.entries, DryRun: dryRun, PlanSHA256: strings.Repeat("a", 64), Presence: f.presence()})
+			if details := wantAPIError(t, err, CodePairRequired); details["name"] != tc.name || details["pair"] != tc.pair {
+				t.Fatalf("%v: details %v", tc.entries, details)
+			}
+			if diffs := diffStates(home, f.homeState()); len(diffs) > 0 {
+				t.Fatalf("a refused adoption changed the home:\n%s", strings.Join(diffs, "\n"))
+			}
+		}
+	}
+	ids := f.adopt(agents, override)
+	text, err := f.svc.CodexInstructions(ctx, "s-1", "", testProject)
+	if err != nil || text != "override rules" {
+		t.Fatalf("instructions %q (%v), want the override", text, err)
+	}
+	f.mustApply(Change{Op: OpBinding, ItemID: ids["AGENTS.override.md"], Binding: ChangeBinding{Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff}}, false)
+	if text, err := f.svc.CodexInstructions(ctx, "s-1", "", testProject); err != nil || text != "codex rules" {
+		t.Fatalf("instructions %q (%v) with the override off, want AGENTS.md", text, err)
+	}
+
+	// A lone AGENTS.md is adopted by itself.
+	g := newChangeFixture(t)
+	g.adopt(codexMove(domain.LadoSetupKindInstructions, "AGENTS.md"))
+}
+
+// The adoption view tells what would hold a restore back, as the adoption
+// preview does, so the app shows it before it asks for the confirmation.
+func TestAdoptionViewShowsRestorePreconditions(t *testing.T) {
+	ctx := context.Background()
+	f := newAdoption(t)
+	svc := f.service()
+	res := f.mustAdopt(svc, claudeMove(domain.LadoSetupKindInstructions, "CLAUDE.md"))
+	f.deps.GOOS = "darwin"
+	f.deps.Sessions = fakeSessions{{ID: "s-claude", ProjectID: "p", Harness: domain.HarnessClaudeCode}, {ID: "s-codex", ProjectID: "p", Harness: domain.HarnessCodex}}
+	svc = f.service()
+	view, err := svc.Adoption(ctx, res.AdoptionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pre := view.Preconditions
+	if pre == nil || len(pre.Unverified) != 0 || len(pre.Sessions) != 1 || pre.Sessions[0].ID != "s-claude" || pre.OK() {
+		t.Fatalf("preconditions %+v, want the live Claude session and no OS check", pre)
+	}
+	f.deps.Sessions = fakeSessions{}
+	svc = f.service()
+	if _, err := svc.Restore(ctx, res.AdoptionID, f.presence()); err != nil {
+		t.Fatal(err)
+	}
+	if view, err := svc.Adoption(ctx, res.AdoptionID); err != nil || view.Preconditions != nil {
+		t.Fatalf("a restored adoption shows preconditions %+v (%v)", view.Preconditions, err)
+	}
+}

@@ -7060,11 +7060,13 @@ export interface components {
             backupReadable: boolean;
             /** @description The items the adoption recorded; a restore puts back the originals of all of them. */
             items: components["schemas"]["LadoSetupItemResponse"][];
+            /** @description What holds a restore back now: the live AO sessions and the programs of the tools it puts back (unverified is always empty: restore runs on every OS). Omitted once restored or when the backup cannot be restored. */
+            preconditions?: components["schemas"]["LadoSetupPreconditionsResponse"];
             /** @description The restore's report; omitted before a restore. */
             report?: components["schemas"]["LadoSetupRestoreReportResponse"];
         };
         LadoSetupAdoptionPreviewResponse: {
-            /** @description What the moved entries bring; a command naming a moved file that cannot be rewritten (LADO_SETUP_HOOK_PATH_MOVED) blocks the adoption. */
+            /** @description What the moved entries bring; a value naming a moved file that cannot follow it (LADO_SETUP_HOOK_PATH_MOVED, LADO_SETUP_PATH_USED_IN_PLACE) blocks the adoption. */
             conflicts: components["schemas"]["LadoSetupConflictResponse"][];
             entries: components["schemas"]["LadoSetupPreviewEntryResponse"][];
             os: string;

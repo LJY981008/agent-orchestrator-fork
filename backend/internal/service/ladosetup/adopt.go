@@ -46,6 +46,9 @@ const (
 	// CodeOSUnverified is an OS where delivery of a tool's setup was not
 	// measured (domain.LadoSetupDeliveryVerified).
 	CodeOSUnverified = "LADO_SETUP_OS_UNVERIFIED"
+	// CodePairRequired is one of Codex's AGENTS.md and AGENTS.override.md
+	// named without the other while both are in the Codex folder.
+	CodePairRequired = "LADO_SETUP_PAIR_REQUIRED"
 	// CodeToolRunning is a live AO session or another process of a tool
 	// whose setup would move.
 	CodeToolRunning = "LADO_SETUP_TOOL_RUNNING"
@@ -371,6 +374,9 @@ func (s *Service) plan(ctx context.Context, req []AdoptEntry) (adoptionPlan, err
 		}
 		plan.entries = append(plan.entries, planEntry{entry: e, action: r.Action})
 	}
+	if err := checkInstructionPairs(inv, req); err != nil {
+		return adoptionPlan{}, err
+	}
 	slices.SortFunc(plan.entries, func(a, b planEntry) int {
 		return cmp.Or(cmp.Compare(a.entry.Tool, b.entry.Tool), cmp.Compare(a.entry.Kind, b.entry.Kind), cmp.Compare(a.entry.Name, b.entry.Name))
 	})
@@ -444,6 +450,33 @@ func checkAdoptEntries(req []AdoptEntry) error {
 			return apierr.Invalid(CodeAdoptionInvalid, "An entry is named twice.", details)
 		}
 		seen[key] = true
+	}
+	return nil
+}
+
+// checkInstructionPairs refuses one of Codex's AGENTS.md and
+// AGENTS.override.md while the other is in the Codex folder: Codex reads the
+// override in place of AGENTS.md, so adopting one leaves sessions and
+// Codex used directly with a mix of both. The two go together, with one
+// action.
+func checkInstructionPairs(inv Inventory, req []AdoptEntry) error {
+	for _, r := range req {
+		i := slices.Index(codexInstructions, r.Name)
+		if r.Tool != domain.LadoSetupToolCodex || r.Kind != domain.LadoSetupKindInstructions || i < 0 {
+			continue
+		}
+		pair := codexInstructions[1-i]
+		there := slices.ContainsFunc(inv.Entries, func(e domain.LadoSetupEntry) bool {
+			return e.Location == domain.LadoSetupLocationCodexHome && e.Kind == domain.LadoSetupKindInstructions && e.Name == pair
+		})
+		named := slices.ContainsFunc(req, func(o AdoptEntry) bool {
+			return o.Tool == r.Tool && o.Kind == r.Kind && o.Name == pair && o.Action == r.Action
+		})
+		if there && !named {
+			return apierr.Invalid(CodePairRequired,
+				"Codex reads AGENTS.override.md in place of AGENTS.md. Adopt both of them together, with the same action.",
+				map[string]any{"name": r.Name, "pair": pair})
+		}
 	}
 	return nil
 }

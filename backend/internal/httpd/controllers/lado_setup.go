@@ -194,6 +194,10 @@ func (c *LadoController) getSetupAdoption(w http.ResponseWriter, r *http.Request
 		report := ladoSetupRestoreReportResponse(*view.Report)
 		resp.Report = &report
 	}
+	if view.Preconditions != nil {
+		pre := ladoSetupPreconditionsResponse(*view.Preconditions)
+		resp.Preconditions = &pre
+	}
 	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
@@ -511,25 +515,37 @@ func ladoSetupConflicts(conflicts []ladosetup.Conflict) []LadoSetupConflictRespo
 	return out
 }
 
+// ladoSetupPreconditionsResponse is what holds an adoption or a restore
+// back.
+func ladoSetupPreconditionsResponse(pre ladosetup.Preconditions) LadoSetupPreconditionsResponse {
+	resp := LadoSetupPreconditionsResponse{
+		OS:               pre.OS,
+		Unverified:       ladoStrings(pre.Unverified),
+		Sessions:         make([]LadoSetupRunningSessionResponse, 0, len(pre.Sessions)),
+		Processes:        make([]LadoSetupRunningProcessResponse, 0, len(pre.Processes)),
+		ProcessesIgnored: pre.ProcessesIgnored,
+		OK:               pre.OK(),
+	}
+	for _, s := range pre.Sessions {
+		resp.Sessions = append(resp.Sessions, LadoSetupRunningSessionResponse{ID: string(s.ID), Tool: string(s.Tool)})
+	}
+	for _, proc := range pre.Processes {
+		resp.Processes = append(resp.Processes, LadoSetupRunningProcessResponse{PID: proc.PID, Name: proc.Program(), Tool: string(proc.Tool)})
+	}
+	return resp
+}
+
 func ladoSetupAdoptResponse(res ladosetup.AdoptResult) LadoSetupAdoptResponse {
 	p := res.Preview
-	pre := p.Preconditions
 	resp := LadoSetupAdoptResponse{
 		Preview: LadoSetupAdoptionPreviewResponse{
-			PlanSHA256: p.PlanSHA256,
-			OS:         p.OS,
-			Entries:    make([]LadoSetupPreviewEntryResponse, 0, len(p.Entries)),
-			Rewrites:   make([]LadoSetupHookRewriteResponse, 0, len(p.Rewrites)),
-			Conflicts:  ladoSetupConflicts(p.Conflicts),
-			Preconditions: LadoSetupPreconditionsResponse{
-				OS:               pre.OS,
-				Unverified:       ladoStrings(pre.Unverified),
-				Sessions:         make([]LadoSetupRunningSessionResponse, 0, len(pre.Sessions)),
-				Processes:        make([]LadoSetupRunningProcessResponse, 0, len(pre.Processes)),
-				ProcessesIgnored: pre.ProcessesIgnored,
-				OK:               pre.OK(),
-			},
-			Warnings: ladoStrings(p.Warnings),
+			PlanSHA256:    p.PlanSHA256,
+			OS:            p.OS,
+			Entries:       make([]LadoSetupPreviewEntryResponse, 0, len(p.Entries)),
+			Rewrites:      make([]LadoSetupHookRewriteResponse, 0, len(p.Rewrites)),
+			Conflicts:     ladoSetupConflicts(p.Conflicts),
+			Preconditions: ladoSetupPreconditionsResponse(p.Preconditions),
+			Warnings:      ladoStrings(p.Warnings),
 		},
 		Applied:      res.Applied,
 		AdoptionID:   string(res.AdoptionID),
@@ -548,12 +564,6 @@ func ladoSetupAdoptResponse(res ladosetup.AdoptResult) LadoSetupAdoptResponse {
 		resp.Preview.Rewrites = append(resp.Preview.Rewrites, LadoSetupHookRewriteResponse{
 			Setting: rw.Setting, Event: rw.Event, Matcher: rw.Matcher, Before: rw.Before, After: rw.After, Paths: ladoStrings(rw.Paths),
 		})
-	}
-	for _, s := range pre.Sessions {
-		resp.Preview.Preconditions.Sessions = append(resp.Preview.Preconditions.Sessions, LadoSetupRunningSessionResponse{ID: string(s.ID), Tool: string(s.Tool)})
-	}
-	for _, proc := range pre.Processes {
-		resp.Preview.Preconditions.Processes = append(resp.Preview.Preconditions.Processes, LadoSetupRunningProcessResponse{PID: proc.PID, Name: proc.Program(), Tool: string(proc.Tool)})
 	}
 	for _, it := range res.Items {
 		resp.Items = append(resp.Items, LadoSetupAdoptedItemResponse{

@@ -388,6 +388,27 @@ func TestLadoAPI_RestoreNeedsPresence(t *testing.T) {
 	if apiErr := decodeLadoJSON[envelope.APIError](t, body); !strings.Contains(string(body), `"sessions":[{"id":"mer-1","tool":"codex"}]`) || apiErr.Details["processes"] == nil {
 		t.Fatalf("envelope = %s, want the running sessions and processes", body)
 	}
+	for _, tc := range []struct {
+		err    error
+		status int
+		code   string
+		want   map[string]any
+	}{
+		{apierr.Conflict(ladosetup.ConflictPathUsedInPlace, "Keep that file in place.", map[string]any{"key": "apiKeyHelper", "path": "hooks/key.sh", "origin": "/home/me/.claude/settings.json#apiKeyHelper"}),
+			http.StatusConflict, "LADO_SETUP_PATH_USED_IN_PLACE", map[string]any{"key": "apiKeyHelper", "path": "hooks/key.sh"}},
+		{apierr.Invalid(ladosetup.CodePairRequired, "Adopt both of them together.", map[string]any{"name": "AGENTS.md", "pair": "AGENTS.override.md"}),
+			http.StatusBadRequest, "LADO_SETUP_PAIR_REQUIRED", map[string]any{"name": "AGENTS.md", "pair": "AGENTS.override.md"}},
+	} {
+		svc.err = tc.err
+		body, status = signedRequest(t, srv, "POST", path, "", "")
+		wantLadoErrorCode(t, body, status, tc.status, tc.code)
+		details := decodeLadoJSON[envelope.APIError](t, body).Details
+		for k, v := range tc.want {
+			if details[k] != v {
+				t.Fatalf("%s: details %v, want %s=%v", tc.code, details, k, v)
+			}
+		}
+	}
 }
 
 // Every change route reads the raw body, hands the service the change and a
@@ -499,6 +520,8 @@ func TestLadoAPI_SetupChangesPassTheExactBody(t *testing.T) {
 		{apierr.Conflict(ladosetup.CodeItemChanged, "The item got another version meanwhile.", map[string]any{"item": "item-1"}), http.StatusConflict, "LADO_SETUP_ITEM_CHANGED", "item", "item-1"},
 		{apierr.Invalid(ladosetup.CodeContentInvalid, "This content does not fit the item.", map[string]any{"reason": "front_matter", "field": "name"}), http.StatusBadRequest, "LADO_SETUP_CONTENT_INVALID", "reason", "front_matter"},
 		{apierr.Forbidden("LADO_PRESENCE_REQUIRED", "Confirm this in the AO desktop app."), http.StatusForbidden, "LADO_PRESENCE_REQUIRED", "", nil},
+		{apierr.Conflict(ladosetup.CodeOSUnverified, "Creating setup items is not available on this OS yet.", map[string]any{"os": "darwin", "tools": []string{"codex"}}), http.StatusConflict, "LADO_SETUP_OS_UNVERIFIED", "os", "darwin"},
+		{apierr.Invalid(ladosetup.CodeLoginKey, "Logins stay where Claude Code keeps them.", map[string]any{"key": "AWS_REGION"}), http.StatusBadRequest, "LADO_SETUP_LOGIN_KEY", "key", "AWS_REGION"},
 		{apierr.NotFound(ladosetup.CodeNotFound, "LADO does not manage this setup item."), http.StatusNotFound, "LADO_SETUP_NOT_FOUND", "", nil},
 		{apierr.Unavailable(ladosetup.CodeUnavailable, "LADO's local setup is not available in this daemon."), http.StatusServiceUnavailable, "LADO_SETUP_UNAVAILABLE", "", nil},
 	} {
@@ -668,5 +691,45 @@ func TestLadoAPI_EffectiveShowsTheSetup(t *testing.T) {
 	if approved == nil || !reflect.DeepEqual(approved.SetupAdded, []string{"item-1"}) || !reflect.DeepEqual(approved.SetupRemoved, []string{"item-3"}) ||
 		len(approved.SetupChanged) != 0 || approved.SetupChanged == nil || !reflect.DeepEqual(approved.Setup, wantSnapshot) || approved.AOSystemSHA256 != setupSum("d") || approved.Accepted == nil {
 		t.Fatalf("approved = %+v", approved)
+	}
+}
+
+// The adoption detail carries what holds a restore back, in the adoption
+// preview's shape, so the app can show it before the confirmation.
+func TestLadoAPI_AdoptionShowsRestorePreconditions(t *testing.T) {
+	svc := &fakeLadoSetupService{adoption: ladosetup.AdoptionView{
+		Adoption: domain.LadoSetupAdoption{ID: "adoption-1", CreatedAt: ladoSetupTime, Actor: "human", OS: "linux", State: domain.LadoSetupAdoptionCompleted},
+		Preconditions: &ladosetup.Preconditions{
+			OS:        "darwin",
+			Sessions:  []ladosetup.LiveSession{{ID: "s-1", ProjectID: "mer", Tool: domain.LadoSetupToolClaudeCode}},
+			Processes: []ladosetup.ToolProcess{{Process: procmem.Process{PID: 42, Command: "/usr/bin/codex --secret-flag"}, Tool: domain.LadoSetupToolCodex}},
+		},
+	}}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoSetup: svc})
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/setup/adoptions/adoption-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("status %d body %s", status, body)
+	}
+	got := decodeLadoJSON[controllers.LadoSetupAdoptionDetailResponse](t, body).Preconditions
+	want := &controllers.LadoSetupPreconditionsResponse{
+		OS: "darwin", Unverified: []string{},
+		Sessions:  []controllers.LadoSetupRunningSessionResponse{{ID: "s-1", Tool: "claude-code"}},
+		Processes: []controllers.LadoSetupRunningProcessResponse{{PID: 42, Name: "codex", Tool: "codex"}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("preconditions %+v, want %+v", got, want)
+	}
+	if strings.Contains(string(body), "secret-flag") {
+		t.Fatalf("the detail shows a command line: %s", body)
+	}
+	// A restored adoption has none.
+	svc.adoption.Preconditions = nil
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/lado/setup/adoptions/adoption-1", "")
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["preconditions"]; ok {
+		t.Fatalf("preconditions without any: %s", body)
 	}
 }

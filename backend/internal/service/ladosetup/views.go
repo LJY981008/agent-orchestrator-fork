@@ -182,6 +182,11 @@ type AdoptionView struct {
 	Backup []BackupEntry
 	// Report is the restore's report, nil before a restore.
 	Report *RestoreReport
+	// Preconditions are what holds a restore back now, as an adoption
+	// preview shows them: the live AO sessions and the programs of the
+	// tools it puts back. They are nil once restored, or when the backup
+	// cannot be restored.
+	Preconditions *Preconditions
 }
 
 // BackupEntry is one original an adoption's backup holds. Root and Path
@@ -231,6 +236,15 @@ func (s *Service) Adoption(ctx context.Context, id domain.LadoSetupAdoptionID) (
 				Tool: be.Tool, Kind: be.Kind, Name: be.Name, Action: be.Action,
 				Root: be.Root, Path: path, Type: be.Type, Size: be.Size, SHA256: be.SHA256,
 			})
+		}
+	}
+	if adoption.RestoredAt.IsZero() && view.Backup != nil {
+		if t, err := s.restoreTarget(ctx, id); err == nil {
+			pre, err := s.restorePreconditions(ctx, t)
+			if err != nil {
+				return AdoptionView{}, err
+			}
+			view.Preconditions = &pre
 		}
 	}
 	if len(adoption.RestoreReport) > 0 {

@@ -213,7 +213,8 @@ type LadoSetupRunningProcessResponse struct {
 	Tool string `json:"tool" enum:"claude-code,codex"`
 }
 
-// LadoSetupPreconditionsResponse is what holds an adoption back.
+// LadoSetupPreconditionsResponse is what holds an adoption, or a restore,
+// back.
 type LadoSetupPreconditionsResponse struct {
 	OS               string                            `json:"os"`
 	Unverified       []string                          `json:"unverified" description:"Tools whose delivery LADO has not measured on this OS."`
@@ -229,7 +230,7 @@ type LadoSetupAdoptionPreviewResponse struct {
 	OS            string                          `json:"os"`
 	Entries       []LadoSetupPreviewEntryResponse `json:"entries"`
 	Rewrites      []LadoSetupHookRewriteResponse  `json:"rewrites"`
-	Conflicts     []LadoSetupConflictResponse     `json:"conflicts" description:"What the moved entries bring; a command naming a moved file that cannot be rewritten (LADO_SETUP_HOOK_PATH_MOVED) blocks the adoption."`
+	Conflicts     []LadoSetupConflictResponse     `json:"conflicts" description:"What the moved entries bring; a value naming a moved file that cannot follow it (LADO_SETUP_HOOK_PATH_MOVED, LADO_SETUP_PATH_USED_IN_PLACE) blocks the adoption."`
 	Preconditions LadoSetupPreconditionsResponse  `json:"preconditions"`
 	Warnings      []string                        `json:"warnings" description:"Stable codes, such as LADO_SETUP_DIRECT_USE_STOPS."`
 }
@@ -304,6 +305,7 @@ type LadoSetupAdoptionDetailResponse struct {
 	BackupReadable bool                            `json:"backupReadable" description:"False when the backup's manifest cannot be read as the adoption recorded it; a restore refuses then too."`
 	Backup         []LadoSetupBackupEntryResponse  `json:"backup" description:"The originals the backup holds, in backup order; empty when it is unreadable."`
 	Report         *LadoSetupRestoreReportResponse `json:"report,omitempty" description:"The restore's report; omitted before a restore."`
+	Preconditions  *LadoSetupPreconditionsResponse `json:"preconditions,omitempty" description:"What holds a restore back now: the live AO sessions and the programs of the tools it puts back (unverified is always empty: restore runs on every OS). Omitted once restored or when the backup cannot be restored."`
 }
 
 // LadoSetupRestoreResponse is a restore made.

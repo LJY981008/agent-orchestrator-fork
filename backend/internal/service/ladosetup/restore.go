@@ -305,14 +305,7 @@ func (s *Service) readBackupManifest(adoption domain.LadoSetupAdoption) (string,
 // confirmRestore checks what holds the restore back, then takes the desktop
 // app's confirmation. An OS where adoption is refused does not hold it back.
 func (s *Service) confirmRestore(ctx context.Context, t restoreTarget, presence func(action, subject string) (domain.LadoPresenceProof, error)) (approval, Preconditions, error) {
-	var tools []domain.LadoSetupTool
-	for _, re := range t.entries {
-		if !re.skip && !slices.Contains(tools, re.entry.Tool) {
-			tools = append(tools, re.entry.Tool)
-		}
-	}
-	slices.Sort(tools)
-	pre, err := s.preconditions(ctx, tools)
+	pre, err := s.restorePreconditions(ctx, t)
 	if err != nil {
 		return approval{}, Preconditions{}, err
 	}
@@ -328,6 +321,22 @@ func (s *Service) confirmRestore(ctx context.Context, t restoreTarget, presence 
 		return approval{}, Preconditions{}, err
 	}
 	return approvalOf(proof), pre, nil
+}
+
+// restorePreconditions are what holds a restore of t back: the live AO
+// sessions and the programs of the tools whose originals it puts back. The
+// OS does not: the way back stays open everywhere.
+func (s *Service) restorePreconditions(ctx context.Context, t restoreTarget) (Preconditions, error) {
+	var tools []domain.LadoSetupTool
+	for _, re := range t.entries {
+		if !re.skip && !slices.Contains(tools, re.entry.Tool) {
+			tools = append(tools, re.entry.Tool)
+		}
+	}
+	slices.Sort(tools)
+	pre, err := s.preconditions(ctx, tools)
+	pre.Unverified = nil
+	return pre, err
 }
 
 // putBackOriginals puts back every original of the target, files and
