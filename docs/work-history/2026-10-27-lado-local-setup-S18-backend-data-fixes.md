@@ -138,7 +138,7 @@ S01~S17 체인 뒤 리뷰(백엔드·프런트 읽기 전용 리뷰 2회)와 전
 - 뜻이 바뀌어 고친 기존 테스트: `TestAdoptionPutsBackWhenRecordFails`(재사용 증명은 이제 아무것도 쓰기 전에 거부 → 기록 실패 store 로 되돌리기 확인 + 행 없음), `TestChangeDryRunWritesNothing`(drift 있는 CLAUDE.md 편집은 409, 편집 dry run 은 `model`), `TestInventoryDoesNotAdoptThroughALinkedSettingsFile`(링크된 `~/.claude.json` → `root_is_link`), `TestLadoPromptSectionComesFromTheSource`·`TestLadoPromptSectionKnowsTheHarness`(가드·행 읽기 위치), `TestSafeNativeTranscriptPathFollowsProjectsLink`(LADO 홈만 링크 허용, 계정·LADO 없음은 업스트림), `TestLadoMigrateCreatesSetupTables`(pending 행), domain 문자열 표(`pending`·`root_is_link`), `codex_section_test.go`(하네스 "" 는 행이 정함).
 - 테스트 순서: 필수 테스트를 실패부터 보지 못했다 — 구현을 먼저 하고 바로 뒤에 썼다(새 API 를 써서 이전 코드에서는 컴파일되지 않음). 처음 실행에서 `TestAdoptionRecordsPendingBeforeRemoving`(증명 action 빈 값 — 테스트 쪽)·`TestInterruptedAdoptionCanBeRestored`(뿌리 폴더 mtime 비교 — 비교 범위를 옮긴 경로로) 를 고쳐 통과.
 - 확인한 명령과 결과: 격리 HOME `go test -count=1` — `./internal/service/ladosetup/`(전체), `./internal/session_manager/` `./pkg/agentcreds/` `./internal/storage/sqlite/store/` `./internal/service/ladotask/` `./internal/daemon/` `./internal/storage/sqlite/` `./internal/httpd/...` `./internal/domain/` `./internal/service/ladopolicy/` 모두 ok. lint: 게이트 패턴과 `./internal/daemon/...` `./internal/httpd/controllers/...` `./internal/ports/...` `./internal/domain/...` 모두 GO_LINT_OK(처음 `restore.go` wastedassign 1건 고침). `npm run sqlc` 두 번(쿼리 ASCII). typecheck 통과.
-- 게이트: `gate-check.sh --run` 11/11 MET(HEAD `e71e23eef`), `51c40d769` 뒤와 엔트리 커밋 뒤 다시 실행(아래 회고 끝).
+- 게이트: `gate-check.sh --run` 11/11 MET(HEAD `e71e23eef`), 엔트리 커밋 `5f10ca147` 뒤 다시 11/11 MET. 이 줄을 고친 커밋 뒤에 한 번 더 돌려 증거를 그 HEAD 에 남김.
 
 ## 비교/회고
 
