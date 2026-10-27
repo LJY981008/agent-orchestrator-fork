@@ -332,18 +332,20 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("general");
 	});
 
-	// LADO fork: Runs (how many approved tasks run at once, and for how long) sits under Rules.
-	it("lists Runs right after Rules and opens it as its own page", async () => {
+	// LADO fork: Local setup (the developer's Claude Code and Codex setup) and Runs (how many
+	// approved tasks run at once, and for how long) sit under Rules, in that order.
+	it("lists Local setup and Runs right after Rules and opens Runs as its own page", async () => {
 		useUiStore.getState().openGlobalSettings("runs");
 		renderSettingsDialog();
 
 		expect(await screen.findByTestId("global-settings-section")).toHaveTextContent("runs");
 		const names = within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button").map((button) => button.textContent);
 		expect(names.indexOf("Rules")).toBeGreaterThan(-1);
-		expect(names.indexOf("Runs")).toBe(names.indexOf("Rules") + 1);
+		expect(names.indexOf("Local setup")).toBe(names.indexOf("Rules") + 1);
+		expect(names.indexOf("Runs")).toBe(names.indexOf("Rules") + 2);
 		expect(screen.getByRole("button", { name: "Runs" })).toHaveAttribute("aria-current", "page");
 		const ids = visibleGlobalSettings({ cloudEnabled: true, developerMode: true, diagnostics: true, customCoder: true, selfServeBilling: true }).map((item) => item.id);
-		expect(ids.indexOf("runs")).toBe(ids.indexOf("rules") + 1);
+		expect(ids.slice(ids.indexOf("rules"), ids.indexOf("rules") + 3)).toEqual(["rules", "localSetup", "runs"]);
 	});
 
 	it("does not expose Downloads as a standalone settings page", async () => {

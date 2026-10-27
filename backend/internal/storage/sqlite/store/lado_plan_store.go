@@ -239,8 +239,10 @@ func (s *Store) ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTas
 // refused with domain.ErrLadoPresenceReplayed. A nil snapshot stores the
 // approval without one; otherwise the snapshot takes the approval's id and
 // time and is stored with the rule versions it used, which must all still
-// exist: the rules are resolved before the transaction, so a rule deleted in
-// between is refused with domain.ErrLadoRulesChanged. The approval supersedes
+// exist, and pins the setup item versions it used, whose items must still be
+// live: the rules and the setup are resolved before the transaction, so a rule
+// deleted or a setup item ended in between is refused with
+// domain.ErrLadoRulesChanged. The approval supersedes
 // the task's open queue entries and, with a snapshot, queues entry under the
 // approval's task, id and time, the task's project and the snapshot's id; a
 // nil snapshot or entry queues nothing. When any part fails, nothing is kept.
@@ -302,8 +304,8 @@ func (s *Store) ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApp
 }
 
 // LadoPolicySnapshot returns the rule snapshot of one approval with the rule
-// versions it used, ordered by rule id. It reports false for an approval
-// without a snapshot.
+// versions it used, ordered by rule id, and the setup item versions it
+// pinned. It reports false for an approval without a snapshot.
 func (s *Store) LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error) {
 	row, err := s.qr.GetLadoPolicySnapshotByApproval(ctx, string(approvalID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -317,6 +319,10 @@ func (s *Store) LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPl
 	if err != nil {
 		return domain.LadoPolicySnapshot{}, false, fmt.Errorf("read LADO rule snapshot rules: %w", err)
 	}
+	setup, err := s.qr.ListLadoPolicySnapshotSetupVersions(ctx, row.ID)
+	if err != nil {
+		return domain.LadoPolicySnapshot{}, false, fmt.Errorf("read LADO rule snapshot setup versions: %w", err)
+	}
 	snapshot := ladoPolicySnapshotFromGen(row)
 	snapshot.Rules = make([]domain.LadoPolicySnapshotRule, 0, len(rules))
 	for _, rule := range rules {
@@ -324,6 +330,10 @@ func (s *Store) LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPl
 			RuleID:    domain.LadoRuleID(rule.RuleID),
 			VersionID: domain.LadoRuleVersionID(rule.RuleVersionID),
 		})
+	}
+	// Ordered by tool, kind and name; nil without pins.
+	for _, pin := range setup {
+		snapshot.SetupVersionIDs = append(snapshot.SetupVersionIDs, domain.LadoSetupItemVersionID(pin.LadoSetupItemVersion.ID))
 	}
 	return snapshot, true, nil
 }
@@ -344,7 +354,9 @@ func checkLadoSnapshotRulesTx(ctx context.Context, q *gen.Queries, snapshot doma
 }
 
 // insertLadoPolicySnapshotTx stores the rule snapshot of a stored approval,
-// with the approval's id and time, and the rule versions it used.
+// with the approval's id and time, the rule versions it used and the pins of
+// its setup item versions. A version that is gone, or whose item ended, is
+// refused with domain.ErrLadoRulesChanged.
 func insertLadoPolicySnapshotTx(ctx context.Context, q *gen.Queries, approval domain.LadoPlanApproval, snapshot domain.LadoPolicySnapshot) error {
 	if _, err := q.InsertLadoPolicySnapshot(ctx, gen.InsertLadoPolicySnapshotParams{
 		ID:           string(snapshot.ID),
@@ -361,6 +373,21 @@ func insertLadoPolicySnapshotTx(ctx context.Context, q *gen.Queries, approval do
 			SnapshotID:    string(snapshot.ID),
 			RuleID:        string(rule.RuleID),
 			RuleVersionID: string(rule.VersionID),
+		}); err != nil {
+			return err
+		}
+	}
+	for _, id := range snapshot.SetupVersionIDs {
+		n, err := q.CountLiveLadoSetupItemVersion(ctx, string(id))
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return domain.ErrLadoRulesChanged
+		}
+		if err := q.InsertLadoPolicySnapshotSetup(ctx, gen.InsertLadoPolicySnapshotSetupParams{
+			SnapshotID:    string(snapshot.ID),
+			ItemVersionID: string(id),
 		}); err != nil {
 			return err
 		}
@@ -440,6 +467,11 @@ func unwrapLadoSentinel(err error) error {
 		domain.ErrLadoRuleChanged,
 		domain.ErrLadoRuleReferenced,
 		domain.ErrLadoRulesChanged,
+		domain.ErrLadoSetupItemExists,
+		domain.ErrLadoSetupItemChanged,
+		domain.ErrLadoSetupItemNotLive,
+		domain.ErrLadoSetupAlreadyRestored,
+		domain.ErrLadoConflictAcceptanceNotLive,
 	} {
 		if errors.Is(err, sentinel) {
 			return sentinel

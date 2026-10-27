@@ -29,6 +29,7 @@ export type GlobalSettingsSection =
 	| "harness"
 	| "agents"
 	| "rules"
+	| "localSetup"
 	| "runs"
 	| "billing"
 	| "remoteHosts"
@@ -164,7 +165,8 @@ export type UiState = {
 	// bumps on every request so a repeat press (even for the same project) still
 	// re-fires; the always-mounted GlobalNewTaskDialog consumes it. Selection
 	// still lives in the URL — this is a one-shot action, not persisted state.
-	newTaskRequest: { projectId: string; hostId?: string; nonce: number } | null;
+	// LADO fork: prompt prefills the composer, as a repository file's Edit does.
+	newTaskRequest: { projectId: string; hostId?: string; prompt?: string; nonce: number } | null;
 	/** Transient one-shot request to reveal a path in a session's existing Files UI. */
 	workspaceFileOpenRequest: WorkspaceFileOpenRequest | null;
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
@@ -237,7 +239,7 @@ export type UiState = {
 	showGlobalToast: (title: string, body?: string, style?: GlobalToast["tone"] | GlobalToast["placement"] | GlobalToastOptions) => void;
 	dismissGlobalToast: (nonce: number) => void;
 	clearGlobalToast: () => void;
-	requestNewTask: (projectId: string, hostId?: string) => void;
+	requestNewTask: (projectId: string, hostId?: string, prompt?: string) => void;
 	requestWorkspaceFileOpen: (sessionId: string, path: string, hostId?: string, source?: "artifact") => void;
 	clearWorkspaceFileOpenRequest: (nonce: number) => void;
 	requestCreateProject: () => void;
@@ -639,7 +641,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			globalToast: state.globalToast?.nonce === nonce ? null : state.globalToast,
 		})),
 	clearGlobalToast: () => set({ globalToast: null, globalToasts: [], globalToastSequence: 0 }),
-	requestNewTask: (projectId, hostId) => {
+	requestNewTask: (projectId, hostId, prompt) => {
 		// Central gate: every New Task entry point (buttons, sidebar menus,
 		// shortcuts) funnels through here, so a project whose orchestrator is
 		// still provisioning cannot start tasks before it exists.
@@ -651,7 +653,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			);
 			return;
 		}
-		set((state) => ({ newTaskRequest: { projectId, hostId, nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
+		set((state) => ({ newTaskRequest: { projectId, hostId, ...(prompt ? { prompt } : {}), nonce: (state.newTaskRequest?.nonce ?? 0) + 1 } }));
 	},
 	requestWorkspaceFileOpen: (sessionId, path, hostId, source) =>
 		set((state) => ({

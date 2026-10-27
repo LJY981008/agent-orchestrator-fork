@@ -76,6 +76,10 @@ const (
 	LadoRulePermissionCeiling LadoRuleID = "agent.permission.ceiling"
 	// LadoRuleKoreanCommits asks workers to write commit messages in Korean.
 	LadoRuleKoreanCommits LadoRuleID = "git.commit.message.korean"
+	// LadoRuleSetupPresence is the protected gate that local setup changes
+	// which can run commands or widen access need the desktop app's
+	// confirmation (LadoSetupNeedsPresence).
+	LadoRuleSetupPresence LadoRuleID = "setup.change.requires_presence"
 )
 
 // LadoRuleContent is what one rule version says (docs/LJY-PRD/HARNESS.md

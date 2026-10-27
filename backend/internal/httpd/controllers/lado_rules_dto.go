@@ -216,6 +216,13 @@ type LadoApprovedRulesResponse struct {
 	Added          []string  `json:"added" description:"Rules on now but not at the approval."`
 	Removed        []string  `json:"removed" description:"Rules on at the approval but not now."`
 	Changed        []string  `json:"changed" description:"Rules on in both with another version or binding."`
+	// The local setup the approval fixed, next to now.
+	SetupAdded     []string                            `json:"setupAdded" description:"Setup items on now but not at the approval."`
+	SetupRemoved   []string                            `json:"setupRemoved" description:"Setup items on at the approval but not now; setup names them."`
+	SetupChanged   []string                            `json:"setupChanged" description:"Setup items on in both with another version or binding, or with other plugins installed for an enabledPlugins setting."`
+	Setup          []LadoSnapshotSetupItemResponse     `json:"setup" description:"The setup items on at the approval."`
+	AOSystemSHA256 string                              `json:"aoSystemSha256" description:"The AO system layer at the approval; empty when it fixed no local setup."`
+	Accepted       []LadoSetupAcceptedConflictResponse `json:"accepted" description:"The setup warnings accepted at the approval."`
 }
 
 // LadoEffectiveResponse is what the rules give a project, or a task at its
@@ -233,5 +240,6 @@ type LadoEffectiveResponse struct {
 	Problems          []LadoPolicyProblemResponse `json:"problems" description:"Sorted by severity, code and rules."`
 	Blocking          bool                        `json:"blocking"`
 	SnapshotSHA256    string                      `json:"snapshotSha256" description:"Hash of the rule snapshot; an approval sends it as policySha256."`
+	Setup             LadoEffectiveSetupResponse  `json:"setup" description:"The local setup of the agent's tool, which the snapshot fixes with the rules."`
 	Approved          *LadoApprovedRulesResponse  `json:"approved,omitempty" description:"The task's valid approval next to now; missing without one, and for an approval given before LADO had rules."`
 }

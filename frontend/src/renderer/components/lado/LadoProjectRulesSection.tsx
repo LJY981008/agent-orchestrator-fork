@@ -1,7 +1,9 @@
-// LADO fork: Project settings → Rules (docs/LJY-PRD/HARNESS.md §3 and §12,
-// PRD HAR-003). Each rule follows Global unless the project forces it on or
-// off; protected rules are always on. The project's AO instructions are
-// listed as they are: LADO includes them and cannot turn them off.
+// LADO fork: Project settings → Rules (docs/LJY-PRD/HARNESS.md §3, §9 and
+// §12, PRD HAR-003). Each rule and each managed local setup item follows
+// Global unless the project forces it on or off; protected rules are always
+// on. The setup files the repository tracks and the project's AO
+// instructions are listed as they are: LADO includes them and cannot turn
+// them off.
 import type { TFunction } from "i18next";
 import { Plus } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -18,6 +20,7 @@ import { Button } from "../ui/button";
 import { LadoRuleEditorDialog } from "./LadoRuleEditorDialog";
 import { LadoRuleImpactDialog } from "./LadoRuleImpactDialog";
 import { ladoCeilingModeLabel } from "./LadoRuleRows";
+import { LadoSetupProjectSection, LadoSetupRepositorySection } from "./setup/LadoSetupScopeRows";
 
 /** Where a row overrides rules: a project's settings, or one task. */
 export type LadoOverrideScope = "project" | "task";
@@ -232,6 +235,8 @@ export function LadoProjectRulesSection({ projectId }: { projectId: string }) {
 						))
 					)}
 				</SettingsSection>
+				<LadoSetupProjectSection projectId={projectId} />
+				<LadoSetupRepositorySection projectId={projectId} />
 				{data ? <LadoAORulesSection rules={data.aoRules} /> : null}
 			</div>
 			<LadoRuleImpactDialog

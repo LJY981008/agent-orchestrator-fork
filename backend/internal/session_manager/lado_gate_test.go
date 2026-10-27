@@ -186,6 +186,7 @@ type ladoSectionCall struct {
 	kind      domain.SessionKind
 	projectID domain.ProjectID
 	sessionID domain.SessionID
+	harness   domain.AgentHarness
 }
 
 // recordingLadoSource answers like LADO's prompt source: an orchestrator gets
@@ -200,10 +201,10 @@ const (
 	ladoWorkerSection       = "## LADO rules\n\nWrite commit messages in Korean."
 )
 
-func (s *recordingLadoSource) section(_ context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
+func (s *recordingLadoSource) section(_ context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.calls = append(s.calls, ladoSectionCall{kind: kind, projectID: projectID, sessionID: sessionID})
+	s.calls = append(s.calls, ladoSectionCall{kind: kind, projectID: projectID, sessionID: sessionID, harness: harness})
 	if kind == domain.KindOrchestrator {
 		return ladoOrchestratorSection, nil
 	}
@@ -239,11 +240,13 @@ func TestLadoPromptSectionComesFromTheSource(t *testing.T) {
 	if _, err := m.buildSystemPrompt(context.Background(), domain.KindWorker, "", "scratch-1", "", false); err != nil {
 		t.Fatalf("buildSystemPrompt without a project: %v", err)
 	}
-	want := []ladoSectionCall{{domain.KindOrchestrator, "mer", "mer-1"}, {domain.KindWorker, "mer", "mer-2"}}
+	// A session without a project is not asked, and no session row is read
+	// here: the source reads it when its section depends on the harness.
+	want := []ladoSectionCall{{domain.KindOrchestrator, "mer", "mer-1", ""}, {domain.KindWorker, "mer", "mer-2", ""}}
 	if got := source.asked(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("asked %+v, want %+v (never for a session without a project)", got, want)
+		t.Fatalf("asked %+v, want %+v", got, want)
 	}
-	m.SetLadoPrompt(func(context.Context, domain.SessionKind, domain.ProjectID, domain.SessionID) (string, error) {
+	m.SetLadoPrompt(func(context.Context, domain.SessionKind, domain.ProjectID, domain.SessionID, domain.AgentHarness) (string, error) {
 		return "", errors.New("settings unreadable")
 	})
 	for _, kind := range []domain.SessionKind{domain.KindOrchestrator, domain.KindWorker} {
@@ -271,7 +274,7 @@ func TestWorkerSystemPromptAsksForTheLadoSection(t *testing.T) {
 	if len(launcher.started) != 1 || !strings.Contains(launcher.started[0].SystemPrompt, ladoWorkerSection) {
 		t.Fatalf("Chat worker started with %d controllers; system prompt lacks the LADO section", len(launcher.started))
 	}
-	if want := []ladoSectionCall{{domain.KindWorker, chatTestProject, rec.ID}}; !reflect.DeepEqual(source.asked(), want) {
+	if want := []ladoSectionCall{{domain.KindWorker, chatTestProject, rec.ID, domain.HarnessCodex}}; !reflect.DeepEqual(source.asked(), want) {
 		t.Fatalf("spawn asked %+v, want %+v", source.asked(), want)
 	}
 
@@ -292,7 +295,7 @@ func TestWorkerSystemPromptAsksForTheLadoSection(t *testing.T) {
 	if !strings.Contains(agent.lastRestore.SystemPrompt, ladoWorkerSection) {
 		t.Fatalf("restore system prompt lacks the LADO section:\n%s", agent.lastRestore.SystemPrompt)
 	}
-	if want := []ladoSectionCall{{domain.KindWorker, "mer", "mer-7"}}; !reflect.DeepEqual(restored.asked(), want) {
+	if want := []ladoSectionCall{{domain.KindWorker, "mer", "mer-7", ""}}; !reflect.DeepEqual(restored.asked(), want) {
 		t.Fatalf("restore asked %+v, want %+v", restored.asked(), want)
 	}
 }

@@ -184,7 +184,7 @@ func (m *Manager) executeChatAgentSwitch(
 		return result, fmt.Errorf("switch Chat agent %s: target config: %w", id, err)
 	}
 
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
+	systemPrompt, err := m.buildSystemPrompt(withLadoPromptHarness(ctx, cfg.TargetHarness), rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, true)
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: system prompt: %w", id, err)
 	}
@@ -367,6 +367,10 @@ func (m *Manager) executeChatAgentSwitch(
 	}
 	targetLaunchEnv := m.runtimeEnv(id, credentialRecord.ProjectID, credentialRecord.IssueID, project.Config.Env)
 	m.augmentAgentRuntimeEnv(targetAgent, targetLaunchEnv)
+	mcpServers, err := m.chatMCPServers(ctx, credentialRecord, cfg.TargetHarness, targetLaunchEnv)
+	if err != nil {
+		return result, fmt.Errorf("switch Chat agent %s: %w", id, err)
+	}
 	releaseCodexAdmission, admissionErr := m.acquireCodexControllerAdmission(ctx, cfg.TargetHarness)
 	if admissionErr != nil {
 		return result, fmt.Errorf("switch Chat agent %s: %w", id, admissionErr)
@@ -395,7 +399,7 @@ func (m *Manager) executeChatAgentSwitch(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            finalSystemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(cfg.TargetHarness, targetLaunchEnv),
+		MCPServers:              mcpServers,
 		ExpectedControllerOwner: credentialRecord.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -406,6 +410,10 @@ func (m *Manager) executeChatAgentSwitch(
 			}
 			credentialRecord = prepared
 			m.augmentAgentRuntimeEnv(targetAgent, launchEnv)
+			// LADO fork: the target runs on the home prepareWorkspace built.
+			if err := m.applyLadoSetupHome(launchCtx, targetAgent, id, launchEnv); err != nil {
+				return nil, err
+			}
 			return launchEnv, nil
 		},
 		ProviderConversationID: providerConversationID,

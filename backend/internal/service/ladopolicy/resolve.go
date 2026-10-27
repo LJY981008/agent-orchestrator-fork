@@ -57,6 +57,9 @@ type Input struct {
 	AORules     []AORule
 	// AOBuild is the running AO build, so an AO update changes the snapshot.
 	AOBuild string
+	// Setup is the local setup of the agent's tool, as a SetupSource resolved
+	// it; the zero value has none.
+	Setup SetupResolution
 }
 
 // Source is the binding that decided whether a rule applies.
@@ -90,8 +93,11 @@ type Resolution struct {
 	// Capabilities are what a task's rules need from its agent, empty for a
 	// project or without an agent.
 	Capabilities []Capability
-	// Problems are sorted by severity, code and rules.
+	// Problems are sorted by severity, code, rules and details. They hold
+	// the setup's problems as well.
 	Problems []domain.LadoPolicyProblem
+	// Setup is the input's local setup.
+	Setup SetupResolution
 	// Content is the snapshot, JSON its canonical bytes and SHA256 their hex
 	// sha256.
 	Content SnapshotContent
@@ -129,11 +135,14 @@ func Resolve(in Input) Resolution {
 	}
 	r.checkConflicts()
 	r.checkAORules(in.AORules)
+	r.Setup = in.Setup
+	r.Problems = append(r.Problems, in.Setup.Problems...)
 	slices.SortStableFunc(r.Problems, func(a, b domain.LadoPolicyProblem) int {
 		return cmp.Or(
 			cmp.Compare(severityRank(a.Severity), severityRank(b.Severity)),
 			strings.Compare(a.Code, b.Code),
 			slices.Compare(a.Rules, b.Rules),
+			strings.Compare(detailsKey(a.Details), detailsKey(b.Details)),
 		)
 	})
 	r.Content = snapshotContent(in, r)
@@ -328,6 +337,17 @@ func (r *Resolution) ruleIDs(match func(Entry) bool) []domain.LadoRuleID {
 		}
 	}
 	return ids
+}
+
+// detailsKey orders problems that differ only in their details, such as the
+// setup conflicts of one code on two items. Maps encode with sorted keys.
+func detailsKey(details map[string]string) string {
+	if len(details) == 0 {
+		return ""
+	}
+	// A string map always encodes.
+	data, _ := json.Marshal(details)
+	return string(data)
 }
 
 // severityRank orders problems blocking first.

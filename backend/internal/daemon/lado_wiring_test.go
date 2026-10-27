@@ -33,11 +33,15 @@ func (s *ladoGateSink) SetWorkGate(gate ports.WorkGate) { s.gate = gate }
 
 func (s *ladoGateSink) SetLadoPrompt(section sessionmanager.LadoPromptSection) { s.prompt = section }
 
-// SetWorkGate, SetLadoPrompt and ResolveDefaultBranch keep wiring_test.go's
-// fake a sessionLifecycle.
+// SetWorkGate, SetLadoPrompt, the setup hooks and ResolveDefaultBranch keep
+// wiring_test.go's fake a sessionLifecycle.
 func (f *fakeSessionLifecycle) SetWorkGate(ports.WorkGate) {}
 
 func (f *fakeSessionLifecycle) SetLadoPrompt(sessionmanager.LadoPromptSection) {}
+
+func (f *fakeSessionLifecycle) SetLadoSetupHome(ports.LadoSetupHome) {}
+
+func (f *fakeSessionLifecycle) SetLadoChatServers(sessionmanager.LadoChatServers) {}
 
 func (f *fakeSessionLifecycle) ResolveDefaultBranch(context.Context, string, string) (ports.WorkspaceDefaultBranch, error) {
 	return ports.WorkspaceDefaultBranch{}, ports.ErrWorkspaceDefaultBranchUnresolved
@@ -68,12 +72,12 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	if sessions.prompt == nil {
 		t.Fatal("wireLado installed no LADO prompt section")
 	}
-	if section, err := sessions.prompt(ctx, domain.KindOrchestrator, "mer", "mer-orchestrator-1"); err != nil || !strings.Contains(section, "## LADO project") {
+	if section, err := sessions.prompt(ctx, domain.KindOrchestrator, "mer", "mer-orchestrator-1", domain.HarnessClaudeCode); err != nil || !strings.Contains(section, "## LADO project") {
 		t.Fatalf("LADO prompt section for a LADO project = %q, %v", section, err)
 	}
 	// A worker that LADO did not dispatch gets no LADO section, and its spawn
 	// with an id shaped like a dispatch has no grant.
-	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", "mer-1"); err != nil || section != "" {
+	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", "mer-1", domain.HarnessClaudeCode); err != nil || section != "" {
 		t.Fatalf("LADO prompt section for a worker = %q, %v", section, err)
 	}
 	err = sessions.gate.AuthorizeSpawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker, ClientRequestID: "lado:lado-queue-1/1", ClientRequestHash: "h"})
@@ -123,7 +127,7 @@ func TestWireLadoGivesADispatchedWorkerItsRules(t *testing.T) {
 
 	wireLado(store, sessions, &ladoGateSink{})
 
-	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID); err != nil || section != rules {
+	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID, domain.HarnessClaudeCode); err != nil || section != rules {
 		t.Fatalf("LADO prompt section for the dispatched worker = %q, %v; want the snapshot's rules", section, err)
 	}
 }
@@ -227,7 +231,7 @@ func TestWireLadoWorkStartsTheDispatcher(t *testing.T) {
 	}
 	sessions := &ladoWorkerSessions{}
 
-	_, tasks, _, queue := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	_, tasks, _, queue, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
 	done := queue.Start(ctx)
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -277,7 +281,7 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	}
 	log := slog.New(slog.DiscardHandler)
 
-	_, tasks, rules, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
 
 	if tasks == nil || rules == nil {
 		t.Fatalf("wireLadoWork returned tasks %v, rules %v", tasks, rules)
@@ -298,9 +302,11 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 		}
 		return got
 	}
-	want := map[domain.LadoRuleID]int{domain.LadoRulePlanApproval: 1, domain.LadoRulePermissionCeiling: 1, domain.LadoRuleKoreanCommits: 1}
+	want := map[domain.LadoRuleID]int{
+		domain.LadoRulePlanApproval: 1, domain.LadoRulePermissionCeiling: 1, domain.LadoRuleKoreanCommits: 1, domain.LadoRuleSetupPresence: 1,
+	}
 	if got := stored(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rules after wiring = %v, want the three built-ins at version 1", got)
+		t.Fatalf("rules after wiring = %v, want the four built-ins at version 1", got)
 	}
 
 	// A restart seeds nothing again.
@@ -312,7 +318,7 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	// The returned service resolves the seeded rules and stamps the running
 	// AO build into every snapshot.
 	view, err := rules.Effective(ctx, ladopolicy.EffectiveInput{ProjectID: "mer"})
-	if err != nil || len(view.Entries) != 3 || view.Ceiling != domain.PermissionModeAuto || view.Content.AOBuild != "0.12.0" {
+	if err != nil || len(view.Entries) != 4 || view.Ceiling != domain.PermissionModeAuto || view.Content.AOBuild != "0.12.0" {
 		t.Fatalf("Effective = %d rules, ceiling %q, AO build %q, err %v", len(view.Entries), view.Ceiling, view.Content.AOBuild, err)
 	}
 }
@@ -359,7 +365,7 @@ func TestWireLadoWorkGivesTasksTheRules(t *testing.T) {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
 
-	_, tasks, rules, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
 
 	listed, err := tasks.List(ctx, "mer", false)
 	if err != nil || len(listed) != 1 {

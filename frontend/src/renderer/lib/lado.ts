@@ -72,7 +72,8 @@ export class LadoApiError extends Error {
 	}
 }
 
-function ladoError(error: unknown, fallback: string): LadoApiError {
+/** A failed daemon call as a LadoApiError, with fallback when the daemon sent no message. */
+export function ladoError(error: unknown, fallback: string): LadoApiError {
 	return new LadoApiError(apiErrorMessage(error, fallback), apiErrorCode(error), apiErrorDetails(error));
 }
 

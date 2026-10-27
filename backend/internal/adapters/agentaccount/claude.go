@@ -40,6 +40,13 @@ var claudeCredentialEnv = []string{
 	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
 }
 
+// ClaudeLoginSettingKeys returns claudeSettingsDropped. LADO fork: its setup
+// inventory keeps the same keys in place (domain.LadoSetupClaudeLoginKeys).
+func ClaudeLoginSettingKeys() []string { return append([]string(nil), claudeSettingsDropped...) }
+
+// ClaudeLoginEnvNames returns claudeCredentialEnv (within domain.LadoSetupIsClaudeLoginEnv).
+func ClaudeLoginEnvNames() []string { return append([]string(nil), claudeCredentialEnv...) }
+
 // Claude runs the `claude` CLI under an account folder (CLAUDE_CONFIG_DIR).
 type Claude struct {
 	// Binary resolves the claude executable.

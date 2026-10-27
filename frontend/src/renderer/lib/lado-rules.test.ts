@@ -151,6 +151,12 @@ describe("rule presentation", () => {
 		expect(ladoRuleName(ko, "team.review", "Ask for a review")).toBe("Ask for a review");
 		expect(ladoRuleDescription(ko, "plan.approval.required", "Plan approval required")).toBe("LADO는 승인한 계획으로만 작업을 시작합니다.");
 		expect(ladoRuleDescription(ko, "team.review", "Ask for a review")).toBeUndefined();
+		expect(ladoRuleName(ko, "setup.change.requires_presence", "Local setup changes need the desktop app's confirmation")).toBe(
+			"로컬 설정 변경 확인 필수",
+		);
+		expect(ladoRuleDescription(ko, "setup.change.requires_presence", "Local setup changes need the desktop app's confirmation")).toBe(
+			"명령을 실행하거나 접근을 넓힐 수 있는 로컬 설정 변경은 데스크톱 앱에서 확인합니다.",
+		);
 		expect(ladoStrengthLabel(ko, "advisory")).toBe("권고");
 	});
 

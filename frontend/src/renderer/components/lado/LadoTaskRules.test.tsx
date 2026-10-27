@@ -2,7 +2,9 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { apiClient } from "../../lib/api-client";
 import * as lado from "../../lib/lado";
+import { daemonCalls, routeDaemon, setupChangeResult, setupConflict, setupItem } from "../../test/lado-setup-fixtures";
 import { LadoTaskRules } from "./LadoTaskRules";
 
 vi.mock("../../lib/lado", async (original) => ({
@@ -10,6 +12,12 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoEffective: vi.fn(),
 	fetchLadoRules: vi.fn(),
 	setLadoBinding: vi.fn(),
+}));
+
+// Local setup goes through the daemon's setup routes (lib/lado-setup.ts).
+vi.mock("../../lib/api-client", async (original) => ({
+	...(await original<typeof import("../../lib/api-client")>()),
+	apiClient: { GET: vi.fn(), POST: vi.fn(), PUT: vi.fn(), PATCH: vi.fn(), DELETE: vi.fn() },
 }));
 
 const revision = { id: "lado-plan-1", number: 1, sha256: "a".repeat(64), source: "agent" as const, valid: true, createdAt: "2026-10-22T09:30:00Z" };
@@ -76,6 +84,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 		problems: [],
 		blocking: false,
 		snapshotSha256: "e".repeat(64),
+		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
 		approved: {
 			snapshotSha256: "e".repeat(64),
 			approvedAt: "2026-10-22T10:00:00Z",
@@ -85,6 +94,12 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 			added: [],
 			removed: [],
 			changed: [],
+			setup: [],
+			setupAdded: [],
+			setupRemoved: [],
+			setupChanged: [],
+			aoSystemSha256: "",
+			accepted: [],
 		},
 		...fields,
 	};
@@ -202,13 +217,19 @@ describe("LadoTaskRules", () => {
 					added: [review.ruleId],
 					removed: ["lado-rule-old"],
 					changed: [ceiling.ruleId],
+					setup: [],
+					setupAdded: [],
+					setupRemoved: [],
+					setupChanged: [],
+					aoSystemSha256: "",
+					accepted: [],
 				},
 			}),
 		);
 		renderRules({ ...task, state: "review_required" });
 
 		const comparison = await screen.findByTestId("lado-approval-rules");
-		expect(comparison).toHaveTextContent("Rules changed since approval");
+		expect(comparison).toHaveTextContent("Rules or local setup changed since approval");
 		expect(comparison).toHaveAttribute("data-tone", "attention");
 		expect(screen.getByText("Added: Ask for a review")).toBeInTheDocument();
 		expect(screen.getByText("Changed: Permission ceiling")).toBeInTheDocument();
@@ -228,8 +249,8 @@ describe("LadoTaskRules", () => {
 			effective({ approved: { ...effective().approved!, matches: false } }),
 		);
 		renderRules({ ...task, state: "review_required" });
-		expect(await screen.findByTestId("lado-approval-rules")).toHaveTextContent("Rules changed since approval");
-		expect(screen.getByText("No rule changed; the agent, its mode, the AO instructions or AO itself did.")).toBeInTheDocument();
+		expect(await screen.findByTestId("lado-approval-rules")).toHaveTextContent("Rules or local setup changed since approval");
+		expect(screen.getByText("No rule or local setup item changed; the agent, its mode, the AO instructions or AO itself did.")).toBeInTheDocument();
 		cleanup();
 
 		// An approval given before LADO had rules has no snapshot to compare.
@@ -243,6 +264,105 @@ describe("LadoTaskRules", () => {
 		renderRules({ ...task, state: "planned", plan: { requestPending: false, latest: revision } });
 		await screen.findByText("Runs with Codex · at most Auto");
 		expect(screen.queryByTestId("lado-approval-rules")).not.toBeInTheDocument();
+	});
+
+	it("compares the local setup with the approval and overrides an item for this task", async () => {
+		const user = userEvent.setup();
+		const claude = setupItem({
+			itemId: "item-claude-md",
+			kind: "instructions",
+			name: "CLAUDE.md",
+			project: "force_on",
+			source: { scope: "project", scopeId: "demo", state: "force_on" },
+		});
+		const plugins = setupItem({ itemId: "item-plugins", kind: "setting", name: "enabledPlugins", installedSha256: "2".repeat(64) });
+		const permissions = setupItem({ itemId: "item-permissions", kind: "setting", name: "permissions" });
+		const approvedPlugins = {
+			itemId: plugins.itemId,
+			tool: plugins.tool,
+			kind: plugins.kind,
+			name: plugins.name,
+			versionId: plugins.versionId,
+			version: plugins.version,
+			sha256: plugins.sha256,
+			installedSha256: "1".repeat(64),
+			source: plugins.source,
+		};
+		const oldAgent = { ...approvedPlugins, itemId: "item-old", kind: "agent" as const, name: "old-agent.md", versionId: "item-old-v1", installedSha256: "" };
+		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
+			effective({
+				snapshotSha256: "d".repeat(64),
+				setup: {
+					items: [claude, plugins, permissions],
+					aoSystemSha256: "a".repeat(64),
+					conflicts: [],
+					accepted: [{ acceptanceId: "acc-1", code: "LADO_SETUP_DENIES_GIT", detail: "Bash(git push:*)", itemId: permissions.itemId }],
+				},
+				approved: {
+					...effective().approved!,
+					matches: false,
+					setup: [approvedPlugins, oldAgent],
+					setupAdded: [claude.itemId],
+					setupRemoved: [oldAgent.itemId],
+					setupChanged: [plugins.itemId],
+				},
+			}),
+		);
+		routeDaemon(apiClient, {
+			"GET /api/v1/lado/setup/conflicts": () => ({
+				data: {
+					conflicts: [
+						setupConflict({
+							code: "LADO_SETUP_DENIES_GIT",
+							severity: "warning",
+							itemId: permissions.itemId,
+							detail: "Bash(git push:*)",
+							details: { rule: "Bash(git push:*)" },
+							acceptanceId: "acc-1",
+						}),
+					],
+				},
+			}),
+			"PUT /api/v1/lado/setup/bindings": ({ body }) => ({
+				data: setupChangeResult({
+					applied: !(body as { dryRun?: boolean }).dryRun,
+					impact: { projects: [], tasks: [{ id: task.id, projectId: "demo", title: "Add login", issueRef: task.issue.ref }] },
+				}),
+			}),
+		});
+		renderRules({ ...task, state: "review_required" });
+
+		// What the approval fixed and what is on now, by name.
+		expect(await screen.findByTestId("lado-approval-rules")).toHaveTextContent("Rules or local setup changed since approval");
+		expect(screen.getAllByTestId("lado-approval-setup").map((line) => line.textContent)).toEqual([
+			"Local setup added: CLAUDE.md",
+			"Local setup removed: old-agent.md",
+			"Local setup changed: enabledPlugins (installed plugins changed)",
+		]);
+		// Something changed, so the line about the agent and AO stays away.
+		expect(screen.queryByText(/^No rule or local setup item changed/)).not.toBeInTheDocument();
+		// The accepted warning has left the problems, and says so.
+		expect(await screen.findByText("Accepted · The permission rule Bash(git push:*) denies git or gh, which workers need for branches and pull requests. · permissions")).toBeInTheDocument();
+		expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/lado/setup/conflicts", { params: { query: { projectId: "demo", taskId: "lado-task-1" } } });
+
+		// The worker tool's items, with where each state comes from.
+		const card = screen.getByRole("heading", { name: "Local setup for this task" }).closest("section")!;
+		const rows = within(card).getAllByTestId("lado-setup-scope-item");
+		expect(rows.map((row) => row.getAttribute("data-item-id"))).toEqual(["item-claude-md", "item-plugins", "item-permissions"]);
+		expect(rows[0]).toHaveTextContent("Instructions · On · from the project");
+		expect(rows[1]).toHaveTextContent("Setting · On · from Global");
+
+		await user.click(within(rows[0]).getByRole("button", { name: "CLAUDE.md for this task" }));
+		await user.click(await screen.findByRole("menuitem", { name: "Off" }));
+		// The task is approved under the setup now, so the change asks first.
+		const dialog = await screen.findByRole("dialog", { name: "Change the local setup for approved tasks?" });
+		expect(within(dialog).getByText("Add login")).toBeInTheDocument();
+		await user.click(within(dialog).getByRole("button", { name: "Change" }));
+
+		const binding = { itemId: "item-claude-md", scope: "task", scopeId: "lado-task-1", state: "force_off" };
+		await waitFor(() => expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings")).toHaveLength(2));
+		expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings").map((call) => call.body)).toEqual([{ ...binding, dryRun: true }, binding]);
+		await waitFor(() => expect(lado.fetchLadoEffective).toHaveBeenCalledTimes(2));
 	});
 
 	it("shows that the approved rules block the run", async () => {
@@ -287,9 +407,13 @@ describe("LadoTaskRules", () => {
 	});
 
 	it("takes no new overrides for a cancelled task", async () => {
+		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
+			effective({ setup: { items: [setupItem({ itemId: "item-claude-md", kind: "instructions", name: "CLAUDE.md" })], aoSystemSha256: "", conflicts: [], accepted: [] } }),
+		);
 		renderRules({ ...task, state: "cancelled", cancelledAt: "2026-10-22T12:00:00Z" });
 
 		await screen.findByText("Runs with Codex · at most Auto");
 		expect(within(row(korean.ruleId)).getByRole("button", { name: "Commit messages in Korean for this task" })).toBeDisabled();
+		expect(screen.getByRole("button", { name: "CLAUDE.md for this task" })).toBeDisabled();
 	});
 });

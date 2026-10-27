@@ -106,6 +106,8 @@ type LadoExecutionSnapshotResponse struct {
 	PermissionCeiling string                      `json:"permissionCeiling" enum:"accept-edits,auto,bypass-permissions" description:"The highest mode a turn of the worker may use."`
 	Rules             []LadoExecutionRuleResponse `json:"rules" description:"The rules that were on, by id."`
 	Prompt            string                      `json:"prompt" description:"The rules text in the worker's system prompt; empty when no rule adds any."`
+	// Setup are the local setup items the worker's session gets.
+	Setup []LadoExecutionSetupItemResponse `json:"setup" description:"The local setup items that were on, the versions the worker's session gets."`
 }
 
 // LadoExecutionBaseResponse is where an execution's base stood: when its

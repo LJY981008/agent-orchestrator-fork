@@ -808,8 +808,8 @@ func TestDryRunWritesNothing(t *testing.T) {
 	if got := fx.rule(t, domain.LadoRuleKoreanCommits); got.Global != domain.LadoBindingOff {
 		t.Fatalf("Korean rule = %+v, want it still off", got)
 	}
-	if rules, err := fx.svc.List(ctx, true); err != nil || len(rules) != 4 {
-		t.Fatalf("List = %d rules, %v, want the 3 built-in and 1 user rule", len(rules), err)
+	if rules, err := fx.svc.List(ctx, true); err != nil || len(rules) != 5 {
+		t.Fatalf("List = %d rules, %v, want the 4 built-in and 1 user rule", len(rules), err)
 	}
 	// Asking for what is already so writes nothing either.
 	same, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: user.ID, Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff})
@@ -1001,8 +1001,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		t.Fatalf("second EnsureBuiltins: %v", err)
 	}
 
-	if rows := fx.rows(t); rows.rules != 3 || rows.versions != 3 || rows.bindings != 3 {
-		t.Fatalf("rows = %+v, want 3 rules with one version and one binding each", rows)
+	if rows := fx.rows(t); rows.rules != 4 || rows.versions != 4 || rows.bindings != 4 {
+		t.Fatalf("rows = %+v, want 4 rules with one version and one binding each", rows)
 	}
 	var seeded []auditRow
 	for _, event := range fx.events(t) {
@@ -1010,8 +1010,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 			seeded = append(seeded, event)
 		}
 	}
-	if len(seeded) != 3 {
-		t.Fatalf("rule.created events = %+v, want 3", seeded)
+	if len(seeded) != 4 {
+		t.Fatalf("rule.created events = %+v, want 4", seeded)
 	}
 	for _, event := range seeded {
 		if event.Actor != "lado" || !reflect.DeepEqual(event.Payload, map[string]any{"version": float64(1), "builtin": true}) {
@@ -1019,13 +1019,14 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		}
 	}
 	rules, err := fx.svc.List(ctx, true)
-	if err != nil || len(rules) != 3 {
-		t.Fatalf("List = %+v, %v, want 3 rules", rules, err)
+	if err != nil || len(rules) != 4 {
+		t.Fatalf("List = %+v, %v, want 4 rules", rules, err)
 	}
 	global := map[domain.LadoRuleID]domain.LadoBindingState{
 		domain.LadoRulePlanApproval:      domain.LadoBindingOn,
 		domain.LadoRulePermissionCeiling: domain.LadoBindingOn,
 		domain.LadoRuleKoreanCommits:     domain.LadoBindingOn, // the developer's change stays
+		domain.LadoRuleSetupPresence:     domain.LadoBindingOn,
 	}
 	for _, view := range rules {
 		rule := view.Rule
@@ -1088,6 +1089,7 @@ func TestSnapshotMatchesCurrentSHA(t *testing.T) {
 	wantRules := []domain.LadoPolicySnapshotRule{
 		{RuleID: domain.LadoRulePermissionCeiling, VersionID: fx.rule(t, domain.LadoRulePermissionCeiling).Version.ID},
 		{RuleID: domain.LadoRulePlanApproval, VersionID: fx.rule(t, domain.LadoRulePlanApproval).Version.ID},
+		{RuleID: domain.LadoRuleSetupPresence, VersionID: fx.rule(t, domain.LadoRuleSetupPresence).Version.ID},
 	}
 	if !reflect.DeepEqual(snapshot.Rules, wantRules) {
 		t.Fatalf("snapshot rules = %+v, want the protected rules' versions %+v", snapshot.Rules, wantRules)
@@ -1418,5 +1420,82 @@ func TestEffectiveNamesOneScope(t *testing.T) {
 	view, err := fx.svc.Effective(ctx, EffectiveInput{ProjectID: "demo", TaskID: task.ID})
 	if err != nil || view.Content.TaskID != task.ID || view.Content.ProjectID != "demo" {
 		t.Fatalf("Effective with the task's own project = %+v, %v", view.Content, err)
+	}
+}
+
+// HARNESS §14: setup.change.requires_presence is a built-in protected rule,
+// seeded at start and always on, that refuses what the other protected rules
+// refuse. Its instruction reaches no worker.
+func TestProtectedSetupPresenceRule(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	rule := fx.rule(t, domain.LadoRuleSetupPresence)
+	content := rule.Version.Content
+	if !rule.Builtin || !rule.Protected || rule.Global != domain.LadoBindingOn || len(rule.Overrides) != 0 || !rule.ArchivedAt.IsZero() {
+		t.Fatalf("rule = %+v, want a built-in protected rule that is on at Global", rule)
+	}
+	if rule.Version.Number != 1 || rule.Version.Actor != "lado" || content.Name != "Local setup changes need the desktop app's confirmation" ||
+		content.Category != "" || !slices.Equal(content.Enforcement, []domain.LadoEnforcement{domain.LadoEnforcementWorkflowGate}) ||
+		content.Instruction == "" || content.Strength() != domain.LadoStrengthPrevents {
+		t.Fatalf("version = %+v, want version 1 by lado: the name, no category, a workflow gate that prevents, an instruction", rule.Version)
+	}
+	var created []auditRow
+	for _, event := range fx.events(t) {
+		if event.Action == "rule.created" && event.Subject == string(domain.LadoRuleSetupPresence) {
+			created = append(created, event)
+		}
+	}
+	if len(created) != 1 || created[0].Actor != "lado" {
+		t.Fatalf("rule.created events = %+v, want lado's one", created)
+	}
+
+	task := fx.task(t, "claude-code")
+	before := fx.rows(t)
+	bypass := domain.PermissionModeBypassPermissions
+	for _, attempt := range []struct {
+		name string
+		run  func() error
+		code string
+	}{
+		{"global off", func() error {
+			_, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: rule.ID, Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff})
+			return err
+		}, "LADO_RULE_PROTECTED"},
+		{"project force_off", func() error {
+			_, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: rule.ID, Scope: domain.LadoScopeProject, ScopeID: "demo", State: domain.LadoBindingForceOff})
+			return err
+		}, "LADO_RULE_PROTECTED"},
+		{"task force_off as a dry run", func() error {
+			_, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: rule.ID, Scope: domain.LadoScopeTask, ScopeID: string(task.ID), State: domain.LadoBindingForceOff, DryRun: true})
+			return err
+		}, "LADO_RULE_PROTECTED"},
+		{"edit", func() error {
+			_, err := fx.svc.Update(ctx, rule.ID, UpdateInput{BaseVersion: 1, Instruction: ptr("Nothing needs confirmation.")})
+			return err
+		}, "LADO_RULE_PROTECTED"},
+		{"archive", func() error {
+			_, err := fx.svc.Update(ctx, rule.ID, UpdateInput{BaseVersion: 1, Archived: ptr(true)})
+			return err
+		}, "LADO_RULE_PROTECTED"},
+		{"a ceiling mode", func() error {
+			_, err := fx.svc.Update(ctx, rule.ID, UpdateInput{BaseVersion: 1, CeilingMode: &bypass, Presence: fx.presence("setup-rule-AAAAAAAAAAAAAAAA", false, nil)})
+			return err
+		}, "LADO_RULE_PROTECTED"},
+		{"delete", func() error { return fx.svc.Delete(ctx, rule.ID) }, "LADO_RULE_BUILTIN"},
+	} {
+		wantAPIError(t, attempt.run(), apierr.KindForbidden, attempt.code)
+	}
+	if after := fx.rows(t); after != before {
+		t.Fatalf("rows after refused changes = %+v, want %+v", after, before)
+	}
+	view, err := fx.svc.Effective(ctx, EffectiveInput{TaskID: task.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e := entry(t, view.Resolution, rule.ID); !e.On || e.Source != (Source{Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOn}) {
+		t.Fatalf("entry = %+v, want on from Global", e)
+	}
+	if !slices.Contains(view.Content.WorkflowGates, rule.ID) || strings.Contains(view.Prompt, content.Instruction) {
+		t.Fatalf("gates %v, prompt %q: want the rule among the workflow gates and out of the worker's text", view.Content.WorkflowGates, view.Prompt)
 	}
 }

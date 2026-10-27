@@ -27,7 +27,7 @@ const editorTheme = EditorView.theme({
 	".cm-selectionBackground, ::selection": { backgroundColor: "var(--color-interactive-active) !important" },
 }, { dark: false });
 
-export function MarkdownEditor({ value, onChange, filePath }: { value: string; onChange: (value: string) => void; filePath: string }) {
+export function MarkdownEditor({ value, onChange, filePath, autoFocus = true }: { value: string; onChange: (value: string) => void; filePath: string; autoFocus?: boolean }) {
 	const { t } = useTranslation();
 	const containerRef = useRef<HTMLDivElement>(null);
 	const viewRef = useRef<EditorView | null>(null);
@@ -63,7 +63,7 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 		});
 		const view = new EditorView({ state, parent: containerRef.current });
 		viewRef.current = view;
-		view.focus();
+		if (autoFocus) view.focus();
 		return () => {
 			view.destroy();
 			viewRef.current = null;

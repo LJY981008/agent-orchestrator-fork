@@ -102,6 +102,55 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoExecutionResponse":             "LadoExecutionResponse",
 	"ControllersLadoDispatchSettingsResponse":      "LadoDispatchSettingsResponse",
 	"ControllersUpdateLadoDispatchSettingsRequest": "UpdateLadoDispatchSettingsRequest",
+	"ControllersLadoSetupItemIDParam":              "LadoSetupItemIDParam",
+	"ControllersLadoSetupAdoptionIDParam":          "LadoSetupAdoptionIDParam",
+	"ControllersLadoSetupAcceptanceIDParam":        "LadoSetupAcceptanceIDParam",
+	"ControllersLadoSetupScopeQuery":               "LadoSetupScopeQuery",
+	"ControllersLadoSetupDryRunQuery":              "LadoSetupDryRunQuery",
+	"ControllersLadoSetupEntryResponse":            "LadoSetupEntryResponse",
+	"ControllersLadoSetupRootResponse":             "LadoSetupRootResponse",
+	"ControllersLadoSetupProjectScanResponse":      "LadoSetupProjectScanResponse",
+	"ControllersLadoSetupDriftResponse":            "LadoSetupDriftResponse",
+	"ControllersLadoSetupAdoptionResponse":         "LadoSetupAdoptionResponse",
+	"ControllersLadoSetupItemStateResponse":        "LadoSetupItemStateResponse",
+	"ControllersLadoSetupInventoryResponse":        "LadoSetupInventoryResponse",
+	"ControllersLadoSetupItemListResponse":         "LadoSetupItemListResponse",
+	"ControllersLadoSetupConflictResponse":         "LadoSetupConflictResponse",
+	"ControllersLadoSetupConflictListResponse":     "LadoSetupConflictListResponse",
+	"ControllersLadoSetupAdoptEntryRequest":        "LadoSetupAdoptEntryRequest",
+	"ControllersAdoptLadoSetupRequest":             "AdoptLadoSetupRequest",
+	"ControllersLadoSetupPreviewEntryResponse":     "LadoSetupPreviewEntryResponse",
+	"ControllersLadoSetupHookRewriteResponse":      "LadoSetupHookRewriteResponse",
+	"ControllersLadoSetupRunningSessionResponse":   "LadoSetupRunningSessionResponse",
+	"ControllersLadoSetupRunningProcessResponse":   "LadoSetupRunningProcessResponse",
+	"ControllersLadoSetupPreconditionsResponse":    "LadoSetupPreconditionsResponse",
+	"ControllersLadoSetupAdoptionPreviewResponse":  "LadoSetupAdoptionPreviewResponse",
+	"ControllersLadoSetupAdoptedItemResponse":      "LadoSetupAdoptedItemResponse",
+	"ControllersLadoSetupVerifyCheckResponse":      "LadoSetupVerifyCheckResponse",
+	"ControllersLadoSetupAdoptResponse":            "LadoSetupAdoptResponse",
+	"ControllersLadoSetupBackupEntryResponse":      "LadoSetupBackupEntryResponse",
+	"ControllersLadoSetupRestoredEntryResponse":    "LadoSetupRestoredEntryResponse",
+	"ControllersLadoSetupRestoreReportResponse":    "LadoSetupRestoreReportResponse",
+	"ControllersLadoSetupAdoptionDetailResponse":   "LadoSetupAdoptionDetailResponse",
+	"ControllersLadoSetupRestoreResponse":          "LadoSetupRestoreResponse",
+	"ControllersLadoSetupItemResponse":             "LadoSetupItemResponse",
+	"ControllersLadoSetupItemVersionResponse":      "LadoSetupItemVersionResponse",
+	"ControllersLadoSetupTreeFileResponse":         "LadoSetupTreeFileResponse",
+	"ControllersLadoSetupContentResponse":          "LadoSetupContentResponse",
+	"ControllersLadoSetupVersionDetailResponse":    "LadoSetupVersionDetailResponse",
+	"ControllersLadoSetupItemDetailResponse":       "LadoSetupItemDetailResponse",
+	"ControllersCreateLadoSetupItemRequest":        "CreateLadoSetupItemRequest",
+	"ControllersUpdateLadoSetupItemRequest":        "UpdateLadoSetupItemRequest",
+	"ControllersSetLadoSetupBindingRequest":        "SetLadoSetupBindingRequest",
+	"ControllersResolveLadoSetupDriftRequest":      "ResolveLadoSetupDriftRequest",
+	"ControllersAcceptLadoSetupConflictRequest":    "AcceptLadoSetupConflictRequest",
+	"ControllersLadoSetupBindingResponse":          "LadoSetupBindingResponse",
+	"ControllersLadoSetupAcceptanceResponse":       "LadoSetupAcceptanceResponse",
+	"ControllersLadoSetupChangeResponse":           "LadoSetupChangeResponse",
+	"ControllersLadoSetupAcceptedConflictResponse": "LadoSetupAcceptedConflictResponse",
+	"ControllersLadoEffectiveSetupResponse":        "LadoEffectiveSetupResponse",
+	"ControllersLadoSnapshotSetupItemResponse":     "LadoSnapshotSetupItemResponse",
+	"ControllersLadoExecutionSetupItemResponse":    "LadoExecutionSetupItemResponse",
 }
 
 func ladoOperations() []operation {
@@ -110,7 +159,7 @@ func ladoOperations() []operation {
 	revisionID := []any{controllers.LadoPlanIDParam{}}
 	credentialHost := []any{controllers.LadoCredentialHostParam{}}
 	ruleID := []any{controllers.LadoRuleIDParam{}}
-	return []operation{
+	return append([]operation{
 		{
 			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/settings", id: "getLadoProjectSettings", tag: "lado",
 			summary:    "Get a project's LADO settings",
@@ -307,6 +356,110 @@ func ladoOperations() []operation {
 			summary: "Replace the dispatch settings; needs no human-presence proof",
 			reqBody: controllers.UpdateLadoDispatchSettingsRequest{},
 			resps:   ladoResps(http.StatusOK, controllers.LadoDispatchSettingsResponse{}, http.StatusBadRequest),
+		},
+	}, ladoSetupOperations()...)
+}
+
+// ladoSetupOperations are the local setup routes (step 7 plan §13). Routes
+// that can need the desktop app's confirmation take X-LADO-Presence.
+func ladoSetupOperations() []operation {
+	itemID := []any{controllers.LadoSetupItemIDParam{}}
+	itemIDPresence := []any{controllers.LadoSetupItemIDParam{}, controllers.LadoPresenceHeaderParam{}}
+	adoptionID := []any{controllers.LadoSetupAdoptionIDParam{}}
+	presence := []any{controllers.LadoPresenceHeaderParam{}}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/lado/setup/inventory", id: "getLadoSetupInventory", tag: "lado",
+			summary: "List the local Claude Code and Codex setup, the managed items, drift and adoptions, from the last scan",
+			resps:   ladoResps(http.StatusOK, controllers.LadoSetupInventoryResponse{}),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/setup/scan", id: "scanLadoSetup", tag: "lado",
+			summary: "Scan the local setup again and list it",
+			resps:   ladoResps(http.StatusOK, controllers.LadoSetupInventoryResponse{}),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/setup/items", id: "listLadoSetupItems", tag: "lado",
+			summary:    "List the managed setup items of both tools as they resolve at Global, for a project or for a task",
+			pathParams: []any{controllers.LadoSetupScopeQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupItemListResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/setup/items", id: "createLadoSetupItem", tag: "lado",
+			summary:    "Make a managed setup item, or show it with dryRun; an item that can run code or widen access needs a human-presence proof, and an OS LADO has not verified refuses",
+			pathParams: presence,
+			reqBody:    controllers.CreateLadoSetupItemRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/setup/items/{itemId}", id: "getLadoSetupItem", tag: "lado",
+			summary:    "Get a managed setup item with the content of every version",
+			pathParams: itemID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupItemDetailResponse{}, http.StatusNotFound, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodPatch, path: "/api/v1/lado/setup/items/{itemId}", id: "updateLadoSetupItem", tag: "lado",
+			summary:    "Edit a text item, or show the edit with dryRun; content that can run code or widen access needs a human-presence proof",
+			pathParams: itemIDPresence,
+			reqBody:    controllers.UpdateLadoSetupItemRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/lado/setup/items/{itemId}", id: "deleteLadoSetupItem", tag: "lado",
+			summary:    "Delete a managed setup item, or show what it reaches with dryRun; its versions stay readable, and an item that can run code or widen access needs a human-presence proof",
+			pathParams: []any{controllers.LadoSetupItemIDParam{}, controllers.LadoSetupDryRunQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/setup/items/{itemId}/drift", id: "resolveLadoSetupDrift", tag: "lado",
+			summary:    "Keep a managed copy's drift as a new version or revert the copy; keeping code or wider access needs a human-presence proof",
+			pathParams: itemIDPresence,
+			reqBody:    controllers.ResolveLadoSetupDriftRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/setup/bindings", id: "setLadoSetupBinding", tag: "lado",
+			summary:    "Turn a managed setup item on or off at Global, for a project or for a task; any binding of an item that can run code or widen access needs a human-presence proof",
+			pathParams: presence,
+			reqBody:    controllers.SetLadoSetupBindingRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/setup/conflicts", id: "listLadoSetupConflicts", tag: "lado",
+			summary:    "List the setup conflicts and their acceptances at Global, for a project or for a task",
+			pathParams: []any{controllers.LadoSetupScopeQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupConflictListResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/setup/conflicts/acceptances", id: "acceptLadoSetupConflict", tag: "lado",
+			summary: "Accept a setup conflict warning for an item's current content in a scope, or show it with dryRun",
+			reqBody: controllers.AcceptLadoSetupConflictRequest{},
+			resps:   ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/lado/setup/conflicts/acceptances/{acceptanceId}", id: "revokeLadoSetupConflictAcceptance", tag: "lado",
+			summary:    "Revoke a setup conflict acceptance, or show it with dryRun",
+			pathParams: []any{controllers.LadoSetupAcceptanceIDParam{}, controllers.LadoSetupDryRunQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/setup/adoptions", id: "adoptLadoSetup", tag: "lado",
+			summary:    "Preview an adoption of local setup with dryRun, or adopt the previewed plan with a human-presence proof",
+			pathParams: presence,
+			reqBody:    controllers.AdoptLadoSetupRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupAdoptResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/setup/adoptions/{adoptionId}", id: "getLadoSetupAdoption", tag: "lado",
+			summary:    "Get an adoption with its items, its backup and its restore's report",
+			pathParams: adoptionID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupAdoptionDetailResponse{}, http.StatusNotFound, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/setup/adoptions/{adoptionId}/restore", id: "restoreLadoSetupAdoption", tag: "lado",
+			summary:    "Put back what an adoption removed; needs a human-presence proof from the AO desktop app",
+			pathParams: []any{controllers.LadoSetupAdoptionIDParam{}, controllers.LadoPresenceHeaderParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSetupRestoreResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
 		},
 	}
 }

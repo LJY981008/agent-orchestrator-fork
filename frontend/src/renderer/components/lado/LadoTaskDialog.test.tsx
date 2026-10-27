@@ -109,6 +109,7 @@ function rules(snapshotSha256: string, fields: Partial<lado.LadoEffective> = {})
 		problems: [],
 		blocking: false,
 		snapshotSha256,
+		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
 		...fields,
 	};
 }
@@ -228,7 +229,7 @@ test("offers approval again when the rules need review", async () => {
 	const dialog = await screen.findByTestId("lado-task-dialog");
 	await within(dialog).findByTestId("lado-plan");
 
-	expect(within(dialog).getByText("The rules changed since this plan was approved. Check the Rules tab, then approve again.")).toHaveAttribute("role", "status");
+	expect(within(dialog).getByText("The rules or local setup changed since this plan was approved. Check the Rules tab, then approve again.")).toHaveAttribute("role", "status");
 	expect(within(dialog).queryByText("Approved")).not.toBeInTheDocument();
 	const approve = within(dialog).getByRole("button", { name: "Approve plan" });
 	expect(approve).toBeEnabled();
@@ -265,14 +266,14 @@ test("says the rules just changed when an approval meets newer rules", async () 
 	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView());
 	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(planned());
 	vi.mocked(lado.approveLadoPlan).mockRejectedValue(
-		new lado.LadoApiError("The rules changed while you were approving. Review them again, then approve.", "LADO_RULES_CHANGED"),
+		new lado.LadoApiError("The rules or local setup changed while you were approving. Review them again, then approve.", "LADO_RULES_CHANGED"),
 	);
 	renderDialog();
 	const dialog = await screen.findByTestId("lado-task-dialog");
 	await within(dialog).findByTestId("lado-plan");
 
 	fireEvent.click(within(dialog).getByRole("button", { name: "Approve plan" }));
-	const notice = await within(dialog).findByText("The rules just changed. Check them on the Rules tab, then approve again.");
+	const notice = await within(dialog).findByText("The rules or local setup just changed. Check them on the Rules tab, then approve again.");
 	expect(notice).toHaveAttribute("role", "status");
 	expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
 	// The rules are read again for the developer to check.
@@ -509,7 +510,7 @@ test("an approval that was never queued says so and can be approved again", asyn
 
 	expect(within(dialog).getByText("Not in the queue — approve again to queue it")).toHaveAttribute("role", "status");
 	// Not a rules review.
-	expect(within(dialog).queryByText("The rules changed since this plan was approved. Check the Rules tab, then approve again.")).not.toBeInTheDocument();
+	expect(within(dialog).queryByText("The rules or local setup changed since this plan was approved. Check the Rules tab, then approve again.")).not.toBeInTheDocument();
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeEnabled();
 });
 

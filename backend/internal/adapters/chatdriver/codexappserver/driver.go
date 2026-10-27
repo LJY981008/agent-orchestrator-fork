@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -448,6 +449,8 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 	mcpServers := make(map[string]any, len(servers))
 	for _, server := range servers {
 		entry := map[string]any{}
+		// LADO fork: the rest of an adopted server's table; the fields below win.
+		maps.Copy(entry, server.CodexConfig)
 		if server.Name == "ao" {
 			entry["default_tools_approval_mode"] = "approve"
 		}

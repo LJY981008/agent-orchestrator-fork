@@ -239,6 +239,11 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
 		}
 	}
+	mcpServers, err := m.chatMCPServers(ctx, in.record, in.cfg.Harness, env)
+	if err != nil {
+		m.rollbackSeedSpawnWorkspace(ctx, in.record, in.workspace, in.workspaceProject, false, in.promptQueued)
+		return domain.SessionRecord{}, wrapSpawnStage(id, ErrSpawnPrepare, err)
+	}
 
 	var (
 		controllerCommitted bool
@@ -257,7 +262,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
 		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
-		MCPServers:              m.aoMCPServers(in.cfg.Harness, env),
+		MCPServers:              mcpServers,
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -268,6 +273,10 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 			}
 			if agent, ok := m.agents.Agent(in.cfg.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
+				// LADO fork: the controller runs on the home prepareWorkspace built.
+				if err := m.applyLadoSetupHome(launchCtx, agent, id, launchEnv); err != nil {
+					return nil, err
+				}
 			}
 			in.record = prepared
 			return launchEnv, nil
@@ -498,6 +507,10 @@ func (m *Manager) resumeChatController(
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)
 	}
+	mcpServers, err := m.chatMCPServers(ctx, rec, rec.Harness, env)
+	if err != nil {
+		return RestoreResult{}, fmt.Errorf("%s %s: %w", operation, rec.ID, err)
+	}
 	historyMode := ports.ChatHistoryImport
 	var providerHandoff *domain.ChatProviderHandoff
 	if requireNativeHistory {
@@ -534,7 +547,7 @@ func (m *Manager) resumeChatController(
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            systemPrompt,
 		AdditionalDirectories:   additionalDirectories,
-		MCPServers:              m.aoMCPServers(rec.Harness, env),
+		MCPServers:              mcpServers,
 		ExpectedControllerOwner: rec.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
 			prepared, launchEnv, prepareErr := m.prepareChatControllerEnv(
@@ -545,6 +558,11 @@ func (m *Manager) resumeChatController(
 			}
 			if agent, ok := m.agents.Agent(rec.Harness); ok {
 				m.augmentAgentRuntimeEnv(agent, launchEnv)
+				// LADO fork: a resumed controller gets its config home here,
+				// as no prepareWorkspace runs on this path.
+				if err := m.applyLadoSetupHome(launchCtx, agent, rec.ID, launchEnv); err != nil {
+					return nil, err
+				}
 			}
 			rec = prepared
 			return launchEnv, nil

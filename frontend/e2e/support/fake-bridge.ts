@@ -384,7 +384,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 				// and there is no presence confirmation outside Electron.
 				lado: {
 					desktop: { get: async () => null, set: async () => null },
-					presence: { approvePlan: async () => null, changeRule: async () => null, setLadoMode: async () => null },
+					presence: {
+						approvePlan: async () => null,
+						changeRule: async () => null,
+						setLadoMode: async () => null,
+						adoptSetup: async () => null,
+						restoreSetup: async () => null,
+						changeSetup: async () => null,
+					},
 				},
 			} satisfies AoBridge;
 			(window as unknown as { __aoFakeUpdates: { setStatus: (status: UpdateStatus) => void } }).__aoFakeUpdates = {
@@ -1255,7 +1262,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				// and there is no presence confirmation outside Electron.
 				lado: {
 					desktop: { get: async () => null, set: async () => null },
-					presence: { approvePlan: async () => null, changeRule: async () => null, setLadoMode: async () => null },
+					presence: {
+						approvePlan: async () => null,
+						changeRule: async () => null,
+						setLadoMode: async () => null,
+						adoptSetup: async () => null,
+						restoreSetup: async () => null,
+						changeSetup: async () => null,
+					},
 				},
 			} satisfies AoBridge;
 			(window as unknown as { ao: unknown }).ao = ao;

@@ -19,6 +19,7 @@ vi.mock("./NewTaskDialog", () => ({
 		open,
 		projectId,
 		hostId,
+		initialPrompt,
 		onProjectChange,
 		onCreated,
 		onOpenChange,
@@ -26,13 +27,14 @@ vi.mock("./NewTaskDialog", () => ({
 		open: boolean;
 		projectId?: string;
 		hostId?: string;
+		initialPrompt?: string;
 		onProjectChange: (projectId: string) => void;
 		onCreated: (id: string) => void;
 		onOpenChange: (open: boolean) => void;
 	}) => {
 		const [draft, setDraft] = useState("");
 		return open ? (
-			<div data-testid="new-task-dialog" data-project={projectId} data-host={hostId}>
+			<div data-testid="new-task-dialog" data-project={projectId} data-host={hostId} data-prompt={initialPrompt}>
 				<label>
 					task
 					<input aria-label="task" value={draft} onChange={(event) => setDraft(event.currentTarget.value)} />
@@ -94,6 +96,13 @@ describe("GlobalNewTaskDialog", () => {
 			to: "/projects/$projectId/sessions/$sessionId",
 			params: { projectId: "proj-7", sessionId: "sess-9" },
 		});
+	});
+
+	// LADO fork: a repository file's Edit starts the composer with the file named.
+	it("starts the composer with the text the request brings", async () => {
+		renderDialog();
+		act(() => useUiStore.getState().requestNewTask("proj-7", undefined, "Update CLAUDE.md"));
+		expect(await screen.findByTestId("new-task-dialog")).toHaveAttribute("data-prompt", "Update CLAUDE.md");
 	});
 
 	it("keeps the host when creating a task for a remote project", async () => {

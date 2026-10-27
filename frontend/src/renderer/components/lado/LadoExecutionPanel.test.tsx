@@ -40,6 +40,7 @@ function execution(fields: Partial<lado.LadoExecution> = {}): lado.LadoExecution
 				{ id: "lado-rule-9", name: "No force push", version: 2 },
 			],
 			prompt: "Never force push.",
+			setup: [],
 		},
 		base: { planSha: "c".repeat(40), dispatchSha: "d".repeat(40), commitsAhead: 2 },
 		startedAt: new Date(Date.now() - 3_600_000).toISOString(),
@@ -97,6 +98,37 @@ test("shows the snapshot the run works under", async () => {
 	fireEvent.click(toggle);
 	expect(toggle).toHaveAttribute("aria-expanded", "true");
 	expect(within(panel).getByTestId("lado-run-worker-text")).toHaveTextContent("Never force push.");
+});
+
+test("lists the local setup items the run got, folded", async () => {
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(
+		execution({
+			snapshot: {
+				...execution().snapshot,
+				setup: [
+					{ itemId: "item-claude-md", tool: "claude-code", kind: "instructions", name: "CLAUDE.md", version: 2 },
+					{ itemId: "item-review", tool: "claude-code", kind: "skill", name: "review", version: 1 },
+				],
+			},
+		}),
+	);
+	renderPanel();
+
+	const panel = await screen.findByTestId("lado-execution-panel");
+	const toggle = within(fact(panel, "Local setup")).getByRole("button", { name: "2 items" });
+	expect(toggle).toHaveAttribute("aria-expanded", "false");
+	expect(within(panel).queryByText("CLAUDE.md")).not.toBeInTheDocument();
+	fireEvent.click(toggle);
+	expect(toggle).toHaveAttribute("aria-expanded", "true");
+	const items = within(panel).getByTestId("lado-run-setup");
+	expect([...items.querySelectorAll("li")].map((item) => item.textContent)).toEqual(["CLAUDE.md · Instructions", "review · Skill"]);
+	cleanup();
+
+	// A run that got no local setup says nothing about it.
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution());
+	renderPanel();
+	const plain = await screen.findByTestId("lado-execution-panel");
+	expect(within(plain).queryByText("Local setup", { selector: "dt" })).not.toBeInTheDocument();
 });
 
 test("renders nothing for a session LADO did not start", async () => {

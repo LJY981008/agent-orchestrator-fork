@@ -1,4 +1,4 @@
-import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, Gauge, Globe2, Keyboard, RefreshCw, ScrollText, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
+import { Activity, BadgeCheck, Bot, CircleHelp, Coffee, CreditCard, FolderCog, Gauge, Globe2, Keyboard, RefreshCw, ScrollText, Server, Settings2, Smartphone, type LucideIcon } from "lucide-react";
 import { lazy, type ReactNode } from "react";
 import type { TFunction } from "i18next";
 import type { GlobalSettingsSection, HarnessDiagnosticsRequest } from "../../stores/ui-store";
@@ -11,6 +11,7 @@ import { ConnectMobileContent } from "./ConnectMobileContent";
 import { GeneralSettingsSection } from "./GeneralSettingsSection";
 import { HarnessSettingsSection } from "./HarnessSettingsSection";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
+import { LocalSetupSection } from "./LocalSetupSection";
 import { MobileDevicesSection } from "./MobileDevicesSection";
 import { ReportProblemContent } from "./ReportProblemContent";
 import { RemoteHostsSettings } from "./RemoteHostsSettings";
@@ -90,6 +91,13 @@ const globalSettingsCatalog: SettingsCatalogItem[] = [
 		icon: ScrollText,
 		label: (t) => t("lado.rules.title"),
 		render: (_t, titleHidden) => <RulesSection titleHidden={titleHidden} />,
+	},
+	{
+		// LADO fork: the developer's Claude Code and Codex setup, adopted and restored (docs/LJY-PRD/HARNESS.md §9).
+		id: "localSetup",
+		icon: FolderCog,
+		label: (t) => t("lado.setup.section.title"),
+		render: (_t, titleHidden) => <LocalSetupSection titleHidden={titleHidden} />,
 	},
 	{
 		// LADO fork: how many approved tasks run at once and for how long (docs/LJY-PRD/TDD.md §5.3).

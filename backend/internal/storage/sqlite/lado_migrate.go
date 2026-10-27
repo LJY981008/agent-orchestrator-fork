@@ -96,13 +96,26 @@ END`,
 	// Rules apply in every LADO project, so a rule, a new version or a Global
 	// binding publishes a lado_rules change in each project with LADO mode on.
 	// Versions never change, and their deletes follow the rule's.
-	ladoRulesCDCTrigger("lado_cdc_rules_insert", "AFTER INSERT ON lado_rules"),
-	ladoRulesCDCTrigger("lado_cdc_rules_update", "AFTER UPDATE ON lado_rules"),
-	ladoRulesCDCTrigger("lado_cdc_rules_delete", "AFTER DELETE ON lado_rules"),
-	ladoRulesCDCTrigger("lado_cdc_rule_versions_insert", "AFTER INSERT ON lado_rule_versions"),
-	ladoBindingCDCTrigger("lado_cdc_rule_bindings_insert", "AFTER INSERT ON lado_rule_bindings", "NEW"),
-	ladoBindingCDCTrigger("lado_cdc_rule_bindings_update", "AFTER UPDATE ON lado_rule_bindings", "NEW"),
-	ladoBindingCDCTrigger("lado_cdc_rule_bindings_delete", "AFTER DELETE ON lado_rule_bindings", "OLD"),
+	ladoModeCDCTrigger("lado_rules", "lado_cdc_rules_insert", "AFTER INSERT ON lado_rules"),
+	ladoModeCDCTrigger("lado_rules", "lado_cdc_rules_update", "AFTER UPDATE ON lado_rules"),
+	ladoModeCDCTrigger("lado_rules", "lado_cdc_rules_delete", "AFTER DELETE ON lado_rules"),
+	ladoModeCDCTrigger("lado_rules", "lado_cdc_rule_versions_insert", "AFTER INSERT ON lado_rule_versions"),
+	ladoBindingCDCTrigger("lado_rules", "lado_cdc_rule_bindings_insert", "AFTER INSERT ON lado_rule_bindings", "NEW"),
+	ladoBindingCDCTrigger("lado_rules", "lado_cdc_rule_bindings_update", "AFTER UPDATE ON lado_rule_bindings", "NEW"),
+	ladoBindingCDCTrigger("lado_rules", "lado_cdc_rule_bindings_delete", "AFTER DELETE ON lado_rule_bindings", "OLD"),
+	// Setup items apply in every LADO project as rules do, so an item, a new
+	// version, a binding and an accepted conflict publish a lado_setup change
+	// the same way; an acceptance has the scopes of a binding. Items change
+	// only when they are deleted or restored, acceptances when they are
+	// revoked, and adoptions publish through the items they record.
+	ladoModeCDCTrigger("lado_setup", "lado_cdc_setup_items_insert", "AFTER INSERT ON lado_setup_items"),
+	ladoModeCDCTrigger("lado_setup", "lado_cdc_setup_items_update", "AFTER UPDATE ON lado_setup_items"),
+	ladoModeCDCTrigger("lado_setup", "lado_cdc_setup_item_versions_insert", "AFTER INSERT ON lado_setup_item_versions"),
+	ladoBindingCDCTrigger("lado_setup", "lado_cdc_setup_bindings_insert", "AFTER INSERT ON lado_setup_bindings", "NEW"),
+	ladoBindingCDCTrigger("lado_setup", "lado_cdc_setup_bindings_update", "AFTER UPDATE ON lado_setup_bindings", "NEW"),
+	ladoBindingCDCTrigger("lado_setup", "lado_cdc_setup_bindings_delete", "AFTER DELETE ON lado_setup_bindings", "OLD"),
+	ladoBindingCDCTrigger("lado_setup", "lado_cdc_conflict_acceptances_insert", "AFTER INSERT ON lado_conflict_acceptances", "NEW"),
+	ladoBindingCDCTrigger("lado_setup", "lado_cdc_conflict_acceptances_update", "AFTER UPDATE ON lado_conflict_acceptances", "NEW"),
 }
 
 // ladoPlanCDCTrigger publishes a change of the task that NEW.task_id names,
@@ -144,35 +157,37 @@ BEGIN
 END`
 }
 
-// ladoRulesChangeInsert writes one lado_rules change per project the FROM and
-// WHERE clauses that follow it select.
-const ladoRulesChangeInsert = `INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+// ladoProjectChangeInsert writes one change of kind, lado_rules or
+// lado_setup, per project the FROM and WHERE clauses that follow it select.
+func ladoProjectChangeInsert(kind string) string {
+	return `INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
     SELECT projects.id, NULL, 'session_updated',
-        json_object('kind', 'lado_rules', 'projectId', projects.id),
+        json_object('kind', '` + kind + `', 'projectId', projects.id),
         datetime('now')`
+}
 
-// ladoRulesCDCTrigger publishes a rule change in every registered project
+// ladoModeCDCTrigger publishes a change of kind in every registered project
 // with LADO mode on.
-func ladoRulesCDCTrigger(name, event string) string {
+func ladoModeCDCTrigger(kind, name, event string) string {
 	return `CREATE TRIGGER ` + name + `
 ` + event + `
 BEGIN
-    ` + ladoRulesChangeInsert + `
+    ` + ladoProjectChangeInsert(kind) + `
     FROM projects
     JOIN lado_project_settings ON lado_project_settings.project_id = projects.id
     WHERE lado_project_settings.lado_mode = 1;
 END`
 }
 
-// ladoBindingCDCTrigger publishes the change of the binding that row names,
-// NEW or OLD for a delete: a Global binding in every registered project with
-// LADO mode on, a project binding in that project and a task binding in the
+// ladoBindingCDCTrigger publishes a change of kind for the scoped row that row
+// names, NEW or OLD for a delete: a Global row in every registered project
+// with LADO mode on, a project row in that project and a task row in the
 // task's project.
-func ladoBindingCDCTrigger(name, event, row string) string {
+func ladoBindingCDCTrigger(kind, name, event, row string) string {
 	return `CREATE TRIGGER ` + name + `
 ` + event + `
 BEGIN
-    ` + ladoRulesChangeInsert + `
+    ` + ladoProjectChangeInsert(kind) + `
     FROM projects
     WHERE (` + row + `.scope = 'global' AND projects.id IN (
             SELECT project_id FROM lado_project_settings WHERE lado_mode = 1))

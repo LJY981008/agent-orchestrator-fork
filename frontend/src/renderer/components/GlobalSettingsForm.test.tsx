@@ -20,9 +20,12 @@ vi.mock("./settings/HarnessSettingsSection", () => ({
 	},
 }));
 
-// LADO fork: the real page reads the daemon's rules; here it only marks its place.
+// LADO fork: the real pages read the daemon; here they only mark their place.
 vi.mock("./settings/RulesSection", () => ({
 	RulesSection: () => <div data-testid="rules-section" />,
+}));
+vi.mock("./settings/LocalSetupSection", () => ({
+	LocalSetupSection: () => <div data-testid="local-setup-section" />,
 }));
 vi.mock("./settings/RunsSection", () => ({
 	RunsSection: () => <div data-testid="runs-section" />,

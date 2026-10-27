@@ -1307,10 +1307,10 @@ func (m *Manager) preserveCurrentNativeSession(ctx context.Context, store ports.
 	}
 	nativeID := strings.TrimSpace(rec.Metadata.AgentSessionID)
 	ref := ports.NativeSessionRef{NativeSessionID: nativeID, ConfigDir: configDir}
-	transcript := safeNativeTranscriptPath(ctx, rec.Metadata.NativeTranscriptPath, configDir)
+	transcript := m.ladoSafeNativeTranscriptPath(ctx, rec.Metadata.NativeTranscriptPath, configDir)
 	if locator, ok := agent.(ports.AgentTranscriptLocator); ok && nativeID != "" {
 		if path, found, locateErr := locator.LocateTranscript(ctx, ref); locateErr == nil && found {
-			transcript = safeNativeTranscriptPath(ctx, path, configDir)
+			transcript = m.ladoSafeNativeTranscriptPath(ctx, path, configDir)
 		}
 	}
 	now := m.clock()
@@ -1366,7 +1366,7 @@ func (m *Manager) prepareTargetActivation(ctx context.Context, store ports.Agent
 			return preparedTargetActivation{}, ErrTargetAgentUnauthorized
 		}
 	}
-	systemPrompt, err := m.buildSystemPrompt(ctx, rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
+	systemPrompt, err := m.buildSystemPrompt(withLadoPromptHarness(ctx, harness), rec.Kind, rec.ProjectID, rec.ID, rec.RequestedOutput, domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat)
 	if err != nil {
 		return preparedTargetActivation{}, fmt.Errorf("system prompt: %w", err)
 	}
@@ -1732,7 +1732,7 @@ func (m *Manager) findTargetResumeCandidate(ctx context.Context, store ports.Age
 		}
 		if locator, ok := agent.(ports.AgentTranscriptLocator); ok {
 			if path, found, locateErr := locator.LocateTranscript(ctx, ref); locateErr == nil && found {
-				candidate.TranscriptPath = safeNativeTranscriptPath(ctx, path, configDir)
+				candidate.TranscriptPath = m.ladoSafeNativeTranscriptPath(ctx, path, configDir)
 			}
 		}
 		return candidate, true, nil
@@ -1803,7 +1803,7 @@ func (m *Manager) captureSourceTranscriptFact(ctx context.Context, agent ports.A
 	if err != nil || !found {
 		return nil, domain.AgentSwitchSourceTranscriptUnavailable
 	}
-	path := safeNativeTranscriptPath(ctx, located, source.ConfigDir)
+	path := m.ladoSafeNativeTranscriptPath(ctx, located, source.ConfigDir)
 	if path == "" {
 		return nil, domain.AgentSwitchSourceTranscriptUnavailable
 	}
@@ -3461,7 +3461,7 @@ func (m *Manager) targetNativeIdentityRecoverable(ctx context.Context, store por
 		return false, nil
 	}
 	native.NativeSessionID = observedID
-	if transcript := safeNativeTranscriptPath(ctx, rec.Metadata.NativeTranscriptPath, native.ConfigDir); transcript != "" {
+	if transcript := m.ladoSafeNativeTranscriptPath(ctx, rec.Metadata.NativeTranscriptPath, native.ConfigDir); transcript != "" {
 		native.TranscriptPath = transcript
 	}
 	updated, err := store.UpdateAgentNativeSession(ctx, native, sw.TargetGenerationID)

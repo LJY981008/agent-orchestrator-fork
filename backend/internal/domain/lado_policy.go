@@ -9,8 +9,9 @@ import (
 type LadoPolicySnapshotID string
 
 // ErrLadoRulesChanged reports that a rule version an approval's snapshot
-// used was deleted after the rules were resolved for the approval.
-var ErrLadoRulesChanged = errors.New("a rule version the snapshot used no longer exists")
+// used was deleted, or a setup item it pinned ended, after the rules were
+// resolved for the approval.
+var ErrLadoRulesChanged = errors.New("a rule version or setup item the snapshot used no longer exists")
 
 // LadoProblemSeverity says what a policy problem does to a task.
 type LadoProblemSeverity string
@@ -53,9 +54,13 @@ type LadoPolicySnapshot struct {
 	Content    []byte
 	// Blocking reports whether the snapshot holds a blocking problem. A task
 	// approved with one is Blocked.
-	Blocking  bool
-	Rules     []LadoPolicySnapshotRule
-	CreatedAt time.Time
+	Blocking bool
+	Rules    []LadoPolicySnapshotRule
+	// SetupVersionIDs are the setup item versions the snapshot used. The
+	// approval pins them while their items are live, and a pinned version
+	// stays readable after its item is deleted or restored.
+	SetupVersionIDs []LadoSetupItemVersionID
+	CreatedAt       time.Time
 }
 
 // LadoPolicySnapshotRef is what a task's state needs to know about the rule

@@ -15,18 +15,21 @@ function issueLabel(issueRef: string): string {
 
 /**
  * Open while impact is set. Confirming applies the change; cancelling, closing
- * or Escape drops it. error is a failed apply, shown in place.
+ * or Escape drops it. error is a failed apply, shown in place. title names
+ * what changes when it is not the rules, such as the local setup.
  */
 export function LadoRuleImpactDialog({
 	impact,
 	busy,
 	error,
+	title,
 	onConfirm,
 	onCancel,
 }: {
 	impact: LadoRuleImpact | null;
 	busy: boolean;
 	error?: unknown;
+	title?: string;
 	onConfirm: () => void;
 	onCancel: () => void;
 }) {
@@ -38,7 +41,7 @@ export function LadoRuleImpactDialog({
 	return (
 		<ConfirmDialog
 			open={impact !== null}
-			title={t("lado.rules.impact.title")}
+			title={title ?? t("lado.rules.impact.title")}
 			description={t("lado.rules.impact.description")}
 			confirmLabel={t("lado.rules.impact.change")}
 			busy={busy}

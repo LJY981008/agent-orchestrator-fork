@@ -16,6 +16,7 @@ import {
 	type LadoExecution,
 	type LadoTask,
 } from "./lado";
+import { ladoSetupQueryRoot } from "./lado-setup";
 
 type LadoEventPayload =
 	| {
@@ -58,6 +59,9 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 	// Whether rules changed, and the LADO projects the change reaches.
 	let rulesChanged = false;
 	const ruleProjects = new Set<string>();
+	// Whether local setup changed, and the LADO projects the change reaches.
+	let setupChanged = false;
+	const setupProjects = new Set<string>();
 	// Tasks whose effective rules a task change can change: its agent, its approval.
 	const tasks = new Map<string, { projectId: string; taskId: string }>();
 	// Runs that started or timed out, or whose session ended or PR changed;
@@ -78,6 +82,13 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 			if (payload?.kind === "lado_rules") {
 				rulesChanged = true;
 				if (typeof payload.projectId === "string" && payload.projectId) ruleProjects.add(payload.projectId);
+				return true;
+			}
+			// Local setup applies like rules: one event for each LADO project a
+			// managed item, version, binding or acceptance reaches.
+			if (payload?.kind === "lado_setup") {
+				setupChanged = true;
+				if (typeof payload.projectId === "string" && payload.projectId) setupProjects.add(payload.projectId);
 				return true;
 			}
 			// A run started, or LADO stopped it at its deadline.
@@ -120,6 +131,19 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 				invalidate(ladoTasksQueryKey(projectId));
 			}
 			ruleProjects.clear();
+			// A setup change can send approved tasks back to review as a rule
+			// change does: refresh the inventory, the items, conflicts and
+			// adoptions of every scope, and what applies in each project reached.
+			if (setupChanged) {
+				invalidate(ladoSetupQueryRoot);
+				if (setupProjects.size > 0) invalidate(ladoTaskViewQueryRoot);
+				setupChanged = false;
+			}
+			for (const projectId of setupProjects) {
+				invalidate(ladoEffectiveProjectQueryKey(projectId));
+				invalidate(ladoTasksQueryKey(projectId));
+			}
+			setupProjects.clear();
 			// The task's open Rules tab.
 			for (const { projectId, taskId } of tasks.values()) invalidate(ladoEffectiveQueryKey(projectId, taskId));
 			tasks.clear();

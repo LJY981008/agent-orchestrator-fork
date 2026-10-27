@@ -38,6 +38,10 @@ func Dir(dataDir string) string {
 	return filepath.Join(dataDir, "skills", SkillName)
 }
 
+// Files returns the embedded skill's files, rooted at the skill folder. LADO
+// fork: the AO system layer hash reads them (service/ladosetup).
+func Files() (fs.FS, error) { return fs.Sub(files, SkillName) }
+
 // Install writes the embedded using-ao skill into <dataDir>/skills/using-ao,
 // replacing any existing copy. It runs once at daemon boot, before any session
 // spawns, so a plain clobber-and-write needs no locking: there are no

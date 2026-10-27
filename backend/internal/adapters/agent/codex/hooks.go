@@ -82,6 +82,16 @@ var codexManagedHooks = []codexHookSpec{
 	{Event: "Stop", Command: codexHookCommandPrefix + "stop"},
 }
 
+// ManagedHookEvents returns the events of codexManagedHooks. LADO fork: the AO
+// system layer hash reads them (service/ladosetup).
+func ManagedHookEvents() []string {
+	events := make([]string, 0, len(codexManagedHooks))
+	for _, h := range codexManagedHooks {
+		events = append(events, h.Event)
+	}
+	return events
+}
+
 // appendSessionHookFlags adds AO's activity hooks to the argv as `-c`
 // session-flag config, one flag per managed event. Codex executes command
 // hooks through a login shell, which may replace PATH, so every hook invokes

@@ -2,7 +2,8 @@
 // (docs/LJY-PRD/HARNESS.md §12, PRD HAR-005). It shows what the approval
 // fixed, never the rules now: the agent and the mode it started in, the
 // permission ceiling, the rules that were on and the text the worker got, the
-// plan revision, how far the base moved, and when LADO stops the run.
+// local setup items its session got, the plan revision, how far the base
+// moved, and when LADO stops the run.
 import { agentLabel, InspectorSection } from "@aoagents/product-ui";
 import { ChevronDown } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -10,7 +11,7 @@ import { useTranslation } from "react-i18next";
 import { useLadoExecution } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
 import { LadoApiError, type LadoExecution } from "../../lib/lado";
-import { ladoErrorText, ladoReasonText } from "../../lib/lado-errors";
+import { ladoErrorText, ladoReasonText, ladoSetupKindLabel } from "../../lib/lado-errors";
 import { ladoRuleName } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
 import type { WorkspaceSession } from "../../types/workspace";
@@ -78,6 +79,11 @@ function ExecutionSnapshot({ execution }: { execution: LadoExecution }) {
 						{/* The hash the run's board card names. */}
 						<span className="block font-mono text-xs text-muted-foreground">{snapshot.sha256.slice(0, 7)}</span>
 					</Fact>
+					{snapshot.setup.length > 0 ? (
+						<Fact label={t("lado.run.setup")}>
+							<SetupItems items={snapshot.setup} />
+						</Fact>
+					) : null}
 					{ahead > 0 ? <Fact label={t("lado.run.base")}>{t("lado.run.baseAhead", { count: ahead })}</Fact> : null}
 					{deadline ? <Fact label={t("lado.run.deadline")}>{deadline}</Fact> : null}
 				</dl>
@@ -93,6 +99,36 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 			<dt className="text-muted-foreground">{label}</dt>
 			<dd className="min-w-0 break-words text-foreground">{children}</dd>
 		</>
+	);
+}
+
+/** The local setup items the worker's session got, by name: collapsed until asked for. */
+function SetupItems({ items }: { items: LadoExecution["snapshot"]["setup"] }) {
+	const { t } = useTranslation();
+	const [open, setOpen] = useState(false);
+	return (
+		<div className="flex flex-col gap-1">
+			<button
+				type="button"
+				aria-expanded={open}
+				onClick={() => setOpen((current) => !current)}
+				className="flex w-fit items-center gap-1.5 rounded-sm text-foreground outline-none hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+			>
+				{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
+				<span className="text-sm">{t("lado.setup.adoptions.items", { count: items.length })}</span>
+				<ChevronDown aria-hidden="true" className={cn("size-icon-2xs text-muted-foreground transition-transform duration-fast", open && "rotate-180")} />
+			</button>
+			{open ? (
+				<ul className="flex flex-col gap-0.5" data-testid="lado-run-setup">
+					{items.map((item) => (
+						<li key={item.itemId} className="break-words text-sm">
+							{item.name}
+							<span className="text-xs text-muted-foreground"> · {ladoSetupKindLabel(t, item.kind)}</span>
+						</li>
+					))}
+				</ul>
+			) : null}
+		</div>
 	);
 }
 

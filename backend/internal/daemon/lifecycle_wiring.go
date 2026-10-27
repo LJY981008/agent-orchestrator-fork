@@ -232,10 +232,13 @@ type sessionLifecycle interface {
 	// session's durable metadata before the next prompt routes. A later TUI
 	// rebuild reads it back so ChatUI model changes survive the handoff.
 	PersistChatModel(ctx context.Context, id domain.SessionID, model string) error
-	// LADO fork: installs LADO's worker gate and orchestrator prompt section,
-	// and resolves a worker's base for LADO's dispatcher (lado_wiring.go).
+	// LADO fork: installs LADO's worker gate, prompt section and local setup
+	// hooks, and resolves a worker's base for LADO's dispatcher
+	// (lado_wiring.go, lado_setup_wiring.go).
 	SetWorkGate(gate ports.WorkGate)
 	SetLadoPrompt(section sessionmanager.LadoPromptSection)
+	SetLadoSetupHome(home ports.LadoSetupHome)
+	SetLadoChatServers(servers sessionmanager.LadoChatServers)
 	ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error)
 }
 

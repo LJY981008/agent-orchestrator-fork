@@ -53,6 +53,20 @@ var claudeManagedHooks = []hooksjson.HookSpec{
 	{Event: "SessionEnd", Command: claudeHookCommandPrefix + "session-end"},
 }
 
+// ManagedHookEvents returns the events of claudeManagedHooks and
+// HookCommandPrefix their command prefix. LADO fork: the setup conflict checks
+// and the AO system layer hash read them (service/ladosetup).
+func ManagedHookEvents() []string {
+	events := make([]string, 0, len(claudeManagedHooks))
+	for _, h := range claudeManagedHooks {
+		events = append(events, h.Event)
+	}
+	return events
+}
+
+// HookCommandPrefix returns claudeHookCommandPrefix (see ManagedHookEvents).
+func HookCommandPrefix() string { return claudeHookCommandPrefix }
+
 // claudeHooks manages AO's hooks in the workspace-local
 // .claude/settings.local.json file.
 var claudeHooks = hooksjson.Manager{

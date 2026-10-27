@@ -28,6 +28,7 @@ type LadoController struct {
 	Tasks       LadoTaskService
 	Rules       LadoRuleService
 	Queue       LadoQueueService
+	Setup       LadoSetupService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
@@ -67,6 +68,7 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/executions/{sessionId}", c.getExecution)
 	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
 	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
+	c.registerSetup(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {

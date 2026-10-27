@@ -138,14 +138,14 @@ This project runs in LADO mode. Its work items are issues, and a worker starts o
 - When the developer asks for a changed plan, rewrite the same file.`
 
 // PromptSource gives an orchestrator its LADO instructions in a LADO project,
-// and a worker LADO dispatched the rules text of its approval. It needs only
-// stored facts, so the daemon installs it before any session starts or
-// restores.
+// a worker LADO dispatched the rules text of its approval, and a Codex
+// session the instructions LADO manages for Codex. It needs only stored
+// facts, so the daemon installs it before any session starts or restores.
 type PromptSource struct {
 	Settings interface {
 		LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 	}
-	// Sessions reads a worker's client request id, and Policies the rule
+	// Sessions reads a session's client request id, and Policies the rule
 	// snapshot of the queue entry it names.
 	Sessions interface {
 		GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
@@ -153,11 +153,24 @@ type PromptSource struct {
 	Policies interface {
 		LadoEntryPolicyByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoEntryPolicy, bool, error)
 	}
+	// Setup reads the Codex instructions LADO manages (service/ladosetup);
+	// nil adds none.
+	Setup interface {
+		CodexInstructions(ctx context.Context, sessionID domain.SessionID, clientRequestID string, projectID domain.ProjectID) (string, error)
+	}
 }
 
+// codexInstructionsHeading heads the instructions LADO manages for Codex in a
+// Codex session's standing instructions: the AGENTS.md text adoption moved
+// out of CODEX_HOME, where Codex no longer reads it.
+const codexInstructionsHeading = "## User instructions (managed by LADO)"
+
 // OrchestratorSection returns the LADO section for an orchestrator of the
-// project, or "" when the project is not in LADO mode.
+// project, or "" when the project is not in LADO mode or there is none.
 func (p PromptSource) OrchestratorSection(ctx context.Context, projectID domain.ProjectID) (string, error) {
+	if projectID == "" {
+		return "", nil
+	}
 	settings, err := p.Settings.LadoProjectSettings(ctx, projectID)
 	if err != nil {
 		return "", fmt.Errorf("read LADO project settings: %w", err)
@@ -191,15 +204,57 @@ func (p PromptSource) WorkerSection(ctx context.Context, sessionID domain.Sessio
 	return policy.Prompt, nil
 }
 
+// CodexSection returns the instructions LADO manages for a session on
+// harness, under codexInstructionsHeading: for a Codex session in any project,
+// LADO mode or not, the versions its execution pinned or else the current
+// ones. harness "" is the one the session's row names. It is "" for any other
+// harness and when there is no text.
+func (p PromptSource) CodexSection(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
+	if p.Setup == nil || (harness != "" && harness != domain.HarnessCodex) {
+		return "", nil
+	}
+	rec, _, err := p.Sessions.GetSession(ctx, sessionID)
+	if err != nil {
+		return "", fmt.Errorf("read session %s: %w", sessionID, err)
+	}
+	if harness == "" && rec.Harness != domain.HarnessCodex {
+		return "", nil
+	}
+	text, err := p.Setup.CodexInstructions(ctx, sessionID, rec.ClientRequestID, projectID)
+	if err != nil {
+		return "", err
+	}
+	if text = strings.TrimSpace(text); text == "" {
+		return "", nil
+	}
+	return codexInstructionsHeading + "\n\n" + text, nil
+}
+
 // Section is the session manager's LADO section of a session's standing
-// instructions (sessionmanager.LadoPromptSection): OrchestratorSection for an
-// orchestrator, WorkerSection for a worker.
-func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
+// instructions (sessionmanager.LadoPromptSection): CodexSection, then
+// OrchestratorSection for an orchestrator or WorkerSection for a worker.
+func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
+	var section string
+	var err error
 	switch kind {
 	case domain.KindOrchestrator:
-		return p.OrchestratorSection(ctx, projectID)
+		section, err = p.OrchestratorSection(ctx, projectID)
 	case domain.KindWorker:
-		return p.WorkerSection(ctx, sessionID)
+		section, err = p.WorkerSection(ctx, sessionID)
+	default:
+		return "", nil
 	}
-	return "", nil
+	if err != nil {
+		return "", err
+	}
+	codex, err := p.CodexSection(ctx, projectID, sessionID, harness)
+	switch {
+	case err != nil:
+		return "", err
+	case codex == "":
+		return section, nil
+	case section == "":
+		return codex, nil
+	}
+	return codex + "\n\n" + section, nil
 }

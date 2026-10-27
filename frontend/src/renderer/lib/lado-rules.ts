@@ -28,6 +28,7 @@ import { ladoPolicyProblemText } from "./lado-errors";
 export const LADO_RULE_PLAN_APPROVAL = "plan.approval.required";
 export const LADO_RULE_PERMISSION_CEILING = "agent.permission.ceiling";
 export const LADO_RULE_KOREAN_COMMITS = "git.commit.message.korean";
+export const LADO_RULE_SETUP_PRESENCE = "setup.change.requires_presence";
 
 type BuiltinKeys = { seedName: string; name: MessageKey; description: MessageKey };
 
@@ -48,6 +49,11 @@ const builtinRules: Partial<Record<string, BuiltinKeys>> = {
 		seedName: "Commit messages in Korean",
 		name: "lado.rules.builtin.koreanCommits.name",
 		description: "lado.rules.builtin.koreanCommits.description",
+	},
+	[LADO_RULE_SETUP_PRESENCE]: {
+		seedName: "Local setup changes need the desktop app's confirmation",
+		name: "lado.rules.builtin.setupPresence.name",
+		description: "lado.rules.builtin.setupPresence.description",
 	},
 };
 

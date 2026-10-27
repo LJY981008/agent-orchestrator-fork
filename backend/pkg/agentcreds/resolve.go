@@ -232,7 +232,7 @@ func loadOAuth(ctx context.Context, opts ResolveOptions) (stored storedOAuth, so
 // readCredentialsFile reads ~/.claude/.credentials.json.
 func readCredentialsFile(ctx context.Context, opts ResolveOptions) (stored storedOAuth, source string, ok bool) {
 	_ = ctx
-	dir, err := claudeConfigDir(opts)
+	dir, err := claudeCredentialsDir(opts)
 	if err != nil {
 		return storedOAuth{}, "", false
 	}

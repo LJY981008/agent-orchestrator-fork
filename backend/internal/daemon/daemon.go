@@ -683,8 +683,10 @@ func Run() error {
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
-	ladoConnections, ladoTasks, ladoRules, ladoQueue := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader}, log)
+	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
+		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}}, log)
 	ladoTasksDone := ladoTasks.Start(ctx)
+	ladoSetupDone := startLadoSetup(ctx, ladoSetup, log)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
 		return errors.New("wire report delivery: session manager lacks semantic send support")
@@ -1024,6 +1026,7 @@ func Run() error {
 		LadoTasks:          ladoTasks,
 		LadoRules:          ladoRules,
 		LadoQueue:          ladoQueue,
+		LadoSetup:          ladoSetup,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1223,6 +1226,7 @@ func Run() error {
 	<-previewDone
 	<-ladoTasksDone // LADO fork
 	<-ladoQueueDone // LADO fork
+	<-ladoSetupDone // LADO fork
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight
 	// turns; the replacement daemon reconnects to the same initialized stream and
@@ -1350,12 +1354,7 @@ func stabilizeWorkingDirectory(dataDir string) error {
 // account is a config folder under the state dir; "This computer" is the CLI's
 // own folder, which AO never changes the login of.
 func newAgentAccounts(cfg config.Config, store *sqlite.Store, codexHome string, codexAccounts ports.CodexAccountClientFactory, log *slog.Logger) *agentaccounts.Service {
-	claudeHome, claudeConfig := strings.TrimSpace(os.Getenv("CLAUDE_CONFIG_DIR")), ""
-	if claudeHome != "" {
-		claudeConfig = filepath.Join(claudeHome, ".claude.json")
-	} else if home, err := os.UserHomeDir(); err == nil {
-		claudeHome, claudeConfig = filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")
-	}
+	claudeHome, claudeConfig, _ := deviceClaudeFolder()
 	providers := []ports.AgentAccountProviderCLI{
 		&agentaccount.Claude{Binary: claudecodeagent.New().ResolveBinary, DeviceHome: claudeHome, DeviceConfig: claudeConfig},
 		&agentaccount.Codex{Binary: codexagent.New().ResolveBinary, Accounts: codexAccounts, DeviceHome: codexHome},

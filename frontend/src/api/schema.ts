@@ -1498,6 +1498,213 @@ export interface paths {
         patch: operations["updateLadoRule"];
         trace?: never;
     };
+    "/api/v1/lado/setup/adoptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview an adoption of local setup with dryRun, or adopt the previewed plan with a human-presence proof */
+        post: operations["adoptLadoSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/adoptions/{adoptionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an adoption with its items, its backup and its restore's report */
+        get: operations["getLadoSetupAdoption"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/adoptions/{adoptionId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Put back what an adoption removed; needs a human-presence proof from the AO desktop app */
+        post: operations["restoreLadoSetupAdoption"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn a managed setup item on or off at Global, for a project or for a task; any binding of an item that can run code or widen access needs a human-presence proof */
+        put: operations["setLadoSetupBinding"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the setup conflicts and their acceptances at Global, for a project or for a task */
+        get: operations["listLadoSetupConflicts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/conflicts/acceptances": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Accept a setup conflict warning for an item's current content in a scope, or show it with dryRun */
+        post: operations["acceptLadoSetupConflict"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/conflicts/acceptances/{acceptanceId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Revoke a setup conflict acceptance, or show it with dryRun */
+        delete: operations["revokeLadoSetupConflictAcceptance"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the local Claude Code and Codex setup, the managed items, drift and adoptions, from the last scan */
+        get: operations["getLadoSetupInventory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the managed setup items of both tools as they resolve at Global, for a project or for a task */
+        get: operations["listLadoSetupItems"];
+        put?: never;
+        /** Make a managed setup item, or show it with dryRun; an item that can run code or widen access needs a human-presence proof, and an OS LADO has not verified refuses */
+        post: operations["createLadoSetupItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/items/{itemId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a managed setup item with the content of every version */
+        get: operations["getLadoSetupItem"];
+        put?: never;
+        post?: never;
+        /** Delete a managed setup item, or show what it reaches with dryRun; its versions stay readable, and an item that can run code or widen access needs a human-presence proof */
+        delete: operations["deleteLadoSetupItem"];
+        options?: never;
+        head?: never;
+        /** Edit a text item, or show the edit with dryRun; content that can run code or widen access needs a human-presence proof */
+        patch: operations["updateLadoSetupItem"];
+        trace?: never;
+    };
+    "/api/v1/lado/setup/items/{itemId}/drift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Keep a managed copy's drift as a new version or revert the copy; keeping code or wider access needs a human-presence proof */
+        post: operations["resolveLadoSetupDrift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/setup/scan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scan the local setup again and list it */
+        post: operations["scanLadoSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/tasks": {
         parameters: {
             query?: never;
@@ -4469,6 +4676,19 @@ export interface components {
             reporting_owner?: "http" | "agent_switch_saga";
             requestId?: string;
         };
+        AcceptLadoSetupConflictRequest: {
+            /** @description A warning's code; blocking and info results cannot be accepted. */
+            code: string;
+            /** @description The result's detail. */
+            detail?: string;
+            /** @description Show the change without making it. */
+            dryRun?: boolean;
+            itemId: string;
+            /** @enum {string} */
+            scope: "global" | "project" | "task";
+            /** @description The project or task id; empty at global. */
+            scopeId?: string;
+        };
         AcknowledgeSessionInterfaceTransitionNoticeResponse: {
             ok: boolean;
             sessionId: string;
@@ -4484,6 +4704,13 @@ export interface components {
             name?: null | string;
             path: string;
             projectId?: null | string;
+        };
+        AdoptLadoSetupRequest: {
+            /** @description Preview the adoption without making it; needs no presence proof. */
+            dryRun?: boolean;
+            entries: components["schemas"]["LadoSetupAdoptEntryRequest"][];
+            /** @description The preview's planSha256; an adoption refuses another one. */
+            planSha256?: string;
         };
         AgentAccountActivity: {
             currentStreakDays?: null | number;
@@ -5793,6 +6020,17 @@ export interface components {
             /** @description The project or task id; empty at global. */
             scopeId?: string;
         };
+        CreateLadoSetupItemRequest: {
+            /** @description A string with the text for a file or a one-file skill's SKILL.md; the value itself for a setting or an MCP server. */
+            content: unknown;
+            /** @description Show the change without making it; needs no presence proof. */
+            dryRun?: boolean;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "mcp_server";
+            name: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
         CreateLadoTaskRequest: {
             agent?: string;
             model?: string;
@@ -6164,8 +6402,12 @@ export interface components {
             sha256: string;
         };
         LadoApprovedRulesResponse: {
+            /** @description The setup warnings accepted at the approval. */
+            accepted: components["schemas"]["LadoSetupAcceptedConflictResponse"][];
             /** @description Rules on now but not at the approval. */
             added: string[];
+            /** @description The AO system layer at the approval; empty when it fixed no local setup. */
+            aoSystemSha256: string;
             /** Format: date-time */
             approvedAt: string;
             /** @description The approved snapshot holds a blocking problem. */
@@ -6178,6 +6420,14 @@ export interface components {
             removed: string[];
             /** @description The approved plan revision's number. */
             revision: number;
+            /** @description The setup items on at the approval. */
+            setup: components["schemas"]["LadoSnapshotSetupItemResponse"][];
+            /** @description Setup items on now but not at the approval. */
+            setupAdded: string[];
+            /** @description Setup items on in both with another version or binding, or with other plugins installed for an enabledPlugins setting. */
+            setupChanged: string[];
+            /** @description Setup items on at the approval but not now; setup names them. */
+            setupRemoved: string[];
             /** @description Hash of the rule snapshot fixed in the approval. */
             snapshotSha256: string;
         };
@@ -6262,6 +6512,8 @@ export interface components {
             prompt: string;
             /** @description Rules that are not archived, oldest first. */
             rules: components["schemas"]["LadoEffectiveRuleResponse"][];
+            /** @description The local setup of the agent's tool, which the snapshot fixes with the rules. */
+            setup: components["schemas"]["LadoEffectiveSetupResponse"];
             /** @description Hash of the rule snapshot; an approval sends it as policySha256. */
             snapshotSha256: string;
             /** @description Empty for a project. */
@@ -6291,6 +6543,16 @@ export interface components {
              */
             task: "inherit" | "force_on" | "force_off";
             version: number;
+        };
+        LadoEffectiveSetupResponse: {
+            /** @description The warnings an acceptance covers. */
+            accepted: components["schemas"]["LadoSetupAcceptedConflictResponse"][];
+            /** @description Hash of what AO adds to every session; empty when LADO resolved no local setup. */
+            aoSystemSha256: string;
+            /** @description The conflicts of the on items that no acceptance covers; problems holds them too. */
+            conflicts: components["schemas"]["LadoPolicyProblemResponse"][];
+            /** @description The managed items of the agent's tool, on or off; empty without an agent LADO manages setup for. */
+            items: components["schemas"]["LadoSetupItemStateResponse"][];
         };
         LadoExecutionBaseResponse: {
             /** @description How many commits the base moved between the two; omitted when unknown. */
@@ -6345,6 +6607,15 @@ export interface components {
             name: string;
             version: number;
         };
+        LadoExecutionSetupItemResponse: {
+            itemId: string;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            name: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+            version: number;
+        };
         LadoExecutionSnapshotResponse: {
             /** @description The agent harness the worker runs, such as claude-code. */
             agent: string;
@@ -6363,6 +6634,8 @@ export interface components {
             prompt: string;
             /** @description The rules that were on, by id. */
             rules: components["schemas"]["LadoExecutionRuleResponse"][];
+            /** @description The local setup items that were on, the versions the worker's session gets. */
+            setup: components["schemas"]["LadoExecutionSetupItemResponse"][];
             sha256: string;
         };
         LadoExecutionTaskResponse: {
@@ -6724,6 +6997,496 @@ export interface components {
             problemCode?: "key_home_unknown" | "key_path_relative" | "key_missing" | "key_not_a_file" | "host_key_untrusted" | "key_refused" | "ssh_failed";
             /** @description What git or ssh printed, when there is one to show. */
             problemDetail?: string;
+        };
+        LadoSetupAcceptanceResponse: {
+            actor: string;
+            code: string;
+            contentSha256: string;
+            /** Format: date-time */
+            createdAt: string;
+            detail: string;
+            /** @description Empty in a dry run, for an acceptance not given yet. */
+            id: string;
+            itemId: string;
+            /** Format: date-time */
+            revokedAt?: null | string;
+            /** @enum {string} */
+            scope: "global" | "project" | "task";
+            scopeId: string;
+        };
+        LadoSetupAcceptedConflictResponse: {
+            acceptanceId: string;
+            code: string;
+            detail: string;
+            itemId: string;
+        };
+        LadoSetupAdoptEntryRequest: {
+            /** @enum {string} */
+            action: "move" | "keep";
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            name: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupAdoptResponse: {
+            /** @description Empty for a preview. */
+            adoptionId: string;
+            /** @description False for a preview, which changes nothing. */
+            applied: boolean;
+            items: components["schemas"]["LadoSetupAdoptedItemResponse"][];
+            preview: components["schemas"]["LadoSetupAdoptionPreviewResponse"];
+            /** @description completed for an adoption made; empty for a preview. */
+            state: string;
+            verification: components["schemas"]["LadoSetupVerifyCheckResponse"][];
+            warnings: string[];
+        };
+        LadoSetupAdoptedItemResponse: {
+            itemId: string;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            managedPath: string;
+            name: string;
+            sha256: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+            versionId: string;
+        };
+        LadoSetupAdoptionDetailResponse: {
+            adoption: components["schemas"]["LadoSetupAdoptionResponse"];
+            /** @description The originals the backup holds, in backup order; empty when it is unreadable. */
+            backup: components["schemas"]["LadoSetupBackupEntryResponse"][];
+            /** @description False when the backup's manifest cannot be read as the adoption recorded it; a restore refuses then too. */
+            backupReadable: boolean;
+            /** @description The items the adoption recorded; a restore puts back the originals of all of them. */
+            items: components["schemas"]["LadoSetupItemResponse"][];
+            /** @description What holds a restore back now: the live AO sessions and the programs of the tools it puts back (unverified is always empty: restore runs on every OS). Omitted once restored or when the backup cannot be restored. */
+            preconditions?: components["schemas"]["LadoSetupPreconditionsResponse"];
+            /** @description The restore's report; omitted before a restore. */
+            report?: components["schemas"]["LadoSetupRestoreReportResponse"];
+        };
+        LadoSetupAdoptionPreviewResponse: {
+            /** @description What the moved entries bring; a value naming a moved file that cannot follow it (LADO_SETUP_HOOK_PATH_MOVED, LADO_SETUP_PATH_USED_IN_PLACE) blocks the adoption. */
+            conflicts: components["schemas"]["LadoSetupConflictResponse"][];
+            entries: components["schemas"]["LadoSetupPreviewEntryResponse"][];
+            os: string;
+            /** @description The hash the desktop app's confirmation signs. */
+            planSha256: string;
+            preconditions: components["schemas"]["LadoSetupPreconditionsResponse"];
+            rewrites: components["schemas"]["LadoSetupHookRewriteResponse"][];
+            /** @description Stable codes, such as LADO_SETUP_DIRECT_USE_STOPS. */
+            warnings: string[];
+        };
+        LadoSetupAdoptionResponse: {
+            /** @description human, or human:dev-presence in a lab. */
+            actor: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description Why a partial adoption stopped. */
+            errorMessage: string;
+            id: string;
+            /** @description How many items the adoption recorded. */
+            itemCount: number;
+            /** @description Hash of the backup's manifest. */
+            manifestSha256: string;
+            /** @description The GOOS the adoption ran on. */
+            os: string;
+            /** @description Hash of the adoption plan the desktop app's confirmation signed. */
+            planSha256: string;
+            /**
+             * Format: date-time
+             * @description When the adoption was restored; omitted before.
+             */
+            restoredAt?: null | string;
+            /**
+             * @description pending: removing the originals is under way. partial: removing them stopped, or a daemon stopped meanwhile; what moved is managed, and restore puts back what was removed.
+             * @enum {string}
+             */
+            state: "pending" | "completed" | "partial";
+        };
+        LadoSetupBackupEntryResponse: {
+            /** @enum {string} */
+            action: "move" | "keep";
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            name: string;
+            /** @description Under root, with slashes and #<key> after a key's file; the inventory's roots give the folder. */
+            path: string;
+            /** @enum {string} */
+            root: "claude_dir" | "claude_json" | "codex_home";
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+            /** @enum {string} */
+            type: "file" | "dir" | "keys";
+        };
+        LadoSetupBindingResponse: {
+            itemId: string;
+            /** @enum {string} */
+            scope: "global" | "project" | "task";
+            scopeId: string;
+            /** @enum {string} */
+            state: "on" | "off" | "inherit" | "force_on" | "force_off";
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LadoSetupChangeResponse: {
+            acceptance?: components["schemas"]["LadoSetupAcceptanceResponse"];
+            /** @description Who made the change: human or human:dev-presence with a confirmation, api without one; empty for a dry run. */
+            actor: string;
+            /** @description The content after the change; omitted for a delete, a binding or an acceptance. */
+            after?: components["schemas"]["LadoSetupContentResponse"];
+            /** @description False for a dry run, which changes nothing. */
+            applied: boolean;
+            /** @description The content before the change; omitted for a create, a binding or an acceptance. */
+            before?: components["schemas"]["LadoSetupContentResponse"];
+            binding?: components["schemas"]["LadoSetupBindingResponse"];
+            /** @description Hash of the change without dryRun, which the desktop app's confirmation signs. */
+            changeSha256: string;
+            conflictsAdded: components["schemas"]["LadoSetupConflictResponse"][];
+            conflictsRemoved: components["schemas"]["LadoSetupConflictResponse"][];
+            impact: components["schemas"]["LadoRuleImpactResponse"];
+            /** @description The item the change is about, as the change leaves it; a dry run's new item has no id. */
+            item: components["schemas"]["LadoSetupItemResponse"];
+            /** @description Making the change needs the desktop app's confirmation for changeSha256. */
+            needsPresence: boolean;
+            /** @enum {string} */
+            op: "create" | "edit" | "delete" | "binding" | "drift_keep" | "drift_revert" | "accept" | "revoke";
+            /** @description Rule snapshots that pinned a version of a deleted item; they keep reading it. */
+            pins: number;
+            /** @description The item's version after a create, an edit or a drift keep or revert. */
+            version?: components["schemas"]["LadoSetupItemVersionResponse"];
+            /** @description Stable codes, such as LADO_SETUP_PREVIEW_INCOMPLETE. */
+            warnings: string[];
+        };
+        LadoSetupConflictListResponse: {
+            /** @description By severity, code and item; accepted warnings are marked. */
+            conflicts: components["schemas"]["LadoSetupConflictResponse"][];
+        };
+        LadoSetupConflictResponse: {
+            /** @description The live acceptance that covers a warning; empty when none does. */
+            acceptanceId: string;
+            /** @description Stable conflict code the app translates. */
+            code: string;
+            /** @description The content the result was found in; an acceptance holds for that content only. */
+            contentSha256: string;
+            /** @description Tells apart results of one code on one item, such as the hook event; an acceptance names it. */
+            detail: string;
+            /** @description The values the app shows: item or origin, and by code event, matcher, rule, key, mode, ceiling, plugin and path. */
+            details: {
+                [key: string]: string;
+            };
+            /** @description The managed item; empty for setup without an item, which path names. */
+            itemId: string;
+            path: string;
+            /**
+             * @description Only a warning can be accepted.
+             * @enum {string}
+             */
+            severity: "blocking" | "warning" | "info";
+        };
+        LadoSetupContentResponse: {
+            /** @enum {string} */
+            contentKind: "file" | "json" | "tree";
+            executable: boolean;
+            /** @description A folder's files. */
+            files: components["schemas"]["LadoSetupTreeFileResponse"][];
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /** @description A file's text, a one-file skill's SKILL.md, or a JSON value with two-space indents; empty for a folder and for content that is no text or larger than 1 MiB. */
+            text: string;
+        };
+        LadoSetupDriftResponse: {
+            /** @description The managed item that drifted; for a new local entry, the live item of its tool, kind and name if there is one. */
+            itemId: string;
+            /** @enum {string} */
+            itemKind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            /**
+             * @description edited: a managed copy no longer holds its item's latest version. new_local: an original location holds new adoptable setup, which is never moved by itself.
+             * @enum {string}
+             */
+            kind: "edited" | "new_local";
+            name: string;
+            /** @description What changed: the managed copy for an edit, the entry at its original location for a new local one. */
+            path: string;
+            /** @description Its content hash now; keeping an edit sends it back. */
+            sha256: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupEntryResponse: {
+            /** @description move or keep for an adoptable entry; empty for the others. */
+            defaultAction: string;
+            /** @description The managed item of a managed entry; empty for the others. */
+            itemId: string;
+            /** @description What stays at the entry's location when it is adopted: the login variables of Claude Code's env setting. */
+            keptInPlace: string[];
+            /** @description The item kind the entry is or would be adopted as: instructions, setting, skill, agent, command, output_style, hook_script or mcp_server. Empty for an entry that is no setup item, such as credentials. */
+            kind: string;
+            /** @enum {string} */
+            location: "claude_dir" | "claude_json" | "codex_home" | "project" | "managed";
+            /** @description The item's name in its tool and kind; for an entry that is no item, its file name, its path in the tool folder or its config key. */
+            name: string;
+            /** @description Absolute path, with #<key> after the file for a key. Entries of one name can share it, so the app keys its list by path. */
+            path: string;
+            /** @description The project of an entry found in a project; empty for the others. */
+            projectId: string;
+            /** @description Why the entry is not adoptable, a stable code the app translates; empty for managed and adoptable entries. */
+            reason: string;
+            /** @description Content hash of an adoptable, managed or repository-tracked entry; empty for the others. */
+            sha256: string;
+            /**
+             * Format: int64
+             * @description Content size of an adoptable, managed or repository-tracked entry; 0 for the others.
+             */
+            size: number;
+            /** @enum {string} */
+            status: "managed" | "adoptable" | "not_adoptable" | "never" | "not_managed" | "repo_tracked";
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+            /** @description The project's repository tracks the file. */
+            tracked: boolean;
+        };
+        LadoSetupHookRewriteResponse: {
+            after: string;
+            before: string;
+            /** @description The hook event; empty for statusLine. */
+            event: string;
+            matcher: string;
+            /** @description The moved entries the command names, under the Claude folder. */
+            paths: string[];
+            /** @enum {string} */
+            setting: "hooks" | "statusLine";
+        };
+        LadoSetupInventoryResponse: {
+            /** @description Oldest first. */
+            adoptions: components["schemas"]["LadoSetupAdoptionResponse"][];
+            drift: components["schemas"]["LadoSetupDriftResponse"][];
+            entries: components["schemas"]["LadoSetupEntryResponse"][];
+            /** @description The managed items of both tools as they resolve at Global. */
+            items: components["schemas"]["LadoSetupItemStateResponse"][];
+            /** @description The GOOS the daemon runs on. */
+            os: string;
+            projects: components["schemas"]["LadoSetupProjectScanResponse"][];
+            roots: components["schemas"]["LadoSetupRootResponse"][];
+            /** Format: date-time */
+            scannedAt: string;
+            /** @description For each tool, whether LADO measured that sessions get adopted setup on this OS; adoption is refused where it did not. */
+            verified: {
+                [key: string]: boolean;
+            };
+        };
+        LadoSetupItemDetailResponse: {
+            item: components["schemas"]["LadoSetupItemResponse"];
+            /** @description Where a live item's managed copy is; a folder item's files are edited there. Empty for an item that is not live. */
+            managedPath: string;
+            /** @description Oldest first. */
+            versions: components["schemas"]["LadoSetupVersionDetailResponse"][];
+            warnings: string[];
+        };
+        LadoSetupItemListResponse: {
+            items: components["schemas"]["LadoSetupItemStateResponse"][];
+        };
+        LadoSetupItemResponse: {
+            /** @description Empty for an item made in LADO. */
+            adoptionId: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deletedAt?: null | string;
+            id: string;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            /** @description Neither deleted nor restored: only a live item is delivered. */
+            live: boolean;
+            name: string;
+            /** @description Where adoption found the item; empty for an item made in LADO. */
+            originPath: string;
+            /** Format: date-time */
+            restoredAt?: null | string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupItemStateResponse: {
+            /**
+             * @description The Global binding; an item without one is on.
+             * @enum {string}
+             */
+            global: "on" | "off";
+            /** @description Hash of the plugins an on enabledPlugins setting turns on, as Claude Code has them installed; empty for every other item. */
+            installedSha256: string;
+            itemId: string;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            name: string;
+            /** @description Sessions of the scope get the item. */
+            on: boolean;
+            /**
+             * @description The binding for the resolved project; inherit at Global.
+             * @enum {string}
+             */
+            project: "inherit" | "force_on" | "force_off";
+            sha256: string;
+            /** @description The binding that decided it; Global without a stored binding is on. */
+            source: components["schemas"]["LadoRuleSourceResponse"];
+            /**
+             * @description The binding for the resolved task; inherit for Global and a project.
+             * @enum {string}
+             */
+            task: "inherit" | "force_on" | "force_off";
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+            version: number;
+            versionId: string;
+        };
+        LadoSetupItemVersionResponse: {
+            /** @description Who made the version: api, human, or human:dev-presence in a lab. */
+            actor: string;
+            /** @enum {string} */
+            contentKind: "file" | "json" | "tree";
+            /** Format: date-time */
+            createdAt: string;
+            executable: boolean;
+            /** @description Empty in a dry run, for a version not made yet. */
+            id: string;
+            itemId: string;
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /** @description Counts from 1; an edit sends the latest back as baseVersion. */
+            version: number;
+        };
+        LadoSetupPreconditionsResponse: {
+            /** @description Nothing holds the adoption back. */
+            ok: boolean;
+            os: string;
+            processes: components["schemas"]["LadoSetupRunningProcessResponse"][];
+            /** @description A lab daemon leaves the programs out. */
+            processesIgnored: boolean;
+            sessions: components["schemas"]["LadoSetupRunningSessionResponse"][];
+            /** @description Tools whose delivery LADO has not measured on this OS. */
+            unverified: string[];
+        };
+        LadoSetupPreviewEntryResponse: {
+            /** @enum {string} */
+            action: "move" | "keep";
+            /** @description How sessions get a moved entry: home (Claude Code's per-session config home) or overlay (Codex launch options); empty for a kept one. */
+            delivery: string;
+            /** @description The login variables a moved env setting leaves in place. */
+            keptInPlace: string[];
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            /** @description Where a moved entry goes; empty for a kept one. */
+            managedPath: string;
+            name: string;
+            originPath: string;
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupProjectScanResponse: {
+            /** @description Why the project could not be read; its entries are then missing. */
+            error: string;
+            id: string;
+            name: string;
+            path: string;
+        };
+        LadoSetupRestoreReportResponse: {
+            entries: components["schemas"]["LadoSetupRestoredEntryResponse"][];
+        };
+        LadoSetupRestoreResponse: {
+            adoptionId: string;
+            applied: boolean;
+            report: components["schemas"]["LadoSetupRestoreReportResponse"];
+            /** Format: date-time */
+            restoredAt: string;
+            warnings: string[];
+        };
+        LadoSetupRestoredEntryResponse: {
+            /** @description The copy written beside the path, under root; empty unless restored_beside. */
+            beside: string;
+            /** @description Why a failed original could not be put back. */
+            error: string;
+            itemId: string;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            name: string;
+            /**
+             * @description kept_in_lado: LADO made later versions of the item, which stay readable in LADO; omitted otherwise.
+             * @enum {string}
+             */
+            note?: "kept_in_lado";
+            /** @description Under root, with slashes and #<key> after a key's file. */
+            path: string;
+            /** @enum {string} */
+            root: "claude_dir" | "claude_json" | "codex_home";
+            /**
+             * @description restored_beside: something new held the path, so the original is beside it; key_kept: the file has the key now, which stays; skipped_deleted: the item was deleted in LADO, so its original stays out.
+             * @enum {string}
+             */
+            status: "restored" | "restored_beside" | "key_kept" | "failed" | "skipped_deleted";
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupRootResponse: {
+            /** @description Why it could not be read; its entries are then missing. */
+            error: string;
+            found: boolean;
+            /** @enum {string} */
+            location: "claude_dir" | "claude_json" | "codex_home";
+            /** @description Empty when the daemon knows none. */
+            path: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupRunningProcessResponse: {
+            name: string;
+            pid: number;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupRunningSessionResponse: {
+            id: string;
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+        };
+        LadoSetupTreeFileResponse: {
+            /** @enum {string} */
+            mode: "file" | "exec";
+            path: string;
+            sha256: string;
+            /** Format: int64 */
+            size: number;
+        };
+        LadoSetupVerifyCheckResponse: {
+            /** @enum {string} */
+            check: "managed_copy" | "codex_override" | "home";
+            error: string;
+            itemId: string;
+            ok: boolean;
+        };
+        LadoSetupVersionDetailResponse: {
+            /** @description Omitted when LADO could not read it. */
+            content?: components["schemas"]["LadoSetupContentResponse"];
+            version: components["schemas"]["LadoSetupItemVersionResponse"];
+        };
+        LadoSnapshotSetupItemResponse: {
+            installedSha256: string;
+            itemId: string;
+            /** @enum {string} */
+            kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
+            name: string;
+            sha256: string;
+            source: components["schemas"]["LadoRuleSourceResponse"];
+            /** @enum {string} */
+            tool: "claude-code" | "codex";
+            version: number;
+            versionId: string;
         };
         LadoTaskExecutionResponse: {
             /**
@@ -7368,6 +8131,17 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        ResolveLadoSetupDriftRequest: {
+            /**
+             * @description keep needs a human-presence proof for an item that can run code or widen access.
+             * @enum {string}
+             */
+            action: "keep" | "revert";
+            /** @description Show the change without making it; needs no presence proof. */
+            dryRun?: boolean;
+            /** @description For keep: the drift's sha256 as reviewed; another one refuses the keep. */
+            sha256?: string;
+        };
         RestoreArtifactVersionRequest: {
             /** @description Artifact-directory-relative file path, as listed in the session's artifactFiles. */
             path: string;
@@ -7796,6 +8570,20 @@ export interface components {
             scopeId?: string;
             /**
              * @description on or off at global; inherit, force_on or force_off for a project or a task. inherit removes the binding.
+             * @enum {string}
+             */
+            state: "on" | "off" | "inherit" | "force_on" | "force_off";
+        };
+        SetLadoSetupBindingRequest: {
+            /** @description Show the change without making it; needs no presence proof. */
+            dryRun?: boolean;
+            itemId: string;
+            /** @enum {string} */
+            scope: "global" | "project" | "task";
+            /** @description The project or task id; empty at global. */
+            scopeId?: string;
+            /**
+             * @description on, off or inherit at global; inherit, force_on or force_off for a project or a task. inherit removes the binding, which at Global turns the item on.
              * @enum {string}
              */
             state: "on" | "off" | "inherit" | "force_on" | "force_off";
@@ -8378,6 +9166,14 @@ export interface components {
             name?: null | string;
             /** @description Goes into the audit log. */
             reason?: string;
+        };
+        UpdateLadoSetupItemRequest: {
+            /** @description The version the edit started from; a newer one refuses the edit. */
+            baseVersion: number;
+            /** @description The new content, shaped as for creation. */
+            content: unknown;
+            /** @description Show the change without making it; needs no presence proof. */
+            dryRun?: boolean;
         };
         UpdateLadoTaskRequest: {
             agent?: null | string;
@@ -13867,6 +14663,1069 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    adoptLadoSetup: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdoptLadoSetupRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupAdoptResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoSetupAdoption: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO setup adoption id. */
+                adoptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupAdoptionDetailResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    restoreLadoSetupAdoption: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description LADO setup adoption id. */
+                adoptionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupRestoreResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setLadoSetupBinding: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLadoSetupBindingRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoSetupConflicts: {
+        parameters: {
+            query?: {
+                /** @description Project to resolve; without projectId and taskId the view is Global. */
+                projectId?: string;
+                /** @description Task to resolve, whose project then applies. With projectId too, the task must be in that project. */
+                taskId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupConflictListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    acceptLadoSetupConflict: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AcceptLadoSetupConflictRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    revokeLadoSetupConflictAcceptance: {
+        parameters: {
+            query?: {
+                /** @description Show the change and what it reaches without making it. */
+                dryRun?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description LADO setup conflict acceptance id. */
+                acceptanceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoSetupInventory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupInventoryResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoSetupItems: {
+        parameters: {
+            query?: {
+                /** @description Project to resolve; without projectId and taskId the view is Global. */
+                projectId?: string;
+                /** @description Task to resolve, whose project then applies. With projectId too, the task must be in that project. */
+                taskId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupItemListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    createLadoSetupItem: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLadoSetupItemRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoSetupItem: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO setup item id. */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupItemDetailResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteLadoSetupItem: {
+        parameters: {
+            query?: {
+                /** @description Show the change and what it reaches without making it. */
+                dryRun?: boolean;
+            };
+            header?: never;
+            path: {
+                /** @description LADO setup item id. */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoSetupItem: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description LADO setup item id. */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoSetupItemRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    resolveLadoSetupDrift: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description LADO setup item id. */
+                itemId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveLadoSetupDriftRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupChangeResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    scanLadoSetup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSetupInventoryResponse"];
                 };
             };
             /** @description Internal Server Error */
