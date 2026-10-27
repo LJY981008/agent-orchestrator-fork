@@ -237,3 +237,40 @@ test("asks only this computer's daemon, and only for workers", async () => {
 	expect(lado.fetchLadoExecution).not.toHaveBeenCalled();
 	for (const view of [remote, orchestrator, cloud]) expect(view.container).toBeEmptyDOMElement();
 });
+
+test("shows what LADO verified on the PR's head under the snapshot, and nothing for a run without a PR", async () => {
+	const head = "1a2b3c4".padEnd(40, "0");
+	const pr = { url: "https://github.com/acme/demo/pull/45", number: 45, merged: false, closed: false, headSha: head };
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(
+		execution({
+			pr,
+			verification: {
+				headSha: head,
+				prUrl: pr.url,
+				outcome: "pass",
+				sha256: "9".repeat(64),
+				items: [{ kind: "required_checks", outcome: "pass", details: { checks: [{ name: "unit", status: "passed", required: true }] } }],
+				evidence: [],
+				computedAt: new Date().toISOString(),
+			},
+		}),
+	);
+	renderPanel();
+
+	const snapshot = await screen.findByTestId("lado-execution-panel");
+	const section = screen.getByTestId("lado-verification");
+	expect(screen.getByRole("button", { name: "Verification" })).toBeInTheDocument();
+	// Its own inspector section, under the run's snapshot.
+	expect(snapshot).not.toContainElement(section);
+	expect(snapshot.compareDocumentPosition(section) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	expect(within(section).getByTestId("lado-verify-state")).toHaveTextContent("Integration pending");
+	expect(within(section).getByText("1 of 1 required check passed")).toBeInTheDocument();
+	expect(within(section).getByRole("button", { name: "Approve integration…" })).toBeEnabled();
+	cleanup();
+
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution());
+	renderPanel();
+	await screen.findByTestId("lado-execution-panel");
+	expect(screen.queryByTestId("lado-verification")).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Verification" })).not.toBeInTheDocument();
+});

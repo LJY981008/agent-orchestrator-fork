@@ -8,6 +8,30 @@ import { formatResetTime } from "../settings/CodexAccountDetails";
 
 export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "merged";
 
+/** The states a run's pull request gives its task. */
+export type LadoRunState = Extract<LadoTask["state"], "validating" | "integration_pending" | "integrating" | "completed" | "closed_unmerged">;
+
+/**
+ * How the task's card, its view and the run's panel name a run's pull
+ * request state: LADO verifying it reads as working, waiting for the
+ * integration approval takes the needs-you color, an approved head reads as
+ * ready, and work merged without that approval needs the human's attention.
+ */
+export function ladoRunStatus(state: LadoRunState, reason: string | undefined, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
+	switch (state) {
+		case "validating":
+			return { label: t("lado.task.state.validating"), tone: "working" };
+		case "integration_pending":
+			return { label: t("lado.task.state.integrationPending"), tone: "attention" };
+		case "integrating":
+			return { label: t("lado.task.state.integrating"), tone: "ready" };
+		case "completed":
+			return { label: t("lado.task.state.completed"), tone: reason === "merged_without_approval" ? "attention" : "merged" };
+		case "closed_unmerged":
+			return { label: t("lado.task.state.closedUnmerged"), tone: "muted" };
+	}
+}
+
 /**
  * The card's one status line. A plan waiting for review is the human's next
  * decision, so it takes the needs-you color; an approved plan waiting in the
@@ -15,17 +39,13 @@ export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "
  * approval that needs review again (its rules or its issue changed, or it was
  * never queued), whose rules block the run (blocked), or whose run failed
  * needs the human again, unless a new plan it waits for is requested. A
- * pull request LADO verifies reads as working; one waiting for the
- * integration approval takes the needs-you color, an approved head as ready,
- * and work merged without that approval needs the human's attention.
+ * run's pull request reads as ladoRunStatus names it.
  */
 export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
 	switch (task.state) {
 		case "closed_unmerged":
 			// After a run, the work closed without a merge, whichever closed first.
-			return task.execution
-				? { label: t("lado.task.state.closedUnmerged"), tone: "muted" }
-				: { label: t("lado.task.state.closed"), tone: "muted" };
+			return task.execution ? ladoRunStatus(task.state, task.stateReason, t) : { label: t("lado.task.state.closed"), tone: "muted" };
 		case "approved":
 			return { label: t("lado.task.state.approved"), tone: "ready" };
 		case "queued":
@@ -35,15 +55,10 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
 		case "running":
 			return { label: t("lado.task.state.running"), tone: "working" };
 		case "validating":
-			return { label: t("lado.task.state.validating"), tone: "working" };
 		case "integration_pending":
-			return { label: t("lado.task.state.integrationPending"), tone: "attention" };
 		case "integrating":
-			return { label: t("lado.task.state.integrating"), tone: "ready" };
 		case "completed":
-			return task.stateReason === "merged_without_approval"
-				? { label: t("lado.task.state.completed"), tone: "attention" }
-				: { label: t("lado.task.state.completed"), tone: "merged" };
+			return ladoRunStatus(task.state, task.stateReason, t);
 		case "review_required":
 			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
 			// Only changed rules make it a rules review; the second line says why otherwise.

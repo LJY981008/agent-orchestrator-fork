@@ -126,3 +126,36 @@ test("another computer's and orchestrator sessions ask nothing", async () => {
 	expect(lado.fetchLadoTasks).not.toHaveBeenCalled();
 	expect(container).toBeEmptyDOMElement();
 });
+
+test("adds where LADO's verification and integration of the PR stand, only while that is news", async () => {
+	const named: [Partial<lado.LadoTask>, string][] = [
+		[{ state: "validating", stateReason: "checks_pending" }, "Validating"],
+		[{ state: "integration_pending" }, "Integration pending"],
+		[{ state: "integrating", stateReason: "status_not_posted" }, "Integrating"],
+		[{ state: "completed", stateReason: "merged_without_approval" }, "Merged without an integration approval"],
+	];
+	for (const [fields, word] of named) {
+		vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, ...fields }]);
+		renderWith(<LadoSessionLine session={session("demo-7")} />);
+		const line = await screen.findByTestId("lado-session-line");
+		expect(line).toHaveTextContent(`LADO · plan r3 · rules 1a2b3c4 · ${word}`);
+		// Still one muted line; only the integration approval is the human's turn.
+		expect(line.tagName).toBe("P");
+		expect(line).toHaveClass("truncate", "text-muted-foreground");
+		const dot = within(line).queryByTestId("lado-session-line-dot");
+		if (fields.state === "integration_pending") expect(dot).toHaveClass("bg-[var(--color-status-needs-you)]");
+		else expect(dot).not.toBeInTheDocument();
+		cleanup();
+	}
+
+	// The card's own status says the rest: a running worker, work merged with
+	// an approval, work closed without a merge.
+	for (const fields of [{ state: "running" }, { state: "completed" }, { state: "closed_unmerged" }] as Partial<lado.LadoTask>[]) {
+		vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, ...fields }]);
+		renderWith(<LadoSessionLine session={session("demo-7")} />);
+		const line = await screen.findByTestId("lado-session-line");
+		expect(line).toHaveTextContent(/^LADO · plan r3 · rules 1a2b3c4$/);
+		expect(within(line).queryByTestId("lado-session-line-dot")).not.toBeInTheDocument();
+		cleanup();
+	}
+});
