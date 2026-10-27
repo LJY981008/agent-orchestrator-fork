@@ -12,6 +12,7 @@
 #   go-pkg-isolated <pkg>...            go-pkg with the isolated home of go-tests-isolated -> GO_PKG_OK
 #   go-race <pkg>...                    go test -race -count=1 for the packages            -> GO_RACE_OK
 #   go-race-isolated <pkg>...           go-race with the isolated home of go-tests-isolated -> GO_RACE_OK
+#   go-lint <pkg pattern>...            golangci-lint v2.13.2 like CI, on the patterns     -> GO_LINT_OK
 #   go-build                            go build ./... and go vet ./...                    -> GO_BUILD_OK
 #   probe <TestName>...                 the real-binary delivery probe (S01) ran and passed -> PROBE_OK n/n
 #   no-home-lookups <dir>               no home or tool-folder lookups in non-test Go files -> NO_HOME_LOOKUPS
@@ -105,6 +106,12 @@ case "$sub" in
     fi
     (( rc == 0 )) || { printf '%s\n' "$out" | tail -60; fail "go test -race failed (rc=$rc)"; }
     echo GO_RACE_OK ;;
+
+  go-lint)
+    (( $# )) || fail "usage: go-lint <pkg pattern>..."
+    out="$(cd backend && go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2 run --path-mode=abs "$@" 2>&1)"; rc=$?
+    (( rc == 0 )) || { printf '%s\n' "$out" | tail -40; fail "golangci-lint failed (rc=$rc)"; }
+    echo GO_LINT_OK ;;
 
   go-build)
     out="$(cd backend && go build ./... 2>&1 && go vet ./... 2>&1)"; rc=$?
