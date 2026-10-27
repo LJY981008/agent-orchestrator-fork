@@ -26,7 +26,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 4b | Plan requests and revisions, plans written in issue comments, approvals confirmed in the desktop app, the Plan and Queued lanes, the task view | Merged |
 | 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | Merged |
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Merged |
-| 7 | Adopting your local agent setup (CLAUDE.md and AGENTS.md, settings, hooks, skills, MCP servers) into one managed place that every session the app starts gets, with restore | In progress |
+| 7 | Adopting your local agent setup (CLAUDE.md and AGENTS.md, settings, hooks, skills, MCP servers) into one managed place that every session the app starts gets, with restore | Merged |
 | 8 | Verification, evidence and integration approval | Planned |
 | 9 | Releases of this fork: a workflow that builds the desktop app (Windows first) and publishes it where the app looks for updates, and the checks that need a real Windows install | Planned |
 
