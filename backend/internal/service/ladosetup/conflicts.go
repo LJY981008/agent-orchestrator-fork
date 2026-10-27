@@ -52,6 +52,10 @@ const (
 	// ConflictDeniesGit is a permissions.deny rule that covers git or gh
 	// commands.
 	ConflictDeniesGit = "LADO_SETUP_DENIES_GIT"
+	// ConflictAllowsProtected is a permissions.allow rule that covers a
+	// command a protected gate stops (protectedGitCommands). LADO enforces
+	// the gate elsewhere, so it is a warning (HARNESS §10).
+	ConflictAllowsProtected = "LADO_SETUP_ALLOWS_PROTECTED"
 	// ConflictHookMayBlockTools is a PreToolUse hook whose matcher covers
 	// Bash or AO's tool server.
 	ConflictHookMayBlockTools = "LADO_SETUP_HOOK_MAY_BLOCK_TOOLS"
@@ -91,6 +95,7 @@ var conflictSeverity = map[string]domain.LadoProblemSeverity{
 	ConflictHookPathMoved:           domain.LadoSeverityBlocking,
 	ConflictPathUsedInPlace:         domain.LadoSeverityBlocking,
 	ConflictDeniesGit:               domain.LadoSeverityWarning,
+	ConflictAllowsProtected:         domain.LadoSeverityWarning,
 	ConflictHookMayBlockTools:       domain.LadoSeverityWarning,
 	ConflictHookAddsPromptText:      domain.LadoSeverityWarning,
 	ConflictDefaultModeAboveCeiling: domain.LadoSeverityWarning,
@@ -168,7 +173,7 @@ type Conflict struct {
 	ContentSHA256 string
 	// Details are the values the app shows: "item" (or "origin", the path of
 	// setup without an item) and, by code, "event", "matcher", "rule",
-	// "key", "mode", "ceiling", "plugin" and "path".
+	// "commands", "key", "mode", "ceiling", "plugin" and "path".
 	Details map[string]string
 	// AcceptanceID is the live acceptance that covers a warning; it is empty
 	// when none does.
@@ -322,6 +327,18 @@ func (cc *conflictChecker) permissions(c SetupContent) {
 			cc.add(c, ConflictDeniesGit, map[string]string{"rule": rule}, rule)
 		}
 	}
+	// The protected gates are always on, so every allow rule is checked.
+	for _, rule := range jsonStrings(keys["allow"]) {
+		var covered []string
+		for _, command := range protectedGitCommands {
+			if bashRuleCovers(rule, command) {
+				covered = append(covered, command)
+			}
+		}
+		if len(covered) > 0 {
+			cc.add(c, ConflictAllowsProtected, map[string]string{"rule": rule, "commands": strings.Join(covered, ", ")}, rule)
+		}
+	}
 	ceiling := domain.LadoPermissionRank(cc.in.Ceiling)
 	mode := jsonString(keys["defaultMode"])
 	if ceiling > 0 && domain.LadoPermissionRank(claudeModes[mode]) > ceiling {
@@ -329,11 +346,17 @@ func (cc *conflictChecker) permissions(c SetupContent) {
 	}
 }
 
+// protectedGitCommands are the commands the protected gates
+// git.protected_branch.no_direct_write and integration.approval.required
+// stop. An allow rule that covers one lets a worker run it without asking.
+var protectedGitCommands = []string{"git push", "git update-ref", "git merge", "git reset", "gh pr merge"}
+
 // bashRuleCovers reports whether a Claude Code permission rule applies to a
 // command of program, read by prefix: "Bash" and "Bash(*)" cover every
 // command, "Bash(ao)" the program alone and "Bash(ao status)" that command,
 // and a pattern with "*" the commands that start with what comes before it,
 // so "Bash(ao:*)", "Bash(ao *)", "Bash(ao status:*)" and "Bash(a*)" cover ao.
+// program may name a subcommand too: "Bash(git:*)" covers "git push".
 func bashRuleCovers(rule, program string) bool {
 	rule = strings.TrimSpace(rule)
 	if rule == "Bash" || rule == "*" {

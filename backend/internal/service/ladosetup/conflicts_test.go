@@ -114,6 +114,7 @@ func TestConflictChecksTable(t *testing.T) {
 		}
 		return `{"deny":[` + strings.Join(quoted, ",") + `]}`
 	}
+	allow := func(rules ...string) string { return `{"allow":` + strings.TrimPrefix(deny(rules...), `{"deny":`) }
 	mode := func(m string) string { return `{"defaultMode":"` + m + `"}` }
 	type row struct {
 		name     string
@@ -177,6 +178,12 @@ func TestConflictChecksTable(t *testing.T) {
 		{name: "deny Bash(git *)", setup: managedSetting("p", "permissions", deny("Bash(git *)")), code: ConflictDeniesGit, hit: true, severity: warning, detail: "Bash(git *)"},
 		{name: "deny Bash(gh pr merge:*)", setup: managedSetting("p", "permissions", deny("Bash(gh pr merge:*)")), code: ConflictDeniesGit, hit: true, severity: warning, detail: "Bash(gh pr merge:*)"},
 		{name: "deny gitk and ghost", setup: managedSetting("p", "permissions", deny("Bash(gitk)", "Bash(ghost:*)", "Bash(ao:*)")), code: ConflictDeniesGit},
+		{name: "allow git push", setup: managedSetting("p", "permissions", allow("Bash(git push:*)")), code: ConflictDeniesGit},
+
+		{name: "allow Bash(git push:*)", setup: managedSetting("p", "permissions", allow("Bash(git push:*)")), code: ConflictAllowsProtected, hit: true, severity: warning, detail: "Bash(git push:*)"},
+		{name: "allow all of Bash", setup: managedSetting("p", "permissions", allow("Bash")), code: ConflictAllowsProtected, hit: true, severity: warning, detail: "Bash"},
+		{name: "allow other git and gh commands", setup: managedSetting("p", "permissions", allow("Bash(git status:*)", "Bash(git pushx:*)", "Bash(gh pr view:*)", "Bash(git)")), code: ConflictAllowsProtected},
+		{name: "deny git push", setup: managedSetting("p", "permissions", deny("Bash(git push:*)")), code: ConflictAllowsProtected},
 
 		{name: "PreToolUse Bash", setup: managedSetting("h", "hooks", hooks("PreToolUse", matcher("Bash"))), code: ConflictHookMayBlockTools, hit: true, severity: warning, detail: "Bash"},
 		{name: "PreToolUse *", setup: managedSetting("h", "hooks", hooks("PreToolUse", matcher("*"))), code: ConflictHookMayBlockTools, hit: true, severity: warning, detail: "*"},
@@ -481,5 +488,64 @@ func TestMovedPathReferences(t *testing.T) {
 	}
 	if refs := movedPathReferences("bash ~/.claude/hooks/check.sh", claudeDir, nil); refs != nil {
 		t.Errorf("nothing moved: %+v, want none", refs)
+	}
+}
+
+// TestConflictAllowsProtectedGate is HARNESS §10's allow rule against a
+// protected gate: a permissions.allow rule that covers git push, git
+// update-ref, git merge, git reset or gh pr merge is a warning that names the
+// rule and the commands it covers, and the developer can accept it, since
+// LADO enforces the gates elsewhere. Other allow rules are not, and the
+// check of deny rules stays as it was.
+func TestConflictAllowsProtectedGate(t *testing.T) {
+	claudeDir := newFakeHome(t).claude
+	permissions := func(value string) SetupContent { return managedSetting("perms", "permissions", value) }
+	for _, tc := range []struct{ rule, commands string }{
+		{"Bash(git push:*)", "git push"},
+		{"Bash(gh pr merge:*)", "gh pr merge"},
+		{"Bash(git:*)", "git push, git update-ref, git merge, git reset"},
+		{"Bash(git push origin main)", "git push"},
+		{"Bash(git update-ref *)", "git update-ref"},
+		{"Bash(*)", "git push, git update-ref, git merge, git reset, gh pr merge"},
+	} {
+		t.Run(tc.rule, func(t *testing.T) {
+			perms := permissions(`{"allow":[` + quoteJSON(tc.rule) + `]}`)
+			all := conflictsOf(t, claudeDir, ConflictInput{Setup: []SetupContent{perms}})
+			got := withCode(all, ConflictAllowsProtected)
+			if len(all) != 1 || len(got) != 1 {
+				t.Fatalf("results:\n%s\nwant one %s", dumpConflicts(all), ConflictAllowsProtected)
+			}
+			c := got[0]
+			if c.Severity != domain.LadoSeverityWarning || c.ItemID != "perms" || c.Detail != tc.rule || c.ContentSHA256 != perms.SHA256 ||
+				c.Details["rule"] != tc.rule || c.Details["commands"] != tc.commands || c.Details["item"] != "perms" {
+				t.Fatalf("result %+v, want a warning on perms naming %q and %q", c, tc.rule, tc.commands)
+			}
+			// It can be accepted, for that rule and content.
+			accepted := conflictsOf(t, claudeDir, ConflictInput{Setup: []SetupContent{perms}, Acceptances: []domain.LadoConflictAcceptance{{
+				ID: "acc", Code: ConflictAllowsProtected, ItemID: "perms", Detail: tc.rule, ContentSHA256: perms.SHA256, Scope: domain.LadoScopeGlobal,
+			}}})
+			if len(accepted) != 1 || accepted[0].AcceptanceID != "acc" {
+				t.Fatalf("results with an acceptance:\n%s\nwant the warning accepted", dumpConflicts(accepted))
+			}
+		})
+	}
+	if err := checkAcceptable(ConflictAllowsProtected); err != nil {
+		t.Fatalf("checkAcceptable(%s) = %v, want nil", ConflictAllowsProtected, err)
+	}
+
+	others := permissions(`{"allow":["Bash(git status:*)","Bash(npm test:*)","Bash(git diff)","Bash(gh pr view:*)","Read(~/.ssh/**)"]}`)
+	if all := conflictsOf(t, claudeDir, ConflictInput{Setup: []SetupContent{others}}); len(all) != 0 {
+		t.Fatalf("results for allow rules no gate stops:\n%s\nwant none", dumpConflicts(all))
+	}
+
+	// Deny rules are checked as before: a deny rule for git push is the
+	// deny warning and no allow warning, and one setting can hold both.
+	denied := conflictsOf(t, claudeDir, ConflictInput{Setup: []SetupContent{permissions(`{"deny":["Bash(git push:*)"]}`)}})
+	if len(denied) != 1 || denied[0].Code != ConflictDeniesGit || denied[0].Detail != "Bash(git push:*)" {
+		t.Fatalf("results for a deny rule:\n%s\nwant one %s", dumpConflicts(denied), ConflictDeniesGit)
+	}
+	both := conflictsOf(t, claudeDir, ConflictInput{Setup: []SetupContent{permissions(`{"allow":["Bash(git:*)"],"deny":["Bash(git push:*)"]}`)}})
+	if len(both) != 2 || len(withCode(both, ConflictAllowsProtected)) != 1 || len(withCode(both, ConflictDeniesGit)) != 1 {
+		t.Fatalf("results for an allow and a deny rule:\n%s\nwant one of each", dumpConflicts(both))
 	}
 }

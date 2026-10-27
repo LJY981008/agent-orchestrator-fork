@@ -369,9 +369,10 @@ func (l *agentLauncher) prepareInvocation(ctx context.Context, spec LaunchSpec) 
 		return ports.ReviewInvocation{}, err
 	}
 	systemPath := filepath.Join(promptRoot, "system.md")
+	// LADO fork: LADO's section, when it has one, ends the system prompt.
 	systemPrompt := strings.TrimRight(inv.SystemPrompt, "\n") + "\n\n" +
 		"AO stores each review task in an immutable file. Whenever AO asks you to start a review task, " +
-		"read the exact file path in that request first and follow it completely.\n"
+		"read the exact file path in that request first and follow it completely.\n" + ladoSystemText(ctx, spec)
 	if err := os.WriteFile(systemPath, []byte(systemPrompt), 0o600); err != nil {
 		return ports.ReviewInvocation{}, fmt.Errorf("write reviewer system prompt: %w", err)
 	}
@@ -386,11 +387,12 @@ func (l *agentLauncher) prepareInvocation(ctx context.Context, spec LaunchSpec) 
 	return inv, nil
 }
 
-func (l *agentLauncher) prepareIdleInvocation(spec LaunchSpec) (ports.ReviewInvocation, error) {
+func (l *agentLauncher) prepareIdleInvocation(ctx context.Context, spec LaunchSpec) (ports.ReviewInvocation, error) {
 	promptRoot := filepath.Join(l.dataDir, "prompts", string(spec.WorkerID), "reviewer")
 	systemPath := filepath.Join(promptRoot, "system.md")
+	// LADO fork: LADO's section, when it has one, ends the system prompt.
 	systemPrompt := reviewSystemPrompt() + "\n\n" +
-		"AO may restore your terminal before a new review task exists. In that state, wait for AO to send a review task file path before reviewing or submitting results.\n"
+		"AO may restore your terminal before a new review task exists. In that state, wait for AO to send a review task file path before reviewing or submitting results.\n" + ladoSystemText(ctx, spec)
 	if err := os.MkdirAll(promptRoot, 0o700); err != nil {
 		return ports.ReviewInvocation{}, fmt.Errorf("create reviewer prompt directory: %w", err)
 	}
@@ -471,7 +473,7 @@ func (l *agentLauncher) Spawn(ctx context.Context, spec LaunchSpec) (LaunchResul
 }
 
 func (l *agentLauncher) RestoreTerminal(ctx context.Context, spec LaunchSpec) (LaunchResult, error) {
-	inv, err := l.prepareIdleInvocation(spec)
+	inv, err := l.prepareIdleInvocation(ctx, spec)
 	if err != nil {
 		return LaunchResult{}, err
 	}
