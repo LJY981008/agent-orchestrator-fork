@@ -1,18 +1,21 @@
 package daemon
 
-// LADO fork: what LADO's verification loop needs from AO (step 8 plan §12;
-// docs/LJY-PRD/TDD.md §8): AO's review service, the plans LADO pinned, the
-// repository clients on the hosts' token chains, the session manager to tell
-// workers what failed, and LADO mode's turn-on.
+// LADO fork: what LADO's verification loop needs from AO (step 8 plan §12
+// and §13; docs/LJY-PRD/TDD.md §7 and §8): AO's review service, the plans
+// LADO pinned, the repository clients on the hosts' token chains, the session
+// manager to tell workers what failed, LADO mode's turn-on, and AO's PR
+// actions, whose merge asks the loop's merge gate, with their SCM reader.
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
 
+	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoverify"
+	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -148,4 +151,52 @@ type ladoVerifySender struct {
 
 func (s ladoVerifySender) Send(ctx context.Context, id domain.SessionID, message string) error {
 	return s.sender.Send(ctx, id, message, nil)
+}
+
+// ladoMergeGated is AO's PR action service, whose merge asks LADO's gate.
+type ladoMergeGated interface {
+	SetMergeGate(ports.LadoMergeGate)
+}
+
+// installLadoMergeGate makes AO's merge route ask the verification loop's
+// merge gate, so a LADO execution's PR merges only at a head whose
+// integration the developer approved, and gives the loop AO's SCM reader,
+// which integration approvals read PR heads with. The daemon calls it once
+// the PR action service exists. Without an SCM provider AO merges nothing
+// and LADO approves nothing.
+func installLadoMergeGate(actions prsvc.ActionManager, reader *scmmulti.Provider, verify *ladoverify.Service) {
+	if verify == nil {
+		return
+	}
+	if gated, ok := actions.(ladoMergeGated); ok {
+		gated.SetMergeGate(verify)
+	}
+	if reader != nil {
+		verify.SetLiveHeads(ladoLiveHeads{reader: reader})
+	}
+}
+
+// ladoPRReader reads PRs from their hosts: AO's SCM reader.
+type ladoPRReader interface {
+	FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error)
+}
+
+// ladoLiveHeads reads a PR's head from its host as AO's merge reads it.
+type ladoLiveHeads struct {
+	reader ladoPRReader
+}
+
+func (h ladoLiveHeads) LiveHead(ctx context.Context, pr domain.PullRequest) (string, error) {
+	ref, ok := prsvc.LadoSCMRef(pr)
+	if !ok {
+		return "", fmt.Errorf("read pull request %s: its repository or number is unknown", pr.URL)
+	}
+	observations, err := h.reader.FetchPullRequests(ctx, []ports.SCMPRRef{ref})
+	if err != nil {
+		return "", fmt.Errorf("read pull request %s: %w", pr.URL, err)
+	}
+	if len(observations) != 1 || !observations[0].Fetched || observations[0].PR.Number != pr.Number || observations[0].PR.HeadSHA == "" {
+		return "", fmt.Errorf("read pull request %s: the host did not return its head", pr.URL)
+	}
+	return observations[0].PR.HeadSHA, nil
 }

@@ -859,6 +859,7 @@ func Run() error {
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")
 	}
+	installLadoMergeGate(prActions, prReader, ladoVerify) // LADO fork: merges need LADO's integration approval
 
 	// Codex switch recovery is best effort and never blocks unrelated daemon
 	// startup. Its own credential gate still protects any local mutation.

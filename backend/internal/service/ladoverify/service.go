@@ -59,6 +59,11 @@ type Store interface {
 	SettleLadoExecution(ctx context.Context, session domain.SessionID, at time.Time, audit *domain.LadoAuditEvent) error
 	ListLadoIntegrationStatusRetries(ctx context.Context, limit int) ([]domain.LadoIntegrationApproval, error)
 	SetLadoIntegrationStatus(ctx context.Context, id string, state domain.LadoIntegrationStatusState, attempts int, postedAt time.Time, errorMessage string) error
+	// The integration approval and the merge gate.
+	LadoPresenceProofUsed(ctx context.Context, nonce string) (bool, error)
+	ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
+	GetLadoIntegrationApproval(ctx context.Context, session domain.SessionID, headSHA string) (domain.LadoIntegrationApproval, bool, error)
+	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 }
 
 // Tasks reads LADO's tasks (*store.Store).
@@ -166,6 +171,9 @@ type Service struct {
 	// runCtx is the context of the loop Start began, while it runs; the
 	// background reads RefreshProtection starts run under it.
 	runCtx context.Context
+	// liveHeads reads PR heads from their hosts for integration approvals
+	// (SetLiveHeads).
+	liveHeads LiveHeads
 }
 
 // New returns a Service.

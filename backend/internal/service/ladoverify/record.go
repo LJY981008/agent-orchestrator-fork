@@ -27,10 +27,12 @@ const finishTimeout = 10 * time.Second
 // verifyOptions say how a head's record is computed. forceProtection reads
 // the base branch's rules again whatever the cache holds; startWork starts
 // the check command, the review round or its cancellation and the fix
-// requests the record calls for.
+// requests the record calls for; fetchBase fetches the base branch from its
+// remote before git reads anything, as an integration approval does.
 type verifyOptions struct {
 	forceProtection bool
 	startWork       bool
+	fetchBase       bool
 }
 
 // headInputs is what a head's record is computed from.
@@ -101,6 +103,9 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 	in, err := s.headInputs(ctx, exec)
 	if err != nil {
 		return domain.LadoVerification{}, err
+	}
+	if opts.fetchBase {
+		s.fetchBase(ctx, in)
 	}
 	ev := s.evaluate(ctx, in, opts)
 	if ctx.Err() != nil {
@@ -339,6 +344,19 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 		ev.items = append(ev.items, item)
 	}
 	return ev
+}
+
+// fetchBase brings the remote-tracking base branch, and the PR's target
+// when it is another branch, up to date in the repository that holds the
+// issue. A fetch that fails is logged: the items then compare with what the
+// last fetch brought.
+func (s *Service) fetchBase(ctx context.Context, in headInputs) {
+	for _, branch := range slices.Compact([]string{in.baseBranch, in.target}) {
+		if err := s.deps.Git.Fetch(ctx, in.dir, in.baseRemote, branch); err != nil {
+			s.deps.Log.Warn("LADO could not fetch the base branch; it compares with the last fetch", "session", in.exec.SessionID,
+				"remote", in.baseRemote, "branch", branch, "err", redactedErrorLine(err))
+		}
+	}
 }
 
 // verifyingItem is an item LADO could not compute this time: it waits.

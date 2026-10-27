@@ -652,7 +652,9 @@ type verifyFixture struct {
 	svc     *Service
 }
 
-func newVerifyFixture(t *testing.T) *verifyFixture {
+// newVerifyFixture builds the fixture; adjust changes the service's deps
+// before the service is built.
+func newVerifyFixture(t *testing.T, adjust ...func(*Deps)) *verifyFixture {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	f := &verifyFixture{
@@ -670,7 +672,7 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 	}
 	f.reads.setProject(domain.ProjectRecord{ID: "p1", Path: t.TempDir()}, nil)
 	var ids atomic.Int64
-	f.svc = New(Deps{
+	deps := Deps{
 		Store:     f.store,
 		Tasks:     f.reads,
 		Plans:     f.reads,
@@ -689,7 +691,11 @@ func newVerifyFixture(t *testing.T) *verifyFixture {
 		NewID:     func() string { return strconv.FormatInt(ids.Add(1), 10) },
 		Log:       slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Interval:  time.Hour,
-	})
+	}
+	for _, change := range adjust {
+		change(&deps)
+	}
+	f.svc = New(deps)
 	t.Cleanup(func() {
 		cancel()
 		f.svc.Wait()
@@ -892,6 +898,10 @@ type verifyStore struct {
 	lists      int
 	listed     []domain.SessionID
 	cancels    int
+	// proofs are the presence proofs integration approvals used, and
+	// ladoModes the projects in LADO mode (approve_test.go).
+	proofs    []domain.LadoPresenceProof
+	ladoModes map[domain.ProjectID]bool
 }
 
 func verifyKey(session domain.SessionID, head string) string { return string(session) + "@" + head }
@@ -971,7 +981,19 @@ func (s *verifyStore) LadoProjectChecks(context.Context, domain.ProjectID) ([]do
 	return slices.Clone(s.commands), s.timeout, nil
 }
 
-func (s *verifyStore) GetPR(context.Context, string) (domain.PullRequest, bool, error) {
+// GetPR answers AO's row of an execution's PR, on GitHub, without the base
+// tip AO records.
+func (s *verifyStore) GetPR(_ context.Context, url string) (domain.PullRequest, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, exec := range s.executions {
+		if exec.PR.URL == url {
+			return domain.PullRequest{
+				URL: url, SessionID: exec.SessionID, Number: exec.PR.Number, HeadSHA: exec.PR.HeadSHA, TargetBranch: exec.PR.TargetBranch,
+				Title: exec.PR.Title, Merged: exec.PR.Merged, Closed: exec.PR.Closed, Provider: "github", Host: "github.com", Repo: "acme/demo",
+			}, true, nil
+		}
+	}
 	return domain.PullRequest{}, false, nil
 }
 
@@ -1375,6 +1397,8 @@ type verifyGit struct {
 	dirty   map[string]bool
 	broken  map[string]bool
 	dirs    map[string]bool
+	// ops are the reads and fetches of each repository, in order.
+	ops map[string][]string
 }
 
 func (g *verifyGit) setBranch(head string, commits []Commit, changed []string) {
@@ -1435,9 +1459,10 @@ func (g *verifyGit) askedDirs() []string {
 // read notes the repository and fails for a broken one.
 func (g *verifyGit) read(dir, command string) error {
 	if g.dirs == nil {
-		g.dirs = map[string]bool{}
+		g.dirs, g.ops = map[string]bool{}, map[string][]string{}
 	}
 	g.dirs[dir] = true
+	g.ops[dir] = append(g.ops[dir], command)
 	if g.broken[dir] {
 		return fmt.Errorf("git %s: fatal: not a git repository: %s", command, dir)
 	}
@@ -1507,7 +1532,19 @@ func (g *verifyGit) StatusClean(_ context.Context, dir string) (bool, error) {
 	return !g.dirty[dir], nil
 }
 
-func (g *verifyGit) Fetch(context.Context, string, string, string) error { return nil }
+// Fetch notes the fetch of remote's branch as "fetch <remote> <branch>".
+func (g *verifyGit) Fetch(_ context.Context, dir, remote, branch string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.read(dir, "fetch "+remote+" "+branch)
+}
+
+// opsOf returns the reads and fetches of the repository at dir, in order.
+func (g *verifyGit) opsOf(dir string) []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.Clone(g.ops[dir])
+}
 
 // verifyHost is the repositories' host: it answers branch rules and records
 // the commit statuses posted, refusing them while postErr is set.
