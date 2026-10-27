@@ -139,7 +139,8 @@ export function LadoProtectedRuleRow({
 							disabled={busy}
 							onClick={onEditPaths}
 						>
-							<span className="text-control">{t("lado.rules.edit")}</span>
+							{/* The size of the count and "Always on" beside it. */}
+							<span className="text-sm">{t("lado.rules.edit")}</span>
 						</Button>
 					</>
 				) : (
