@@ -81,9 +81,9 @@ S01~S17 체인 뒤 리뷰(백엔드·프런트 읽기 전용 리뷰 2회)와 전
 - [ ] S18-G6: sqlc 재생성이 커밋과 같고 쿼리 파일은 ASCII
   CHECK: bash .claude/gate/lado-local-setup.sh sqlc-clean && bash .claude/gate/lado-local-setup.sh queries-ascii
   EXPECT: QUERIES_ASCII
-- [ ] S18-G7: agentcreds 업스트림 파일은 한 줄 호출만 남는다
-  CHECK: bash .claude/gate/lado-local-setup.sh diff-budget 12 backend/pkg/agentcreds/resolve.go
-  EXPECT: BUDGET_OK
+- [ ] S18-G7: agentcreds 업스트림 파일은 main 대비 한두 줄 호출만 남는다(로직은 LADO 파일)
+  CHECK: n=$(git diff --numstat main HEAD -- backend/pkg/agentcreds/resolve.go | awk '{print $1+$2}'); [ "${n:-0}" -le 12 ] && echo "AGENTCREDS_SMALL ${n:-0}"
+  EXPECT: AGENTCREDS_SMALL
 - [ ] S18-G8: 패키지가 홈·도구 폴더를 스스로 찾지 않는다
   CHECK: bash .claude/gate/lado-local-setup.sh no-home-lookups backend/internal/service/ladosetup
   EXPECT: NO_HOME_LOOKUPS
