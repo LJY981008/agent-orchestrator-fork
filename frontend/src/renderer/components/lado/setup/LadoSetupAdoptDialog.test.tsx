@@ -148,7 +148,7 @@ describe("LadoSetupAdoptDialog", () => {
 
 		const hooks = items[0];
 		expect(await within(hooks).findByText("lado/harness/claude/settings.json#hooks")).toHaveClass("font-mono");
-		expect(within(items[1]).getByText("Stays in place; LADO manages a copy.")).toBeInTheDocument();
+		expect(within(items[1]).getByText("Stays in place; LADO does not manage it.")).toBeInTheDocument();
 		expect(
 			within(dialog).getByText(
 				"Claude Code and Codex used outside this app no longer load the items that move. LADO keeps a backup, and Restore puts them back.",
