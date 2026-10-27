@@ -55,13 +55,48 @@ func TestPathsProtectedNeedThePlanToNameThem(t *testing.T) {
 		})
 	}
 
+	t.Run("a glob without a fixed part needs an entry inside it", func(t *testing.T) {
+		// Any entry that matches docs/CLAUDE.md has a fixed part as long as
+		// that of **/CLAUDE.md, so the entry itself must be a CLAUDE.md.
+		for _, tc := range []struct {
+			affected []string
+			named    bool
+		}{
+			{[]string{"**"}, false},
+			{[]string{"docs/**"}, false},
+			{[]string{"docs/*.md"}, false},
+			{[]string{"docs/CLAUDE.md"}, true},
+			{[]string{"**/CLAUDE.md"}, true},
+			{[]string{"docs/**/CLAUDE.md"}, true},
+		} {
+			in := PathsInput{Changed: []string{"docs/CLAUDE.md"}, Affected: tc.affected, Protected: protected, ProtectedOn: true}
+			if tc.named {
+				checkPaths(t, in, domain.LadoVerifyPass, "", domain.LadoPathsDetails{})
+			} else {
+				checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{"docs/CLAUDE.md"}})
+			}
+		}
+	})
+
 	t.Run("every protected glob that matches needs naming", func(t *testing.T) {
-		// .claude/CLAUDE.md is under .claude/** and is a CLAUDE.md: naming
-		// CLAUDE.md files in general does not name the .claude folder.
-		in := PathsInput{Changed: []string{".claude/CLAUDE.md"}, Affected: []string{"**/CLAUDE.md"}, Protected: protected, ProtectedOn: true}
-		checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{".claude/CLAUDE.md"}})
-		in.Affected = []string{".claude/**"}
-		checkPaths(t, in, domain.LadoVerifyPass, "", domain.LadoPathsDetails{})
+		// .claude/CLAUDE.md is under .claude/** and is a CLAUDE.md: the plan
+		// names both, or the file itself.
+		for _, tc := range []struct {
+			affected []string
+			named    bool
+		}{
+			{[]string{"**/CLAUDE.md"}, false},
+			{[]string{".claude/**"}, false},
+			{[]string{".claude/**", "**/CLAUDE.md"}, true},
+			{[]string{".claude/CLAUDE.md"}, true},
+		} {
+			in := PathsInput{Changed: []string{".claude/CLAUDE.md"}, Affected: tc.affected, Protected: protected, ProtectedOn: true}
+			if tc.named {
+				checkPaths(t, in, domain.LadoVerifyPass, "", domain.LadoPathsDetails{})
+			} else {
+				checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{".claude/CLAUDE.md"}})
+			}
+		}
 	})
 }
 

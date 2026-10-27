@@ -8,6 +8,7 @@ package ladoverify
 import (
 	"path"
 	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -42,13 +43,11 @@ func PrefixPaths(prefix string, paths []string) []string {
 }
 
 // EvaluatePaths computes the paths item. A changed path that a protected glob
-// matches fails it as protected_path unless the plan names the path: an
-// affected_paths entry matches it and has a fixed part at least as long as
-// that of each protected glob that matches it, so "**" names no protected
-// path while ".github/workflows/*" names .github/workflows/ci.yml under
-// ".github/**". A changed path that no entry matches needs confirming as
-// outside_plan; the details list the first outsidePlanMax of those and count
-// them all. Paths are sorted and listed once.
+// matches fails it as protected_path unless the plan names the path (see
+// protectedPathNamed). A changed path that no affected_paths entry matches
+// needs confirming as outside_plan; the details list the first
+// outsidePlanMax of those and count them all. Paths are sorted and listed
+// once.
 func EvaluatePaths(in PathsInput) (domain.LadoVerifyItem, error) {
 	changed := slices.Clone(in.Changed)
 	slices.Sort(changed)
@@ -75,16 +74,35 @@ func EvaluatePaths(in PathsInput) (domain.LadoVerifyItem, error) {
 	return domain.NewLadoVerifyItem(domain.LadoVerifyPaths, outcome, code, details)
 }
 
-// protectedPathNamed reports whether the changed path p may change: no
-// protected glob matches it, or the plan names it.
+// protectedPathNamed reports whether the changed path p may change: for each
+// protected glob that matches p, an affected_paths entry that matches p names
+// it (see entryNames).
 func protectedPathNamed(in PathsInput, p string) bool {
-	need := -1
-	for _, glob := range in.Protected {
-		if MatchPath(glob, p) {
-			need = max(need, len(fixedPrefix(glob)))
+	var entries []string
+	for _, entry := range in.Affected {
+		if MatchPath(entry, p) {
+			entries = append(entries, entry)
 		}
 	}
-	return need < 0 || slices.ContainsFunc(in.Affected, func(entry string) bool {
-		return MatchPath(entry, p) && len(fixedPrefix(entry)) >= need
-	})
+	for _, glob := range in.Protected {
+		if MatchPath(glob, p) && !slices.ContainsFunc(entries, func(entry string) bool { return entryNames(entry, glob) }) {
+			return false
+		}
+	}
+	return true
+}
+
+// entryNames reports whether an affected_paths entry that matches a path is
+// as precise as the protected glob that matches it: its fixed part is at
+// least as long as the glob's, so ".github/workflows/*" and ".github" name
+// paths under ".github/**" and "**" does not. Every entry would pass that way
+// for a glob without a fixed part, as "**/CLAUDE.md", so there the glob must
+// match the entry itself: "docs/CLAUDE.md" and "**/CLAUDE.md" name it, "**"
+// and "docs/**" do not.
+func entryNames(entry, glob string) bool {
+	if need := fixedPrefix(glob); need != "" {
+		return len(fixedPrefix(entry)) >= len(need)
+	}
+	entry = strings.Join(patternSegments(entry), "/")
+	return entry == strings.Join(patternSegments(glob), "/") || MatchPath(glob, entry)
 }
