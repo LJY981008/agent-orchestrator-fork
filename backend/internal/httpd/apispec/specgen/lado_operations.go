@@ -386,7 +386,7 @@ func ladoSetupOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/lado/setup/items", id: "createLadoSetupItem", tag: "lado",
-			summary:    "Make a managed setup item, or show it with dryRun; a hook script or an MCP server needs a human-presence proof",
+			summary:    "Make a managed setup item, or show it with dryRun; an item that can run code or widen access needs a human-presence proof, and an OS LADO has not verified refuses",
 			pathParams: presence,
 			reqBody:    controllers.CreateLadoSetupItemRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusServiceUnavailable),
@@ -406,7 +406,7 @@ func ladoSetupOperations() []operation {
 		},
 		{
 			method: http.MethodDelete, path: "/api/v1/lado/setup/items/{itemId}", id: "deleteLadoSetupItem", tag: "lado",
-			summary:    "Delete a managed setup item, or show what it reaches with dryRun; its versions stay readable",
+			summary:    "Delete a managed setup item, or show what it reaches with dryRun; its versions stay readable, and an item that can run code or widen access needs a human-presence proof",
 			pathParams: []any{controllers.LadoSetupItemIDParam{}, controllers.LadoSetupDryRunQuery{}},
 			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable),
 		},
@@ -419,7 +419,7 @@ func ladoSetupOperations() []operation {
 		},
 		{
 			method: http.MethodPut, path: "/api/v1/lado/setup/bindings", id: "setLadoSetupBinding", tag: "lado",
-			summary:    "Turn a managed setup item on or off at Global, for a project or for a task; turning on code or wider access needs a human-presence proof",
+			summary:    "Turn a managed setup item on or off at Global, for a project or for a task; any binding of an item that can run code or widen access needs a human-presence proof",
 			pathParams: presence,
 			reqBody:    controllers.SetLadoSetupBindingRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoSetupChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),

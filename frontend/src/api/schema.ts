@@ -1557,7 +1557,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** Turn a managed setup item on or off at Global, for a project or for a task; turning on code or wider access needs a human-presence proof */
+        /** Turn a managed setup item on or off at Global, for a project or for a task; any binding of an item that can run code or widen access needs a human-presence proof */
         put: operations["setLadoSetupBinding"];
         post?: never;
         delete?: never;
@@ -1644,7 +1644,7 @@ export interface paths {
         /** List the managed setup items of both tools as they resolve at Global, for a project or for a task */
         get: operations["listLadoSetupItems"];
         put?: never;
-        /** Make a managed setup item, or show it with dryRun; a hook script or an MCP server needs a human-presence proof */
+        /** Make a managed setup item, or show it with dryRun; an item that can run code or widen access needs a human-presence proof, and an OS LADO has not verified refuses */
         post: operations["createLadoSetupItem"];
         delete?: never;
         options?: never;
@@ -1663,7 +1663,7 @@ export interface paths {
         get: operations["getLadoSetupItem"];
         put?: never;
         post?: never;
-        /** Delete a managed setup item, or show what it reaches with dryRun; its versions stay readable */
+        /** Delete a managed setup item, or show what it reaches with dryRun; its versions stay readable, and an item that can run code or widen access needs a human-presence proof */
         delete: operations["deleteLadoSetupItem"];
         options?: never;
         head?: never;

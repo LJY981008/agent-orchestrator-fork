@@ -4272,7 +4272,8 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Turn a managed setup item on or off at Global, for a project or for
-        a task; turning on code or wider access needs a human-presence proof
+        a task; any binding of an item that can run code or widen access needs a human-presence
+        proof
       tags:
       - lado
   /api/v1/lado/setup/conflicts:
@@ -4584,8 +4585,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Make a managed setup item, or show it with dryRun; a hook script or
-        an MCP server needs a human-presence proof
+      summary: Make a managed setup item, or show it with dryRun; an item that can
+        run code or widen access needs a human-presence proof, and an OS LADO has
+        not verified refuses
       tags:
       - lado
   /api/v1/lado/setup/items/{itemId}:
@@ -4643,7 +4645,8 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Delete a managed setup item, or show what it reaches with dryRun; its
-        versions stay readable
+        versions stay readable, and an item that can run code or widen access needs
+        a human-presence proof
       tags:
       - lado
     get:

@@ -44,7 +44,7 @@ func Builtins() []domain.LadoRule {
 		// enforcement it never reaches a worker.
 		builtin(domain.LadoRule{ID: domain.LadoRuleSetupPresence, Protected: true, Global: domain.LadoBindingOn}, domain.LadoRuleContent{
 			Name:        "Local setup changes need the desktop app's confirmation",
-			Instruction: "Adopting or restoring local setup, and creating, editing, turning on or keeping a changed copy of a hook script, an MCP server or a setting that can run commands or widen access, need a confirmation in the AO desktop app.",
+			Instruction: "Adopting or restoring local setup, and every change but a drift revert to a hook script, an MCP server, a setting outside the safe keys, or a command, skill or agent that gives itself tools or hooks or runs a shell command, need a confirmation in the AO desktop app.",
 			Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementWorkflowGate},
 		}),
 	}
