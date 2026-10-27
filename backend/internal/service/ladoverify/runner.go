@@ -202,6 +202,12 @@ func sameVariable(a, b string) bool {
 // domain.LadoCodeWorktreeNotAtHead while its HEAD is another commit, it has
 // changes (untracked files too) or git cannot read it.
 func WorktreeAtHead(ctx context.Context, git Git, dir, head string) string {
+	return worktreeAt(ctx, git, dir, head, true)
+}
+
+// worktreeAt is WorktreeAtHead; with clean false, changes in the worktree do
+// not count.
+func worktreeAt(ctx context.Context, git Git, dir, head string, clean bool) string {
 	if dir == "" {
 		return domain.LadoCodeWorktreeMissing
 	}
@@ -216,7 +222,10 @@ func WorktreeAtHead(ctx context.Context, git Git, dir, head string) string {
 	if err != nil || !strings.EqualFold(current, head) {
 		return domain.LadoCodeWorktreeNotAtHead
 	}
-	if clean, err := git.StatusClean(ctx, dir); err != nil || !clean {
+	if !clean {
+		return ""
+	}
+	if unchanged, err := git.StatusClean(ctx, dir); err != nil || !unchanged {
 		return domain.LadoCodeWorktreeNotAtHead
 	}
 	return ""
