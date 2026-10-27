@@ -119,7 +119,8 @@ func TestChatMCPListsCarryAdoptedCodexServers(t *testing.T) {
 }
 
 // The LADO section is asked for the agent the prompt is for: the spawn's,
-// before a task preparation's row names it, and else the row's.
+// before a task preparation's row names it, and else none, for the source to
+// read the row's when its section depends on it.
 func TestLadoPromptSectionKnowsTheHarness(t *testing.T) {
 	ctx := context.Background()
 	m, st, _ := newChatManager(&recordingLauncher{})
@@ -141,7 +142,7 @@ func TestLadoPromptSectionKnowsTheHarness(t *testing.T) {
 	if _, err := m.buildSystemPrompt(ctx, domain.KindWorker, chatTestProject, rec.ID, "", true); err != nil {
 		t.Fatalf("buildSystemPrompt: %v", err)
 	}
-	want := []ladoSectionCall{{domain.KindWorker, chatTestProject, rec.ID, domain.HarnessCodex}, {domain.KindWorker, chatTestProject, rec.ID, domain.HarnessCodex}}
+	want := []ladoSectionCall{{domain.KindWorker, chatTestProject, rec.ID, domain.HarnessCodex}, {domain.KindWorker, chatTestProject, rec.ID, ""}}
 	if got := source.asked(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("asked %+v, want %+v", got, want)
 	}

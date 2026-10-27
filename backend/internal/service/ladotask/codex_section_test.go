@@ -74,6 +74,10 @@ func TestPromptSectionCarriesAdoptedAgentsMd(t *testing.T) {
 	if got := section(t, domain.KindWorker, "demo", worker, domain.HarnessClaudeCode); got != rules {
 		t.Fatalf("Claude Code execution's section = %q, want the rules alone", got)
 	}
+	// Without the agent, the session's row names it.
+	if want := map[bool]string{true: heading + "pinned codex rules\n\n" + rules, false: rules}[rec.Harness == domain.HarnessCodex]; section(t, domain.KindWorker, "demo", worker, "") != want {
+		t.Fatalf("the section of a %s row without the agent is not %q", rec.Harness, want)
+	}
 	// Other Codex sessions get the current text, in a LADO project or not,
 	// and without a project.
 	if got, want := section(t, domain.KindOrchestrator, "demo", "demo-orchestrator-1", domain.HarnessCodex), heading+"current codex rules\n\n"+orchestratorSection; got != want {

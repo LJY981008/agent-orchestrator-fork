@@ -240,9 +240,9 @@ func TestLadoPromptSectionComesFromTheSource(t *testing.T) {
 	if _, err := m.buildSystemPrompt(context.Background(), domain.KindWorker, "", "scratch-1", "", false); err != nil {
 		t.Fatalf("buildSystemPrompt without a project: %v", err)
 	}
-	// A session without a project is asked too: LADO's Codex instructions
-	// reach it. No row names a harness here.
-	want := []ladoSectionCall{{domain.KindOrchestrator, "mer", "mer-1", ""}, {domain.KindWorker, "mer", "mer-2", ""}, {domain.KindWorker, "", "scratch-1", ""}}
+	// A session without a project is not asked, and no session row is read
+	// here: the source reads it when its section depends on the harness.
+	want := []ladoSectionCall{{domain.KindOrchestrator, "mer", "mer-1", ""}, {domain.KindWorker, "mer", "mer-2", ""}}
 	if got := source.asked(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("asked %+v, want %+v", got, want)
 	}

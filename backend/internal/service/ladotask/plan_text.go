@@ -207,14 +207,18 @@ func (p PromptSource) WorkerSection(ctx context.Context, sessionID domain.Sessio
 // CodexSection returns the instructions LADO manages for a session on
 // harness, under codexInstructionsHeading: for a Codex session in any project,
 // LADO mode or not, the versions its execution pinned or else the current
-// ones. It is "" for any other harness and when there is no text.
+// ones. harness "" is the one the session's row names. It is "" for any other
+// harness and when there is no text.
 func (p PromptSource) CodexSection(ctx context.Context, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
-	if p.Setup == nil || harness != domain.HarnessCodex {
+	if p.Setup == nil || (harness != "" && harness != domain.HarnessCodex) {
 		return "", nil
 	}
 	rec, _, err := p.Sessions.GetSession(ctx, sessionID)
 	if err != nil {
 		return "", fmt.Errorf("read session %s: %w", sessionID, err)
+	}
+	if harness == "" && rec.Harness != domain.HarnessCodex {
+		return "", nil
 	}
 	text, err := p.Setup.CodexInstructions(ctx, sessionID, rec.ClientRequestID, projectID)
 	if err != nil {

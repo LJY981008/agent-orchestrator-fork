@@ -7,7 +7,6 @@ package sessionmanager
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -23,8 +22,8 @@ func (m *Manager) SetWorkGate(gate ports.WorkGate) {
 // instructions, or "" when LADO adds none: an orchestrator's in a project in
 // LADO mode, the rules text of a worker LADO dispatched, and the instructions
 // LADO manages for a Codex session. harness is the agent the instructions are
-// for. An error fails the spawn or restore rather than starting the session
-// without its section.
+// for, "" when the session's row names it. An error fails the spawn or
+// restore rather than starting the session without its section.
 type LadoPromptSection func(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error)
 
 // SetLadoPrompt installs LADO's section. The daemon calls it before any
@@ -33,23 +32,17 @@ func (m *Manager) SetLadoPrompt(section LadoPromptSection) {
 	m.ladoPrompt = section
 }
 
-// ladoPromptSection is the LADO section for a session; the source decides by
-// kind and harness. Spawn, restore, resume and agent switches all build the
-// system prompt through here, so a rebuilt worker keeps its section.
+// ladoPromptSection is the LADO section for a session of a project; the
+// source decides by kind and harness. Spawn, restore, resume and agent
+// switches all build the system prompt through here, so a rebuilt worker
+// keeps its section. harness is the agent a spawn or an agent switch builds
+// for, or "" where the session's row names it, which the source reads only
+// when its section depends on it.
 func (m *Manager) ladoPromptSection(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
-	if m.ladoPrompt == nil {
+	if m.ladoPrompt == nil || projectID == "" {
 		return "", nil
 	}
 	harness, _ := ctx.Value(ladoPromptHarnessKey{}).(domain.AgentHarness)
-	if harness == "" {
-		rec, found, err := m.store.GetSession(ctx, sessionID)
-		if err != nil {
-			return "", fmt.Errorf("read session %s for its LADO section: %w", sessionID, err)
-		}
-		if found {
-			harness = rec.Harness
-		}
-	}
 	return m.ladoPrompt(ctx, kind, projectID, sessionID, harness)
 }
 
