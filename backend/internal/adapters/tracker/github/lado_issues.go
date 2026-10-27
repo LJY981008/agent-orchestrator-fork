@@ -254,11 +254,13 @@ func ladoScopeDetail(private bool, public string) string {
 	return "The token needs the " + public + " scope."
 }
 
-// ladoAnswer is one response's status, headers and body.
+// ladoAnswer is one response's status, headers and body, and the token sent,
+// so an error can leave it out.
 type ladoAnswer struct {
 	status int
 	header http.Header
 	body   []byte
+	token  string
 }
 
 func (a ladoAnswer) ok() bool {
@@ -317,5 +319,5 @@ func (w *LadoIssues) send(ctx context.Context, method, path string, body any) (l
 	if err != nil {
 		return ladoAnswer{}, fmt.Errorf("github tracker: read response body: %w", err)
 	}
-	return ladoAnswer{status: resp.StatusCode, header: resp.Header, body: respBody}, nil
+	return ladoAnswer{status: resp.StatusCode, header: resp.Header, body: respBody, token: tok}, nil
 }

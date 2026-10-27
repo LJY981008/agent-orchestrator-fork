@@ -137,6 +137,14 @@ func (f *fakeTracker) IssueComments(_ context.Context, id domain.TrackerID) ([]d
 	return append([]domain.LadoIssueComment(nil), f.comments[id.Native]...), nil
 }
 
+func (f *fakeTracker) BranchRules(context.Context, domain.TrackerRepo, string) (ports.LadoBranchRules, error) {
+	return ports.LadoBranchRules{}, errors.New("not used")
+}
+
+func (f *fakeTracker) PostCommitStatus(context.Context, domain.TrackerRepo, string, ports.LadoCommitStatus) error {
+	return errors.New("not used")
+}
+
 // comment adds a comment to an issue.
 func (f *fakeTracker) comment(native string, c domain.LadoIssueComment) {
 	f.mu.Lock()
