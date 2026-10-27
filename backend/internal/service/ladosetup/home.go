@@ -9,21 +9,29 @@ package ladosetup
 // account's folder or the computer's own Claude folder, and the managed
 // items:
 //
-//   - the base's state entries are links, created empty in the base first
+//   - every entry of the base is a link, so the session sees the base's
+//     folder as it is, entries LADO does not know included; the state
+//     entries Claude writes as it runs are created empty in the base first
 //     when it has none, as AO's account linker does;
 //   - skills/, agents/, commands/, output-styles/ and hooks/ are real
-//     folders with a link per base entry and the managed items, which win a
-//     name clash: a folder item links to its tree, made once under
+//     folders, when the session gets a managed item of their kind, with a
+//     link per base entry and the managed items, which win a name clash: a
+//     folder item links to its tree, made once under
 //     <state>/lado/harness/trees/, and a file item is a copy;
 //   - top-level Markdown is a link per base file and a copy per managed one;
 //   - settings.json is the base's file with the managed settings' keys;
 //   - .claude.json is a copy of the base's whose mcpServers hold the base's
-//     servers and the managed ones. Claude's changes to the copy stay.
+//     servers and the managed ones. Claude's changes to the copy stay;
+//   - the base's login file is never linked (CLAUDE_SECURESTORAGE_CONFIG_DIR
+//     names its folder), and backups/ and the .claude.json.* files Claude
+//     writes beside its config are the home's own.
 //
 // Every launch reconciles the home instead of making it again: what LADO
 // placed before and no longer wants goes, and what Claude made there stays.
-// A record beside the home names what LADO placed. Homes are made from stored
-// versions only, never from the managed folder.
+// A record beside the home names what LADO placed and the base it was made
+// from. Homes are made from stored versions only, never from the managed
+// folder. What a session made or changed in its home is rescued before LADO
+// takes it away (home_rescue.go).
 
 import (
 	"bytes"
@@ -72,10 +80,10 @@ const (
 	homeRecordFormat       = "lado-setup-home/1"
 )
 
-// claudeStateDirs and claudeStateFile are the base entries a home links to:
-// what Claude writes as it runs, so transcripts, history and plugins stay the
-// base's. They are the shared entries of AO's account linker without the item
-// folders, which a home merges instead.
+// claudeStateDirs and claudeStateFile are the base entries a home creates in
+// the base when it has none, before it links them: what Claude writes as it
+// runs, so transcripts, history and plugins stay the base's. They are the
+// shared entries of AO's account linker without the item folders.
 var claudeStateDirs = []string{
 	"projects", "sessions", "session-env", "file-history", "shell-snapshots", "todos",
 	"paste-cache", "tasks", "plans", "transcripts", "plugins",
@@ -135,18 +143,43 @@ func (s *Service) PrepareClaudeHome(ctx context.Context, in ports.LadoSetupHomeI
 	}
 	home := homeDir(s.deps.StateDir, in.SessionID)
 	s.markPrepared(in.SessionID)
-	if err := s.buildHome(ctx, home, base, items, true); err != nil {
+	if err := s.buildHome(ctx, in.SessionID, home, base, items, true); err != nil {
 		return nil, s.homeFailed(in.SessionID, homeStageEntries, err)
 	}
 	return map[string]string{envClaudeConfigDir: home, envClaudeSecureStorage: base.secure}, nil
 }
 
+// OwnsHome reports whether configDir is a session config home LADO builds,
+// <state>/lado/homes/<session-id>/claude (ports.LadoSetupHome).
+func (s *Service) OwnsHome(configDir string) bool {
+	if s.deps.StateDir == "" || strings.TrimSpace(configDir) == "" {
+		return false
+	}
+	clean := filepath.Clean(configDir)
+	id := filepath.Base(filepath.Dir(clean))
+	return filepath.Base(clean) == "claude" && homeFolderName.MatchString(id) && clean == homeDir(s.deps.StateDir, domain.SessionID(id))
+}
+
 // sessionItems returns the items of a tool that a session gets, and whether
-// it gets any delivery at all: only while a live managed item of the tool
-// exists (decision a). A LADO execution gets the versions its rule snapshot
-// pinned, live or not since, so a later change never reaches it; any other
-// session gets the current versions that are on for its project (decision c).
+// it gets any delivery at all. A LADO execution gets the versions its rule
+// snapshot pinned, live or not since, so a later change never reaches it;
+// any other session gets the current versions that are on for its project
+// (decision c), and only while a live managed item of the tool exists
+// (decision a). An execution whose snapshot pinned none, approved before the
+// adoption, gets the current versions too: the closest to what it found in
+// the original places when it was approved.
 func (s *Service) sessionItems(ctx context.Context, tool domain.LadoSetupTool, project domain.ProjectID, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error) {
+	execution := false
+	if clientRequestID != "" {
+		pinned, ok, err := s.deps.Store.LadoSetupVersionsForClientRequest(ctx, clientRequestID)
+		if err != nil {
+			return nil, false, fmt.Errorf("read the setup an execution pinned: %w", err)
+		}
+		if pinned = itemsOf(pinned, tool); ok && len(pinned) > 0 {
+			return pinned, true, nil
+		}
+		execution = ok
+	}
 	live, err := s.deps.Store.ListLiveLadoSetupItems(ctx)
 	if err != nil {
 		return nil, false, fmt.Errorf("list the managed setup items: %w", err)
@@ -155,14 +188,9 @@ func (s *Service) sessionItems(ctx context.Context, tool domain.LadoSetupTool, p
 	if len(live) == 0 {
 		return nil, false, nil
 	}
-	if clientRequestID != "" {
-		pinned, execution, err := s.deps.Store.LadoSetupVersionsForClientRequest(ctx, clientRequestID)
-		if err != nil {
-			return nil, false, fmt.Errorf("read the setup an execution pinned: %w", err)
-		}
-		if execution {
-			return itemsOf(pinned, tool), true, nil
-		}
+	if execution {
+		s.deps.Log.Warn("LADO gives an execution whose rules pinned no setup the current setup, as it was approved before the adoption",
+			"clientRequest", clientRequestID, "tool", tool)
 	}
 	off, err := s.offForProject(ctx, project)
 	if err != nil {
@@ -324,6 +352,8 @@ type homeNode struct {
 	// lado marks an entry that is LADO's whatever is there now: settings.json,
 	// which Claude rewrites when a session changes a setting.
 	lado bool
+	// copyOf names the managed item version a file is a copy of.
+	copyOf *homeCopy
 }
 
 type homeFile struct {
@@ -331,12 +361,28 @@ type homeFile struct {
 	mode fs.FileMode
 }
 
-// buildHome reconciles the config home at home from base and items: it
-// places what the home should hold, takes away what LADO placed before and
-// no longer wants, sets the servers of .claude.json and records beside the
-// home what it placed. createMissing creates the base's missing state entries
-// first; without it they get no link.
-func (s *Service) buildHome(ctx context.Context, home string, base homeBase, items []domain.LadoSetupItemWithVersion, createMissing bool) error {
+// homeBuild is one reconcile of a home: its session, the home and its base,
+// and the records of what LADO placed before and places now.
+type homeBuild struct {
+	session    domain.SessionID
+	home       string
+	base       homeBase
+	prev, next *homeRecord
+}
+
+// rescue is what a reconcile rescues from before it replaces an entry: what
+// LADO placed before, into the base the home is made from now.
+func (b *homeBuild) rescue() *homeRescue {
+	return &homeRescue{session: b.session, home: b.home, base: b.base.dir, record: b.prev}
+}
+
+// buildHome reconciles the config home at home of session from base and
+// items: it places what the home should hold, takes away what LADO placed
+// before and no longer wants, after rescuing what the session made or
+// changed there, sets the servers of .claude.json and records beside the
+// home what it placed and its base. createMissing creates the base's missing
+// state entries and item folders first; without it they get no link.
+func (s *Service) buildHome(ctx context.Context, session domain.SessionID, home string, base homeBase, items []domain.LadoSetupItemWithVersion, createMissing bool) error {
 	plan, err := s.homePlan(ctx, base, items, createMissing)
 	if err != nil {
 		return err
@@ -345,29 +391,50 @@ func (s *Service) buildHome(ctx context.Context, home string, base homeBase, ite
 		return atStage(homeStageEntries, err)
 	}
 	recordPath := filepath.Join(filepath.Dir(home), homeRecordName)
-	prev := readHomeRecord(recordPath)
-	next := &homeRecord{Format: homeRecordFormat, Entries: map[string]string{}}
-	err = atStage(homeStageEntries, s.place(home, "", plan, prev, next))
+	b := &homeBuild{session: session, home: home, base: base, prev: readHomeRecord(recordPath), next: newHomeRecord(base)}
+	err = atStage(homeStageEntries, s.place(ctx, b, home, "", plan))
 	if err == nil {
-		err = atStage(homeStageEntries, removeStale(home, prev, next))
+		err = atStage(homeStageEntries, s.removeStale(ctx, b))
 	}
 	if err == nil {
-		err = atStage(homeStageConfig, s.reconcileConfig(home, base, items, prev, next))
+		err = atStage(homeStageConfig, s.reconcileConfig(b, items))
 	}
 	if err != nil {
 		// What LADO placed before the failure stays claimed, so the next
 		// launch can take it away.
-		_ = writeHomeRecord(recordPath, next.with(prev))
+		_ = writeHomeRecord(recordPath, b.next.with(b.prev))
 		return err
 	}
-	return atStage(homeStageRecord, writeHomeRecord(recordPath, next))
+	return atStage(homeStageRecord, writeHomeRecord(recordPath, b.next))
+}
+
+// homeOwn are base entries a home does not link: the login file, which
+// CLAUDE_SECURESTORAGE_CONFIG_DIR reaches where it is, settings.json, which
+// the home writes, and what Claude keeps beside its config, which the home
+// has of its own: .claude.json, its .claude.json.* files and backups/.
+func homeOwn(name string) bool {
+	return name == claudeCredentials || name == claudeSettings || name == "backups" ||
+		name == claudeConfigName || strings.HasPrefix(name, claudeConfigName+".")
 }
 
 // homePlan is what a home should hold besides the servers of its
-// .claude.json.
+// .claude.json: a link per base entry, merged item folders for the kinds the
+// session gets managed items of, the managed items and settings.json.
 func (s *Service) homePlan(ctx context.Context, base homeBase, items []domain.LadoSetupItemWithVersion, createMissing bool) (map[string]*homeNode, error) {
+	merged := map[domain.LadoSetupKind]bool{}
+	for _, iv := range items {
+		merged[iv.Item.Kind] = true
+	}
 	plan := map[string]*homeNode{}
-	for _, name := range append(slices.Clone(claudeStateDirs), claudeStateFile) {
+	missing := append(slices.Clone(claudeStateDirs), claudeStateFile)
+	for _, folder := range claudeItemDirs {
+		if merged[folder.kind] {
+			plan[folder.name] = &homeNode{dir: baseLinks(filepath.Join(base.dir, folder.name))}
+			continue
+		}
+		missing = append(missing, folder.name)
+	}
+	for _, name := range missing {
 		target := filepath.Join(base.dir, name)
 		err := ensureBaseEntry(target, name == claudeStateFile, createMissing)
 		switch {
@@ -383,12 +450,9 @@ func (s *Service) homePlan(ctx context.Context, base homeBase, items []domain.La
 		return nil, atStage(homeStageBase, err)
 	}
 	for _, d := range entries {
-		if isMarkdown(d.Name()) && !d.IsDir() {
+		if _, ok := plan[d.Name()]; !ok && !homeOwn(d.Name()) {
 			plan[d.Name()] = &homeNode{link: filepath.Join(base.dir, d.Name())}
 		}
-	}
-	for _, folder := range claudeItemDirs {
-		plan[folder.name] = &homeNode{dir: baseLinks(filepath.Join(base.dir, folder.name))}
 	}
 	var settings []domain.LadoSetupItemWithVersion
 	for _, iv := range items {
@@ -514,7 +578,7 @@ func (s *Service) itemNode(ctx context.Context, iv domain.LadoSetupItemWithVersi
 		if v.Executable {
 			mode = privateExec
 		}
-		return &homeNode{file: &homeFile{data: data, mode: mode}}, nil
+		return &homeNode{file: &homeFile{data: data, mode: mode}, copyOf: &homeCopy{Item: iv.Item.ID, SHA256: v.SHA256}}, nil
 	case domain.LadoSetupContentTree:
 		dir, err := s.materializeTree(ctx, v)
 		if err != nil {
@@ -651,8 +715,9 @@ func withLoginEnvOf(content, settings []byte) []byte {
 // place makes the folder dir hold what plan wants and records under rel what
 // LADO placed. An entry LADO did not place, which Claude or the developer
 // made, stays: only a link, which loses nothing, and an empty folder give
-// way.
-func (s *Service) place(dir, rel string, plan map[string]*homeNode, prev, next *homeRecord) error {
+// way. What the session made or changed in an entry LADO placed is rescued
+// before the entry is replaced.
+func (s *Service) place(ctx context.Context, b *homeBuild, dir, rel string, plan map[string]*homeNode) error {
 	for _, name := range sortedKeys(plan) {
 		node := plan[name]
 		key := path.Join(rel, name)
@@ -664,12 +729,22 @@ func (s *Service) place(dir, rel string, plan map[string]*homeNode, prev, next *
 		exists := err == nil
 		isLink := exists && info.Mode()&fs.ModeSymlink != 0
 		isDir := exists && info.IsDir()
-		yields := !exists || isLink || node.lado || prev.has(key) || (isDir && emptyFolder(p))
+		yields := !exists || isLink || node.lado || b.prev.has(key) || (isDir && emptyFolder(p))
+		// replace rescues from what is at p, then takes it away.
+		replace := func() error {
+			if !exists {
+				return nil
+			}
+			if err := s.rescueReplaced(ctx, b.rescue(), key, p, info); err != nil {
+				return err
+			}
+			return os.RemoveAll(p)
+		}
 		switch {
 		case node.link != "":
 			if isLink {
 				if target, err := os.Readlink(p); err == nil && target == node.link {
-					next.Entries[key] = placedLink
+					b.next.Entries[key] = placedLink
 					continue
 				}
 			}
@@ -677,50 +752,48 @@ func (s *Service) place(dir, rel string, plan map[string]*homeNode, prev, next *
 				s.leftInHome(key)
 				continue
 			}
-			if exists {
-				if err := os.RemoveAll(p); err != nil {
-					return err
-				}
+			if err := replace(); err != nil {
+				return err
 			}
 			if err := os.Symlink(node.link, p); err != nil {
 				return err
 			}
-			next.Entries[key] = placedLink
+			b.next.Entries[key] = placedLink
 		case node.file != nil:
 			if exists && info.Mode().IsRegular() && holdsFile(p, info, node.file) {
-				next.Entries[key] = placedFile
+				b.next.placed(key, node)
 				continue
 			}
 			if !yields {
 				s.leftInHome(key)
 				continue
 			}
-			if isDir {
-				if err := os.RemoveAll(p); err != nil {
+			if exists && !isLink && !isDir {
+				if err := s.rescueReplaced(ctx, b.rescue(), key, p, info); err != nil {
 					return err
 				}
+			} else if err := replace(); err != nil {
+				return err
 			}
 			if err := atomicWrite(p, node.file.data, node.file.mode, os.Rename); err != nil {
 				return err
 			}
-			next.Entries[key] = placedFile
+			b.next.placed(key, node)
 		default:
 			if !isDir {
 				if exists && !yields {
 					s.leftInHome(key)
 					continue
 				}
-				if exists {
-					if err := os.RemoveAll(p); err != nil {
-						return err
-					}
+				if err := replace(); err != nil {
+					return err
 				}
 				if err := os.Mkdir(p, privateDir); err != nil {
 					return err
 				}
 			}
-			next.Entries[key] = placedFolder
-			if err := s.place(p, key, node.dir, prev, next); err != nil {
+			b.next.Entries[key] = placedFolder
+			if err := s.place(ctx, b, p, key, node.dir); err != nil {
 				return err
 			}
 		}
@@ -747,13 +820,14 @@ func emptyFolder(p string) bool {
 }
 
 // removeStale takes away what LADO placed in a home before and no longer
-// wants: links, which are never followed, files, and folders LADO made once
-// they are empty. An entry under a link, which now stands where LADO's folder
-// was, is not the home's and stays.
-func removeStale(home string, prev, next *homeRecord) error {
+// wants: links, which are never followed, files, after rescuing a managed
+// copy the session changed or a file it put in place of a link, and folders
+// LADO made once they are empty. An entry under a link, which now stands
+// where LADO's folder was, is not the home's and stays.
+func (s *Service) removeStale(ctx context.Context, b *homeBuild) error {
 	var stale []string
-	for key := range prev.Entries {
-		if _, ok := next.Entries[key]; !ok {
+	for key := range b.prev.Entries {
+		if _, ok := b.next.Entries[key]; !ok {
 			stale = append(stale, key)
 		}
 	}
@@ -762,22 +836,25 @@ func removeStale(home string, prev, next *homeRecord) error {
 		return cmp.Or(cmp.Compare(strings.Count(b, "/"), strings.Count(a, "/")), cmp.Compare(a, b))
 	})
 	for _, key := range stale {
-		if !inRealFolders(home, key) {
+		if !inRealFolders(b.home, key) {
 			continue
 		}
-		p := filepath.Join(home, filepath.FromSlash(key))
+		p := filepath.Join(b.home, filepath.FromSlash(key))
 		info, err := os.Lstat(p)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
 			continue
 		case err != nil:
 			return err
-		case info.IsDir():
+		case info.IsDir() && b.prev.Entries[key] == placedFolder:
 			// A folder Claude keeps something in stays.
 			_ = os.Remove(p)
 			continue
 		}
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		if err := s.rescueReplaced(ctx, b.rescue(), key, p, info); err != nil {
+			return err
+		}
+		if err := os.RemoveAll(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 	}
@@ -803,13 +880,28 @@ func inRealFolders(home, key string) bool {
 // Claude changes as it runs, and sets its mcpServers: the base's servers and
 // the managed ones, which win a name clash. A server LADO put there before and
 // no longer delivers goes; one the session added stays. A copy that is
-// missing or is no JSON object is taken from the base again.
-func (s *Service) reconcileConfig(home string, base homeBase, items []domain.LadoSetupItemWithVersion, prev, next *homeRecord) error {
-	p := filepath.Join(home, claudeConfigName)
+// missing or is no JSON object is taken from the base again, and so is the
+// copy of a home whose base changed, as when its session moved to another
+// account: the servers its session added go to the base it was made from
+// first, or come along when that cannot take them.
+func (s *Service) reconcileConfig(b *homeBuild, items []domain.LadoSetupItemWithVersion) error {
+	base, prev, next := b.base, b.prev, b.next
+	p := filepath.Join(b.home, claudeConfigName)
 	current, err := readRegularNoLink(p)
 	if err != nil || !isJSONObject(current) {
 		if err == nil || !errors.Is(err, fs.ErrNotExist) {
 			s.deps.Log.Warn("LADO copies a Claude Code session home's .claude.json from the base again: it is no JSON object", "err", err)
+		}
+		current = nil
+	}
+	var carried []jsonMember
+	if current != nil && prev.Base != "" && (prev.Base != base.dir || prev.BaseConfig != base.config) {
+		if carried, err = sessionServers(current, prev); err == nil && len(carried) > 0 && prev.BaseConfig != "" {
+			if err := addServers(prev.BaseConfig, carried); err != nil {
+				s.deps.Log.Warn("LADO keeps the MCP servers a session added in its home: the base it was made from cannot take them", "err", err)
+			} else {
+				carried = nil
+			}
 		}
 		current = nil
 	}
@@ -843,6 +935,14 @@ func (s *Service) reconcileConfig(home string, base homeBase, items []domain.Lad
 		}
 	}
 	for _, m := range servers {
+		if data, err = jsonWithMCPServer(data, m.Key, m.Value); err != nil {
+			return err
+		}
+	}
+	for _, m := range carried {
+		if has, err := hasServer(data, m.Key); err != nil || has {
+			continue
+		}
 		if data, err = jsonWithMCPServer(data, m.Key, m.Value); err != nil {
 			return err
 		}
@@ -937,11 +1037,34 @@ const (
 )
 
 // homeRecord names what LADO placed in a home: entries by their slash path
-// under it, with their kind, and the MCP servers of its .claude.json.
+// under it, with their kind, the managed copies among them, and the MCP
+// servers of its .claude.json; and the base folder and .claude.json it was
+// made from.
 type homeRecord struct {
-	Format  string            `json:"format"`
-	Entries map[string]string `json:"entries"`
-	Servers []string          `json:"servers"`
+	Format     string              `json:"format"`
+	Base       string              `json:"base,omitempty"`
+	BaseConfig string              `json:"baseConfig,omitempty"`
+	Entries    map[string]string   `json:"entries"`
+	Copies     map[string]homeCopy `json:"copies,omitempty"`
+	Servers    []string            `json:"servers"`
+}
+
+// homeCopy is the managed item version a file in a home is a copy of.
+type homeCopy struct {
+	Item   domain.LadoSetupItemID `json:"item"`
+	SHA256 string                 `json:"sha256"`
+}
+
+func newHomeRecord(base homeBase) *homeRecord {
+	return &homeRecord{Format: homeRecordFormat, Base: base.dir, BaseConfig: base.config, Entries: map[string]string{}, Copies: map[string]homeCopy{}}
+}
+
+// placed records a file LADO placed at key, and the version it copies.
+func (r *homeRecord) placed(key string, node *homeNode) {
+	r.Entries[key] = placedFile
+	if node.copyOf != nil {
+		r.Copies[key] = *node.copyOf
+	}
 }
 
 func (r *homeRecord) has(key string) bool {
@@ -951,12 +1074,18 @@ func (r *homeRecord) has(key string) bool {
 
 // with is r with what prev names and r does not.
 func (r *homeRecord) with(prev *homeRecord) *homeRecord {
-	out := &homeRecord{Format: homeRecordFormat, Entries: map[string]string{}}
+	out := &homeRecord{Format: homeRecordFormat, Base: r.Base, BaseConfig: r.BaseConfig, Entries: map[string]string{}, Copies: map[string]homeCopy{}}
 	for key, kind := range prev.Entries {
 		out.Entries[key] = kind
 	}
 	for key, kind := range r.Entries {
 		out.Entries[key] = kind
+	}
+	for key, c := range prev.Copies {
+		out.Copies[key] = c
+	}
+	for key, c := range r.Copies {
+		out.Copies[key] = c
 	}
 	out.Servers = slices.Compact(slices.Sorted(slices.Values(append(slices.Clone(prev.Servers), r.Servers...))))
 	return out
@@ -977,7 +1106,10 @@ func readHomeRecord(p string) *homeRecord {
 	if got.Entries != nil {
 		r.Entries = got.Entries
 	}
-	r.Servers = got.Servers
+	if got.Copies != nil {
+		r.Copies = got.Copies
+	}
+	r.Base, r.BaseConfig, r.Servers = got.Base, got.BaseConfig, got.Servers
 	return r
 }
 
@@ -993,11 +1125,13 @@ func writeHomeRecord(p string, r *homeRecord) error {
 }
 
 // CleanupHomes removes the config homes of sessions that ended or no longer
-// exist (plan §9). os.RemoveAll removes a home's links without following
-// them, so what they point at stays. A home prepared within homeGrace stays
-// even when its session reads as ended, since a restore builds the home
-// before it marks the session live again. The daemon calls it when it starts
-// and after scans.
+// exist (plan §9), after rescuing what each session made or changed there
+// (home_rescue.go); a home whose rescue fails stays for the next cleanup.
+// os.RemoveAll removes a home's links without following them, so what they
+// point at stays. A home prepared within homeGrace stays even when its
+// session reads as ended, since a restore builds the home before it marks
+// the session live again. The daemon calls it when it starts and after
+// scans.
 func (s *Service) CleanupHomes(ctx context.Context) error {
 	if s.deps.StateDir == "" {
 		return nil
@@ -1023,6 +1157,11 @@ func (s *Service) CleanupHomes(ctx context.Context) error {
 			live[rec.ID] = true
 		}
 	}
+	// Rescue writes to the managed folder, as changes do.
+	if err := s.lockWrite(ctx); err != nil {
+		return err
+	}
+	defer s.unlockWrite()
 	s.homesMu.Lock()
 	defer s.homesMu.Unlock()
 	now := s.deps.Clock()
@@ -1030,6 +1169,11 @@ func (s *Service) CleanupHomes(ctx context.Context) error {
 	for _, d := range entries {
 		id := domain.SessionID(d.Name())
 		if live[id] || now.Sub(s.homesPrepared[id]) < homeGrace {
+			continue
+		}
+		if err := s.rescueHome(ctx, id, filepath.Join(root, d.Name())); err != nil {
+			s.deps.Log.Warn("LADO keeps the config home of an ended session: it could not rescue what the session made there", "session", id, "err", err)
+			errs = append(errs, err)
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(root, d.Name())); err != nil {
@@ -1085,7 +1229,7 @@ func (s *Service) probeHome(ctx context.Context) (string, func(), error) {
 		return "", cleanup, err
 	}
 	home := filepath.Join(root, "claude")
-	return home, cleanup, s.buildHome(ctx, home, base, items, false)
+	return home, cleanup, s.buildHome(ctx, "", home, base, items, false)
 }
 
 // checkHomeItem compares an item in a home with its version: its key's

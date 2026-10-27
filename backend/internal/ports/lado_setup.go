@@ -16,6 +16,8 @@ type LadoSetupHome interface {
 	// returns the launch variables that point Claude Code at it. The caller
 	// sets them over the launch environment; an empty map changes nothing.
 	PrepareClaudeHome(ctx context.Context, in LadoSetupHomeInput) (map[string]string, error)
+	// OwnsHome reports whether configDir is a config home LADO built.
+	OwnsHome(configDir string) bool
 }
 
 // LadoSetupHomeInput is a Claude Code session about to launch.

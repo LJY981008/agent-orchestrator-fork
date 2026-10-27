@@ -11,6 +11,7 @@ package sessionmanager
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -65,6 +66,29 @@ func (m *Manager) isClaudeCodeAgent(agent ports.Agent) bool {
 	// == on interfaces panics for an adapter type that is not comparable.
 	t := reflect.TypeOf(agent)
 	return t == reflect.TypeOf(claude) && t.Comparable() && agent == claude
+}
+
+// ladoSafeNativeTranscriptPath is safeNativeTranscriptPath for a session
+// whose config folder may be a LADO config home, which links projects to the
+// folder that keeps the transcripts, so they resolve outside the home: in a
+// home LADO built, a transcript under that folder is accepted too. Any other
+// config folder, an account's included, is checked as upstream does.
+func (m *Manager) ladoSafeNativeTranscriptPath(ctx context.Context, path, configDir string) string {
+	if safe := safeNativeTranscriptPath(ctx, path, configDir); safe != "" || m.ladoSetupHome == nil || !m.ladoSetupHome.OwnsHome(configDir) {
+		return safe
+	}
+	path = strings.TrimSpace(path)
+	if path == "" || !filepath.IsAbs(path) {
+		return ""
+	}
+	realPath, err := filepath.EvalSymlinks(filepath.Clean(path))
+	if err != nil || ctx.Err() != nil || !ladoProjectsLinkHolds(configDir, realPath) {
+		return ""
+	}
+	if info, err := os.Stat(realPath); err != nil || !info.Mode().IsRegular() {
+		return ""
+	}
+	return realPath
 }
 
 // ladoProjectsLinkHolds reports whether realPath, a transcript path with its

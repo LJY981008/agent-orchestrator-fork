@@ -25,6 +25,10 @@ type fakeLadoHome struct {
 	calls  []ports.LadoSetupHomeInput
 }
 
+func (h *fakeLadoHome) OwnsHome(configDir string) bool {
+	return h.home != "" && filepath.Clean(configDir) == filepath.Clean(h.home)
+}
+
 func (h *fakeLadoHome) PrepareClaudeHome(_ context.Context, in ports.LadoSetupHomeInput) (map[string]string, error) {
 	if h.before != nil {
 		h.before(in)
@@ -173,9 +177,9 @@ func TestChatResumeBuildsTheLadoHome(t *testing.T) {
 
 func TestSafeNativeTranscriptPathFollowsProjectsLink(t *testing.T) {
 	ctx := context.Background()
-	real := t.TempDir()
-	transcript := filepath.Join(real, "projects", "-ws", "abc.jsonl")
-	credentials := filepath.Join(real, ".credentials.json")
+	base := t.TempDir()
+	transcript := filepath.Join(base, "projects", "-ws", "abc.jsonl")
+	credentials := filepath.Join(base, ".credentials.json")
 	for _, path := range []string{transcript, credentials} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 			t.Fatal(err)
@@ -184,15 +188,17 @@ func TestSafeNativeTranscriptPathFollowsProjectsLink(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	realTranscript, err := filepath.EvalSymlinks(transcript)
+	resolved, err := filepath.EvalSymlinks(transcript)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A config home, like an account folder, links projects to the folder
-	// that keeps the transcripts.
-	home := t.TempDir()
-	if err := os.Symlink(filepath.Join(real, "projects"), filepath.Join(home, "projects")); err != nil {
-		t.Skipf("cannot make a symbolic link here: %v", err)
+	// A LADO config home and an account folder both link projects to the
+	// folder that keeps the transcripts.
+	home, account := t.TempDir(), t.TempDir()
+	for _, dir := range []string{home, account} {
+		if err := os.Symlink(filepath.Join(base, "projects"), filepath.Join(dir, "projects")); err != nil {
+			t.Skipf("cannot make a symbolic link here: %v", err)
+		}
 	}
 	if err := os.Symlink(credentials, filepath.Join(home, "linked.jsonl")); err != nil {
 		t.Fatal(err)
@@ -201,18 +207,25 @@ func TestSafeNativeTranscriptPathFollowsProjectsLink(t *testing.T) {
 	if err := os.WriteFile(outside, []byte("{}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	lado := &Manager{}
+	lado.SetLadoSetupHome(&fakeLadoHome{home: home})
 	for _, c := range []struct {
 		name, path, configDir, want string
+		m                           *Manager
 	}{
-		{"through the home's link", filepath.Join(home, "projects", "-ws", "abc.jsonl"), home, realTranscript},
-		{"the resolved transcript", transcript, home, realTranscript},
-		{"inside the folder itself", transcript, real, realTranscript},
-		{"elsewhere in the linked folder's parent", credentials, home, ""},
-		{"a link in the home to elsewhere", filepath.Join(home, "linked.jsonl"), home, ""},
-		{"outside", outside, home, ""},
+		{"through the home's link", filepath.Join(home, "projects", "-ws", "abc.jsonl"), home, resolved, lado},
+		{"the resolved transcript", transcript, home, resolved, lado},
+		{"inside the folder itself", transcript, base, resolved, lado},
+		{"elsewhere in the linked folder's parent", credentials, home, "", lado},
+		{"a link in the home to elsewhere", filepath.Join(home, "linked.jsonl"), home, "", lado},
+		{"outside", outside, home, "", lado},
+		// Upstream: a folder that is no LADO home, or no LADO at all.
+		{"through an account's link", filepath.Join(account, "projects", "-ws", "abc.jsonl"), account, "", lado},
+		{"without LADO", filepath.Join(home, "projects", "-ws", "abc.jsonl"), home, "", &Manager{}},
+		{"inside the folder without LADO", transcript, base, resolved, &Manager{}},
 	} {
-		if got := safeNativeTranscriptPath(ctx, c.path, c.configDir); got != c.want {
-			t.Errorf("%s: safeNativeTranscriptPath = %q, want %q", c.name, got, c.want)
+		if got := c.m.ladoSafeNativeTranscriptPath(ctx, c.path, c.configDir); got != c.want {
+			t.Errorf("%s: ladoSafeNativeTranscriptPath = %q, want %q", c.name, got, c.want)
 		}
 	}
 }

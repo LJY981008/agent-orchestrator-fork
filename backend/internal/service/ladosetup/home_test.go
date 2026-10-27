@@ -377,14 +377,18 @@ func fileExists(path string) bool {
 }
 
 // pinningStore is the real store with the setup an approval pinned for one
-// execution, which the rule snapshot would hold.
+// execution, which the rule snapshot would hold, and another execution that
+// pinned none.
 type pinningStore struct {
 	*recordingStore
-	request string
-	pins    map[domain.LadoSetupItemID]int
+	request, unpinned string
+	pins              map[domain.LadoSetupItemID]int
 }
 
 func (p *pinningStore) LadoSetupVersionsForClientRequest(ctx context.Context, id string) ([]domain.LadoSetupItemWithVersion, bool, error) {
+	if id != "" && id == p.unpinned {
+		return nil, true, nil
+	}
 	if id != p.request {
 		return p.recordingStore.LadoSetupVersionsForClientRequest(ctx, id)
 	}
