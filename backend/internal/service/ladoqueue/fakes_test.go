@@ -251,6 +251,10 @@ type fakeStore struct {
 	taskReads  int
 	// settingsEvents are the audit events of the stored dispatch settings.
 	settingsEvents []domain.LadoAuditEvent
+	// checks are every project's check commands; checksErr fails reading
+	// them.
+	checks    []domain.LadoCheckCommand
+	checksErr error
 }
 
 func (f *fakeStore) add(entries ...domain.LadoQueueEntry) {
@@ -579,6 +583,15 @@ func (f *fakeStore) SetLadoDispatchSettings(_ context.Context, settings domain.L
 	f.settings = settings
 	f.settingsEvents = append(f.settingsEvents, event)
 	return settings, nil
+}
+
+func (f *fakeStore) LadoProjectChecks(context.Context, domain.ProjectID) ([]domain.LadoCheckCommand, int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.checksErr != nil {
+		return nil, 0, f.checksErr
+	}
+	return slices.Clone(f.checks), domain.LadoCheckTimeoutDefault, nil
 }
 
 // fakeTrackerClient stands for the tracker client a real task service reads

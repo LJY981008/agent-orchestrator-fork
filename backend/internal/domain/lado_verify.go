@@ -576,6 +576,10 @@ var ErrLadoIntegrationAlreadyApproved = errors.New("the head already has an inte
 // as LADO_VERIFICATION_CHANGED.
 var ErrLadoVerificationChanged = errors.New("the head's verification record changed")
 
+// LadoEvidencePath is where a worker writes its evidence file, relative to
+// its session's artifact directory (docs/LJY-PRD/TDD.md §8.6).
+const LadoEvidencePath = "lado/evidence.md"
+
 // LadoEvidenceState is what an acceptance criterion's evidence amounts to
 // (docs/LJY-PRD/TDD.md §8.6).
 type LadoEvidenceState string
