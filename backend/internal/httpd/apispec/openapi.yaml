@@ -21387,6 +21387,12 @@ components:
           type: string
         name:
           type: string
+        note:
+          description: 'kept_in_lado: LADO made later versions of the item, which
+            stay readable in LADO; omitted otherwise.'
+          enum:
+          - kept_in_lado
+          type: string
         path:
           description: 'Under root, with slashes and #<key> after a key''s file.'
           type: string
@@ -21398,12 +21404,14 @@ components:
           type: string
         status:
           description: 'restored_beside: something new held the path, so the original
-            is beside it; key_kept: the file has the key now, which stays.'
+            is beside it; key_kept: the file has the key now, which stays; skipped_deleted:
+            the item was deleted in LADO, so its original stays out.'
           enum:
           - restored
           - restored_beside
           - key_kept
           - failed
+          - skipped_deleted
           type: string
         tool:
           enum:

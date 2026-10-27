@@ -50,6 +50,9 @@ const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
 // stale notice for a newer version.
 const contentCodes = new Set(["LADO_SETUP_CONTENT_INVALID", "LADO_SETUP_LOGIN_KEY"]);
 const ITEM_CHANGED = "LADO_SETUP_ITEM_CHANGED";
+// The managed copy was changed by hand: the daemon refuses an edit until that
+// change is kept or reverted, which the drift review does.
+const DRIFT_PENDING = "LADO_SETUP_DRIFT_PENDING";
 
 function codeOf(error: unknown): string | undefined {
 	return error instanceof LadoApiError ? error.code : undefined;
@@ -66,16 +69,19 @@ function baseOf(detail: LadoSetupItemDetail | undefined): Base | null {
 
 /**
  * Open while itemId is set and open is true. Mount it again for each opening,
- * so it starts from the item as it is then.
+ * so it starts from the item as it is then. onReviewDrift opens the drift
+ * review of the item instead, when its managed copy was changed by hand.
  */
 export function LadoSetupItemEditor({
 	itemId,
 	open,
 	onOpenChange,
+	onReviewDrift,
 }: {
 	itemId: string | null;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
+	onReviewDrift?: () => void;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
@@ -114,12 +120,13 @@ export function LadoSetupItemEditor({
 	// A failed apply after the impact dialog's confirm shows in that dialog.
 	const error = (change.pending ? null : change.error) ?? preview.error;
 	const stale = codeOf(error) === ITEM_CHANGED;
+	const drifted = codeOf(error) === DRIFT_PENDING;
 	const contentError = invalidJSON
 		? t("lado.setup.editor.invalidJson")
 		: error && contentCodes.has(codeOf(error) ?? "")
 			? ladoErrorText(t, error)
 			: null;
-	const formError = error && !stale && !contentCodes.has(codeOf(error) ?? "") ? ladoErrorText(t, error) : null;
+	const formError = error && !stale && !drifted && !contentCodes.has(codeOf(error) ?? "") ? ladoErrorText(t, error) : null;
 
 	const close = () => onOpenChange(false);
 	const request = (): LadoSetupChangeRequest | null => {
@@ -253,6 +260,23 @@ export function LadoSetupItemEditor({
 									>
 										<span className="text-control">{t("lado.rules.editor.reload")}</span>
 									</Button>
+								</div>
+							) : drifted ? (
+								<div className="flex items-center justify-between gap-3" data-testid="lado-setup-editor-drift">
+									<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">
+										{ladoErrorText(t, error)}
+									</p>
+									{onReviewDrift ? (
+										<Button
+											type="button"
+											variant="ghost"
+											size="sm"
+											className="shrink-0 text-settings-muted hover:text-settings-label"
+											onClick={onReviewDrift}
+										>
+											<span className="text-control">{t("lado.setup.list.reviewChange")}</span>
+										</Button>
+									) : null}
 								</div>
 							) : rebased ? (
 								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">

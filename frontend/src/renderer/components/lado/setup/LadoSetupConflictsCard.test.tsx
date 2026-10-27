@@ -11,8 +11,11 @@ import {
 	routeDaemon,
 	setupChangeResult,
 	setupConflict,
+	setupContent,
 	setupInventory,
 	setupItem,
+	setupItemDetail,
+	setupItemRecord,
 	type DaemonRoutes,
 } from "../../../test/lado-setup-fixtures";
 import { LadoSetupConflictsCard } from "./LadoSetupConflictsCard";
@@ -62,11 +65,13 @@ function serve(routes: DaemonRoutes = {}) {
 
 function renderCard(conflicts = [note, warning, accepted, blocking, leftInPlace]) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-	return render(
+	const card = (shown: typeof conflicts) => (
 		<QueryClientProvider client={client}>
-			<LadoSetupConflictsCard conflicts={conflicts} inventory={inventory} />
-		</QueryClientProvider>,
+			<LadoSetupConflictsCard conflicts={shown} inventory={inventory} />
+		</QueryClientProvider>
 	);
+	const view = render(card(conflicts));
+	return { ...view, showConflicts: (shown: typeof conflicts) => view.rerender(card(shown)) };
 }
 
 function conflictRow(code: string): HTMLElement {
@@ -111,16 +116,16 @@ describe("LadoSetupConflictsCard", () => {
 		serve();
 		renderCard();
 
-		expect(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: "Accept" })).toBeEnabled();
+		expect(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: /^Accept this warning for / })).toBeEnabled();
 		const done = conflictRow("LADO_SETUP_HOOK_ADDS_PROMPT_TEXT");
-		expect(within(done).queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+		expect(within(done).queryByRole("button", { name: /^Accept this warning for / })).not.toBeInTheDocument();
 		expect(within(done).getByText("Claude Code · Setting · hooks · Accepted")).toBeInTheDocument();
 		for (const code of ["LADO_SETUP_MCP_NAME_TAKEN", "LADO_SETUP_DENIES_AO", "LADO_SETUP_HOOK_SHARES_AO_EVENT"]) {
-			expect(within(conflictRow(code)).queryByRole("button", { name: "Accept" })).not.toBeInTheDocument();
+			expect(within(conflictRow(code)).queryByRole("button", { name: /^Accept this warning for / })).not.toBeInTheDocument();
 		}
 		// Only an item that is on at Global can be turned off there.
-		expect(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: "Turn off" })).toBeEnabled();
-		expect(within(conflictRow("LADO_SETUP_DENIES_AO")).queryByRole("button", { name: "Turn off" })).not.toBeInTheDocument();
+		expect(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: /^Turn off / })).toBeEnabled();
+		expect(within(conflictRow("LADO_SETUP_DENIES_AO")).queryByRole("button", { name: /^Turn off / })).not.toBeInTheDocument();
 	});
 
 	it("accepts a warning for its current content at Global after a dry run", async () => {
@@ -132,7 +137,7 @@ describe("LadoSetupConflictsCard", () => {
 		});
 		renderCard();
 
-		await user.click(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: "Accept" }));
+		await user.click(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: /^Accept this warning for / }));
 
 		await waitFor(() => expect(daemonCalls(apiClient, "POST", "/api/v1/lado/setup/conflicts/acceptances")).toHaveLength(2));
 		const acceptance = {
@@ -158,7 +163,7 @@ describe("LadoSetupConflictsCard", () => {
 		const changeSetup = vi.spyOn(aoBridge.lado.presence, "changeSetup");
 		renderCard();
 
-		await user.click(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: "Turn off" }));
+		await user.click(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: /^Turn off / }));
 
 		await waitFor(() => expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings")).toHaveLength(2));
 		const binding = { itemId: "item-ao", scope: "global", scopeId: "", state: "off" };
@@ -182,7 +187,7 @@ describe("LadoSetupConflictsCard", () => {
 		});
 		renderCard();
 
-		await user.click(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: "Turn off" }));
+		await user.click(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: /^Turn off / }));
 		const dialog = await screen.findByRole("dialog", { name: "Change the local setup for approved tasks?" });
 		expect(within(dialog).getByText("Add login")).toBeInTheDocument();
 		expect(daemonCalls(apiClient, "PUT", "/api/v1/lado/setup/bindings")).toHaveLength(1);
@@ -208,7 +213,7 @@ describe("LadoSetupConflictsCard", () => {
 		});
 		renderCard();
 
-		await user.click(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: "Accept" }));
+		await user.click(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: /^Accept this warning for / }));
 
 		expect(await within(conflictRow("LADO_SETUP_DENIES_GIT")).findByRole("alert")).toHaveTextContent(
 			"This item's content does not give that warning. Check the conflicts again.",
@@ -220,5 +225,56 @@ describe("LadoSetupConflictsCard", () => {
 		renderCard([]);
 
 		expect(screen.queryByTestId("lado-setup-conflicts")).not.toBeInTheDocument();
+	});
+
+	it("names the item each repeated action is about", () => {
+		serve();
+		renderCard();
+
+		expect(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: "Turn off ao" })).toBeEnabled();
+		expect(within(conflictRow("LADO_SETUP_DENIES_GIT")).getByRole("button", { name: "Accept this warning for permissions" })).toBeEnabled();
+		expect(within(conflictRow("LADO_SETUP_HOOK_ADDS_PROMPT_TEXT")).getByRole("button", { name: "Revoke the acceptance for hooks" })).toBeEnabled();
+	});
+
+	it("revokes an accepted warning after a dry run, without the desktop app", async () => {
+		const user = userEvent.setup();
+		const path = "/api/v1/lado/setup/conflicts/acceptances/{acceptanceId}";
+		serve({
+			[`DELETE ${path}`]: ({ params }) => ({
+				data: setupChangeResult({ op: "revoke", applied: !(params?.query as { dryRun?: boolean } | undefined)?.dryRun }),
+			}),
+		});
+		const changeSetup = vi.spyOn(aoBridge.lado.presence, "changeSetup");
+		renderCard();
+
+		await user.click(within(conflictRow("LADO_SETUP_HOOK_ADDS_PROMPT_TEXT")).getByRole("button", { name: "Revoke the acceptance for hooks" }));
+
+		await waitFor(() => expect(daemonCalls(apiClient, "DELETE", path)).toHaveLength(2));
+		expect(daemonCalls(apiClient, "DELETE", path).map((call) => call.params)).toEqual([
+			{ path: { acceptanceId: "acceptance-1" }, query: { dryRun: true } },
+			{ path: { acceptanceId: "acceptance-1" }, query: {} },
+		]);
+		expect(changeSetup).not.toHaveBeenCalled();
+	});
+
+	it("keeps the editor it opened when the last conflict goes away", async () => {
+		const user = userEvent.setup();
+		serve({
+			"GET /api/v1/lado/setup/items/{itemId}": () => ({
+				data: setupItemDetail(setupItemRecord({ id: "item-ao", kind: "mcp_server", name: "ao" }), [
+					{ content: setupContent({ contentKind: "json", text: '{ "type": "http" }' }) },
+				]),
+			}),
+		});
+		const { showConflicts } = renderCard([blocking]);
+
+		await user.click(within(conflictRow("LADO_SETUP_MCP_NAME_TAKEN")).getByRole("button", { name: "Edit ao" }));
+		expect(await screen.findByRole("dialog", { name: "Edit ao" })).toBeInTheDocument();
+
+		// Fixing the item ends its conflict while the editor is still open.
+		showConflicts([]);
+
+		expect(screen.queryByTestId("lado-setup-conflicts")).not.toBeInTheDocument();
+		expect(screen.getByRole("dialog", { name: "Edit ao" })).toBeInTheDocument();
 	});
 });

@@ -185,6 +185,7 @@ function json(status: number, body: unknown): Response {
 const PLAN_SHA = "e".repeat(64);
 const CHANGE_SHA = "7".repeat(64);
 const DRIFT_SHA = "d".repeat(64);
+const UNREADABLE = "LADO_PRESENCE_ANSWER_UNREADABLE";
 const setupEntries: LadoPresenceSetupEntry[] = [
 	{ tool: "claude-code", kind: "skill", name: "review", action: "move" },
 	{ tool: "claude-code", kind: "setting", name: "hooks", action: "move" },
@@ -243,9 +244,13 @@ function setupItem(overrides: Partial<components["schemas"]["LadoSetupItemRespon
 	};
 }
 
+type Preconditions = components["schemas"]["LadoSetupPreconditionsResponse"];
+const nothingRunning: Preconditions = { ok: true, os: "linux", processes: [], processesIgnored: false, sessions: [], unverified: [] };
+
 function adoptionDetail(
 	overrides: Partial<components["schemas"]["LadoSetupAdoptionResponse"]> = {},
 	backupReadable = true,
+	preconditions: Preconditions | undefined = nothingRunning,
 ): components["schemas"]["LadoSetupAdoptionDetailResponse"] {
 	return {
 		adoption: {
@@ -263,6 +268,7 @@ function adoptionDetail(
 		backup: [],
 		backupReadable,
 		items: [setupItem(), setupItem({ id: "item-2", kind: "skill", name: "review" }), setupItem({ id: "item-3", kind: "setting", name: "hooks" })],
+		...(preconditions ? { preconditions } : {}),
 	};
 }
 
@@ -293,6 +299,26 @@ function changePreview(overrides: Partial<ChangeResponse> = {}): ChangeResponse 
 	};
 }
 
+// The item as it resolves in a project or task, from LadoSetupItemListResponse.
+function scopeItem(overrides: Partial<components["schemas"]["LadoSetupItemStateResponse"]> = {}): components["schemas"]["LadoSetupItemStateResponse"] {
+	return {
+		global: "on",
+		installedSha256: "",
+		itemId: "item-1",
+		kind: "mcp_server",
+		name: "search",
+		on: true,
+		project: "force_off",
+		sha256: "f".repeat(64),
+		source: { scope: "project", scopeId: "demo", state: "force_off" },
+		task: "inherit",
+		tool: "claude-code",
+		version: 1,
+		versionId: "version-1",
+		...overrides,
+	};
+}
+
 type Route = () => Response | Promise<Response>;
 type Routes = {
 	plan?: Route;
@@ -309,6 +335,7 @@ type Routes = {
 	restore?: Route;
 	changePreview?: Route;
 	change?: Route;
+	scopeItems?: Route;
 };
 
 function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
@@ -321,7 +348,13 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 		calls.push({ url, init });
 		const { pathname } = new URL(url);
 		if (pathname.startsWith("/api/v1/lado/setup/")) {
-			const dryRun = typeof init.body === "string" && init.body !== "" && JSON.parse(init.body).dryRun === true;
+			// A delete asks for its dry run in the query.
+			const dryRun =
+				new URL(url).searchParams.get("dryRun") === "true" ||
+				(typeof init.body === "string" && init.body !== "" && JSON.parse(init.body).dryRun === true);
+			if (init.method === "GET" && pathname === "/api/v1/lado/setup/items") {
+				return routes.scopeItems ? routes.scopeItems() : json(200, { items: [scopeItem()] });
+			}
 			if (pathname === "/api/v1/lado/setup/adoptions") {
 				if (dryRun) return routes.adoptPreview ? routes.adoptPreview() : json(200, adoptionPreview());
 				return routes.adopt ? routes.adopt() : json(200, adopted);
@@ -512,10 +545,10 @@ describe("registerLadoPresenceIpc", () => {
 				"LADO_PLAN_BLOB_MISSING",
 			],
 			["a broken answer", () => new Response("bad gateway", { status: 502 }), undefined],
-			["no snapshot hash", () => json(200, effectiveResponse({ snapshotSha256: "" })), undefined],
-			["a short snapshot hash", () => json(200, effectiveResponse({ snapshotSha256: "c".repeat(63) })), undefined],
-			["another task's rules", () => json(200, effectiveResponse({ taskId: "lado-task-2" })), undefined],
-			["no rules", () => json(200, { ...effectiveResponse(), rules: undefined }), undefined],
+			["no snapshot hash", () => json(200, effectiveResponse({ snapshotSha256: "" })), UNREADABLE],
+			["a short snapshot hash", () => json(200, effectiveResponse({ snapshotSha256: "c".repeat(63) })), UNREADABLE],
+			["another task's rules", () => json(200, effectiveResponse({ taskId: "lado-task-2" })), UNREADABLE],
+			["no rules", () => json(200, { ...effectiveResponse(), rules: undefined }), UNREADABLE],
 			["an unreachable daemon", () => Promise.reject(new TypeError("fetch failed")), "SERVICE_UNAVAILABLE"],
 		];
 		for (const [name, effective, code] of unreadable) {
@@ -878,9 +911,9 @@ describe("turning LADO mode off", () => {
 				{ settings: () => json(404, { error: "not_found", code: "PROJECT_NOT_FOUND", message: "Unknown project" }) },
 				"PROJECT_NOT_FOUND",
 			],
-			["another project's settings", { settings: () => json(200, { ...settingsResponse(), projectId: "other" }) }, undefined],
-			["settings without a mode", { settings: () => json(200, { projectId: "demo", maxConcurrent: 1 }) }, undefined],
-			["another project", { project: () => json(200, { status: "ok", project: { ...projectResponse().project, id: "other" } }) }, undefined],
+			["another project's settings", { settings: () => json(200, { ...settingsResponse(), projectId: "other" }) }, UNREADABLE],
+			["settings without a mode", { settings: () => json(200, { projectId: "demo", maxConcurrent: 1 }) }, UNREADABLE],
+			["another project", { project: () => json(200, { status: "ok", project: { ...projectResponse().project, id: "other" } }) }, UNREADABLE],
 			["an unreachable daemon", { project: () => Promise.reject(new TypeError("fetch failed")) }, "SERVICE_UNAVAILABLE"],
 		];
 		for (const [name, routes, code] of unreadable) {
@@ -1038,6 +1071,29 @@ describe("adopting local setup", () => {
 		expect(refused.dialog.showMessageBox).not.toHaveBeenCalled();
 		expect(refused.calls).toHaveLength(1);
 
+		// A setting left in place that names a moved file stops it the same way.
+		const inPlace = adoptionPreview({
+			conflicts: [
+				{
+					acceptanceId: "",
+					code: "LADO_SETUP_PATH_USED_IN_PLACE",
+					contentSha256: "",
+					detail: "",
+					details: { key: "env.HELPER", path: "bin/helper.sh", origin: "/home/dev/.claude/settings.json#env" },
+					itemId: "",
+					path: "/home/dev/.claude/settings.json#env",
+					severity: "blocking",
+				},
+			],
+		});
+		const stopped = setup({}, { adoptPreview: () => json(200, inPlace) });
+		await expect(stopped.adoptSetup({ entries: setupEntries })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_SETUP_PATH_USED_IN_PLACE",
+			details: { key: "env.HELPER", path: "bin/helper.sh" },
+		});
+		expect(stopped.dialog.showMessageBox).not.toHaveBeenCalled();
+
 		// The same setup left in place has these too, and adopted it can be turned off or fixed.
 		const blocked = adoptionPreview({
 			conflicts: [
@@ -1103,12 +1159,12 @@ describe("adopting local setup", () => {
 				() => json(400, { error: "bad_request", code: "LADO_SETUP_NOT_ADOPTABLE", message: "LADO cannot adopt this entry.", details: { reason: "symlink" } }),
 				"LADO_SETUP_NOT_ADOPTABLE",
 			],
-			["no plan hash", () => json(200, adoptionPreview({ planSha256: "" })), undefined],
-			["a short plan hash", () => json(200, adoptionPreview({ planSha256: "e".repeat(63) })), undefined],
-			["a missing entry", () => json(200, adoptionPreview({}, [first!, second!, third!])), undefined],
-			["another action", () => json(200, adoptionPreview({}, setupEntries.map((entry) => ({ ...entry, action: "move" as const })))), undefined],
-			["an entry twice", () => json(200, adoptionPreview({}, [first!, first!, second!, third!])), undefined],
-			["no preconditions", () => json(200, { ...adoptionPreview(), preview: { ...adoptionPreview().preview, preconditions: undefined } }), undefined],
+			["no plan hash", () => json(200, adoptionPreview({ planSha256: "" })), UNREADABLE],
+			["a short plan hash", () => json(200, adoptionPreview({ planSha256: "e".repeat(63) })), UNREADABLE],
+			["a missing entry", () => json(200, adoptionPreview({}, [first!, second!, third!])), UNREADABLE],
+			["another action", () => json(200, adoptionPreview({}, setupEntries.map((entry) => ({ ...entry, action: "move" as const })))), UNREADABLE],
+			["an entry twice", () => json(200, adoptionPreview({}, [first!, first!, second!, third!])), UNREADABLE],
+			["no preconditions", () => json(200, { ...adoptionPreview(), preview: { ...adoptionPreview().preview, preconditions: undefined } }), UNREADABLE],
 			["an unreachable daemon", () => Promise.reject(new TypeError("fetch failed")), "SERVICE_UNAVAILABLE"],
 		];
 		for (const [name, adoptPreview, code] of unreadable) {
@@ -1158,6 +1214,8 @@ describe("adopting local setup", () => {
 
 describe("restoring local setup", () => {
 	const adoptionPath = "/api/v1/lado/setup/adoptions/adoption-1";
+	const adoptedAt = (locale: string) =>
+		new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date("2026-10-26T00:00:00Z"));
 
 	it("reads the adoption, names how many items go back, then signs the restore", async () => {
 		const { restoreSetup, calls, dialog, window } = setup();
@@ -1176,12 +1234,22 @@ describe("restoring local setup", () => {
 			expect.objectContaining({
 				type: "question",
 				message: "Restore this adoption?",
+				// When the adoption ran, as the app's language writes it, not its id.
 				detail:
-					"Adoption ID: adoption-1\nItems to put back where they were: 3\n\n" +
+					`Adopted: ${adoptedAt("en")}\nItems to put back where they were: 3\n\n` +
 					"Where something new is at a path now, the original goes beside it. Sessions AO starts no longer get these items.",
 				buttons: ["Cancel", "Restore"],
 			}),
 		);
+	});
+
+	it("counts what an adoption interrupted before it recorded its items moved", async () => {
+		const entry = (name: string, action: "move" | "keep") =>
+			({ action, kind: "skill", name, path: `skills/${name}`, root: "claude_dir", sha256: SHA, size: 1, tool: "claude-code", type: "dir" }) as const;
+		const interrupted = { ...adoptionDetail({ itemCount: 0, state: "partial" }), items: [], backup: [entry("a", "move"), entry("b", "keep"), entry("c", "move")] };
+		const { restoreSetup, dialog } = setup({}, { adoption: () => json(200, interrupted) });
+		await expect(restoreSetup({ adoptionId: "adoption-1" })).resolves.toMatchObject({ status: "restored" });
+		expect(dialogOptions(dialog).detail?.split("\n")[1]).toBe("Items to put back where they were: 2");
 	});
 
 	it("sends nothing when the human cancels", async () => {
@@ -1223,8 +1291,23 @@ describe("restoring local setup", () => {
 				"LADO_SETUP_NOT_FOUND",
 				undefined,
 			],
-			["another adoption", () => json(200, adoptionDetail({ id: "adoption-2" })), undefined, undefined],
-			["no items", () => json(200, { ...adoptionDetail(), items: undefined }), undefined, undefined],
+			[
+				"the tools running",
+				() =>
+					json(
+						200,
+						adoptionDetail({}, true, {
+							...nothingRunning,
+							ok: false,
+							sessions: [{ id: "ses-1", tool: "claude-code" }],
+							processes: [{ pid: 42, name: "codex", tool: "codex" }],
+						}),
+					),
+				"LADO_SETUP_TOOL_RUNNING",
+				{ sessions: [{ id: "ses-1", tool: "claude-code" }], processes: [{ pid: 42, name: "codex", tool: "codex" }] },
+			],
+			["another adoption", () => json(200, adoptionDetail({ id: "adoption-2" })), UNREADABLE, undefined],
+			["no items", () => json(200, { ...adoptionDetail(), items: undefined }), UNREADABLE, undefined],
 		];
 		for (const [name, adoption, code, details] of refusals) {
 			const { restoreSetup, calls, dialog } = setup({}, { adoption });
@@ -1244,7 +1327,7 @@ describe("restoring local setup", () => {
 		expect(dialogOptions(dialog)).toMatchObject({
 			message: ko["lado.presence.setupRestoreTitle"],
 			buttons: [ko["lado.presence.cancel"], ko["lado.presence.setupRestore"]],
-			detail: ko["lado.presence.setupRestoreDetail"].replace("{{id}}", "adoption-1").replace("{{count}}", "3"),
+			detail: ko["lado.presence.setupRestoreDetail"].replace("{{when}}", adoptedAt("ko")).replace("{{count}}", "3"),
 		});
 	});
 });
@@ -1277,7 +1360,7 @@ describe("changing local setup", () => {
 				message: "Confirm this local setup change?",
 				detail:
 					"Claude Code · MCP server · search\nNew item\nchange sha256 777777777777\n\n" +
-					"This change can run commands or widen access.",
+					"This item can run commands or widen access, so every change to it is confirmed here.",
 				buttons: ["Cancel", "Change"],
 				defaultId: 0,
 				cancelId: 0,
@@ -1313,6 +1396,24 @@ describe("changing local setup", () => {
 				"Claude Code · MCP server · search\nTurn on for task lado-task-1",
 			],
 			[
+				"turning off at Global",
+				{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { itemId: "item-1", scope: "global", scopeId: "", state: "off" } },
+				changePreview({ op: "binding", item: setupItem({ kind: "hook_script", name: "check.sh" }) }),
+				"Claude Code · Hook script · check.sh\nTurn off at Global",
+			],
+			[
+				"turning off for a project",
+				{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { itemId: "item-1", scope: "project", scopeId: "demo", state: "force_off" } },
+				changePreview({ op: "binding", item: setupItem() }),
+				"Claude Code · MCP server · search\nTurn off for project demo",
+			],
+			[
+				"turning off for a task",
+				{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { itemId: "item-1", scope: "task", scopeId: "lado-task-1", state: "force_off" } },
+				changePreview({ op: "binding", item: setupItem() }),
+				"Claude Code · MCP server · search\nTurn off for task lado-task-1",
+			],
+			[
 				"keeping drift",
 				{ method: "POST", path: `${itemsPath}/item-1/drift`, body: { action: "keep", sha256: DRIFT_SHA } },
 				changePreview({ op: "drift_keep", item: setupItem({ kind: "setting", name: "hooks" }) }),
@@ -1333,6 +1434,76 @@ describe("changing local setup", () => {
 		}
 	});
 
+	it("names what inheriting turns the item to, read from the daemon", async () => {
+		const cases: [string, Record<string, unknown>, Route, string, string][] = [
+			// The project follows Global, which has the item on.
+			["a project", { scope: "project", scopeId: "demo" }, () => json(200, { items: [scopeItem()] }), "/api/v1/lado/setup/items?projectId=demo", "Follow Global for project demo, which turns it on"],
+			// The task follows its project, which forces the item off.
+			["a task", { scope: "task", scopeId: "lado-task-1" }, () => json(200, { items: [scopeItem()] }), "/api/v1/lado/setup/items?taskId=lado-task-1", "Follow the project for task lado-task-1, which turns it off"],
+			["a task of a project that follows Global", { scope: "task", scopeId: "lado-task-1" }, () => json(200, { items: [scopeItem({ global: "off", project: "inherit" })] }), "/api/v1/lado/setup/items?taskId=lado-task-1", "Follow the project for task lado-task-1, which turns it off"],
+		];
+		for (const [name, scope, scopeItems, readPath, line] of cases) {
+			const request = { method: "PUT", path: "/api/v1/lado/setup/bindings", body: { itemId: "item-1", ...scope, state: "inherit" } };
+			const { changeSetup, calls, dialog } = setup({}, { scopeItems, changePreview: () => json(200, changePreview({ op: "binding", item: setupItem() })) });
+			await expect(changeSetup(request), name).resolves.toMatchObject({ status: "changed" });
+			expect(dialogOptions(dialog).detail?.split("\n")[1], name).toBe(line);
+			expect(calls.map(({ url, init }) => [init.method, url.slice(BASE.length)]), name).toEqual([
+				["PUT", "/api/v1/lado/setup/bindings"],
+				["GET", readPath],
+				["PUT", "/api/v1/lado/setup/bindings"],
+			]);
+			expectSigned(calls[2]!, "PUT", JSON.stringify(request.body));
+		}
+		// An item the daemon does not list there is not guessed at.
+		const missing = setup({}, { scopeItems: () => json(200, { items: [] }), changePreview: () => json(200, changePreview({ op: "binding", item: setupItem() })) });
+		await expect(
+			missing.changeSetup({ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { itemId: "item-1", scope: "project", scopeId: "demo", state: "inherit" } }),
+		).resolves.toMatchObject({ status: "error", code: UNREADABLE });
+		expect(missing.dialog.showMessageBox).not.toHaveBeenCalled();
+	});
+
+	it("deletes through a dry run in the query, then signs no body", async () => {
+		const path = `${itemsPath}/item-1`;
+		const { changeSetup, calls, dialog } = setup({}, { changePreview: () => json(200, changePreview({ op: "delete", item: setupItem() })) });
+		await expect(changeSetup({ method: "DELETE", path, body: {} })).resolves.toMatchObject({ status: "changed" });
+		expect(calls.map(({ url, init }) => [init.method, url.slice(BASE.length)])).toEqual([
+			["DELETE", `${path}?dryRun=true`],
+			["DELETE", path],
+		]);
+		expect(calls[0]!.init.body).toBeUndefined();
+		expectSigned(calls[1]!, "DELETE", "");
+		expect(dialogOptions(dialog).detail?.split("\n").slice(0, 2)).toEqual(["Claude Code · MCP server · search", "Delete this item"]);
+	});
+
+	it("quotes the content it signs and counts the blocking conflicts it adds", async () => {
+		const text = `{\n  "PreToolUse": [\n    { "matcher": "Bash", "hooks": [{ "command": "check.sh" }] }\n  ]\n}\u202e${"x".repeat(400)}`;
+		const preview = changePreview({
+			op: "edit",
+			item: setupItem(),
+			after: { contentKind: "json", executable: false, files: [], sha256: "f".repeat(64), size: text.length, text },
+			conflictsAdded: [
+				{ acceptanceId: "", code: "LADO_SETUP_DENIES_AO", contentSha256: "", detail: "", details: {}, itemId: "item-1", path: "", severity: "blocking" },
+				{ acceptanceId: "", code: "LADO_SETUP_DENIES_GIT", contentSha256: "", detail: "", details: {}, itemId: "item-1", path: "", severity: "warning" },
+			],
+		});
+		const { changeSetup, dialog } = setup({}, { changePreview: () => json(200, preview) });
+		await changeSetup({ method: "PATCH", path: `${itemsPath}/item-1`, body: { baseVersion: 2, content: { PreToolUse: [] } } });
+		const [, , content, blocking] = dialogOptions(dialog).detail?.split("\n\n") ?? [];
+		const quoted = `{ "PreToolUse": [ { "matcher": "Bash", "hooks": [{ "command": "check.sh" }] } ] } ${"x".repeat(400)}`;
+		// One line of the daemon's own content, without the direction override, cut at 300 characters.
+		expect(content).toBe(`Content: ${quoted.slice(0, 300)}…`);
+		expect(blocking).toBe("Blocking conflicts this change adds: 1. LADO tasks stay blocked until you turn off or fix the items that cause them.");
+	});
+
+	it("gives a sent change whose answer it cannot read a code", async () => {
+		const { changeSetup } = setup({}, { change: () => json(200, { applied: false }) });
+		await expect(changeSetup(create)).resolves.toEqual({
+			status: "error",
+			code: UNREADABLE,
+			message: "The change was sent, but the AO daemon's answer could not be read.",
+		});
+	});
+
 	it("refuses a request that is not a change it confirms, before asking the daemon", async () => {
 		const binding = { itemId: "item-1", scope: "global", state: "on" };
 		for (const input of [
@@ -1350,11 +1521,13 @@ describe("changing local setup", () => {
 			{ ...create, body: { tool: "claude-code", kind: "mcp_server", name: "search" } },
 			{ method: "PATCH", path: `${itemsPath}/item-1`, body: { baseVersion: 0, content: "text" } },
 			{ method: "PATCH", path: `${itemsPath}/item 1`, body: { baseVersion: 2, content: "text" } },
-			{ method: "DELETE", path: `${itemsPath}/item-1`, body: {} },
-			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, state: "off" } },
+			{ method: "DELETE", path: `${itemsPath}/item-1`, body: { dryRun: true } },
+			{ method: "DELETE", path: `${itemsPath}/item-1/drift`, body: {} },
 			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, state: "force_on" } },
+			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, state: "inherit" } },
 			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, scopeId: "demo" } },
-			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, scope: "project", scopeId: "demo", state: "inherit" } },
+			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, scope: "project", scopeId: "demo", state: "on" } },
+			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, scope: "task", scopeId: "", state: "inherit" } },
 			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, scope: "project", scopeId: "../demo", state: "force_on" } },
 			{ method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...binding, itemId: "../item" } },
 			{ method: "POST", path: `${itemsPath}/item-1/drift`, body: { action: "revert" } },
@@ -1377,11 +1550,11 @@ describe("changing local setup", () => {
 	it("does not ask about a preview of another item or another change", async () => {
 		const edit = { method: "PATCH", path: `${itemsPath}/item-1`, body: { baseVersion: 2, content: "text" } };
 		const unreadable: [string, Record<string, unknown>, Route, string | undefined][] = [
-			["another item", edit, () => json(200, changePreview({ op: "edit", item: setupItem({ id: "item-2" }) })), undefined],
-			["another name", create, () => json(200, changePreview({ item: setupItem({ id: "", name: "other" }) })), undefined],
-			["another op", create, () => json(200, changePreview({ op: "edit" })), undefined],
-			["an applied change", create, () => json(200, changePreview({ applied: true })), undefined],
-			["no change hash", create, () => json(200, changePreview({ changeSha256: "" })), undefined],
+			["another item", edit, () => json(200, changePreview({ op: "edit", item: setupItem({ id: "item-2" }) })), UNREADABLE],
+			["another name", create, () => json(200, changePreview({ item: setupItem({ id: "", name: "other" }) })), UNREADABLE],
+			["another op", create, () => json(200, changePreview({ op: "edit" })), UNREADABLE],
+			["an applied change", create, () => json(200, changePreview({ applied: true })), UNREADABLE],
+			["no change hash", create, () => json(200, changePreview({ changeSha256: "" })), UNREADABLE],
 			[
 				"a refused change",
 				edit,

@@ -10,6 +10,7 @@ import {
 	ladoSetupConflictText,
 	ladoSetupKindLabel,
 	ladoSetupReasonText,
+	ladoSetupRestoreNoteText,
 	ladoSetupRestoreStatusText,
 	ladoSetupWarningText,
 } from "./lado-errors";
@@ -317,6 +318,11 @@ const setupCodes = [
 	"LADO_SETUP_LOAD_FAILED",
 	"LADO_SETUP_ADOPTION_ID_INVALID",
 	"INVALID_JSON",
+	"LADO_SETUP_DRIFT_PENDING",
+	"LADO_SETUP_PATH_USED_IN_PLACE",
+	"LADO_SETUP_PAIR_REQUIRED",
+	"LADO_SETUP_ROOT_IS_LINK",
+	"LADO_PRESENCE_ANSWER_UNREADABLE",
 ];
 
 // Why the inventory does not adopt an entry (backend/internal/domain/lado_setup.go)
@@ -353,6 +359,8 @@ const setupReasons = [
 	"not_object",
 	"front_matter",
 	"server_shape",
+	"root_is_link",
+	"provider_login_env",
 ];
 
 // The conflict checks (backend/internal/service/ladosetup/conflicts.go).
@@ -369,10 +377,11 @@ const setupConflicts = [
 	"LADO_SETUP_HOOK_SHARES_AO_EVENT",
 	"LADO_SETUP_PROJECT_OVERRIDES",
 	"LADO_SETUP_PLUGIN_HOOKS_UNREADABLE",
+	"LADO_SETUP_PATH_USED_IN_PLACE",
 ];
 
 const setupKinds = ["instructions", "setting", "skill", "agent", "command", "output_style", "hook_script", "mcp_server"];
-const restoreStatuses = ["restored", "restored_beside", "key_kept", "failed"];
+const restoreStatuses = ["restored", "restored_beside", "key_kept", "failed", "skipped_deleted"];
 const setupWarnings = [
 	"LADO_SETUP_DIRECT_USE_STOPS",
 	"LADO_SETUP_BASELINE_FAILED",
@@ -395,6 +404,7 @@ const setupDetails = {
 	sessions: [{ id: "demo-7", tool: "claude-code" }],
 	processes: [{ pid: 4242, name: "codex", tool: "codex" }],
 	tools: ["claude-code", "codex"],
+	pair: "AGENTS.override.md",
 };
 
 // LADO fork: local setup's errors, reasons, conflicts and warnings in the
@@ -416,6 +426,12 @@ describe("LADO local setup errors", () => {
 		}
 		expect(ladoErrorText(en, new LadoApiError(daemon, "INVALID_JSON"))).toBe(en("lado.error.internal"));
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_ADOPTION_ID_INVALID"))).toBe(en("lado.error.setupNotFound"));
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_PAIR_REQUIRED", { name: "AGENTS.md", pair: "AGENTS.override.md" }))).toBe(
+			"Codex reads AGENTS.md and AGENTS.override.md together, so adopt both with the same action.",
+		);
+		expect(
+			ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_PATH_USED_IN_PLACE", { key: "env.HELPER", path: "~/.claude/bin/helper.sh", origin: "x" })),
+		).toBe("env.HELPER stays where it is and names ~/.claude/bin/helper.sh, which would move. Move it too, or keep the file in place.");
 		// A code from a newer daemon shows the daemon's own words.
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SETUP_SOMETHING_NEW"))).toBe(daemon);
 	});
@@ -487,6 +503,10 @@ describe("LADO local setup errors", () => {
 			"LADO could not put back CLAUDE.md. What it put back stays where it is; restore again to finish the rest.",
 		);
 		expect(restore({ stage: "record" })).toBe("LADO put back the originals but could not record the restore. Restore again to record it.");
+		// What LADO could not put back after it failed to record is named, with the way back.
+		expect(adoption({ stage: "record", state: "partial", putBackFailed: ["skills/review", ".claude.json#mcpServers.search"] })).toBe(
+			"LADO could not record the adoption and could not put these back: skills/review, .claude.json#mcpServers.search. Restore the adoption under Adoptions.",
+		);
 		for (const locale of APP_LOCALES) {
 			const t = createFullAppI18n(locale).t;
 			const texts = [
@@ -524,6 +544,12 @@ describe("LADO local setup errors", () => {
 		);
 		expect(ladoSetupKindLabel(ko, "hook_script")).toBe("hook 스크립트");
 		expect(ladoSetupRestoreStatusText(en, "restored_beside")).toBe("Put beside what is there now");
+		expect(ladoSetupRestoreStatusText(en, "skipped_deleted")).toBe("Deleted in LADO, not put back");
+		expect(ladoSetupRestoreNoteText(ko, "kept_in_lado")).toBe("이후 버전은 LADO에 남음");
+		expect(ladoSetupRestoreNoteText(en, "")).toBe("");
+		expect(ladoSetupReasonText(en, "root_is_link")).toBe(
+			"Its tool folder or settings file is a symbolic link, and LADO never adopts through a link.",
+		);
 		expect(ladoSetupWarningText(ko, "LADO_SETUP_DIRECT_USE_STOPS")).toBe(
 			"이 앱 밖에서 쓰는 Claude Code와 Codex는 옮긴 항목을 더 이상 불러오지 않습니다.",
 		);

@@ -1,12 +1,15 @@
 // LADO fork: the adoptions of local setup and their restore
 // (docs/LJY-PRD/HARNESS.md §9). Each adoption says when it ran, how many items
-// it took and whether it finished, stopped partway or was restored. Restore
-// puts the originals back through the desktop app's confirmation, and its
-// report says what went where, including a copy put beside something new.
+// it took and whether it is under way, finished, stopped partway or was
+// restored. Before a restore it names the Claude Code and Codex sessions and
+// programs that hold it back, with Check again. Restore puts the originals
+// back through the desktop app's confirmation, and its report says what went
+// where, including a copy put beside something new.
+import { agentLabel } from "@aoagents/product-ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useRestoreLadoSetup } from "../../../hooks/useLadoSetup";
-import { ladoErrorText, ladoSetupRestoreStatusText, ladoSetupWarningText } from "../../../lib/lado-errors";
+import { useLadoSetupAdoption, useRestoreLadoSetup } from "../../../hooks/useLadoSetup";
+import { ladoErrorText, ladoSetupRestoreNoteText, ladoSetupRestoreStatusText, ladoSetupWarningText } from "../../../lib/lado-errors";
 import type { LadoSetupAdoption, LadoSetupInventory, LadoSetupRestoreResult } from "../../../lib/lado-setup";
 import { formatResetTime } from "../../settings/CodexAccountDetails";
 import { SettingsRow } from "../../settings/SettingsRow";
@@ -20,7 +23,7 @@ function newestFirst(adoptions: readonly LadoSetupAdoption[]): LadoSetupAdoption
 }
 
 export function LadoSetupAdoptionsCard({ inventory }: { inventory: LadoSetupInventory }) {
-	const { t, i18n } = useTranslation();
+	const { t } = useTranslation();
 	const restore = useRestoreLadoSetup();
 	const [restoring, setRestoring] = useState<string | null>(null);
 	const [reports, setReports] = useState<Record<string, LadoSetupRestoreResult>>({});
@@ -43,57 +46,116 @@ export function LadoSetupAdoptionsCard({ inventory }: { inventory: LadoSetupInve
 
 	return (
 		<SettingsSection title={t("lado.setup.adoptions.title")} grouped testId="lado-setup-adoptions">
-			{newestFirst(inventory.adoptions).map((adoption) => {
-				const at = formatResetTime(adoption.createdAt, i18n.language);
-				const restoredAt = formatResetTime(adoption.restoredAt, i18n.language);
-				const state = restoredAt
-					? t("lado.setup.adoptions.restored", { time: restoredAt.visible })
-					: adoption.state === "partial"
-						? t("lado.setup.adoptions.partial")
-						: t("lado.setup.adoptions.completed");
-				const report = reports[adoption.id];
-				const error = failure?.adoptionId === adoption.id ? failure.error : undefined;
-				return (
-					<div key={adoption.id} className="flex flex-col" data-testid="lado-setup-adoption" data-adoption-id={adoption.id}>
-						<SettingsRow
-							label={
-								<span className="tabular-nums" title={at?.full}>
-									{t("lado.setup.adoptions.adoptedAt", { time: at?.visible ?? adoption.createdAt })}
-								</span>
-							}
-							description={
-								<>
-									<span className="block" title={adoption.state === "partial" ? adoption.errorMessage || undefined : restoredAt?.full}>
-										{`${t("lado.setup.adoptions.items", { count: adoption.itemCount })} · ${state}`}
-									</span>
-									{error ? (
-										<span role="alert" className="block text-error">
-											{ladoErrorText(t, error)}
-										</span>
-									) : null}
-								</>
-							}
-						>
-							{adoption.restoredAt ? null : (
-								<Button
-									type="button"
-									variant="ghost"
-									size="sm"
-									className="text-settings-muted hover:text-settings-label"
-									disabled={restore.isPending}
-									onClick={() => restoreNow(adoption)}
-								>
-									<span className="text-control">
-										{restoring === adoption.id ? t("lado.setup.adoptions.restoring") : t("lado.setup.adoptions.restore")}
-									</span>
-								</Button>
-							)}
-						</SettingsRow>
-						{report ? <RestoreReport report={report} inventory={inventory} /> : null}
-					</div>
-				);
-			})}
+			{newestFirst(inventory.adoptions).map((adoption) => (
+				<AdoptionRow
+					key={adoption.id}
+					adoption={adoption}
+					inventory={inventory}
+					report={reports[adoption.id]}
+					error={failure?.adoptionId === adoption.id ? failure.error : undefined}
+					restoring={restoring === adoption.id}
+					busy={restore.isPending}
+					onRestore={() => restoreNow(adoption)}
+				/>
+			))}
 		</SettingsSection>
+	);
+}
+
+function AdoptionRow({
+	adoption,
+	inventory,
+	report,
+	error,
+	restoring,
+	busy,
+	onRestore,
+}: {
+	adoption: LadoSetupAdoption;
+	inventory: LadoSetupInventory;
+	report: LadoSetupRestoreResult | undefined;
+	error: unknown;
+	restoring: boolean;
+	busy: boolean;
+	onRestore: () => void;
+}) {
+	const { t, i18n } = useTranslation();
+	// An adoption under way is not restored until it ends.
+	const restorable = !adoption.restoredAt && adoption.state !== "pending";
+	// What holds a restore back now, as the daemon reads it for this adoption.
+	const detail = useLadoSetupAdoption(restorable ? adoption.id : null);
+	const preconditions = detail.data?.preconditions;
+	const running = preconditions
+		? [
+				...preconditions.sessions.map((session) => `${t("lado.setup.adopt.session", { id: session.id })} (${agentLabel(session.tool)})`),
+				...preconditions.processes.map((program) => t("lado.setup.adopt.process", { name: program.name, pid: program.pid })),
+			]
+		: [];
+	const at = formatResetTime(adoption.createdAt, i18n.language);
+	const restoredAt = formatResetTime(adoption.restoredAt, i18n.language);
+	const state = restoredAt
+		? t("lado.setup.adoptions.restored", { time: restoredAt.visible })
+		: adoption.state === "pending"
+			? t("lado.setup.adoptions.pending")
+			: adoption.state === "partial"
+				? t("lado.setup.adoptions.partial")
+				: t("lado.setup.adoptions.completed");
+	return (
+		<div className="flex flex-col" data-testid="lado-setup-adoption" data-adoption-id={adoption.id}>
+			<SettingsRow
+				label={
+					<span className="tabular-nums" title={at?.full}>
+						{t("lado.setup.adoptions.adoptedAt", { time: at?.visible ?? adoption.createdAt })}
+					</span>
+				}
+				description={
+					<>
+						<span className="block" title={adoption.state === "partial" ? adoption.errorMessage || undefined : restoredAt?.full}>
+							{`${t("lado.setup.adoptions.items", { count: adoption.itemCount })} · ${state}`}
+						</span>
+						{restorable && running.length > 0 ? (
+							<span className="block text-[var(--color-status-in-review)]" data-testid="lado-setup-adoption-running">
+								{t("lado.setup.adoptions.running", { running: running.join(", ") })}
+							</span>
+						) : null}
+						{error ? (
+							<span role="alert" className="block text-error">
+								{ladoErrorText(t, error)}
+							</span>
+						) : null}
+					</>
+				}
+			>
+				{restorable ? (
+					<div className="flex items-center gap-1">
+						{running.length > 0 ? (
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="text-settings-muted hover:text-settings-label"
+								disabled={detail.isFetching}
+								onClick={() => void detail.refetch()}
+							>
+								<span className="text-control">{t("lado.setup.adopt.checkAgain")}</span>
+							</Button>
+						) : null}
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							className="text-settings-muted hover:text-settings-label"
+							aria-label={t("lado.setup.adoptions.restoreLabel", { time: at?.visible ?? adoption.createdAt })}
+							disabled={busy || running.length > 0}
+							onClick={onRestore}
+						>
+							<span className="text-control">{restoring ? t("lado.setup.adoptions.restoring") : t("lado.setup.adoptions.restore")}</span>
+						</Button>
+					</div>
+				) : null}
+			</SettingsRow>
+			{report ? <RestoreReport report={report} inventory={inventory} /> : null}
+		</div>
 	);
 }
 
@@ -117,9 +179,13 @@ function RestoreReport({ report, inventory }: { report: LadoSetupRestoreResult; 
 								{path.short}
 							</span>
 							<span className={entry.status === "failed" ? "text-error" : "text-settings-muted"}>
-								{entry.status === "failed" && entry.error
-									? `${ladoSetupRestoreStatusText(t, entry.status)} · ${entry.error}`
-									: ladoSetupRestoreStatusText(t, entry.status)}
+								{[
+									ladoSetupRestoreStatusText(t, entry.status),
+									entry.status === "failed" ? entry.error : "",
+									ladoSetupRestoreNoteText(t, entry.note),
+								]
+									.filter(Boolean)
+									.join(" · ")}
 							</span>
 							{beside ? (
 								<span className="min-w-0 truncate text-settings-muted" title={beside.full}>

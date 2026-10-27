@@ -222,6 +222,30 @@ describe("LadoSetupItemEditor", () => {
 		expect(within(dialog).getByTestId("pierre-diff")).toHaveAttribute("data-old", "# Rules v2\n");
 	});
 
+	it("sends an edit of a copy changed by hand to the drift review first", async () => {
+		const user = userEvent.setup();
+		serve(instructions, {
+			[`PATCH ${ITEM}`]: () => ({
+				error: { code: "LADO_SETUP_DRIFT_PENDING", message: "drift", details: { item: "item-claude-md" } },
+			}),
+		});
+		const onReviewDrift = vi.fn();
+		renderDialog(<LadoSetupItemEditor itemId="item-claude-md" open onOpenChange={vi.fn()} onReviewDrift={onReviewDrift} />);
+
+		const dialog = await screen.findByRole("dialog", { name: "Edit CLAUDE.md" });
+		await typeInto(user, await within(dialog).findByRole("textbox", { name: "Edit CLAUDE.md" }), "Use tabs. ");
+		await user.click(within(dialog).getByRole("button", { name: "Review changes" }));
+
+		const notice = await within(dialog).findByTestId("lado-setup-editor-drift");
+		expect(within(notice).getByRole("status")).toHaveTextContent(
+			"This item's managed copy was changed by hand. Keep or revert that change first.",
+		);
+		// It is a next step, not a failure of the form.
+		expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
+		await user.click(within(notice).getByRole("button", { name: "Review change" }));
+		expect(onReviewDrift).toHaveBeenCalledTimes(1);
+	});
+
 	it("shows a folder item's files read-only, to change in the managed folder", async () => {
 		serve(
 			setupItemDetail(

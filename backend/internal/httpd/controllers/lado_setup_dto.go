@@ -287,9 +287,10 @@ type LadoSetupRestoredEntryResponse struct {
 	Name   string `json:"name"`
 	Root   string `json:"root" enum:"claude_dir,claude_json,codex_home"`
 	Path   string `json:"path" description:"Under root, with slashes and #<key> after a key's file."`
-	Status string `json:"status" enum:"restored,restored_beside,key_kept,failed" description:"restored_beside: something new held the path, so the original is beside it; key_kept: the file has the key now, which stays."`
+	Status string `json:"status" enum:"restored,restored_beside,key_kept,failed,skipped_deleted" description:"restored_beside: something new held the path, so the original is beside it; key_kept: the file has the key now, which stays; skipped_deleted: the item was deleted in LADO, so its original stays out."`
 	Beside string `json:"beside" description:"The copy written beside the path, under root; empty unless restored_beside."`
 	Error  string `json:"error" description:"Why a failed original could not be put back."`
+	Note   string `json:"note,omitempty" enum:"kept_in_lado" description:"kept_in_lado: LADO made later versions of the item, which stay readable in LADO; omitted otherwise."`
 }
 
 // LadoSetupRestoreReportResponse is what a restore did.

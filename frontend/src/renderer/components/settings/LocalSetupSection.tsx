@@ -3,7 +3,8 @@
 // last scan, the conflicts of what it manages, what changed outside the app,
 // one card per tool, adopting what it can take, new items made here and
 // restoring an adoption. Adopted items reach only the sessions AO starts, and
-// adoption stays off on an OS where LADO has not checked that they do.
+// adoption and new items stay off on an OS where LADO has not checked that
+// they do.
 import { FolderInput, Plus, RefreshCw } from "lucide-react";
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -82,6 +83,9 @@ export function LocalSetupSection({ titleHidden }: { titleHidden?: boolean }) {
 							variant="ghost"
 							size="sm"
 							className="text-settings-muted hover:text-settings-label"
+							// The daemon refuses new items where no tool's delivery was checked.
+							disabled={unverified.length === ladoSetupTools.length}
+							aria-describedby={unverified.length > 0 ? osLineId : undefined}
 							onClick={() => setCreating((current) => ({ key: current.key + 1, open: true }))}
 						>
 							<Plus aria-hidden="true" />

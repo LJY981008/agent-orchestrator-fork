@@ -166,7 +166,13 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 				onCancel={change.cancel}
 			/>
 			{opening.view === "edit" ? (
-				<LadoSetupItemEditor key={opening.key} itemId={opening.itemId} open={opening.open} onOpenChange={onOpeningChange} />
+				<LadoSetupItemEditor
+					key={opening.key}
+					itemId={opening.itemId}
+					open={opening.open}
+					onOpenChange={onOpeningChange}
+					onReviewDrift={opening.itemId && edited.has(opening.itemId) ? () => show("drift", opening.itemId ?? "") : undefined}
+				/>
 			) : opening.view === "history" ? (
 				<LadoSetupHistoryDialog key={opening.key} itemId={opening.itemId} open={opening.open} onOpenChange={onOpeningChange} />
 			) : (

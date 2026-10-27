@@ -3,6 +3,7 @@
 // and restoring through the desktop app's confirmation. Changes to managed
 // items go through useLadoSetupChange (lib/lado-setup.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ladoEffectiveQueryRoot } from "../lib/lado";
 import {
 	adoptLadoSetup,
 	fetchLadoSetupAdoption,
@@ -14,9 +15,11 @@ import {
 	ladoSetupAdoptionPreviewQueryKey,
 	ladoSetupAdoptionQueryKey,
 	ladoSetupConflictsQueryKey,
+	ladoSetupConflictsQueryRoot,
 	ladoSetupInventoryQueryKey,
 	ladoSetupItemQueryKey,
 	ladoSetupItemsQueryKey,
+	ladoSetupItemsQueryRoot,
 	previewLadoSetupAdoption,
 	restoreLadoSetup,
 	scanLadoSetup,
@@ -34,12 +37,21 @@ export function useLadoSetupInventory(enabled = true) {
 	});
 }
 
-/** Scans again; the inventory shows the new scan. */
+/**
+ * Scans again; the inventory shows the new scan, and the conflicts, the
+ * managed items and the effective views, which read the same folders, load
+ * again.
+ */
 export function useScanLadoSetup() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: scanLadoSetup,
-		onSuccess: (inventory) => queryClient.setQueryData(ladoSetupInventoryQueryKey, inventory),
+		onSuccess: (inventory) => {
+			queryClient.setQueryData(ladoSetupInventoryQueryKey, inventory);
+			for (const queryKey of [ladoSetupConflictsQueryRoot, ladoSetupItemsQueryRoot, ladoEffectiveQueryRoot]) {
+				void queryClient.invalidateQueries({ queryKey });
+			}
+		},
 		retry: false,
 	});
 }

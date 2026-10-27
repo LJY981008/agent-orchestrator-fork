@@ -79,6 +79,9 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_PRESENCE_INVALID: "lado.error.presenceInvalid",
 	LADO_PRESENCE_EXPIRED: "lado.error.presenceExpired",
 	LADO_PRESENCE_REPLAYED: "lado.error.presenceReplayed",
+	// The desktop app's main process could not read the daemon's answer; a
+	// request it sent can still have been made.
+	LADO_PRESENCE_ANSWER_UNREADABLE: "lado.error.presenceAnswerUnreadable",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_PRESENCE_UNTRUSTED_SENDER: "lado.error.presenceInvalid",
 	LADO_PLAN_REVISION_ID_INVALID: "lado.error.planNotFound",
@@ -160,6 +163,10 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_SETUP_HOME_FAILED: "lado.error.setupHomeFailed",
 	LADO_SETUP_CODEX_FAILED: "lado.error.setupCodexFailed",
 	LADO_SETUP_LOAD_FAILED: "lado.error.setupLoadFailed",
+	LADO_SETUP_DRIFT_PENDING: "lado.error.setupDriftPending",
+	LADO_SETUP_PATH_USED_IN_PLACE: "lado.error.setupPathUsedInPlace",
+	LADO_SETUP_PAIR_REQUIRED: "lado.error.setupPairRequired",
+	LADO_SETUP_ROOT_IS_LINK: "lado.error.setupRootIsLink",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_SETUP_ADOPTION_ID_INVALID: "lado.error.setupNotFound",
 	// The app sends the setup routes' bodies as the API defines them.
@@ -183,6 +190,11 @@ const setupStageKeys: Partial<Record<string, Partial<Record<string, LadoErrorKey
 function errorKey(code: string, details: Record<string, unknown> | undefined): LadoErrorKey | undefined {
 	if (code === "LADO_EXECUTION_FIXED" && typeof details?.reason === "string") {
 		return restoreKeys[details.reason] ?? errorKeys[code];
+	}
+	// An adoption LADO could not record puts back what it removed; what it
+	// could not put back the developer restores from the adoption.
+	if (code === "LADO_SETUP_ADOPTION_FAILED" && Array.isArray(details?.putBackFailed) && details.putBackFailed.length > 0) {
+		return "lado.error.setupAdoptionPutBackFailed";
 	}
 	const stages = setupStageKeys[code];
 	if (stages) {
@@ -227,6 +239,8 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 	};
 	const sessions = list("sessions", (session) => `${field(session, "id")} (${agentLabel(field(session, "tool"))})`);
 	const processes = list("processes", (program) => `${field(program, "name")} (PID ${field(program, "pid")})`);
+	const putBackFailed = details?.putBackFailed;
+	const paths = Array.isArray(putBackFailed) ? putBackFailed.filter((path): path is string => typeof path === "string") : [];
 	const toolIds = details?.tools;
 	const tools = Array.isArray(toolIds)
 		? toolIds.filter((tool): tool is string => typeof tool === "string").map((tool) => agentLabel(tool))
@@ -252,6 +266,8 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 		processes: processes.join(", "),
 		running: [...sessions, ...processes].join(", "),
 		tools: tools.join(", "),
+		pair: text("pair"),
+		paths: paths.join(", "),
 	};
 }
 
@@ -493,6 +509,8 @@ const setupReasonKeys: Partial<Record<string, LadoSetupReasonKey>> = {
 	not_object: "lado.setup.reason.notObject",
 	front_matter: "lado.setup.reason.frontMatter",
 	server_shape: "lado.setup.reason.serverShape",
+	root_is_link: "lado.setup.reason.rootIsLink",
+	provider_login_env: "lado.setup.reason.providerLoginEnv",
 };
 
 /**
@@ -527,6 +545,7 @@ const setupConflictKeys: Partial<Record<string, LadoSetupConflictKey>> = {
 	LADO_SETUP_HOOK_SHARES_AO_EVENT: "lado.setup.conflict.hookSharesAoEvent",
 	LADO_SETUP_PROJECT_OVERRIDES: "lado.setup.conflict.projectOverrides",
 	LADO_SETUP_PLUGIN_HOOKS_UNREADABLE: "lado.setup.conflict.pluginHooksUnreadable",
+	LADO_SETUP_PATH_USED_IN_PLACE: "lado.setup.conflict.pathUsedInPlace",
 };
 
 // Claude Code's own names of the permission modes a defaultMode can ask for.
@@ -569,12 +588,24 @@ const setupRestoreKeys: Partial<Record<string, LadoSetupRestoreKey>> = {
 	restored_beside: "lado.setup.restore.restoredBeside",
 	key_kept: "lado.setup.restore.keyKept",
 	failed: "lado.setup.restore.failed",
+	skipped_deleted: "lado.setup.restore.skippedDeleted",
 };
 
 /** What a restore did with one original, as its report says; a status from a newer daemon shows as is. */
 export function ladoSetupRestoreStatusText(t: TFunction, status: string): string {
 	const key = setupRestoreKeys[status];
 	return key ? t(key) : status;
+}
+
+const setupRestoreNoteKeys: Partial<Record<string, LadoSetupRestoreKey>> = {
+	kept_in_lado: "lado.setup.restore.keptInLado",
+};
+
+/** A note on one restored original, such as the later versions LADO keeps; none reads empty. */
+export function ladoSetupRestoreNoteText(t: TFunction, note: string | undefined): string {
+	if (!note) return "";
+	const key = setupRestoreNoteKeys[note];
+	return key ? t(key) : note;
 }
 
 type LadoSetupWarningKey = Extract<MessageKey, `lado.setup.warning.${string}`>;

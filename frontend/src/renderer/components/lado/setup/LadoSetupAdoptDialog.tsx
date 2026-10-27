@@ -50,10 +50,11 @@ import {
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
 
-// A command that names a moved file LADO cannot rewrite stops the adoption.
-// Any other blocking conflict stays the same whether the entry moves or not,
-// so it shows in the caution tone and does not stop it.
-const HOOK_PATH_MOVED = "LADO_SETUP_HOOK_PATH_MOVED";
+// A command, or a setting left in place, that names a moved file LADO cannot
+// rewrite stops the adoption. Any other blocking conflict stays the same
+// whether the entry moves or not, so it shows in the caution tone and does not
+// stop it.
+const STOPPING_CONFLICTS = new Set(["LADO_SETUP_HOOK_PATH_MOVED", "LADO_SETUP_PATH_USED_IN_PLACE"]);
 const DIRECT_USE_STOPS = "LADO_SETUP_DIRECT_USE_STOPS";
 
 // Each preview scans again, so a change of the choices waits for a pause.
@@ -159,7 +160,7 @@ export function LadoSetupAdoptDialog({
 
 	const moves = requested.filter((entry) => entry.action === "move").length;
 	const conflicts = shown ? ladoSetupConflictsBySeverity(shown.conflicts) : [];
-	const unmovable = conflicts.find((conflict) => conflict.code === HOOK_PATH_MOVED);
+	const unmovable = conflicts.find((conflict) => STOPPING_CONFLICTS.has(conflict.code));
 	const running = shown ? [...shown.preconditions.sessions, ...shown.preconditions.processes].length > 0 : false;
 	const unverified = shown?.preconditions.unverified ?? [];
 	const managedPaths = new Map((shown?.entries ?? []).map((entry) => [ladoSetupEntryKey(entry), entry.managedPath]));
@@ -170,7 +171,7 @@ export function LadoSetupAdoptDialog({
 		if (requested.length === 0) return t("lado.setup.adopt.chooseItems");
 		if (moves === 0) return t("lado.setup.adopt.noMove");
 		if (!current) return preview.isError ? "" : t("lado.setup.adopt.checking");
-		if (unmovable) return ladoErrorText(t, new LadoApiError("", HOOK_PATH_MOVED, unmovable.details));
+		if (unmovable) return ladoErrorText(t, new LadoApiError("", unmovable.code, unmovable.details));
 		if (unverified.length > 0) return t("lado.setup.section.osUnverified", { os: ladoSetupOSLabel(shown?.preconditions.os ?? inventory.os) });
 		if (running) return t("lado.setup.adopt.closeRunning");
 		return null;
@@ -481,10 +482,10 @@ function Command({ label, command }: { label: string; command: string }) {
 	);
 }
 
-/** A conflict the adoption brings. Only a command it cannot rewrite stops it. */
+/** A conflict the adoption brings. Only a moved file it cannot rewrite a reference to stops it. */
 function PreviewConflict({ conflict, inventory }: { conflict: LadoSetupConflict; inventory: LadoSetupInventory }) {
 	const { t } = useTranslation();
-	const stops = conflict.code === HOOK_PATH_MOVED;
+	const stops = STOPPING_CONFLICTS.has(conflict.code);
 	// Another blocking conflict blocks LADO tasks after the adoption as it does now.
 	const tone = stops ? "blocking" : conflict.severity === "blocking" ? "warning" : conflict.severity;
 	return (

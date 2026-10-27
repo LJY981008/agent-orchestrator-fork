@@ -582,7 +582,7 @@ func ladoSetupRestoreReportResponse(report ladosetup.RestoreReport) LadoSetupRes
 	for _, e := range report.Entries {
 		resp.Entries = append(resp.Entries, LadoSetupRestoredEntryResponse{
 			ItemID: string(e.ItemID), Tool: string(e.Tool), Kind: string(e.Kind), Name: e.Name, Root: string(e.Root),
-			Path: e.Path, Status: e.Status, Beside: e.Beside, Error: e.Error,
+			Path: e.Path, Status: e.Status, Beside: e.Beside, Error: e.Error, Note: e.Note,
 		})
 	}
 	return resp

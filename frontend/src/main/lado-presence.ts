@@ -73,9 +73,20 @@ const MAX_SETUP_ENTRIES = 500;
 const MAX_SETUP_NAME = 1024;
 // The daemon reads a setup change of at most 8 MiB.
 const MAX_SETUP_CHANGE_BYTES = 8 << 20;
-// A command naming a moved file that adoption cannot rewrite: the daemon
-// refuses the adoption, so main does not ask.
-const SETUP_HOOK_PATH_MOVED = "LADO_SETUP_HOOK_PATH_MOVED";
+// A command, or a setting left in place, that names a moved file adoption
+// cannot rewrite: the daemon refuses the adoption, so main does not ask.
+const SETUP_UNMOVABLE: Partial<Record<string, string>> = {
+	LADO_SETUP_HOOK_PATH_MOVED:
+		"A command names a file that would move, and LADO cannot rewrite it. Move the setting that holds it too, or keep the file in place.",
+	LADO_SETUP_PATH_USED_IN_PLACE: "A setting left in place names a file that would move. Move that setting too, or keep the file in place.",
+};
+// The daemon answered, but not as main reads it; a request it sent can still
+// have been made.
+const ANSWER_UNREADABLE = "LADO_PRESENCE_ANSWER_UNREADABLE";
+// How much of a change's content its confirmation quotes, in characters.
+const MAX_CONTENT_EXCERPT = 300;
+// A project's or task's binding: it follows the wider scope, or forces the item.
+const SCOPED_BINDING_STATES: readonly unknown[] = ["inherit", "force_on", "force_off"];
 const SETUP_TOOLS = ["claude-code", "codex"] as const;
 const SETUP_KINDS = [
 	"instructions",
@@ -115,28 +126,46 @@ type AdoptionSubject = {
 	moved: Record<SetupTool, number>;
 	kept: number;
 	blocking: number;
-	// The details of the first command that names a moved file adoption
-	// cannot rewrite.
-	hookPathMoved: Record<string, unknown> | null;
+	// The first command or setting that names a moved file adoption cannot
+	// rewrite, with its details.
+	unmovable: { code: string; details: Record<string, unknown> } | null;
 	os: string;
 	unverified: unknown[];
 	sessions: unknown[];
 	processes: unknown[];
 };
-// The adoption a restore puts back, from LadoSetupAdoptionDetailResponse.
-type RestoreSubject = { items: number; restored: boolean; backupReadable: boolean };
+// The adoption a restore puts back and what holds the restore back now, from
+// LadoSetupAdoptionDetailResponse.
+type RestoreSubject = {
+	items: number;
+	createdAt: string;
+	restored: boolean;
+	backupReadable: boolean;
+	sessions: unknown[];
+	processes: unknown[];
+};
 // A setup change main confirms: its route, the body it sends, and the item
 // or binding it names.
 type SetupChange = {
-	op: "create" | "edit" | "binding" | "drift_keep";
-	method: "POST" | "PATCH" | "PUT";
+	op: "create" | "edit" | "delete" | "binding" | "drift_keep";
+	method: "POST" | "PATCH" | "DELETE" | "PUT";
 	path: string;
 	body: Record<string, unknown>;
-	// The item an edit, a binding or a drift keep changes.
+	// The item an edit, a delete, a binding or a drift keep changes.
 	itemId?: string;
 };
-// What the change's preview names, from LadoSetupChangeResponse.
-type ChangeSubject = { sha256: string; needsPresence: boolean; tool: SetupTool; kind: SetupKind; name: string };
+// What the change's preview names, from LadoSetupChangeResponse: the item,
+// the daemon's own form of the content it sets as one line, and the blocking
+// conflicts it adds.
+type ChangeSubject = {
+	sha256: string;
+	needsPresence: boolean;
+	tool: SetupTool;
+	kind: SetupKind;
+	name: string;
+	content: string;
+	blocking: number;
+};
 
 const MODE_KEYS: Record<LadoCeilingMode, PresenceMessageKey> = {
 	"accept-edits": "lado.presence.mode.acceptEdits",
@@ -243,7 +272,7 @@ async function approvePlan(
 	const read = await callDaemon(deps, planPath, { method: "GET", headers: { accept: "application/json" } });
 	if (!read.ok) return read.failure;
 	const plan = planSubject(read.body, revisionId);
-	if (!plan) return failure(undefined, "The AO daemon's answer about this plan could not be read.");
+	if (!plan) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this plan could not be read.");
 	// The daemon refuses these as well, in this order; asking the human first
 	// would only waste a confirmation.
 	if (!plan.latest) {
@@ -258,7 +287,7 @@ async function approvePlan(
 	const effective = await callDaemon(deps, effectivePath, { method: "GET", headers: { accept: "application/json" } });
 	if (!effective.ok) return effective.failure;
 	const rules = rulesSubject(effective.body, plan.taskId);
-	if (!rules) return failure(undefined, "The AO daemon's answer about this task's rules could not be read.");
+	if (!rules) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this task's rules could not be read.");
 	const t = await translator(deps);
 	const detail = [
 		t("lado.presence.approveDetail", {
@@ -281,7 +310,7 @@ async function approvePlan(
 	const sent = await callDaemon(deps, approvePath, signed(deps, "POST", approvePath, body));
 	if (!sent.ok) return sent.failure;
 	const approval = record(sent.body);
-	if (!approval) return failure(undefined, "The approval was sent, but the AO daemon's answer could not be read.");
+	if (!approval) return failure(ANSWER_UNREADABLE, "The approval was sent, but the AO daemon's answer could not be read.");
 	return { status: "approved", approval: approval as LadoPresenceApproval };
 }
 
@@ -311,7 +340,7 @@ async function changeRule(
 		return failure("LADO_RULE_CEILING_INVALID", "The AO daemon does not have this rule as the protected permission ceiling.");
 	}
 	const ceiling = ceilingSubject(rule);
-	if (!ceiling) return failure(undefined, "The AO daemon's answer about this rule could not be read.");
+	if (!ceiling) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this rule could not be read.");
 	// Nothing would change, so there is nothing to confirm.
 	if (ceiling.mode === mode) return { status: "changed", rule: ceiling.rule };
 	const t = await translator(deps);
@@ -329,7 +358,7 @@ async function changeRule(
 	const sent = await callDaemon(deps, rulePath, signed(deps, "PATCH", rulePath, body));
 	if (!sent.ok) return sent.failure;
 	const changed = record(record(sent.body)?.rule);
-	if (!changed) return failure(undefined, "The change was sent, but the AO daemon's answer could not be read.");
+	if (!changed) return failure(ANSWER_UNREADABLE, "The change was sent, but the AO daemon's answer could not be read.");
 	return { status: "changed", rule: changed as LadoPresenceRule };
 }
 
@@ -357,14 +386,14 @@ async function setLadoMode(
 	const read = await callDaemon(deps, settingsPath, { method: "GET", headers: { accept: "application/json" } });
 	if (!read.ok) return read.failure;
 	const settings = projectSettings(read.body, projectId);
-	if (!settings) return failure(undefined, "The AO daemon's answer about this project's LADO settings could not be read.");
+	if (!settings) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this project's LADO settings could not be read.");
 	// Nothing would change, so there is nothing to confirm.
 	if (!settings.ladoMode) return { status: "changed", settings };
 	const projectPath = `/api/v1/projects/${encodeURIComponent(projectId)}`;
 	const project = await callDaemon(deps, projectPath, { method: "GET", headers: { accept: "application/json" } });
 	if (!project.ok) return project.failure;
 	const name = projectName(project.body, projectId);
-	if (name === null) return failure(undefined, "The AO daemon's answer about this project could not be read.");
+	if (name === null) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this project could not be read.");
 	const t = await translator(deps);
 	const title = t("lado.presence.modeOffTitle", { project: name });
 	if (!(await confirm(deps, t, title, t("lado.presence.modeOffDetail", { id: projectId }), t("lado.presence.turnOff")))) {
@@ -376,7 +405,7 @@ async function setLadoMode(
 	const sent = await callDaemon(deps, settingsPath, signed(deps, "PUT", settingsPath, body));
 	if (!sent.ok) return sent.failure;
 	const changed = projectSettings(sent.body, projectId);
-	if (!changed) return failure(undefined, "LADO mode was turned off, but the AO daemon's answer could not be read.");
+	if (!changed) return failure(ANSWER_UNREADABLE, "LADO mode was turned off, but the AO daemon's answer could not be read.");
 	return { status: "changed", settings: changed };
 }
 
@@ -408,7 +437,7 @@ async function adoptSetup(
 	);
 	if (!preview.ok) return preview.failure;
 	const plan = adoptionSubject(preview.body, entries);
-	if (!plan) return failure(undefined, "The AO daemon's preview of this adoption could not be read.");
+	if (!plan) return failure(ANSWER_UNREADABLE, "The AO daemon's preview of this adoption could not be read.");
 	// The daemon refuses these as well, in this order; asking the human first
 	// would only waste a confirmation. Other blocking conflicts do not hold the
 	// adoption back: the same setup left in place has them too, and once it is
@@ -416,12 +445,8 @@ async function adoptSetup(
 	if (plan.moved["claude-code"] + plan.moved.codex === 0) {
 		return failure("LADO_SETUP_ADOPTION_INVALID", "Choose at least one entry to move.");
 	}
-	if (plan.hookPathMoved) {
-		return failure(
-			SETUP_HOOK_PATH_MOVED,
-			"A command names a file that would move, and LADO cannot rewrite it. Move the setting that holds it too, or keep the file in place.",
-			plan.hookPathMoved,
-		);
+	if (plan.unmovable) {
+		return failure(plan.unmovable.code, SETUP_UNMOVABLE[plan.unmovable.code] ?? "", plan.unmovable.details);
 	}
 	if (plan.unverified.length > 0) {
 		return failure(
@@ -457,13 +482,14 @@ async function adoptSetup(
 	const sent = await callDaemon(deps, SETUP_ADOPTIONS_PATH, signed(deps, "POST", SETUP_ADOPTIONS_PATH, body), SETUP_TIMEOUT_MS);
 	if (!sent.ok) return sent.failure;
 	const adoption = record(sent.body);
-	if (adoption?.applied !== true) return failure(undefined, "The adoption was sent, but the AO daemon's answer could not be read.");
+	if (adoption?.applied !== true) return failure(ANSWER_UNREADABLE, "The adoption was sent, but the AO daemon's answer could not be read.");
 	return { status: "adopted", adoption: adoption as LadoPresenceSetupAdoption };
 }
 
 // Restore writes the adoption's originals back into the tools' folders, so
-// only the human may start it. Main reads the adoption and names how many
-// items go back.
+// only the human may start it. Main reads the adoption, does not ask while
+// the tools it puts back are running, and names when the adoption ran and
+// how many items go back.
 async function restoreSetup(
 	deps: LadoPresenceDeps,
 	sender: WebContents,
@@ -481,7 +507,7 @@ async function restoreSetup(
 	const read = await callDaemon(deps, adoptionPath, { method: "GET", headers: { accept: "application/json" } });
 	if (!read.ok) return read.failure;
 	const adoption = restoreSubject(read.body, adoptionId);
-	if (!adoption) return failure(undefined, "The AO daemon's answer about this adoption could not be read.");
+	if (!adoption) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this adoption could not be read.");
 	// The daemon refuses these as well; asking the human first would only
 	// waste a confirmation.
 	if (adoption.restored) {
@@ -494,8 +520,16 @@ async function restoreSetup(
 			{ adoption: adoptionId, stage: "manifest" },
 		);
 	}
-	const t = await translator(deps);
-	const detail = t("lado.presence.setupRestoreDetail", { id: adoptionId, count: adoption.items });
+	if (adoption.sessions.length > 0 || adoption.processes.length > 0) {
+		return failure(
+			"LADO_SETUP_TOOL_RUNNING",
+			"Close the Claude Code and Codex sessions and programs listed, then restore again.",
+			{ sessions: adoption.sessions, processes: adoption.processes },
+		);
+	}
+	const locale = await deps.locale();
+	const t = translate(locale);
+	const detail = t("lado.presence.setupRestoreDetail", { when: formatTime(locale, adoption.createdAt), count: adoption.items });
 	if (!(await confirm(deps, t, t("lado.presence.setupRestoreTitle"), detail, t("lado.presence.setupRestore")))) {
 		return { status: "cancelled" };
 	}
@@ -506,15 +540,17 @@ async function restoreSetup(
 	if (!sent.ok) return sent.failure;
 	const restore = record(sent.body);
 	if (restore?.adoptionId !== adoptionId || restore.applied !== true) {
-		return failure(undefined, "The restore was sent, but the AO daemon's answer could not be read.");
+		return failure(ANSWER_UNREADABLE, "The restore was sent, but the AO daemon's answer could not be read.");
 	}
 	return { status: "restored", restore: restore as LadoPresenceSetupRestore };
 }
 
-// A setup change that can run commands or widen access (creating or editing
-// such an item, turning one on, keeping its drift) needs the human. Main
-// checks the route and the body, previews the change itself, names the item
-// the daemon reports, then signs exactly the request the renderer named.
+// Every change to an item that can run commands or widen access (creating,
+// editing or deleting it, setting where it applies, keeping its drift) needs
+// the human. Main checks the route and the body, previews the change itself,
+// names the item, what the change does, the content it sets and the blocking
+// conflicts it adds, then signs exactly the request the renderer named, and
+// only when its own preview says the change needs that.
 async function changeSetup(
 	deps: LadoPresenceDeps,
 	sender: WebContents,
@@ -528,35 +564,45 @@ async function changeSetup(
 	if (!change) {
 		return failure(
 			"LADO_SETUP_CHANGE_INVALID",
-			"Only creating or editing a setup item, turning one on and keeping its drift are confirmed here.",
+			"Only creating, editing or deleting a setup item, setting where it applies and keeping its drift are confirmed here.",
 		);
 	}
-	const body = JSON.stringify(change.body);
+	// A delete sends no body, and the daemon checks the proof against none.
+	const body = change.op === "delete" ? "" : JSON.stringify(change.body);
 	if (new TextEncoder().encode(body).length > MAX_SETUP_CHANGE_BYTES) {
 		return failure("LADO_SETUP_CONTENT_INVALID", "This content is too large for a setup item.", {
 			reason: "too_large",
 			limit: MAX_SETUP_CHANGE_BYTES,
 		});
 	}
-	const preview = await callDaemon(
-		deps,
-		change.path,
-		jsonRequest(change.method, JSON.stringify({ ...change.body, dryRun: true })),
-		SETUP_TIMEOUT_MS,
-	);
+	const preview =
+		change.op === "delete"
+			? await callDaemon(deps, `${change.path}?dryRun=true`, { method: "DELETE", headers: { accept: "application/json" } }, SETUP_TIMEOUT_MS)
+			: await callDaemon(deps, change.path, jsonRequest(change.method, JSON.stringify({ ...change.body, dryRun: true })), SETUP_TIMEOUT_MS);
 	if (!preview.ok) return preview.failure;
 	const subject = changeSubject(preview.body, change);
-	if (!subject) return failure(undefined, "The AO daemon's preview of this change could not be read.");
+	if (!subject) return failure(ANSWER_UNREADABLE, "The AO daemon's preview of this change could not be read.");
 	let init = jsonRequest(change.method, body);
 	// The daemon makes a change that needs no confirmation without one, as it
 	// would from the renderer; main signs only what the human confirmed.
 	if (subject.needsPresence) {
+		// Inheriting names what the wider scope turns the item to.
+		let inheritsOn = false;
+		if (change.op === "binding" && change.body.state === "inherit") {
+			const inherited = await inheritedState(deps, change);
+			if (!inherited.ok) return inherited.failure;
+			inheritsOn = inherited.on;
+		}
 		const t = await translator(deps);
-		const detail = t("lado.presence.setupChangeDetail", {
-			item: `${SETUP_TOOL_NAMES[subject.tool]} · ${t(SETUP_KIND_KEYS[subject.kind])} · ${subject.name}`,
-			change: changeLine(t, change),
-			sha: subject.sha256.slice(0, 12),
-		});
+		const detail = [
+			t("lado.presence.setupChangeDetail", {
+				item: `${SETUP_TOOL_NAMES[subject.tool]} · ${t(SETUP_KIND_KEYS[subject.kind])} · ${subject.name}`,
+				change: changeLine(t, change, inheritsOn),
+				sha: subject.sha256.slice(0, 12),
+			}),
+			...(subject.content ? [t("lado.presence.setupChangeContent", { content: subject.content })] : []),
+			...(subject.blocking > 0 ? [t("lado.presence.setupChangeBlocking", { blocking: subject.blocking })] : []),
+		].join("\n\n");
 		if (!(await confirm(deps, t, t("lado.presence.setupChangeTitle"), detail, t("lado.presence.change")))) {
 			return { status: "cancelled" };
 		}
@@ -566,7 +612,7 @@ async function changeSetup(
 	const sent = await callDaemon(deps, change.path, init, SETUP_TIMEOUT_MS);
 	if (!sent.ok) return sent.failure;
 	const changed = record(sent.body);
-	if (changed?.applied !== true) return failure(undefined, "The change was sent, but the AO daemon's answer could not be read.");
+	if (changed?.applied !== true) return failure(ANSWER_UNREADABLE, "The change was sent, but the AO daemon's answer could not be read.");
 	return { status: "changed", change: changed as LadoPresenceSetupChange };
 }
 
@@ -587,8 +633,23 @@ function jsonRequest(method: string, body: string): RequestInit {
 
 // Main's catalog in the current language, read for each confirmation.
 async function translator(deps: LadoPresenceDeps): Promise<Translate> {
-	const catalog = trayCatalogs[await deps.locale()] ?? trayCatalogs.en;
+	return translate(await deps.locale());
+}
+
+function translate(locale: AppLocale): Translate {
+	const catalog = trayCatalogs[locale] ?? trayCatalogs.en;
 	return (key, vars) => format(catalog[key] ?? trayCatalogs.en[key], vars);
+}
+
+// A time as the app's language writes it, in this computer's time zone.
+function formatTime(locale: AppLocale, iso: string): string {
+	const date = new Date(iso);
+	if (Number.isNaN(date.getTime())) return oneLine(iso);
+	try {
+		return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(date);
+	} catch {
+		return date.toISOString();
+	}
 }
 
 async function confirm(
@@ -788,11 +849,11 @@ function adoptionSubject(body: unknown, entries: readonly LadoPresenceSetupEntry
 		else kept += 1;
 	}
 	let blocking = 0;
-	let hookPathMoved: Record<string, unknown> | null = null;
+	let unmovable: AdoptionSubject["unmovable"] = null;
 	for (const value of conflicts) {
 		const conflict = record(value);
 		if (typeof conflict?.code !== "string" || typeof conflict.severity !== "string") return null;
-		if (conflict.code === SETUP_HOOK_PATH_MOVED) hookPathMoved ??= record(conflict.details) ?? {};
+		if (SETUP_UNMOVABLE[conflict.code]) unmovable ??= { code: conflict.code, details: record(conflict.details) ?? {} };
 		else if (conflict.severity === "blocking") blocking += 1;
 	}
 	return {
@@ -800,7 +861,7 @@ function adoptionSubject(body: unknown, entries: readonly LadoPresenceSetupEntry
 		moved,
 		kept,
 		blocking,
-		hookPathMoved,
+		unmovable,
 		os: preconditions.os,
 		unverified: preconditions.unverified,
 		sessions: preconditions.sessions,
@@ -808,26 +869,45 @@ function adoptionSubject(body: unknown, entries: readonly LadoPresenceSetupEntry
 	};
 }
 
-// The adoption a restore names, from LadoSetupAdoptionDetailResponse.
+// The adoption a restore names, from LadoSetupAdoptionDetailResponse. An
+// adoption interrupted before it recorded its items puts back the originals
+// its backup moved. The daemon leaves out the preconditions once nothing can
+// be restored.
 function restoreSubject(body: unknown, adoptionId: string): RestoreSubject | null {
 	const detail = record(body);
 	const adoption = record(detail?.adoption);
 	const items = detail?.items;
+	const backup = detail?.backup;
 	const restoredAt = adoption?.restoredAt;
+	const createdAt = adoption?.createdAt;
+	const preconditions = detail?.preconditions === undefined ? {} : record(detail.preconditions);
+	const sessions = preconditions?.sessions ?? [];
+	const processes = preconditions?.processes ?? [];
 	if (
 		adoption?.id !== adoptionId ||
+		typeof createdAt !== "string" ||
 		!Array.isArray(items) ||
+		!Array.isArray(backup) ||
 		typeof detail?.backupReadable !== "boolean" ||
-		(restoredAt !== undefined && restoredAt !== null && typeof restoredAt !== "string")
+		(restoredAt !== undefined && restoredAt !== null && typeof restoredAt !== "string") ||
+		!Array.isArray(sessions) ||
+		!Array.isArray(processes)
 	) {
 		return null;
 	}
-	return { items: items.length, restored: typeof restoredAt === "string" && restoredAt !== "", backupReadable: detail.backupReadable };
+	return {
+		items: items.length || backup.filter((entry) => record(entry)?.action === "move").length,
+		createdAt,
+		restored: typeof restoredAt === "string" && restoredAt !== "",
+		backupReadable: detail.backupReadable,
+		sessions,
+		processes,
+	};
 }
 
 // The setup change the renderer names: one of the routes whose change can
-// need the human, with exactly that route's fields. Turning an item off,
-// inheriting and reverting drift never need the human, so they are not taken
+// need the human, with exactly that route's fields. Reverting drift and
+// accepting or revoking a warning never need the human, so they are not taken
 // here.
 function setupChange(input: unknown): SetupChange | null {
 	const request = record(input);
@@ -848,9 +928,13 @@ function setupChange(input: unknown): SetupChange | null {
 		if (!fields || !isVersion(fields.baseVersion) || !isJSONValue(fields.content)) return null;
 		return { op: "edit", method, path, body: fields, itemId: edited };
 	}
+	if (method === "DELETE" && edited) {
+		if (!onlyFields(body, [])) return null;
+		return { op: "delete", method, path, body: {}, itemId: edited };
+	}
 	if (method === "PUT" && path === SETUP_BINDINGS_PATH) {
 		const fields = onlyFields(body, ["itemId", "scope", "scopeId", "state"]);
-		if (!fields || typeof fields.itemId !== "string" || !SETUP_ID.test(fields.itemId) || !turnsOn(fields)) return null;
+		if (!fields || typeof fields.itemId !== "string" || !SETUP_ID.test(fields.itemId) || !isBinding(fields)) return null;
 		return { op: "binding", method, path, body: fields, itemId: fields.itemId };
 	}
 	const drifted = SETUP_DRIFT_PATH.exec(path)?.[1];
@@ -870,21 +954,43 @@ function onlyFields(body: Record<string, unknown>, names: readonly string[]): Re
 	return fields;
 }
 
-// A binding that turns its item on: on at Global, force_on for an existing
-// project's or task's id.
-function turnsOn(binding: Record<string, unknown>): boolean {
+// A binding the daemon takes: on or off at Global; inherit, force_on or
+// force_off for a project's or task's id.
+function isBinding(binding: Record<string, unknown>): boolean {
 	const { scope, scopeId = "", state } = binding;
 	if (typeof scopeId !== "string") return false;
 	switch (scope) {
 		case "global":
-			return state === "on" && scopeId === "";
+			return (state === "on" || state === "off") && scopeId === "";
 		case "project":
-			return state === "force_on" && PROJECT_ID.test(scopeId) && !scopeId.includes("..");
+			return SCOPED_BINDING_STATES.includes(state) && PROJECT_ID.test(scopeId) && !scopeId.includes("..");
 		case "task":
-			return state === "force_on" && SETUP_ID.test(scopeId);
+			return SCOPED_BINDING_STATES.includes(state) && SETUP_ID.test(scopeId);
 		default:
 			return false;
 	}
+}
+
+// Whether inheriting turns the item on, from LadoSetupItemListResponse: a
+// project follows Global, and a task follows its project, which can follow
+// Global in turn.
+async function inheritedState(
+	deps: LadoPresenceDeps,
+	change: SetupChange,
+): Promise<{ ok: true; on: boolean } | { ok: false; failure: Failure }> {
+	const task = change.body.scope === "task";
+	const path = `${SETUP_ITEMS_PATH}?${task ? "taskId" : "projectId"}=${encodeURIComponent(String(change.body.scopeId))}`;
+	const read = await callDaemon(deps, path, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read;
+	const items = record(read.body)?.items;
+	const item = Array.isArray(items) ? items.map(record).find((value) => value?.itemId === change.itemId) : undefined;
+	const global = item?.global;
+	const project = item?.project;
+	if ((global !== "on" && global !== "off") || (task && !SCOPED_BINDING_STATES.includes(project))) {
+		return { ok: false, failure: failure(ANSWER_UNREADABLE, "The AO daemon's answer about where this item applies could not be read.") };
+	}
+	if (task && project !== "inherit") return { ok: true, on: project === "force_on" };
+	return { ok: true, on: global === "on" };
 }
 
 // The preview of the change: about the item the request names, by the op the
@@ -897,7 +1003,10 @@ function changeSubject(body: unknown, change: SetupChange): ChangeSubject | null
 	const tool = item?.tool;
 	const kind = item?.kind;
 	const name = item?.name;
+	const text = record(result?.after)?.text;
+	const added = result?.conflictsAdded;
 	if (
+		!Array.isArray(added) ||
 		result?.op !== change.op ||
 		result.applied !== false ||
 		typeof sha256 !== "string" ||
@@ -913,25 +1022,48 @@ function changeSubject(body: unknown, change: SetupChange): ChangeSubject | null
 		change.op === "create"
 			? tool === change.body.tool && kind === change.body.kind && name === change.body.name
 			: item?.id === change.itemId;
-	return named ? { sha256, needsPresence, tool, kind, name: oneLine(name) } : null;
+	if (!named) return null;
+	return {
+		sha256,
+		needsPresence,
+		tool,
+		kind,
+		name: oneLine(name),
+		content: typeof text === "string" ? excerpt(text) : "",
+		blocking: added.filter((conflict) => record(conflict)?.severity === "blocking").length,
+	};
 }
 
-// What the change does, as the dialog names it.
-function changeLine(t: Translate, change: SetupChange): string {
+// What the change does, as the dialog names it; inheritsOn is what an
+// inherit binding turns the item to.
+function changeLine(t: Translate, change: SetupChange, inheritsOn: boolean): string {
 	switch (change.op) {
 		case "create":
 			return t("lado.presence.setupChangeCreate");
 		case "edit":
 			return t("lado.presence.setupChangeEdit");
+		case "delete":
+			return t("lado.presence.setupChangeDelete");
 		case "drift_keep":
 			return t("lado.presence.setupChangeKeepDrift");
 		case "binding": {
+			const { scope, state } = change.body;
 			const id = String(change.body.scopeId ?? "");
-			if (change.body.scope === "project") return t("lado.presence.setupChangeOnProject", { id });
-			if (change.body.scope === "task") return t("lado.presence.setupChangeOnTask", { id });
-			return t("lado.presence.setupChangeOnGlobal");
+			if (scope === "global") return t(state === "on" ? "lado.presence.setupChangeOnGlobal" : "lado.presence.setupChangeOffGlobal");
+			const task = scope === "task";
+			if (state === "force_on") return t(task ? "lado.presence.setupChangeOnTask" : "lado.presence.setupChangeOnProject", { id });
+			if (state === "force_off") return t(task ? "lado.presence.setupChangeOffTask" : "lado.presence.setupChangeOffProject", { id });
+			if (task) return t(inheritsOn ? "lado.presence.setupChangeInheritTaskOn" : "lado.presence.setupChangeInheritTaskOff", { id });
+			return t(inheritsOn ? "lado.presence.setupChangeInheritProjectOn" : "lado.presence.setupChangeInheritProjectOff", { id });
 		}
 	}
+}
+
+// Content as one line of at most MAX_CONTENT_EXCERPT characters: control and
+// direction characters could fake the dialog's other lines.
+function excerpt(value: string): string {
+	const characters = Array.from(value.replace(UNSAFE_TEXT, " ").replace(/\s+/g, " ").trim());
+	return characters.length > MAX_CONTENT_EXCERPT ? `${characters.slice(0, MAX_CONTENT_EXCERPT).join("")}…` : characters.join("");
 }
 
 function isSetupTool(value: unknown): value is SetupTool {

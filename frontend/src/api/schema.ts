@@ -7416,15 +7416,20 @@ export interface components {
             /** @enum {string} */
             kind: "instructions" | "setting" | "skill" | "agent" | "command" | "output_style" | "hook_script" | "mcp_server";
             name: string;
+            /**
+             * @description kept_in_lado: LADO made later versions of the item, which stay readable in LADO; omitted otherwise.
+             * @enum {string}
+             */
+            note?: "kept_in_lado";
             /** @description Under root, with slashes and #<key> after a key's file. */
             path: string;
             /** @enum {string} */
             root: "claude_dir" | "claude_json" | "codex_home";
             /**
-             * @description restored_beside: something new held the path, so the original is beside it; key_kept: the file has the key now, which stays.
+             * @description restored_beside: something new held the path, so the original is beside it; key_kept: the file has the key now, which stays; skipped_deleted: the item was deleted in LADO, so its original stays out.
              * @enum {string}
              */
-            status: "restored" | "restored_beside" | "key_kept" | "failed";
+            status: "restored" | "restored_beside" | "key_kept" | "failed" | "skipped_deleted";
             /** @enum {string} */
             tool: "claude-code" | "codex";
         };

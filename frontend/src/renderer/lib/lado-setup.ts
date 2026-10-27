@@ -281,8 +281,9 @@ export function previewLadoSetupChange(request: LadoSetupChangeRequest): Promise
 
 /**
  * The request the desktop app's main process confirms and signs, for the
- * changes that can need it: creating or editing an item, turning one on, and
- * keeping drift. Deleting, turning off, reverting and acceptances never do.
+ * changes that can need it: every change to an item that can run commands or
+ * widen access (creating, editing or deleting it, setting where it applies,
+ * keeping its drift). Reverting drift and acceptances never do.
  */
 export function ladoSetupPresenceRequest(request: LadoSetupChangeRequest): LadoPresenceSetupChangeRequest | null {
 	switch (request.op) {
@@ -290,6 +291,8 @@ export function ladoSetupPresenceRequest(request: LadoSetupChangeRequest): LadoP
 			return { method: "POST", path: "/api/v1/lado/setup/items", body: { ...request.input } };
 		case "edit":
 			return { method: "PATCH", path: `/api/v1/lado/setup/items/${encodeURIComponent(request.itemId)}`, body: { ...request.input } };
+		case "delete":
+			return { method: "DELETE", path: `/api/v1/lado/setup/items/${encodeURIComponent(request.itemId)}`, body: {} };
 		case "binding":
 			return { method: "PUT", path: "/api/v1/lado/setup/bindings", body: { ...request.input } };
 		case "drift":
@@ -324,7 +327,8 @@ async function applyLadoSetupChange(request: LadoSetupChangeRequest, needsPresen
  * approved tasks waits in pending until confirm() or cancel(); any other is
  * made at once, through the desktop app's confirmation when the dry run says
  * it needs one. A failed call rejects with the daemon's LadoApiError, which
- * error also holds.
+ * error also holds; the views refresh then too, since a change the desktop
+ * app sent can have been made before its answer went missing.
  */
 export function useLadoSetupChange() {
 	const queryClient = useQueryClient();
@@ -346,6 +350,7 @@ export function useLadoSetupChange() {
 			setPending(null);
 			if (outcome.status === "applied") invalidateLadoSetupQueries(queryClient);
 		},
+		onError: () => invalidateLadoSetupQueries(queryClient),
 		retry: false,
 	});
 	return {

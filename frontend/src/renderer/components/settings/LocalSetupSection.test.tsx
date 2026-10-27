@@ -275,7 +275,7 @@ describe("LocalSetupSection", () => {
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 	});
 
-	it("keeps adoption off on an OS LADO has not checked, and says why", async () => {
+	it("keeps adoption and new items off on an OS LADO has not checked, and says why", async () => {
 		serve({
 			"GET /api/v1/lado/setup/inventory": () => ({
 				data: { ...inventory, os: "windows", verified: { "claude-code": false, codex: false } },
@@ -287,9 +287,36 @@ describe("LocalSetupSection", () => {
 		expect(adopt).toBeDisabled();
 		const reason = screen.getByTestId("lado-setup-os");
 		expect(reason).toHaveTextContent(
-			"Adoption is off on this OS (Windows): LADO has not yet checked that sessions get the adopted setup here.",
+			"Adopting and new items are off on this OS (Windows): LADO has not yet checked that sessions get the managed setup here.",
 		);
 		expect(adopt).toHaveAttribute("aria-describedby", reason.id);
+		// The daemon refuses a new item there too, so the button says why it is off.
+		const create = screen.getByRole("button", { name: "New item" });
+		expect(create).toBeDisabled();
+		expect(create).toHaveAttribute("aria-describedby", reason.id);
+	});
+
+	it("says why LADO leaves setup behind a link or a provider login where it is", async () => {
+		serve({
+			"GET /api/v1/lado/setup/inventory": () => ({
+				data: {
+					...inventory,
+					entries: [
+						...inventory.entries,
+						setupEntry({ tool: "claude-code", kind: "setting", name: "env", status: "not_adoptable", reason: "provider_login_env", path: `${CLAUDE_DIR}/settings.json#env` }),
+						setupEntry({ tool: "claude-code", kind: "agent", name: "reviewer.md", status: "not_adoptable", reason: "root_is_link", path: `${CLAUDE_DIR}/agents/reviewer.md` }),
+					],
+				},
+			}),
+		});
+		renderSection();
+
+		await waitFor(() => toolCard("claude-code"));
+		const claude = toolCard("claude-code");
+		expect(
+			within(claude).getByText(/Claude Code signs in through a cloud provider set here, so these variables stay with the login\./),
+		).toBeInTheDocument();
+		expect(within(claude).getByText(/Its tool folder or settings file is a symbolic link, and LADO never adopts through a link\./)).toBeInTheDocument();
 	});
 
 	it("is quiet about the OS when LADO checked it, and opens the adoption", async () => {

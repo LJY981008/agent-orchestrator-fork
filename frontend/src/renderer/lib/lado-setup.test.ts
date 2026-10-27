@@ -3,6 +3,7 @@ import { act, renderHook } from "@testing-library/react";
 import { createElement, type PropsWithChildren } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { apiClient } from "./api-client";
+import { useScanLadoSetup } from "../hooks/useLadoSetup";
 import { LadoApiError, type LadoRuleImpact } from "./lado";
 import {
 	adoptLadoSetup,
@@ -238,7 +239,9 @@ describe("useLadoSetupChange", () => {
 		});
 		expect(error).toBeInstanceOf(LadoApiError);
 		expect(error).toMatchObject({ code: "LADO_SETUP_NOT_FOUND", message: "The daemon's LADO_SETUP_NOT_FOUND" });
-		expect(refused.invalidate).not.toHaveBeenCalled();
+		// A change the desktop app sent can have been made before its answer went
+		// missing, so a failure refreshes the views like a change does.
+		expect(invalidatedKeys(refused.invalidate)).toEqual(changeKeys);
 
 		// The desktop app's refusal reads the same way.
 		post.mockResolvedValueOnce(answer(changeResult({ op: "create", needsPresence: true })));
@@ -254,19 +257,43 @@ describe("useLadoSetupChange", () => {
 		});
 		expect(error).toBeInstanceOf(LadoApiError);
 		expect(error).toMatchObject({ code: "LADO_PRESENCE_EXPIRED", message: "The confirmation expired.", details: { op: "create" } });
+
+		post.mockResolvedValueOnce(answer(changeResult({ op: "create", needsPresence: true })));
+		changeSetupMock.mockResolvedValueOnce({
+			status: "error",
+			code: "LADO_PRESENCE_ANSWER_UNREADABLE",
+			message: "The change was sent, but the AO daemon's answer could not be read.",
+		});
+		const unread = renderChange();
+		await act(async () => {
+			error = await unread.result.current.change(createServer).catch((caught: unknown) => caught);
+		});
+		expect(error).toMatchObject({ code: "LADO_PRESENCE_ANSWER_UNREADABLE" });
+		expect(invalidatedKeys(unread.invalidate)).toEqual(changeKeys);
 	});
 
-	it("deletes with a dry run query, never through the desktop app", async () => {
-		del.mockResolvedValueOnce(answer(changeResult({ op: "delete", needsPresence: true }))).mockResolvedValueOnce(answer(applied));
-		const { result } = renderChange();
+	it("deletes with a dry run query, through the desktop app only when the dry run asks for it", async () => {
+		del.mockResolvedValueOnce(answer(changeResult({ op: "delete" }))).mockResolvedValueOnce(answer(applied));
+		const plain = renderChange();
 		await act(async () => {
-			await result.current.change({ op: "delete", itemId: "item-1" });
+			await plain.result.current.change({ op: "delete", itemId: "item-1" });
 		});
 		expect(del.mock.calls).toEqual([
 			["/api/v1/lado/setup/items/{itemId}", { params: { path: { itemId: "item-1" }, query: { dryRun: true } } }],
 			["/api/v1/lado/setup/items/{itemId}", { params: { path: { itemId: "item-1" }, query: {} } }],
 		]);
 		expect(changeSetupMock).not.toHaveBeenCalled();
+
+		// Deleting an item that can run commands is confirmed like any change to it.
+		del.mockClear();
+		del.mockResolvedValueOnce(answer(changeResult({ op: "delete", needsPresence: true })));
+		changeSetupMock.mockResolvedValueOnce({ status: "changed", change: applied });
+		const confirmed = renderChange();
+		await act(async () => {
+			await confirmed.result.current.change({ op: "delete", itemId: "item-1" });
+		});
+		expect(del).toHaveBeenCalledTimes(1);
+		expect(changeSetupMock).toHaveBeenCalledWith({ method: "DELETE", path: "/api/v1/lado/setup/items/item-1", body: {} });
 	});
 });
 
@@ -282,8 +309,18 @@ describe("ladoSetupPresenceRequest", () => {
 			path: "/api/v1/lado/setup/items/item-1/drift",
 			body: { action: "keep", sha256: SHA },
 		});
+		expect(ladoSetupPresenceRequest({ op: "delete", itemId: "item-1" })).toEqual({
+			method: "DELETE",
+			path: "/api/v1/lado/setup/items/item-1",
+			body: {},
+		});
+		// Turning off and inheriting go the same way as turning on.
+		expect(ladoSetupPresenceRequest({ op: "binding", input: { itemId: "item-1", scope: "project", scopeId: "demo", state: "inherit" } })).toEqual({
+			method: "PUT",
+			path: "/api/v1/lado/setup/bindings",
+			body: { itemId: "item-1", scope: "project", scopeId: "demo", state: "inherit" },
+		});
 		for (const request of [
-			{ op: "delete", itemId: "item-1" },
 			{ op: "revoke", acceptanceId: "acceptance-1" },
 			{ op: "accept", input: { itemId: "item-1", code: "LADO_SETUP_DENIES_GIT", scope: "global" } },
 		] as LadoSetupChangeRequest[]) {
@@ -391,5 +428,33 @@ describe("setup queries", () => {
 			code: "LADO_SETUP_SCOPE_INVALID",
 			details: { projectId: "demo", taskId: "lado-task-9" },
 		});
+	});
+});
+
+describe("scanning again", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("shows the new inventory and loads the conflicts, items and effective views again", async () => {
+		const inventory = { scannedAt: "2026-10-27T00:00:00Z" };
+		post.mockResolvedValueOnce(answer(inventory));
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+		const wrapper = ({ children }: PropsWithChildren) => createElement(QueryClientProvider, { client: queryClient }, children);
+		const { result } = renderHook(() => useScanLadoSetup(), { wrapper });
+
+		await act(async () => {
+			await result.current.mutateAsync();
+		});
+
+		expect(post).toHaveBeenCalledWith("/api/v1/lado/setup/scan");
+		expect(queryClient.getQueryData(["lado", "setup", "inventory"])).toEqual(inventory);
+		// Not the inventory again, which the scan answered.
+		expect(invalidatedKeys(invalidate)).toEqual([
+			["lado", "setup", "conflicts"],
+			["lado", "setup", "items"],
+			["lado", "effective"],
+		]);
 	});
 });

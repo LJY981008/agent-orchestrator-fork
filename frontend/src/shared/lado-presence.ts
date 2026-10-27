@@ -77,13 +77,14 @@ export type LadoPresenceRestoreSetupResult =
 	| LadoPresenceFailure;
 
 /**
- * A setup change that can need the human: creating or editing an item,
- * turning one on, or keeping its drift. The body is the route's request
- * without dryRun; main checks the route and the fields, previews the change
- * itself and signs exactly this request.
+ * A setup change that can need the human: creating, editing or deleting an
+ * item, setting where it applies, or keeping its drift. The body is the
+ * route's request without dryRun, and empty for a delete; main checks the
+ * route and the fields, previews the change itself and signs exactly this
+ * request.
  */
 export type LadoPresenceSetupChangeRequest = {
-	method: "POST" | "PATCH" | "PUT";
+	method: "POST" | "PATCH" | "DELETE" | "PUT";
 	path: string;
 	body: Record<string, unknown>;
 };
