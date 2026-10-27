@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -41,6 +42,8 @@ type Deps struct {
 // Service reads and changes LADO's project settings.
 type Service struct {
 	deps Deps
+	// onLadoModeOn is told the project whose LADO mode was turned on.
+	onLadoModeOn atomic.Pointer[func(domain.ProjectID)]
 }
 
 // New returns a Service.
@@ -49,6 +52,18 @@ func New(deps Deps) *Service {
 		deps.Clock = time.Now
 	}
 	return &Service{deps: deps}
+}
+
+// SetOnLadoModeOn sets what is told, after the change is stored, the project
+// whose LADO mode was turned on: the verification loop, which reads the
+// protection of the project's base branches again (docs/LJY-PRD/TDD.md
+// §7.1). It must not block. nil tells nobody.
+func (s *Service) SetOnLadoModeOn(fn func(domain.ProjectID)) {
+	if fn == nil {
+		s.onLadoModeOn.Store(nil)
+		return
+	}
+	s.onLadoModeOn.Store(&fn)
 }
 
 // UpdateInput is a settings change. It needs at least one field; a nil
@@ -203,6 +218,9 @@ func (s *Service) setMode(ctx context.Context, project domain.ProjectRecord, on 
 	updated, err := s.deps.Store.SetLadoMode(ctx, projectID, true, s.deps.Clock())
 	if err != nil {
 		return domain.LadoProjectSettings{}, apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
+	}
+	if fn := s.onLadoModeOn.Load(); fn != nil {
+		(*fn)(projectID)
 	}
 	return updated, nil
 }

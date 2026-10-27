@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
+	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
@@ -69,6 +70,12 @@ type ladoWorkDeps struct {
 	// setup is what LADO's local setup uses: the tool folders and the
 	// session hooks.
 	setup ladoSetupDeps
+	// reviews is AO's review service, which reviews an execution's PR when
+	// its plan requires a review.
+	reviews reviewsvc.Manager
+	// ladoModes is LADO's project settings service, whose turn-on of LADO
+	// mode reads the protection of the project's base branches again.
+	ladoModes ladoModeHook
 }
 
 // ladoOrchestratorSpawner is AO's session service.

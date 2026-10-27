@@ -83,7 +83,7 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 	var reviewerSection reviewcore.LadoSystemSection
 	log := slog.New(slog.DiscardHandler)
 
-	_, _, rules, _, setup := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{setup: ladoSetupDeps{
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{setup: ladoSetupDeps{
 		folders:  folders,
 		sessions: sessions,
 		agents:   ladoAgents{domain.HarnessCodex: codex},
@@ -91,6 +91,7 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 		processes: func(context.Context) ([]procmem.Process, error) { return nil, nil },
 		reviewers: func(section reviewcore.LadoSystemSection) { reviewerSection = section },
 	}}, log)
+	rules, setup := work.rules, work.setup
 
 	if setup == nil || sessions.home != ports.LadoSetupHome(setup) || sessions.chat == nil || sessions.prompt == nil || codex.overrides == nil || reviewerSection == nil {
 		t.Fatalf("hooks: home %v (service %p), chat set %v, prompt set %v, Codex options set %v, reviewer section set %v",

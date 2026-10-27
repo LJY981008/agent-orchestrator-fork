@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoverify"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
@@ -49,16 +50,27 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 
+// ladoWork is LADO's services wireLadoWork builds.
+type ladoWork struct {
+	connections *ladoconnect.Service
+	tasks       *ladotask.Service
+	rules       *ladopolicy.Service
+	queue       *ladoqueue.Service
+	setup       *ladosetup.Service
+	verify      *ladoverify.Service
+}
+
 // wireLadoWork builds LADO's repository connections, the local setup it
 // manages with its session hooks, its rules with the built-in ones seeded,
 // issue-backed tasks with their plans, whose approvals fix the rules and the
-// setup and queue the plans, and the dispatcher that starts the queued plans'
-// workers and stops the worker of a cancelled task. The daemon calls it once
-// AO's project service exists, after installLadoCredentials opened the token
-// store and before sessions restore, and starts the dispatcher once workers
-// may spawn. Without AO's session service the dispatcher only reads; it must
-// not start.
-func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) (*ladoconnect.Service, *ladotask.Service, *ladopolicy.Service, *ladoqueue.Service, *ladosetup.Service) {
+// setup and queue the plans, the dispatcher that starts the queued plans'
+// workers and stops the worker of a cancelled task, and the loop that
+// verifies the workers' PRs. The daemon calls it once AO's project service
+// exists, after installLadoCredentials opened the token store and before
+// sessions restore, and starts the dispatcher, then the verification loop,
+// once workers may spawn. Without AO's session service the dispatcher only
+// reads; it must not start.
+func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, projects ladoProjectCloner, work ladoWorkDeps, log *slog.Logger) ladoWork {
 	if ladoStoredTokens == nil {
 		installLadoCredentials(cfg, log)
 	}
@@ -100,7 +112,8 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	if work.sessions != nil {
 		tasks.SetKiller(queue)
 	}
-	return connections, tasks, rules, queue, setup
+	verify := wireLadoVerify(store, blobs, clients, work, log)
+	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify}
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.

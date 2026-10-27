@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -32,6 +33,9 @@ const (
 	statusBatch = 50
 	// protectionTTL is how long a read of a base branch's rules is kept.
 	protectionTTL = 10 * time.Minute
+	// baseResolveTimeout bounds resolving a repository's base branch, as the
+	// dispatcher bounds it.
+	baseResolveTimeout = 30 * time.Second
 )
 
 // Store is what the loop reads and writes in LADO's store (*store.Store).
@@ -85,6 +89,12 @@ type Sessions interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
+// Branches resolves the branch a repository's workers start from (AO's
+// session manager), as the dispatcher does.
+type Branches interface {
+	ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error)
+}
+
 // Sender messages a worker session as the daemon (AO's session manager).
 type Sender interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
@@ -113,6 +123,9 @@ type Deps struct {
 	Blobs Blobs
 	// Sender tells workers what failed. Without it none is told.
 	Sender Sender
+	// Branches resolves a repository's base branch for ProjectProtection.
+	// Without it the branch the project configures is read, if any.
+	Branches Branches
 	// Run runs one check command and waits for it; nil uses RunCommand.
 	Run func(ctx context.Context, spec CommandSpec) CommandResult
 	// Env is the environment check commands start from, before CommandEnv
@@ -150,6 +163,9 @@ type Service struct {
 	// statusTried holds, by approval, when this daemon last tried to post
 	// its status.
 	statusTried map[string]time.Time
+	// runCtx is the context of the loop Start began, while it runs; the
+	// background reads RefreshProtection starts run under it.
+	runCtx context.Context
 }
 
 // New returns a Service.
@@ -190,9 +206,17 @@ func New(deps Deps) *Service {
 // one, until ctx is done. Check commands a pass starts run under ctx too, so
 // its end cancels them. Wait waits for both.
 func (s *Service) Start(ctx context.Context) {
+	s.mu.Lock()
+	s.runCtx = ctx
+	s.mu.Unlock()
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		defer func() {
+			s.mu.Lock()
+			s.runCtx = nil
+			s.mu.Unlock()
+		}()
 		ticker := time.NewTicker(s.deps.Interval)
 		defer ticker.Stop()
 		for {
@@ -209,8 +233,9 @@ func (s *Service) Start(ctx context.Context) {
 	}()
 }
 
-// Wait waits for the loop Start began and for the check commands passes
-// started, which end as cancelled once their context is done.
+// Wait waits for the loop Start began, for the check commands passes
+// started, which end as cancelled once their context is done, and for the
+// reads RefreshProtection started.
 func (s *Service) Wait() {
 	s.wg.Wait()
 }
@@ -221,6 +246,122 @@ func (s *Service) Kick() {
 	case s.kick <- struct{}{}:
 	default:
 	}
+}
+
+// RefreshProtection reads again, in the background, the rules of the base
+// branch of each of the project's repositories, as when LADO mode is turned
+// on (decision i), so the next pass and the project's screen start from a
+// fresh read. What fails is logged. Before Start, or once the loop stopped,
+// it does nothing; Wait waits for the reads it started.
+func (s *Service) RefreshProtection(projectID domain.ProjectID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ctx := s.runCtx
+	if ctx == nil {
+		return
+	}
+	// The loop holds the wait group until it clears runCtx, so this Add
+	// never races Wait.
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		reads, err := s.ProjectProtection(ctx, projectID, true)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			s.deps.Log.Warn("LADO could not read the protection of a project's base branches", "project", projectID, "err", err)
+			return
+		}
+		for _, read := range reads {
+			if read.Err != nil {
+				s.deps.Log.Warn("LADO could not read a base branch's protection", "project", projectID,
+					"repo", domain.LadoRepoRef(read.Repo), "branch", read.Branch, "err", redactedErrorLine(read.Err))
+			}
+		}
+	}()
+}
+
+// ProjectProtection reads the rules of the base branch of each of the
+// project's repositories: a single-repository project's origin, or each
+// workspace repository whose origin is on a host LADO supports. The base
+// branch is the one the dispatcher starts workers from. force reads past the
+// cache. A repository whose base branch cannot be told has a read with only
+// its error.
+func (s *Service) ProjectProtection(ctx context.Context, projectID domain.ProjectID, force bool) ([]ProtectionRead, error) {
+	places, err := s.projectRepos(ctx, projectID)
+	if err != nil {
+		return nil, err
+	}
+	reads := make([]ProtectionRead, 0, len(places))
+	for _, place := range places {
+		branch, err := s.baseBranchOf(ctx, place)
+		if err != nil {
+			reads = append(reads, ProtectionRead{Provider: place.repo.Provider, Repo: place.repo, Err: err, ReadAt: s.now()})
+			continue
+		}
+		reads = append(reads, s.protection.Read(ctx, place.repo, branch, force))
+	}
+	return reads, nil
+}
+
+// repoPlace is one of a project's repositories: where it is and the base
+// branch the project configures for it, if any.
+type repoPlace struct {
+	repo       domain.TrackerRepo
+	dir        string
+	configured string
+}
+
+// projectRepos lists the project's repositories as LADO's tasks list them.
+func (s *Service) projectRepos(ctx context.Context, projectID domain.ProjectID) ([]repoPlace, error) {
+	project, ok, err := s.deps.Projects.GetProject(ctx, string(projectID))
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("read project %s: %w", projectID, err)
+	case !ok:
+		return nil, fmt.Errorf("project %s not found", projectID)
+	}
+	var places []repoPlace
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		// An origin on a host LADO does not support has no protection to read.
+		if repo, err := domain.LadoTrackerRepoFromOrigin(project.RepoOriginURL); project.RepoOriginURL != "" && err == nil {
+			places = append(places, repoPlace{repo: repo, dir: project.Path, configured: project.Config.WorktreeBaseBranch()})
+		}
+		return places, nil
+	}
+	children, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the workspace repositories of project %s: %w", project.ID, err)
+	}
+	for _, child := range children {
+		repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL)
+		if child.RepoOriginURL == "" || err != nil {
+			continue
+		}
+		places = append(places, repoPlace{repo: repo, dir: filepath.Join(project.Path, filepath.FromSlash(child.RelativePath)), configured: child.DefaultBranch})
+	}
+	return places, nil
+}
+
+// baseBranchOf resolves a repository's base branch as the dispatcher does.
+func (s *Service) baseBranchOf(ctx context.Context, place repoPlace) (string, error) {
+	if s.deps.Branches == nil {
+		if place.configured == "" {
+			return "", errors.New("the project names no base branch and no branch resolver is wired")
+		}
+		return place.configured, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, baseResolveTimeout)
+	defer cancel()
+	base, err := s.deps.Branches.ResolveDefaultBranch(ctx, place.dir, place.configured)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("resolve the base branch: %w", err)
+	case base.Branch == "":
+		return "", errors.New("resolve the base branch: no branch")
+	}
+	return base.Branch, nil
 }
 
 // Tick runs one pass. The first pass cancels the check runs a stopped daemon

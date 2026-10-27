@@ -231,7 +231,8 @@ func TestWireLadoWorkStartsTheDispatcher(t *testing.T) {
 	}
 	sessions := &ladoWorkerSessions{}
 
-	_, tasks, _, queue, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	tasks, queue := work.tasks, work.queue
 	done := queue.Start(ctx)
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -281,7 +282,8 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	}
 	log := slog.New(slog.DiscardHandler)
 
-	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	tasks, rules := work.tasks, work.rules
 
 	if tasks == nil || rules == nil {
 		t.Fatalf("wireLadoWork returned tasks %v, rules %v", tasks, rules)
@@ -366,7 +368,8 @@ func TestWireLadoWorkGivesTasksTheRules(t *testing.T) {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
 
-	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	tasks, rules := work.tasks, work.rules
 
 	listed, err := tasks.List(ctx, "mer", false)
 	if err != nil || len(listed) != 1 {

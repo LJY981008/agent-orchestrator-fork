@@ -246,6 +246,65 @@ func TestModeSwitchNeedsNoDevFlag(t *testing.T) {
 	}
 }
 
+// Turning LADO mode on tells the verification loop the project once the
+// change is stored, so it reads the base branches' protection again; nothing
+// else does.
+func TestLadoModeOnRefreshesProtection(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeStore{}
+	svc := newService(store)
+	var told []domain.ProjectID
+	svc.SetOnLadoModeOn(func(id domain.ProjectID) { told = append(told, id) })
+	update := func(id domain.ProjectID, in ladoproject.UpdateInput) error {
+		_, err := svc.UpdateSettings(ctx, id, in)
+		return err
+	}
+
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(true)}); err != nil {
+		t.Fatalf("turn on: %v", err)
+	}
+	if !slices.Equal(told, []domain.ProjectID{"mer"}) {
+		t.Fatalf("told %v after turning LADO mode on, want mer once", told)
+	}
+
+	// Already on, with or without another change.
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(true)}); err != nil {
+		t.Fatalf("turn on again: %v", err)
+	}
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(true), MaxConcurrent: intPtr(2)}); err != nil {
+		t.Fatalf("change the cap: %v", err)
+	}
+	// Off, and a turn-on that is refused or not stored.
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(false), Presence: presence("nonce-1")}); err != nil {
+		t.Fatalf("turn off: %v", err)
+	}
+	requireAPIError(t, update("intake", ladoproject.UpdateInput{LadoMode: boolPtr(true)}), apierr.KindConflict, "LADO_TRACKER_INTAKE_ENABLED")
+	store.writeErr = errors.New("disk full")
+	requireAPIError(t, update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(true)}), apierr.KindInternal, "LADO_SETTINGS_UPDATE_FAILED")
+	if !slices.Equal(told, []domain.ProjectID{"mer"}) {
+		t.Fatalf("told %v, want only the first turn-on", told)
+	}
+
+	// Turned on again, the loop is told again; without a hook nobody is.
+	store.writeErr = nil
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(true)}); err != nil {
+		t.Fatalf("turn on after off: %v", err)
+	}
+	if !slices.Equal(told, []domain.ProjectID{"mer", "mer"}) {
+		t.Fatalf("told %v, want mer twice", told)
+	}
+	svc.SetOnLadoModeOn(nil)
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(false), Presence: presence("nonce-2")}); err != nil {
+		t.Fatalf("turn off: %v", err)
+	}
+	if err := update("mer", ladoproject.UpdateInput{LadoMode: boolPtr(true)}); err != nil {
+		t.Fatalf("turn on without a hook: %v", err)
+	}
+	if len(told) != 2 {
+		t.Fatalf("told %v, want nothing more without a hook", told)
+	}
+}
+
 func TestUpdateSettingsSetsMaxConcurrent(t *testing.T) {
 	ctx := context.Background()
 	store := &fakeStore{}

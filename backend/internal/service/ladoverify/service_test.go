@@ -552,6 +552,87 @@ func TestStartCancelsLeftoverCheckRuns(t *testing.T) {
 	}
 }
 
+// Turning LADO mode on reads the rules of the base branch of each of the
+// project's repositories again, past the cache, in the background of the
+// running loop: in a workspace, each repository with an origin, at the
+// branch the dispatcher would start its workers from. Before Start and after
+// the stop nothing is read; a branch that cannot be resolved has a read with
+// only its error.
+func TestRefreshProtectionReadsEachBaseBranchAgain(t *testing.T) {
+	f := newVerifyFixture(t)
+	root := t.TempDir()
+	f.reads.setProject(domain.ProjectRecord{ID: "ws", Path: root, Kind: domain.ProjectKindWorkspace}, []domain.WorkspaceRepoRecord{
+		{ProjectID: "ws", Name: "web", RelativePath: "web", RepoOriginURL: "https://github.com/acme/web.git", DefaultBranch: "develop"},
+		{ProjectID: "ws", Name: "docs", RelativePath: "docs"},
+		{ProjectID: "ws", Name: "api", RelativePath: "api", RepoOriginURL: "https://github.com/acme/api.git"},
+	})
+	branches := &verifyBranches{byDir: map[string]string{filepath.Join(root, "web"): "develop", filepath.Join(root, "api"): "main"}}
+	svc := New(Deps{Store: f.store, Projects: f.reads, Clients: f.host, Branches: branches, Clock: f.clock.Now,
+		Log: slog.New(slog.NewTextHandler(io.Discard, nil)), Interval: time.Hour})
+	want := []string{"acme/web@develop", "acme/api@main"}
+
+	svc.RefreshProtection("ws")
+	reads, err := svc.ProjectProtection(context.Background(), "ws", false)
+	if err != nil || len(reads) != 2 || reads[0].Branch != "develop" || reads[1].Branch != "main" || reads[0].Err != nil || reads[1].Err != nil {
+		t.Fatalf("ProjectProtection = %+v, %v; want web at develop and api at main", reads, err)
+	}
+	if got := f.host.branchReads(); !slices.Equal(got, want) {
+		t.Fatalf("host reads = %v before Start, want only ProjectProtection's %v", got, want)
+	}
+	if got := branches.configuredSeen(); !slices.Equal(got, []string{"develop", ""}) {
+		t.Fatalf("configured branches passed = %q, want the workspace's", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc.Start(ctx)
+	svc.RefreshProtection("ws")
+	waitUntil(t, "the refresh reads both branches again", func() bool { return len(f.host.branchReads()) == 4 })
+	cancel()
+	svc.Wait()
+	svc.RefreshProtection("ws")
+	time.Sleep(50 * time.Millisecond)
+	if got := f.host.branchReads(); !slices.Equal(got, append(want, want...)) {
+		t.Fatalf("host reads = %v, want two rounds and none after the stop", got)
+	}
+
+	branches.setErr(errors.New("no origin/HEAD"))
+	reads, err = svc.ProjectProtection(context.Background(), "ws", true)
+	if err != nil || len(reads) != 2 || reads[0].Err == nil || reads[0].Branch != "" || reads[0].Repo.Native != "acme/web" {
+		t.Fatalf("ProjectProtection with no base branch = %+v, %v; want each repository with its error", reads, err)
+	}
+}
+
+// verifyBranches resolves a repository folder's base branch.
+type verifyBranches struct {
+	mu         sync.Mutex
+	byDir      map[string]string
+	err        error
+	configured []string
+}
+
+func (b *verifyBranches) ResolveDefaultBranch(_ context.Context, dir, configured string) (ports.WorkspaceDefaultBranch, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.configured = append(b.configured, configured)
+	if b.err != nil {
+		return ports.WorkspaceDefaultBranch{}, b.err
+	}
+	return ports.WorkspaceDefaultBranch{Remote: "origin", Branch: b.byDir[dir]}, nil
+}
+
+func (b *verifyBranches) setErr(err error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.err = err
+}
+
+func (b *verifyBranches) configuredSeen() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return slices.Clone(b.configured)
+}
+
 // verifyFixture is the loop over fakes: project p1, a single repository,
 // whose tasks' executions the tests add, and the hosts and services around
 // it. Its passes run under a context its cleanup ends, so check commands
@@ -1435,6 +1516,8 @@ type verifyHost struct {
 	rules   ports.LadoBranchRules
 	postErr error
 	posts   []verifyPost
+	// ruleReads are the branches whose rules were read, as repo@branch.
+	ruleReads []string
 }
 
 type verifyPost struct {
@@ -1464,10 +1547,17 @@ type verifyClient struct {
 	host *verifyHost
 }
 
-func (c verifyClient) BranchRules(context.Context, domain.TrackerRepo, string) (ports.LadoBranchRules, error) {
+func (c verifyClient) BranchRules(_ context.Context, repo domain.TrackerRepo, branch string) (ports.LadoBranchRules, error) {
 	c.host.mu.Lock()
 	defer c.host.mu.Unlock()
+	c.host.ruleReads = append(c.host.ruleReads, repo.Native+"@"+branch)
 	return c.host.rules, nil
+}
+
+func (h *verifyHost) branchReads() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return slices.Clone(h.ruleReads)
 }
 
 func (c verifyClient) PostCommitStatus(_ context.Context, repo domain.TrackerRepo, sha string, status ports.LadoCommitStatus) error {
