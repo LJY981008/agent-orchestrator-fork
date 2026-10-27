@@ -410,23 +410,27 @@ func (q *Queries) HoldLadoQueueEntry(ctx context.Context, arg HoldLadoQueueEntry
 const insertLadoExecution = `-- name: InsertLadoExecution :exec
 INSERT INTO lado_executions (
     session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at,
+    base_branch, base_remote, dispatch_local_base_sha
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertLadoExecutionParams struct {
-	SessionID        string
-	TaskID           string
-	QueueEntryID     string
-	PlanRevisionID   string
-	PlanApprovalID   string
-	PolicySnapshotID string
-	Attempt          int64
-	PlanBaseSha      string
-	DispatchBaseSha  string
-	BaseCommitsAhead sql.NullInt64
-	StartedAt        time.Time
-	DeadlineAt       sql.NullTime
+	SessionID            string
+	TaskID               string
+	QueueEntryID         string
+	PlanRevisionID       string
+	PlanApprovalID       string
+	PolicySnapshotID     string
+	Attempt              int64
+	PlanBaseSha          string
+	DispatchBaseSha      string
+	BaseCommitsAhead     sql.NullInt64
+	StartedAt            time.Time
+	DeadlineAt           sql.NullTime
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSha string
 }
 
 func (q *Queries) InsertLadoExecution(ctx context.Context, arg InsertLadoExecutionParams) error {
@@ -443,6 +447,9 @@ func (q *Queries) InsertLadoExecution(ctx context.Context, arg InsertLadoExecuti
 		arg.BaseCommitsAhead,
 		arg.StartedAt,
 		arg.DeadlineAt,
+		arg.BaseBranch,
+		arg.BaseRemote,
+		arg.DispatchLocalBaseSha,
 	)
 	return err
 }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -449,6 +450,10 @@ type LadoCheckRun struct {
 	FinishedAt         time.Time
 }
 
+// ErrLadoCheckRunFinished means a check run already reached a final state,
+// which stays as first recorded.
+var ErrLadoCheckRunFinished = errors.New("the check run already finished")
+
 // LadoCheckCommand is one of a project's check commands. The daemon runs it
 // outside any agent sandbox, so changing the list needs the desktop app's
 // confirmation (LadoPresenceCheckCommands).
@@ -560,6 +565,16 @@ type LadoIntegrationApproval struct {
 	// StatusError is the last failed post's error, without secrets.
 	StatusError string
 }
+
+// ErrLadoIntegrationAlreadyApproved means the head already has an
+// integration approval. The services report it as
+// LADO_INTEGRATION_ALREADY_APPROVED.
+var ErrLadoIntegrationAlreadyApproved = errors.New("the head already has an integration approval")
+
+// ErrLadoVerificationChanged means the head's stored verification record no
+// longer has the sha256 an integration approval signs. The services report it
+// as LADO_VERIFICATION_CHANGED.
+var ErrLadoVerificationChanged = errors.New("the head's verification record changed")
 
 // LadoEvidenceState is what an acceptance criterion's evidence amounts to
 // (docs/LJY-PRD/TDD.md §8.6).

@@ -195,8 +195,9 @@ ORDER BY claimed_at, id;
 -- name: InsertLadoExecution :exec
 INSERT INTO lado_executions (
     session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at,
+    base_branch, base_remote, dispatch_local_base_sha
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: GetLadoExecution :one
 -- With whether the session ended, as in ListLadoExecutionsForTasks.

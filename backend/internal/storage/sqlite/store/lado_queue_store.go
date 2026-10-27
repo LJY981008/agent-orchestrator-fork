@@ -50,8 +50,9 @@ func queueLadoApprovalTx(ctx context.Context, q *gen.Queries, approval domain.La
 
 // fillLadoQueueFacts sets each task's queue entry, the one of its newest
 // approval, and its newest execution with what AO keeps about the execution's
-// session: whether it ended and its newest PR. The plan facts must be read
-// first. One query each reads the entries, executions and PRs of all the
+// session, whether it ended and its newest PR, and what LADO verified and
+// approved about that PR's head. The plan facts must be read first. One query
+// each reads the entries, executions, PRs, records and approvals of all the
 // tasks.
 func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask) error {
 	// Only an approval has an entry, and only an entry starts an execution.
@@ -90,7 +91,7 @@ func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask)
 		execution.SessionTerminated = row.SessionTerminated
 		executions = append(executions, execution)
 	}
-	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+	if err := s.fillLadoExecutionFacts(ctx, executions); err != nil {
 		return err
 	}
 	newest := make(map[domain.LadoTaskID]domain.LadoExecution, len(executions))
@@ -105,25 +106,118 @@ func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask)
 	return nil
 }
 
+// fillLadoExecutionFacts sets each execution's newest PR and the
+// verification facts of that PR's head. Every read that gives an execution to
+// a task's state goes through it, so the state is the same in task lists, one
+// task and the execution view.
+func (s *Store) fillLadoExecutionFacts(ctx context.Context, executions []domain.LadoExecution) error {
+	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+		return err
+	}
+	return s.fillLadoVerification(ctx, executions)
+}
+
 // fillLadoExecutionPRs sets each execution's newest PR, reading the PRs of
 // all their sessions at once.
 func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.LadoExecution) error {
+	if len(executions) == 0 {
+		return nil
+	}
 	sessions := make([]domain.SessionID, 0, len(executions))
 	for _, execution := range executions {
 		sessions = append(sessions, execution.SessionID)
 	}
-	prs, err := s.ListPRFactsForSessions(ctx, sessions)
+	rows, err := s.qr.ListLadoExecutionPRs(ctx, sessions)
 	if err != nil {
 		return fmt.Errorf("read LADO execution PRs: %w", err)
 	}
+	// Rows come newest first within each session.
+	newest := make(map[domain.SessionID]gen.ListLadoExecutionPRsRow, len(rows))
+	for _, row := range rows {
+		if _, ok := newest[row.SessionID]; !ok {
+			newest[row.SessionID] = row
+		}
+	}
 	for i := range executions {
-		// Newest first, as the session list reads them.
-		if facts := prs[executions[i].SessionID]; len(facts) > 0 {
-			pr := facts[0]
-			executions[i].PR = domain.LadoExecutionPR{URL: pr.URL, Number: pr.Number, Merged: pr.Merged, Closed: pr.Closed}
+		if row, ok := newest[executions[i].SessionID]; ok {
+			executions[i].PR = ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title)
 		}
 	}
 	return nil
+}
+
+// fillLadoVerification sets what LADO verified and approved about each
+// execution's PR at its current head: the head's record, by its outcome and
+// reason, and its integration approval, by its status state, which once the
+// PR merged is the merged head's. The PRs must be read first. A record or an
+// approval of another head says nothing about the current one, and a PR
+// whose head AO has not observed has neither.
+func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.LadoExecution) error {
+	type head struct {
+		session domain.SessionID
+		sha     string
+	}
+	var sessions, shas []string
+	for _, execution := range executions {
+		if execution.PR.URL != "" && execution.PR.HeadSHA != "" {
+			sessions = append(sessions, string(execution.SessionID))
+			shas = append(shas, execution.PR.HeadSHA)
+		}
+	}
+	if len(sessions) == 0 {
+		return nil
+	}
+	// Each query reads the rows of every session and head asked for; only the
+	// pairs asked for count.
+	records, err := s.qr.ListLadoVerificationOutcomes(ctx, gen.ListLadoVerificationOutcomesParams{SessionIds: sessions, HeadShas: shas})
+	if err != nil {
+		return fmt.Errorf("read LADO verification records: %w", err)
+	}
+	verified := make(map[head]domain.LadoExecutionVerification, len(records))
+	for _, row := range records {
+		verified[head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}] = domain.LadoExecutionVerification{
+			HeadSHA: row.HeadSha,
+			Outcome: domain.LadoVerifyOutcome(row.Outcome),
+			Reason:  row.Reason,
+		}
+	}
+	approvals, err := s.qr.ListLadoIntegrationApprovalStates(ctx, gen.ListLadoIntegrationApprovalStatesParams{SessionIds: sessions, HeadShas: shas})
+	if err != nil {
+		return fmt.Errorf("read LADO integration approvals: %w", err)
+	}
+	approved := make(map[head]domain.LadoIntegrationStatusState, len(approvals))
+	for _, row := range approvals {
+		approved[head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}] = domain.LadoIntegrationStatusState(row.StatusState)
+	}
+	for i := range executions {
+		execution := &executions[i]
+		if execution.PR.URL == "" || execution.PR.HeadSHA == "" {
+			continue
+		}
+		key := head{execution.SessionID, execution.PR.HeadSHA}
+		execution.Verification = verified[key]
+		if state, ok := approved[key]; ok {
+			execution.Integration = domain.LadoExecutionIntegration{
+				HeadApproved:       true,
+				StatusState:        state,
+				MergedHeadApproved: execution.PR.Merged,
+			}
+		}
+	}
+	return nil
+}
+
+// ladoExecutionPR is the PR of an execution from AO's PR row.
+func ladoExecutionPR(url string, number int64, state domain.PRState, headSHA, targetBranch, title string) domain.LadoExecutionPR {
+	return domain.LadoExecutionPR{
+		URL:          url,
+		Number:       int(number),
+		Merged:       state == domain.PRStateMerged,
+		Closed:       state == domain.PRStateClosed,
+		HeadSHA:      headSHA,
+		TargetBranch: targetBranch,
+		Title:        title,
+	}
 }
 
 // ClaimLadoQueueEntries leases up to limit entries until leaseUntil, oldest
@@ -338,7 +432,8 @@ func (s *Store) writeLadoRow(ctx context.Context, what string, write func(*gen.Q
 // session, which clears the lease. The execution takes the entry's task,
 // approval, rule snapshot and attempt, and the revision the approval names
 // with its base SHA; the caller gives the session, the base SHA at dispatch,
-// the commits ahead and the times. Only the token is checked, not when the
+// the commits ahead, the base branch and remote it resolved with the local
+// branch's commit then, and the times. Only the token is checked, not when the
 // lease ends, so recovery can link the session of an expired lease nobody
 // claimed since. When token no longer holds the entry, nothing is written and
 // the error is domain.ErrLadoLeaseLost. Linking the entry's session again
@@ -379,18 +474,21 @@ func (s *Store) LinkLadoExecution(ctx context.Context, entryID domain.LadoQueueE
 			ahead = sql.NullInt64{Int64: int64(*exec.BaseCommitsAhead), Valid: true}
 		}
 		if err := q.InsertLadoExecution(ctx, gen.InsertLadoExecutionParams{
-			SessionID:        string(exec.SessionID),
-			TaskID:           entry.TaskID,
-			QueueEntryID:     entry.ID,
-			PlanRevisionID:   row.PlanRevisionID,
-			PlanApprovalID:   entry.PlanApprovalID,
-			PolicySnapshotID: entry.PolicySnapshotID,
-			Attempt:          entry.AttemptCount,
-			PlanBaseSha:      row.PlanBaseSha,
-			DispatchBaseSha:  exec.DispatchBaseSHA,
-			BaseCommitsAhead: ahead,
-			StartedAt:        exec.StartedAt.UTC(),
-			DeadlineAt:       ladoNullTime(exec.DeadlineAt),
+			SessionID:            string(exec.SessionID),
+			TaskID:               entry.TaskID,
+			QueueEntryID:         entry.ID,
+			PlanRevisionID:       row.PlanRevisionID,
+			PlanApprovalID:       entry.PlanApprovalID,
+			PolicySnapshotID:     entry.PolicySnapshotID,
+			Attempt:              entry.AttemptCount,
+			PlanBaseSha:          row.PlanBaseSha,
+			DispatchBaseSha:      exec.DispatchBaseSHA,
+			BaseCommitsAhead:     ahead,
+			StartedAt:            exec.StartedAt.UTC(),
+			DeadlineAt:           ladoNullTime(exec.DeadlineAt),
+			BaseBranch:           exec.BaseBranch,
+			BaseRemote:           exec.BaseRemote,
+			DispatchLocalBaseSha: exec.DispatchLocalBaseSHA,
 		}); err != nil {
 			return err
 		}
@@ -465,7 +563,7 @@ func (s *Store) LadoExecutionsPastDeadline(ctx context.Context, now time.Time) (
 	for _, row := range rows {
 		executions = append(executions, ladoExecutionFromGen(row))
 	}
-	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+	if err := s.fillLadoExecutionFacts(ctx, executions); err != nil {
 		return nil, err
 	}
 	return executions, nil
@@ -517,8 +615,8 @@ func (s *Store) MarkLadoExecutionTimedOut(ctx context.Context, sessionID domain.
 }
 
 // LadoExecution returns the execution a session runs, with whether the
-// session ended and its newest PR. It reports false for a session that is not
-// an execution.
+// session ended, its newest PR and the verification facts of that PR's head.
+// It reports false for a session that is not an execution.
 func (s *Store) LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error) {
 	row, err := s.qr.GetLadoExecution(ctx, string(sessionID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -527,15 +625,15 @@ func (s *Store) LadoExecution(ctx context.Context, sessionID domain.SessionID) (
 	if err != nil {
 		return domain.LadoExecution{}, false, fmt.Errorf("read LADO execution: %w", err)
 	}
-	return s.ladoExecutionWithPR(ctx, row.LadoExecution, row.SessionTerminated)
+	return s.ladoExecutionWithFacts(ctx, row.LadoExecution, row.SessionTerminated)
 }
 
-// ladoExecutionWithPR converts one execution, with whether its session ended,
-// and reads its newest PR.
-func (s *Store) ladoExecutionWithPR(ctx context.Context, row gen.LadoExecution, terminated bool) (domain.LadoExecution, bool, error) {
+// ladoExecutionWithFacts converts one execution, with whether its session
+// ended, and reads its newest PR and the verification facts of its head.
+func (s *Store) ladoExecutionWithFacts(ctx context.Context, row gen.LadoExecution, terminated bool) (domain.LadoExecution, bool, error) {
 	executions := []domain.LadoExecution{ladoExecutionFromGen(row)}
 	executions[0].SessionTerminated = terminated
-	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+	if err := s.fillLadoExecutionFacts(ctx, executions); err != nil {
 		return domain.LadoExecution{}, false, err
 	}
 	return executions[0], true, nil
@@ -732,19 +830,23 @@ func ladoExecutionFromGen(row gen.LadoExecution) domain.LadoExecution {
 		ahead = &n
 	}
 	return domain.LadoExecution{
-		SessionID:        domain.SessionID(row.SessionID),
-		TaskID:           domain.LadoTaskID(row.TaskID),
-		QueueEntryID:     domain.LadoQueueEntryID(row.QueueEntryID),
-		PlanRevisionID:   domain.LadoPlanRevisionID(row.PlanRevisionID),
-		PlanApprovalID:   domain.LadoPlanApprovalID(row.PlanApprovalID),
-		PolicySnapshotID: domain.LadoPolicySnapshotID(row.PolicySnapshotID),
-		Attempt:          int(row.Attempt),
-		PlanBaseSHA:      row.PlanBaseSha,
-		DispatchBaseSHA:  row.DispatchBaseSha,
-		BaseCommitsAhead: ahead,
-		StartedAt:        row.StartedAt.UTC(),
-		DeadlineAt:       ladoTimeFromNull(row.DeadlineAt),
-		TimedOutAt:       ladoTimeFromNull(row.TimedOutAt),
+		SessionID:            domain.SessionID(row.SessionID),
+		TaskID:               domain.LadoTaskID(row.TaskID),
+		QueueEntryID:         domain.LadoQueueEntryID(row.QueueEntryID),
+		PlanRevisionID:       domain.LadoPlanRevisionID(row.PlanRevisionID),
+		PlanApprovalID:       domain.LadoPlanApprovalID(row.PlanApprovalID),
+		PolicySnapshotID:     domain.LadoPolicySnapshotID(row.PolicySnapshotID),
+		Attempt:              int(row.Attempt),
+		PlanBaseSHA:          row.PlanBaseSha,
+		DispatchBaseSHA:      row.DispatchBaseSha,
+		BaseCommitsAhead:     ahead,
+		BaseBranch:           row.BaseBranch,
+		BaseRemote:           row.BaseRemote,
+		DispatchLocalBaseSHA: row.DispatchLocalBaseSha,
+		StartedAt:            row.StartedAt.UTC(),
+		DeadlineAt:           ladoTimeFromNull(row.DeadlineAt),
+		TimedOutAt:           ladoTimeFromNull(row.TimedOutAt),
+		SettledAt:            ladoTimeFromNull(row.SettledAt),
 	}
 }
 
