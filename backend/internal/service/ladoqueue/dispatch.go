@@ -160,10 +160,21 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.block(ctx, entry, domain.LadoBlockedSnapshot)
 	}
 
+	// The worker's prompt names the project's check commands, which LADO
+	// runs on its pull request's head.
+	checks, _, err := s.deps.Store.LadoProjectChecks(ctx, task.ProjectID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, s.handBack(ctx, entry)
+		}
+		s.deps.Log.Warn("LADO could not read the check commands of a queued task's project", "entry", entry.ID, "task", task.ID, "err", err)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+	}
+
 	if ctx.Err() != nil {
 		return false, s.handBack(ctx, entry)
 	}
-	cfg := spawnConfig(task, entry, in, agent)
+	cfg := spawnConfig(task, entry, in, agent, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
 	exec := domain.LadoExecution{
 		SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead,
@@ -208,7 +219,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 // and from the plan and issue the developer approved, in Chat (decisions c,
 // d and n of the step 6 plan). The attempt's own client request id is what
 // the worker gate grants the spawn by. The branch is left to AO's naming.
-func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent) ports.SpawnConfig {
+func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent, checks []domain.LadoCheckCommand) ports.SpawnConfig {
 	return ports.SpawnConfig{
 		ProjectID:         task.ProjectID,
 		IssueID:           task.IssueRef,
@@ -217,7 +228,7 @@ func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.
 		IssueContext:      in.IssueContext,
 		Kind:              domain.KindWorker,
 		Harness:           agent.Harness,
-		Prompt:            workerPrompt(task, in),
+		Prompt:            workerPrompt(task, in, checks),
 		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName(task.Issue.Title),
