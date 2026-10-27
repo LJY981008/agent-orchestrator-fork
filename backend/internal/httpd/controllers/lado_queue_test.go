@@ -491,10 +491,13 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 		snapshot            string
 		revisionNumber      int
 	}{
-		{"lado-task-1", "running", "", "dispatched", "", 1, runningWorker, running.snapshot, 1},
+		// The live run's PR is open and its head has no verification record
+		// yet.
+		{"lado-task-1", "validating", "verifying", "dispatched", "", 1, runningWorker, running.snapshot, 1},
 		{"lado-task-2", "failed", "timed_out", "dispatched", "", 1, timedOutWorker, timedOut.snapshot, 1},
 		// The newer revision hides the run's revision number from the task.
-		{"lado-task-3", "completed", "", "dispatched", "", 1, mergedWorker, merged.snapshot, 0},
+		// The PR merged a head without an integration approval.
+		{"lado-task-3", "completed", "merged_without_approval", "dispatched", "", 1, mergedWorker, merged.snapshot, 0},
 		{"lado-task-4", "dispatching", "", "dispatching", "", 2, "", "", 0},
 		{"lado-task-5", "queued", "slot_global", "waiting", "slot_global", 0, "", "", 0},
 		{"lado-task-6", "blocked", "base_ref_mismatch", "blocked", "base_ref_mismatch", 1, "", "", 0},

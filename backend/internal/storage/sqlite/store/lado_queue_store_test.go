@@ -314,7 +314,8 @@ func TestLadoTaskReadsCarryQueueAndExecution(t *testing.T) {
 	}
 	wants := map[domain.LadoTaskID]facts{
 		"lado-task-1": {queue: "lado-queue-2", state: domain.LadoTaskQueued},
-		"lado-task-2": {queue: "lado-queue-4", session: merged.SessionID, execution: merged, state: domain.LadoTaskCompleted},
+		// The PR merged a head without an integration approval.
+		"lado-task-2": {queue: "lado-queue-4", session: merged.SessionID, execution: merged, state: domain.LadoTaskCompleted, reason: domain.LadoCompletedWithoutApproval},
 		"lado-task-3": {queue: "lado-queue-5", session: closed.SessionID, execution: closed, state: domain.LadoTaskClosedUnmerged},
 		"lado-task-4": {queue: "lado-queue-6", session: ended.SessionID, execution: ended, state: domain.LadoTaskFailed, reason: domain.LadoFailedEndedWithoutPR},
 	}

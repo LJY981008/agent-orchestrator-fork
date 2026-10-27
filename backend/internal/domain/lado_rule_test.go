@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -149,5 +151,66 @@ func TestLadoPermissionRank(t *testing.T) {
 		if got := domain.LadoPermissionRank(mode); got != 0 {
 			t.Errorf("LadoPermissionRank(%q) = %d, want 0: it is never a ceiling", mode, got)
 		}
+	}
+}
+
+func TestLadoProtectedPathsConfig(t *testing.T) {
+	defaults := domain.DefaultLadoProtectedPaths()
+	want := []string{".github/**", ".gitlab-ci.yml", ".gitlab/**", "**/CLAUDE.md", "**/AGENTS.md", ".claude/**", ".codex/**", ".mcp.json", ".ao/**"}
+	if !slices.Equal(defaults, want) {
+		t.Fatalf("DefaultLadoProtectedPaths = %v, want the 9 defaults %v", defaults, want)
+	}
+	if err := domain.ValidateLadoProtectedPaths(defaults); err != nil {
+		t.Fatalf("the defaults are refused: %v", err)
+	}
+	defaults[0] = "edited"
+	if got := domain.DefaultLadoProtectedPaths(); got[0] != ".github/**" {
+		t.Fatalf("editing the returned defaults changed the next call: %v", got)
+	}
+	data, err := json.Marshal(domain.LadoProtectedPathsConfig{Globs: []string{".github/**", "deploy/*.yaml"}})
+	if err != nil || string(data) != `{"globs":[".github/**","deploy/*.yaml"]}` {
+		t.Fatalf("LadoProtectedPathsConfig JSON = %s (%v)", data, err)
+	}
+
+	fifty := make([]string, 50)
+	for i := range fifty {
+		fifty[i] = "dir" + strconv.Itoa(i) + "/**"
+	}
+	for _, globs := range [][]string{{"deploy"}, {"src/*.go", "**/secrets/**", "a/b/[ch]ef.txt"}, fifty} {
+		if err := domain.ValidateLadoProtectedPaths(globs); err != nil {
+			t.Errorf("ValidateLadoProtectedPaths(%q) = %v, want nil", globs, err)
+		}
+	}
+	for name, globs := range map[string][]string{
+		"no globs":       nil,
+		"empty list":     {},
+		"51 globs":       append(slices.Clone(fifty), "one/more"),
+		"parent segment": {".github/**", "../outside/**"},
+		"inner parent":   {"docs/../.github/**"},
+		"absolute":       {"/etc/passwd"},
+		"broken pattern": {"src/[a-"},
+		"backslash":      {`.github\workflows`},
+		"drive letter":   {"C:/ao"},
+		"NUL":            {"docs\x00"},
+		"blank":          {""},
+		"padded":         {" .github/**"},
+	} {
+		err := domain.ValidateLadoProtectedPaths(globs)
+		if !errors.Is(err, domain.ErrLadoProtectedPathsInvalid) {
+			t.Errorf("%s: ValidateLadoProtectedPaths(%q) = %v, want ErrLadoProtectedPathsInvalid", name, globs, err)
+		}
+	}
+}
+
+func TestDefaultLadoCommitLocaleConfig(t *testing.T) {
+	cfg := domain.DefaultLadoCommitLocaleConfig()
+	data, err := json.Marshal(cfg)
+	want := `{"language":"ko","allowPrefixes":["feat","fix","docs","refactor","test","chore","style","perf","build","ci","revert"]}`
+	if err != nil || string(data) != want {
+		t.Fatalf("DefaultLadoCommitLocaleConfig JSON = %s (%v), want %s", data, err, want)
+	}
+	cfg.AllowPrefixes[0] = "edited"
+	if got := domain.DefaultLadoCommitLocaleConfig(); got.AllowPrefixes[0] != "feat" {
+		t.Fatalf("editing the returned config changed the next call: %v", got)
 	}
 }

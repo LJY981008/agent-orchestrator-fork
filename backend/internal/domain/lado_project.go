@@ -13,5 +13,12 @@ type LadoProjectSettings struct {
 	// MaxConcurrent caps the executions that run at once in the project:
 	// LadoDefaultProjectMaxConcurrent until it sets one.
 	MaxConcurrent int
-	UpdatedAt     time.Time
+	// CheckCommands are the commands LADO runs on each PR head in the
+	// execution's worktree (docs/LJY-PRD/TDD.md §8.2), at most
+	// LadoCheckCommandsMax, and CheckTimeoutMinutes the time limit of each,
+	// LadoCheckTimeoutMin to LadoCheckTimeoutMax (LadoCheckTimeoutDefault
+	// until it sets one).
+	CheckCommands       []LadoCheckCommand
+	CheckTimeoutMinutes int
+	UpdatedAt           time.Time
 }
