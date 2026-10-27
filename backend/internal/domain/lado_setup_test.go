@@ -3,6 +3,7 @@ package domain_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"slices"
 	"testing"
@@ -272,44 +273,107 @@ func TestLadoSetupNeedsPresence(t *testing.T) {
 		hookScript   = domain.LadoSetupKindHookScript
 		mcpServer    = domain.LadoSetupKindMCPServer
 	)
+	plain := "---\nname: review\ndescription: Review the diff.\n---\nRead the diff and say what is wrong.\n"
 	for _, tc := range []struct {
-		kind domain.LadoSetupKind
-		name string
-		want bool
+		kind    domain.LadoSetupKind
+		name    string
+		content string
+		want    bool
 	}{
-		// Changes that can run code or widen access.
-		{hookScript, "notify.sh", true},
-		{hookScript, "lint", true},
-		{mcpServer, "figma", true},
-		{mcpServer, "notion", true},
-		{setting, "hooks", true},
-		{setting, "permissions", true},
-		{setting, "env", true},
-		{setting, "statusLine", true},
-		{setting, "enabledPlugins", true},
-		{setting, "extraKnownMarketplaces", true},
-		{setting, "otelHeadersHelper", true},
-		{setting, "enableAllProjectMcpServers", true},
-		{setting, "enabledMcpjsonServers", true},
-		// Everything else.
-		{setting, "model", false},
-		{setting, "modelSettings", false},
-		{setting, "outputStyle", false},
-		{setting, "includeCoAuthoredBy", false},
-		{setting, "theme", false},
-		{setting, "verbose", false},
-		{instructions, "CLAUDE.md", false},
-		{instructions, "AGENTS.md", false},
-		{skill, "review", false},
-		{agent, "reviewer.md", false},
-		{command, "git/commit.md", false},
-		{outputStyle, "terse.md", false},
+		// Hook scripts and MCP servers always run code.
+		{hookScript, "notify.sh", "", true},
+		{hookScript, "lint", "", true},
+		{mcpServer, "figma", "", true},
+		{mcpServer, "notion", `{"command":"npx"}`, true},
+		// Settings outside the safe keys: the old list and any other key.
+		{setting, "hooks", "", true},
+		{setting, "permissions", "", true},
+		{setting, "env", "", true},
+		{setting, "statusLine", "", true},
+		{setting, "enabledPlugins", "", true},
+		{setting, "extraKnownMarketplaces", "", true},
+		{setting, "otelHeadersHelper", "", true},
+		{setting, "enableAllProjectMcpServers", "", true},
+		{setting, "enabledMcpjsonServers", "", true},
+		{setting, "disableAllHooks", "", true},
+		{setting, "sandbox", "", true},
+		{setting, "someFutureKey", "", true},
+		// The safe keys.
+		{setting, "theme", "", false},
+		{setting, "verbose", "", false},
+		{setting, "outputStyle", "", false},
+		{setting, "model", "", false},
+		{setting, "modelSettings", "", false},
+		{setting, "includeCoAuthoredBy", "", false},
+		{setting, "showClearContextOnPlanAccept", "", false},
+		{setting, "inputNeededNotifEnabled", "", false},
+		{setting, "agentPushNotifEnabled", "", false},
+		{setting, "preferredNotifChannel", "", false},
+		{setting, "spinnerTipsEnabled", "", false},
+		{setting, "cleanupPeriodDays", "", false},
+		{setting, "language", "", false},
+		// Commands, skills and agents by their content.
+		{skill, "review", plain, false},
+		{agent, "reviewer.md", "---\nname: reviewer\ndescription: Reviews.\ntools: Read, Grep\n---\nReview.\n", false},
+		{command, "git/commit.md", "Write a commit message for the staged diff.\n", false},
+		{command, "notes.md", "", false},
+		{skill, "review", "---\nname: review\ndescription: x\nallowed-tools: Bash(git:*)\n---\nbody\n", true},
+		{command, "commit.md", "---\nallowed-tools: Bash(git add:*)\ndescription: Commit\n---\nCommit.\n", true},
+		{agent, "guard.md", "---\nname: guard\nhooks:\n  PreToolUse: []\n---\nGuard.\n", true},
+		{command, "status.md", "Status: !`git status`\n", true},
+		{skill, "s", "---\nname: s\ndescription: d\n---\nRun !`ls` first.\n", true},
+		{command, "crlf.md", "---\r\nAllowed_Tools: Bash\r\n---\r\nx\r\n", true},
+		// Front matter that does not parse, or content that is not text.
+		{command, "broken.md", "---\nname: [unclosed\n---\nx\n", true},
+		{agent, "binary.md", "\x00\x01", true},
+		// The other kinds never.
+		{instructions, "CLAUDE.md", "!`make clean`", false},
+		{instructions, "AGENTS.md", "", false},
+		{outputStyle, "terse.md", "---\nallowed-tools: Bash\n---\n", false},
 		// The key names count only for settings.
-		{skill, "hooks", false},
-		{instructions, "env", false},
+		{skill, "hooks", plain, false},
+		{instructions, "env", "", false},
 	} {
-		if got := domain.LadoSetupNeedsPresence(tc.kind, tc.name); got != tc.want {
-			t.Errorf("LadoSetupNeedsPresence(%s, %q) = %v, want %v", tc.kind, tc.name, got, tc.want)
+		if got := domain.LadoSetupNeedsPresence(tc.kind, tc.name, []byte(tc.content)); got != tc.want {
+			t.Errorf("LadoSetupNeedsPresence(%s, %q, %q) = %v, want %v", tc.kind, tc.name, tc.content, got, tc.want)
+		}
+	}
+}
+
+func TestLadoSetupClaudeLoginEnv(t *testing.T) {
+	for _, name := range []string{
+		"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "anthropic_base_url", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX",
+		"CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_REGION", "AWS_PROFILE", "AWS_BEARER_TOKEN_BEDROCK",
+		"CLOUD_ML_REGION", "VERTEX_REGION_CLAUDE_3_5_SONNET", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT",
+		"AZURE_API_KEY", "HTTP_PROXY", "https_proxy", "NO_PROXY", "no_proxy",
+	} {
+		if !domain.LadoSetupIsClaudeLoginEnv(name) {
+			t.Errorf("%s is not a login variable", name)
+		}
+	}
+	for _, name := range []string{"DEBUG", "CLAUDE_CODE_MAX_OUTPUT_TOKENS", "BASH_DEFAULT_TIMEOUT_MS", "GOOGLE_API_HOST", "PROXY"} {
+		if domain.LadoSetupIsClaudeLoginEnv(name) {
+			t.Errorf("%s is a login variable", name)
+		}
+	}
+	for _, tc := range []struct {
+		name, value string
+		want        bool
+	}{
+		{"CLAUDE_CODE_USE_BEDROCK", `"1"`, true},
+		{"claude_code_use_vertex", `"true"`, true},
+		{"CLAUDE_CODE_USE_FOUNDRY", `1`, true},
+		{"CLAUDE_CODE_USE_BEDROCK", `true`, true},
+		{"CLAUDE_CODE_USE_BEDROCK", `{"x":1}`, true},
+		{"CLAUDE_CODE_USE_BEDROCK", `"0"`, false},
+		{"CLAUDE_CODE_USE_BEDROCK", `"false"`, false},
+		{"CLAUDE_CODE_USE_BEDROCK", `""`, false},
+		{"CLAUDE_CODE_USE_BEDROCK", `0`, false},
+		{"CLAUDE_CODE_USE_BEDROCK", `null`, false},
+		{"ANTHROPIC_API_KEY", `"1"`, false},
+	} {
+		if got := domain.LadoSetupIsClaudeProviderSwitchOn(tc.name, json.RawMessage(tc.value)); got != tc.want {
+			t.Errorf("LadoSetupIsClaudeProviderSwitchOn(%s, %s) = %v, want %v", tc.name, tc.value, got, tc.want)
 		}
 	}
 }
@@ -419,6 +483,7 @@ func TestLadoSetupCodesAreStable(t *testing.T) {
 			{string(domain.LadoSetupReasonNoTUIPath), "no_tui_path"},
 			{string(domain.LadoSetupReasonDeprecated), "deprecated"},
 			{string(domain.LadoSetupReasonInlineTable), "inline_table"},
+			{string(domain.LadoSetupReasonProviderLoginEnv), "provider_login_env"},
 			{string(domain.LadoSetupReasonLiteralCredentials), "literal_credentials"},
 			{string(domain.LadoSetupReasonNameUnsupported), "name_unsupported"},
 			{string(domain.LadoSetupReasonUnknownLocation), "unknown_location"},

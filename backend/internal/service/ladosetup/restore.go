@@ -873,7 +873,7 @@ func adoptedEnv(orig []byte) ([]jsonMember, bool) {
 	if err != nil {
 		return nil, false
 	}
-	return slices.DeleteFunc(vars, func(m jsonMember) bool { return slices.Contains(domain.LadoSetupClaudeLoginEnv, m.Key) }), true
+	return slices.DeleteFunc(vars, func(m jsonMember) bool { return domain.LadoSetupIsClaudeLoginEnv(m.Key) }), true
 }
 
 // sameJSON reports whether two JSON values are equal as stored.

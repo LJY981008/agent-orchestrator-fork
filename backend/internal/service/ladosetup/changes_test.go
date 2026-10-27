@@ -351,12 +351,16 @@ func driftCase(name string, needs bool, op ChangeOp, item, file, content string)
 	}}
 }
 
-// Decision i: creating or editing a hook script, an MCP server or a setting
-// that runs code or widens access, turning such an item on and keeping its
-// drift need the desktop app's confirmation. Without it the change is
-// refused and nothing is written; with it the change is the developer's.
-// Every other change needs none and is the API's.
-func TestChangePresenceRules(t *testing.T) {
+// Owner decision 2026-10-27 (decision i as amended): every change of an
+// item that can run code or widen access needs the desktop app's
+// confirmation, reverting its drift aside: creating, editing, deleting it,
+// turning it on or off at any scope, inherit, and keeping its drift. Such
+// items are hook scripts, MCP servers, settings outside the safe keys, and
+// commands, skills and agents whose content gives them tools or hooks or
+// runs a shell command. Without a confirmation the change is refused and
+// nothing is written; with it the change is the developer's. Every other
+// change needs none and is the API's.
+func TestEveryChangeToCodeRunningItemsNeedsPresence(t *testing.T) {
 	global := func(state domain.LadoBindingState) ChangeBinding {
 		return ChangeBinding{Scope: domain.LadoScopeGlobal, State: state}
 	}
@@ -388,6 +392,40 @@ func TestChangePresenceRules(t *testing.T) {
 		bindingCase("hooks setting forced on for a project", true, "hooks", project(domain.LadoBindingForceOn)),
 		bindingCase("MCP server forced on for a task", true, "docs", task(domain.LadoBindingForceOn)),
 		driftCase("keep a hook script's drift", true, OpDriftKeep, "check.sh", "hooks/check.sh", "#!/bin/sh\nexit 3\n"),
+		{"delete a hook script", true, func(_ *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
+			return Change{Op: OpDelete, ItemID: ids["check.sh"]}
+		}},
+		{"delete the hooks setting", true, func(_ *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
+			return Change{Op: OpDelete, ItemID: ids["hooks"]}
+		}},
+		{"delete an MCP server", true, func(_ *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
+			return Change{Op: OpDelete, ItemID: ids["figma"]}
+		}},
+		bindingCase("hook script off at Global", true, "check.sh", global(domain.LadoBindingOff)),
+		bindingCase("hooks setting forced off for a project", true, "hooks", project(domain.LadoBindingForceOff)),
+		bindingCase("MCP server forced off for a task", true, "docs", task(domain.LadoBindingForceOff)),
+		{"hooks setting back to inherit for a project", true, func(f *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
+			f.mustApply(Change{Op: OpBinding, ItemID: ids["hooks"], Binding: project(domain.LadoBindingForceOff)}, true)
+			return Change{Op: OpBinding, ItemID: ids["hooks"], Binding: project(domain.LadoBindingInherit)}
+		}},
+		setting("disableAllHooks", `true`),
+		setting("sandbox", `{"enabled":false}`),
+		createCase("create a skill with allowed-tools", true, domain.LadoSetupKindSkill, "tooled",
+			jsonText("---\nname: tooled\ndescription: Runs git.\nallowed-tools: Bash(git:*)\n---\nRun git.\n")),
+		createCase("create a command that runs a shell command", true, domain.LadoSetupKindCommand, "st.md", jsonText("Status: !`git status`\n")),
+		createCase("create an agent with hooks", true, domain.LadoSetupKindAgent, "guard.md", jsonText("---\nname: guard\nhooks:\n  Stop: []\n---\nGuard.\n")),
+		{"edit a plain command to give it tools", true, func(f *changeFixture, _ map[string]domain.LadoSetupItemID) Change {
+			res := f.mustApply(Change{Op: OpCreate, Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindCommand, Name: "p.md", Content: jsonText("plain\n")}, false)
+			return Change{Op: OpEdit, ItemID: res.Item.ID, BaseVersion: 1, Content: jsonText("---\nallowed-tools: Bash\n---\nplain\n")}
+		}},
+		{"edit a tooled command back to plain", true, func(f *changeFixture, _ map[string]domain.LadoSetupItemID) Change {
+			res := f.mustApply(Change{Op: OpCreate, Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindCommand, Name: "t.md", Content: jsonText("!`date`\n")}, true)
+			return Change{Op: OpEdit, ItemID: res.Item.ID, BaseVersion: 1, Content: jsonText("plain\n")}
+		}},
+		{"turn a tooled command off", true, func(f *changeFixture, _ map[string]domain.LadoSetupItemID) Change {
+			res := f.mustApply(Change{Op: OpCreate, Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindCommand, Name: "t.md", Content: jsonText("!`date`\n")}, true)
+			return Change{Op: OpBinding, ItemID: res.Item.ID, Binding: global(domain.LadoBindingOff)}
+		}},
 
 		createCase("create instructions", false, domain.LadoSetupKindInstructions, "RULES.md", jsonText("# rules\n")),
 		createCase("create a plain setting", false, domain.LadoSetupKindSetting, "theme", json.RawMessage(`"light"`)),
@@ -398,11 +436,15 @@ func TestChangePresenceRules(t *testing.T) {
 		createToolCase("create Codex instructions", false, domain.LadoSetupToolCodex, domain.LadoSetupKindInstructions, "AGENTS.override.md", jsonText("override\n")),
 		editCase("edit instructions", false, "CLAUDE.md", jsonText("# edited\n")),
 		editCase("edit a plain setting", false, "model", json.RawMessage(`"haiku"`)),
-		{"delete a hook script", false, func(_ *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
-			return Change{Op: OpDelete, ItemID: ids["check.sh"]}
+		{"delete a plain setting", false, func(_ *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
+			return Change{Op: OpDelete, ItemID: ids["model"]}
 		}},
-		bindingCase("hook script off at Global", false, "check.sh", global(domain.LadoBindingOff)),
-		bindingCase("hooks setting forced off for a project", false, "hooks", project(domain.LadoBindingForceOff)),
+		bindingCase("plain setting off at Global", false, "model", global(domain.LadoBindingOff)),
+		{"turn a plain command off", false, func(f *changeFixture, _ map[string]domain.LadoSetupItemID) Change {
+			res := f.mustApply(Change{Op: OpCreate, Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindCommand, Name: "p.md", Content: jsonText("plain\n")}, false)
+			return Change{Op: OpBinding, ItemID: res.Item.ID, Binding: global(domain.LadoBindingOff)}
+		}},
+		driftCase("revert the hooks setting's drift", false, OpDriftRevert, "hooks", "settings.json", `{"hooks":{"Stop":[]}}`),
 		bindingCase("instructions on at Global", false, "CLAUDE.md", global(domain.LadoBindingOn)),
 		bindingCase("instructions forced on for a task", false, "CLAUDE.md", task(domain.LadoBindingForceOn)),
 		driftCase("keep instructions' drift", false, OpDriftKeep, "CLAUDE.md", "CLAUDE.md", "# by hand\n"),
@@ -414,6 +456,22 @@ func TestChangePresenceRules(t *testing.T) {
 			res := f.mustApply(Change{Op: OpAccept, ItemID: ids["hooks"], Acceptance: ChangeAcceptance{Code: ConflictHookMayBlockTools, Detail: "Bash", Scope: domain.LadoScopeGlobal}}, false)
 			return Change{Op: OpRevoke, AcceptanceID: res.Acceptance.ID}
 		}},
+	}
+	// Every safe key is made, changed and ended without a confirmation.
+	for _, key := range []string{"theme", "verbose", "outputStyle", "includeCoAuthoredBy", "showClearContextOnPlanAccept",
+		"inputNeededNotifEnabled", "agentPushNotifEnabled", "preferredNotifChannel", "spinnerTipsEnabled", "cleanupPeriodDays", "language"} {
+		cases = append(cases, createCase("create safe setting "+key, false, domain.LadoSetupKindSetting, key, json.RawMessage(`"x"`)))
+	}
+	for _, key := range []string{"model", "modelSettings"} {
+		cases = append(cases, presenceCase{"create, edit and delete safe setting " + key, false, func(f *changeFixture, ids map[string]domain.LadoSetupItemID) Change {
+			id := ids[key]
+			if id == "" {
+				id = f.mustApply(Change{Op: OpCreate, Tool: domain.LadoSetupToolClaudeCode, Kind: domain.LadoSetupKindSetting, Name: key, Content: json.RawMessage(`{"a":1}`)}, false).Item.ID
+			}
+			f.mustApply(Change{Op: OpEdit, ItemID: id, BaseVersion: 1, Content: json.RawMessage(`{"a":2}`)}, false)
+			f.mustApply(Change{Op: OpBinding, ItemID: id, Binding: project(domain.LadoBindingForceOff)}, false)
+			return Change{Op: OpDelete, ItemID: id}
+		}})
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -603,7 +661,7 @@ func TestFolderItemsRefuseEdits(t *testing.T) {
 
 	// Off and on again, and gone.
 	f.mustApply(Change{Op: OpBinding, ItemID: ids["review"], Binding: ChangeBinding{Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff}}, false)
-	f.mustApply(Change{Op: OpBinding, ItemID: ids["lint"], Binding: ChangeBinding{Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff}}, false)
+	f.mustApply(Change{Op: OpBinding, ItemID: ids["lint"], Binding: ChangeBinding{Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff}}, true)
 	on := f.mustApply(Change{Op: OpBinding, ItemID: ids["lint"], Binding: ChangeBinding{Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOn}}, true)
 	if on.Actor != actorHuman {
 		t.Fatalf("turning a hook folder on = %+v, want the developer's", on)
@@ -613,7 +671,8 @@ func TestFolderItemsRefuseEdits(t *testing.T) {
 		t.Fatalf("Global bindings %+v (%v)", global, err)
 	}
 	for _, name := range []string{"review", "lint"} {
-		res := f.mustApply(Change{Op: OpDelete, ItemID: ids[name]}, false)
+		// A hook folder runs code; the skill's SKILL.md is plain.
+		res := f.mustApply(Change{Op: OpDelete, ItemID: ids[name]}, name == "lint")
 		if res.Item.DeletedAt.IsZero() || res.Before == nil || len(res.Before.Files) != 2 || res.Before.Text != "" {
 			t.Fatalf("delete %s = %+v", name, res)
 		}
@@ -802,10 +861,10 @@ func TestDeleteKeepsVersionsAndPins(t *testing.T) {
 	wantAPIError(t, err, CodeNotFound)
 }
 
-// Decision i: turning an item that can run code on needs the desktop app's
-// confirmation at every scope, and so does an inherit that turns it on where
-// it was off. Turning it off never does.
-func TestBindingTurningOnACodeItemNeedsPresence(t *testing.T) {
+// Owner decision 2026-10-27: every binding of an item that can run code
+// needs the desktop app's confirmation at every scope, on, off and inherit
+// alike; turning it off can lift a guard as turning it on can add a command.
+func TestEveryBindingOfACodeItemNeedsPresence(t *testing.T) {
 	ctx := context.Background()
 	f := newChangeFixture(t)
 	ids := f.adopt(
@@ -847,21 +906,21 @@ func TestBindingTurningOnACodeItemNeedsPresence(t *testing.T) {
 	}{
 		// Global on, though the item was on without a row.
 		{bind(hook, domain.LadoScopeGlobal, "", domain.LadoBindingOn), true, []string{"global/=on"}},
-		{bind(hook, domain.LadoScopeGlobal, "", domain.LadoBindingOff), false, []string{"global/=off"}},
+		{bind(hook, domain.LadoScopeGlobal, "", domain.LadoBindingOff), true, []string{"global/=off"}},
 		// Removing the Global off turns the item on.
 		{bind(hook, domain.LadoScopeGlobal, "", domain.LadoBindingInherit), true, nil},
 		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingForceOn), true, []string{"project/demo=force_on"}},
-		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingForceOff), false, []string{"project/demo=force_off"}},
+		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingForceOff), true, []string{"project/demo=force_off"}},
 		// Inherit after force_off falls back to Global, which is on.
 		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingInherit), true, nil},
-		{bind(hook, domain.LadoScopeTask, testTask, domain.LadoBindingForceOff), false, []string{"task/task-1=force_off"}},
+		{bind(hook, domain.LadoScopeTask, testTask, domain.LadoBindingForceOff), true, []string{"task/task-1=force_off"}},
 		{bind(hook, domain.LadoScopeTask, testTask, domain.LadoBindingForceOn), true, []string{"task/task-1=force_on"}},
 		// Inherit after force_on leaves it on: nothing is turned on.
-		{bind(hook, domain.LadoScopeTask, testTask, domain.LadoBindingInherit), false, nil},
-		{bind(hook, domain.LadoScopeGlobal, "", domain.LadoBindingOff), false, []string{"global/=off"}},
+		{bind(hook, domain.LadoScopeTask, testTask, domain.LadoBindingInherit), true, nil},
+		{bind(hook, domain.LadoScopeGlobal, "", domain.LadoBindingOff), true, []string{"global/=off"}},
 		// With Global off, a project inherit turns nothing on.
-		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingForceOff), false, []string{"global/=off", "project/demo=force_off"}},
-		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingInherit), false, []string{"global/=off"}},
+		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingForceOff), true, []string{"global/=off", "project/demo=force_off"}},
+		{bind(hook, domain.LadoScopeProject, testProject, domain.LadoBindingInherit), true, []string{"global/=off"}},
 	} {
 		b := step.change.Binding
 		name := fmt.Sprintf("%s %s=%s", b.Scope, b.ScopeID, b.State)
@@ -945,9 +1004,9 @@ func TestLoginKeysCannotBeAdded(t *testing.T) {
 	}
 	wantSameDB(t, "a refused login key", db, f.dbState())
 	// env is adopted already; a second env item is refused before its name.
-	f.mustApply(Change{Op: OpDelete, ItemID: ids["env"]}, false)
+	f.mustApply(Change{Op: OpDelete, ItemID: ids["env"]}, true)
 	db = f.dbState()
-	for _, login := range domain.LadoSetupClaudeLoginEnv {
+	for _, login := range []string{"ANTHROPIC_API_KEY", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_OAUTH_TOKEN", "AWS_REGION", "CLOUD_ML_REGION", "VERTEX_REGION_X", "GOOGLE_CLOUD_PROJECT", "AZURE_API_KEY", "HTTPS_PROXY"} {
 		for _, name := range []string{login, strings.ToLower(login)} {
 			if details := wantAPIError(t, create("env", fmt.Sprintf(`{"DEBUG":"1",%q:"x"}`, name)), CodeLoginKey); details["key"] != name {
 				t.Fatalf("%s: details %v", name, details)

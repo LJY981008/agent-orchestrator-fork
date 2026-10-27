@@ -988,7 +988,7 @@ func withoutAdoptedKey(be backupEntry, data []byte) ([]byte, error) {
 			// Not an object: adopted as it was.
 			return jsonWithout(data, claudeEnvKey)
 		}
-		vars = slices.DeleteFunc(vars, func(m jsonMember) bool { return !slices.Contains(domain.LadoSetupClaudeLoginEnv, m.Key) })
+		vars = slices.DeleteFunc(vars, func(m jsonMember) bool { return !domain.LadoSetupIsClaudeLoginEnv(m.Key) })
 		if len(vars) == 0 {
 			return jsonWithout(data, claudeEnvKey)
 		}

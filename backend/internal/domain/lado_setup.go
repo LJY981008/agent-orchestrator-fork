@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"gopkg.in/yaml.v3"
 )
 
 // LadoSetupTool is the agent tool a setup item belongs to. Its values are the
@@ -436,6 +438,9 @@ const (
 	// a [mcp_servers.<name>] table, so adoption cannot cut it out of
 	// config.toml.
 	LadoSetupReasonInlineTable LadoSetupReason = "inline_table"
+	// LadoSetupReasonProviderLoginEnv is Claude's env setting while it turns
+	// on a cloud provider's login (LadoSetupIsClaudeProviderSwitchOn).
+	LadoSetupReasonProviderLoginEnv LadoSetupReason = "provider_login_env"
 	// LadoSetupReasonLiteralCredentials is a Codex MCP server with secret
 	// values (env values, http_headers, bearer_token), which its delivery
 	// would put on a command line.
@@ -569,29 +574,64 @@ var ladoSetupMovedSettings = []string{
 	"enabledPlugins", "extraKnownMarketplaces", "includeCoAuthoredBy",
 }
 
-// LadoSetupNeedsPresence reports whether creating, editing, turning on or
-// keeping the drift of an item needs the desktop app's confirmation
-// (setup.change.requires_presence). Hook scripts, MCP servers and the
-// settings keys hooks, permissions, env, statusLine, enabledPlugins,
-// extraKnownMarketplaces, otelHeadersHelper (it runs a script),
-// enableAllProjectMcpServers and enabledMcpjsonServers (they approve a
-// project's MCP servers) can run code or widen access.
-func LadoSetupNeedsPresence(kind LadoSetupKind, name string) bool {
+// LadoSetupNeedsPresence reports whether a change of an item needs the
+// desktop app's confirmation (setup.change.requires_presence): creating,
+// editing, deleting it, any binding of it and keeping its drift; reverting
+// a drift needs none (owner decision 2026-10-27). The item is one that can
+// run code or widen access: a hook script, an MCP server, a Claude setting
+// outside a short list of safe keys, and a command, skill or agent whose
+// content (a skill's SKILL.md) gives it tools or hooks in its front matter
+// (allowed-tools, hooks) or runs a shell command (!`...`). Content that
+// cannot be read as text is taken to need it.
+func LadoSetupNeedsPresence(kind LadoSetupKind, name string, content []byte) bool {
 	switch kind {
 	case LadoSetupKindHookScript, LadoSetupKindMCPServer:
 		return true
 	case LadoSetupKindSetting:
-		return slices.Contains(ladoSetupPresenceSettings, name)
+		return !slices.Contains(ladoSetupSafeSettings, name)
+	case LadoSetupKindCommand, LadoSetupKindSkill, LadoSetupKindAgent:
+		return ladoSetupTextRunsCode(content)
 	default:
 		return false
 	}
 }
 
-// ladoSetupPresenceSettings are the Claude settings keys whose changes need
-// presence.
-var ladoSetupPresenceSettings = []string{
-	"hooks", "permissions", "env", "statusLine", "enabledPlugins", "extraKnownMarketplaces",
-	"otelHeadersHelper", "enableAllProjectMcpServers", "enabledMcpjsonServers",
+// ladoSetupSafeSettings are the Claude settings keys whose changes need no
+// presence: how Claude Code looks, talks and which model it uses. Every
+// other key, such as disableAllHooks, otelHeadersHelper or
+// enableAllProjectMcpServers, needs it.
+var ladoSetupSafeSettings = []string{
+	"theme", "verbose", "outputStyle", "model", "modelSettings", "includeCoAuthoredBy",
+	"showClearContextOnPlanAccept", "inputNeededNotifEnabled", "agentPushNotifEnabled",
+	"preferredNotifChannel", "spinnerTipsEnabled", "cleanupPeriodDays", "language",
+}
+
+// ladoSetupTextRunsCode reports whether a command's, skill's or agent's text
+// gives it tools or hooks in its front matter, or runs a shell command when
+// Claude Code loads it. Front matter that does not parse counts as doing so.
+func ladoSetupTextRunsCode(content []byte) bool {
+	if !utf8.Valid(content) || bytes.IndexByte(content, 0) >= 0 {
+		return true
+	}
+	text := string(content)
+	if strings.Contains(text, "!`") {
+		return true
+	}
+	front, _, ok := SplitLadoFrontMatter(text)
+	if !ok {
+		return false
+	}
+	var fields map[string]any
+	if err := yaml.Unmarshal([]byte(front), &fields); err != nil {
+		return true
+	}
+	for key := range fields {
+		switch strings.NewReplacer("-", "", "_", "").Replace(strings.ToLower(key)) {
+		case "allowedtools", "hooks":
+			return true
+		}
+	}
+	return false
 }
 
 // LadoSetupDeliveryVerified reports whether sessions on goos were measured to
@@ -609,12 +649,51 @@ func LadoSetupDeliveryVerified(goos string, tool LadoSetupTool) bool {
 // (adapters/agentaccount/claude.go), which domain does not import.
 var LadoSetupClaudeLoginKeys = []string{"apiKeyHelper", "awsAuthRefresh", "awsCredentialExport", "forceLoginMethod", "forceLoginOrgUUID"}
 
-// LadoSetupClaudeLoginEnv are the variables that make Claude Code use another
-// login than its folder's. An adopted env setting leaves them in the original
-// settings.json. The list is the account copier's as well.
-var LadoSetupClaudeLoginEnv = []string{
-	"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL",
-	"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
+// LadoSetupIsClaudeLoginEnv reports whether an env variable picks Claude
+// Code's login, provider or the way it reaches one. An adopted env setting
+// leaves these in the original settings.json, and LADO never writes them:
+// every ANTHROPIC_, AWS_ and AZURE_ variable, CLAUDE_CODE_USE_*,
+// CLAUDE_CODE_OAUTH_TOKEN, Vertex's CLOUD_ML_REGION, VERTEX_REGION_*,
+// GOOGLE_APPLICATION_CREDENTIALS and GOOGLE_CLOUD_PROJECT, and the proxy
+// variables. Names are compared in any case, as Windows reads them. The
+// account copier's list (adapters/agentaccount/claude.go) is a part of it.
+func LadoSetupIsClaudeLoginEnv(name string) bool {
+	name = strings.ToUpper(name)
+	for _, prefix := range []string{"ANTHROPIC_", "CLAUDE_CODE_USE_", "AWS_", "VERTEX_REGION_", "AZURE_"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return slices.Contains([]string{
+		"CLAUDE_CODE_OAUTH_TOKEN", "CLOUD_ML_REGION", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT",
+		"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+	}, name)
+}
+
+// LadoSetupIsClaudeProviderSwitchOn reports whether an env variable turns on
+// a cloud provider's login (CLAUDE_CODE_USE_BEDROCK, _VERTEX or _FOUNDRY)
+// with its JSON value. Such an env setting is not adopted at all: the
+// provider reads more of it than LADO can tell apart. A value LADO cannot
+// read as off counts as on.
+func LadoSetupIsClaudeProviderSwitchOn(name string, value json.RawMessage) bool {
+	if !slices.Contains([]string{"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}, strings.ToUpper(name)) {
+		return false
+	}
+	var v any
+	if err := json.Unmarshal(value, &v); err != nil {
+		return true
+	}
+	switch v := v.(type) {
+	case nil:
+		return false
+	case bool:
+		return v
+	case float64:
+		return v != 0
+	case string:
+		return !slices.Contains([]string{"", "0", "false", "no", "off"}, strings.ToLower(strings.TrimSpace(v)))
+	}
+	return true
 }
 
 // LadoSetupItemWithVersion is a setup item with one of its versions: the

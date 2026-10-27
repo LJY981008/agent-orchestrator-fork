@@ -226,15 +226,15 @@ func (s *Service) keepDrift(ctx context.Context, itemID domain.LadoSetupItemID, 
 		return domain.LadoSetupItemVersion{}, err
 	}
 	it, latest := iv.Item, iv.Version
-	if domain.LadoSetupNeedsPresence(it.Kind, it.Name) && ap.proof.Nonce == "" {
-		return domain.LadoSetupItemVersion{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED",
-			"Keep this change in the AO desktop app. It can run commands or widen access, so the app asks you to confirm it.")
-	}
 	content, err := s.readManaged(ctx, it, latest)
 	if err != nil {
 		return domain.LadoSetupItemVersion{}, apierr.Conflict(CodeDriftUnreadable,
 			"LADO cannot read the managed copy of this item as its content. Revert it to the latest version instead.",
 			map[string]any{"item": string(it.ID), "error": plainError(err)})
+	}
+	if (s.versionNeedsPresence(it, latest) || managedNeedsPresence(it, content)) && ap.proof.Nonce == "" {
+		return domain.LadoSetupItemVersion{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED",
+			"Keep this change in the AO desktop app. It can run commands or widen access, so the app asks you to confirm it.")
 	}
 	v := content.version
 	if v.ContentKind != latest.ContentKind {

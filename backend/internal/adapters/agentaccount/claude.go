@@ -44,7 +44,7 @@ var claudeCredentialEnv = []string{
 // inventory keeps the same keys in place (domain.LadoSetupClaudeLoginKeys).
 func ClaudeLoginSettingKeys() []string { return append([]string(nil), claudeSettingsDropped...) }
 
-// ClaudeLoginEnvNames returns claudeCredentialEnv (domain.LadoSetupClaudeLoginEnv).
+// ClaudeLoginEnvNames returns claudeCredentialEnv (within domain.LadoSetupIsClaudeLoginEnv).
 func ClaudeLoginEnvNames() []string { return append([]string(nil), claudeCredentialEnv...) }
 
 // Claude runs the `claude` CLI under an account folder (CLAUDE_CONFIG_DIR).

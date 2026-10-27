@@ -259,10 +259,10 @@ func TestInventoryKeepsLoginKeysAndCredentialsOut(t *testing.T) {
 
 	t.Run("an env of login variables only stays whole", func(t *testing.T) {
 		h := newFakeHome(t)
-		h.write(filepath.Join(h.claude, "settings.json"), `{"env": {"ANTHROPIC_BASE_URL": "https://proxy", "CLAUDE_CODE_USE_BEDROCK": "1"}}`)
+		h.write(filepath.Join(h.claude, "settings.json"), `{"env": {"ANTHROPIC_BASE_URL": "https://proxy", "AWS_REGION": "us-east-1"}}`)
 		env := entryAt(t, mustScan(t, h.deps()), claudeDir, domain.LadoSetupKindSetting, "env")
 		wantStatus(t, env, domain.LadoSetupStatusNever, domain.LadoSetupReasonLoginKey)
-		if want := []string{"ANTHROPIC_BASE_URL", "CLAUDE_CODE_USE_BEDROCK"}; !slices.Equal(env.KeptInPlace, want) {
+		if want := []string{"ANTHROPIC_BASE_URL", "AWS_REGION"}; !slices.Equal(env.KeptInPlace, want) {
 			t.Fatalf("env keeps %v in place, want %v", env.KeptInPlace, want)
 		}
 	})
@@ -517,8 +517,11 @@ func TestClaudeLoginKeysMatchAgentAccount(t *testing.T) {
 	if got := agentaccount.ClaudeLoginSettingKeys(); !slices.Equal(domain.LadoSetupClaudeLoginKeys, got) {
 		t.Fatalf("domain.LadoSetupClaudeLoginKeys = %v, the account copier drops %v", domain.LadoSetupClaudeLoginKeys, got)
 	}
-	if got := agentaccount.ClaudeLoginEnvNames(); !slices.Equal(domain.LadoSetupClaudeLoginEnv, got) {
-		t.Fatalf("domain.LadoSetupClaudeLoginEnv = %v, an account launch neutralizes %v", domain.LadoSetupClaudeLoginEnv, got)
+	// LADO keeps more variables in place than an account launch clears.
+	for _, name := range agentaccount.ClaudeLoginEnvNames() {
+		if !domain.LadoSetupIsClaudeLoginEnv(name) {
+			t.Errorf("an account launch neutralizes %s, which domain.LadoSetupIsClaudeLoginEnv does not keep in place", name)
+		}
 	}
 }
 

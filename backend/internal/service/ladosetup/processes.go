@@ -44,13 +44,15 @@ type Running struct {
 }
 
 // processMarkers are command-line parts that mark a Claude Code or Codex
-// process started through Node: the npm packages and the ACP adapter AO's
-// Chat sessions run Claude through.
+// process started through Node: the npm packages, the Agent SDK other
+// programs run Claude Code through, and the ACP adapter AO's Chat sessions
+// run Claude through.
 var processMarkers = []struct {
 	text string
 	tool domain.LadoSetupTool
 }{
 	{"@anthropic-ai/claude-code", domain.LadoSetupToolClaudeCode},
+	{"@anthropic-ai/claude-agent-sdk", domain.LadoSetupToolClaudeCode},
 	{"claude-agent-acp", domain.LadoSetupToolClaudeCode},
 	{"@openai/codex", domain.LadoSetupToolCodex},
 }

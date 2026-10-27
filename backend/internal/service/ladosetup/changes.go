@@ -202,8 +202,7 @@ type ChangeResult struct {
 	// ConflictsAdded and ConflictsRemoved are the conflict results the
 	// change brings to its scope and the ones it ends, leaving out those an
 	// acceptance covers. Item changes are compared at Global, bindings and
-	// acceptances in their scope. The default mode check needs the rules'
-	// permission ceiling and is left out.
+	// acceptances in their scope, against the rules' permission ceiling.
 	ConflictsAdded, ConflictsRemoved []Conflict
 	// Impact is what the change reaches.
 	Impact ladopolicy.Impact
@@ -477,6 +476,12 @@ func (s *Service) prepareCreate(ctx context.Context, c Change) (*preparedChange,
 	if err := checkNewName(c.Tool, c.Kind, c.Name); err != nil {
 		return nil, err
 	}
+	// A new item reaches sessions as an adopted one does, which this OS was
+	// not measured for.
+	if !domain.LadoSetupDeliveryVerified(s.deps.GOOS, c.Tool) {
+		return nil, apierr.Conflict(CodeOSUnverified, "Creating setup items is not available on this OS yet: LADO has not checked that sessions get them here.",
+			map[string]any{"os": s.deps.GOOS, "tools": []domain.LadoSetupTool{c.Tool}})
+	}
 	content, err := newContent(c.Tool, c.Kind, c.Name, c.Content)
 	if err != nil {
 		return nil, err
@@ -497,7 +502,7 @@ func (s *Service) prepareCreate(ctx context.Context, c Change) (*preparedChange,
 	return &preparedChange{
 		op: OpCreate, item: item, content: &content, version: v, after: content.view,
 		change:        ladopolicy.SetupChange{Item: &domain.LadoSetupItemWithVersion{Item: item, Version: v}, Content: content.value},
-		needsPresence: domain.LadoSetupNeedsPresence(c.Kind, c.Name),
+		needsPresence: domain.LadoSetupNeedsPresence(c.Kind, c.Name, content.blobs[0]),
 	}, nil
 }
 
@@ -548,7 +553,8 @@ func (s *Service) prepareEdit(ctx context.Context, c Change) (*preparedChange, e
 	v.ID, v.ItemID, v.Version, v.CreatedAt = domain.LadoSetupItemVersionID(s.deps.NewID()), it.ID, latest.Version+1, s.now()
 	p.content, p.version = &content, v
 	p.change = ladopolicy.SetupChange{Item: &domain.LadoSetupItemWithVersion{Item: it, Version: v}, Content: content.value}
-	p.needsPresence = domain.LadoSetupNeedsPresence(it.Kind, it.Name)
+	// An edit that makes an item safe changes one that was not.
+	p.needsPresence = s.versionNeedsPresence(it, latest) || domain.LadoSetupNeedsPresence(it.Kind, it.Name, content.blobs[0])
 	return p, nil
 }
 
@@ -567,7 +573,8 @@ func (s *Service) prepareDelete(ctx context.Context, c Change) (*preparedChange,
 	if err != nil {
 		return nil, err
 	}
-	p := &preparedChange{op: OpDelete, item: it, latest: latest, pins: pins, change: ladopolicy.SetupChange{Remove: it.ID}}
+	p := &preparedChange{op: OpDelete, item: it, latest: latest, pins: pins, change: ladopolicy.SetupChange{Remove: it.ID},
+		needsPresence: s.versionNeedsPresence(it, latest)}
 	p.before = s.beforeView(it, latest, &p.warnings)
 	return p, nil
 }
@@ -585,9 +592,9 @@ func (s *Service) refuseOverDrift(ctx context.Context, iv domain.LadoSetupItemWi
 		map[string]any{"item": string(iv.Item.ID)})
 }
 
-// prepareBinding checks a binding. Turning an item that can run code or
-// widen access on needs presence: on and force_on, and an inherit that turns
-// it on where it was off, as removing the Global off does.
+// prepareBinding checks a binding. Any binding of an item that can run code
+// or widen access needs presence: turning it off can lift a deny or a guard
+// hook as turning it on can add a command (owner decision 2026-10-27).
 func (s *Service) prepareBinding(ctx context.Context, c Change) (*preparedChange, error) {
 	iv, err := s.liveItem(ctx, c.ItemID)
 	if err != nil {
@@ -614,23 +621,7 @@ func (s *Service) prepareBinding(ctx context.Context, c Change) (*preparedChange
 		p.noop = true
 		return p, nil
 	}
-	if !domain.LadoSetupNeedsPresence(iv.Item.Kind, iv.Item.Name) {
-		return p, nil
-	}
-	switch b.State {
-	case domain.LadoBindingOn, domain.LadoBindingForceOn:
-		p.needsPresence = true
-	case domain.LadoBindingInherit:
-		before, err := s.onIn(ctx, scope, iv, nil)
-		if err != nil {
-			return nil, err
-		}
-		after, err := s.onIn(ctx, scope, iv, &p.change)
-		if err != nil {
-			return nil, err
-		}
-		p.needsPresence = !before && after
-	}
+	p.needsPresence = s.versionNeedsPresence(iv.Item, iv.Version)
 	return p, nil
 }
 
@@ -976,7 +967,7 @@ func (s *Service) applyDrift(ctx context.Context, c Change, sum string, presence
 	if isKeyKind(it.Kind) {
 		change.Content = mc.blobs[0]
 	}
-	res.NeedsPresence = domain.LadoSetupNeedsPresence(it.Kind, it.Name)
+	res.NeedsPresence = s.versionNeedsPresence(it, latest) || managedNeedsPresence(it, mc)
 	s.preview(ctx, scopeRef{}, change, &res)
 	if c.DryRun {
 		v.ID = ""
@@ -1052,28 +1043,20 @@ func (s *Service) scopeProblems(ctx context.Context, scope scopeRef, change *lad
 	if err != nil {
 		return nil, err
 	}
+	ceiling, err := s.ceiling(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var out []Conflict
 	for _, c := range s.Conflicts(ConflictInput{
-		ProjectID: scope.project, TaskID: scope.task, Setup: setup, Moved: st.moved(), ProjectSettings: project, Acceptances: st.acceptances,
+		ProjectID: scope.project, TaskID: scope.task, Setup: setup, Moved: st.moved(), Ceiling: ceiling, ProjectSettings: project,
+		Acceptances: st.acceptances,
 	}) {
 		if !c.Accepted() {
 			out = append(out, c)
 		}
 	}
 	return out, nil
-}
-
-// onIn reports whether an item is on in a scope, after change when it is
-// set.
-func (s *Service) onIn(ctx context.Context, scope scopeRef, iv domain.LadoSetupItemWithVersion, change *ladopolicy.SetupChange) (bool, error) {
-	st, err := s.readScope(ctx, scope.project, scope.task)
-	if err != nil {
-		return false, err
-	}
-	if change != nil {
-		st.apply(*change)
-	}
-	return st.state(iv).On, nil
 }
 
 // impactOf is what a change reaches, nothing without a policy.
@@ -1335,7 +1318,7 @@ func checkSettingValue(name string, value []byte) error {
 		return contentInvalid(reasonNotObject, nil)
 	}
 	for _, v := range sortedKeys(vars) {
-		if slices.ContainsFunc(domain.LadoSetupClaudeLoginEnv, func(login string) bool { return strings.EqualFold(login, v) }) {
+		if domain.LadoSetupIsClaudeLoginEnv(v) {
 			return loginKey(v)
 		}
 	}
@@ -1507,6 +1490,62 @@ func indentJSON(value []byte) string {
 		return string(value)
 	}
 	return buf.String()
+}
+
+// versionNeedsPresence reports whether changing an item whose version is v
+// needs the desktop app's confirmation (domain.LadoSetupNeedsPresence). A
+// command's, skill's or agent's text is read from its blob; text LADO
+// cannot read counts as running code.
+func (s *Service) versionNeedsPresence(it domain.LadoSetupItem, v domain.LadoSetupItemVersion) bool {
+	if !readsText(it.Kind) {
+		return domain.LadoSetupNeedsPresence(it.Kind, it.Name, nil)
+	}
+	sum := v.SHA256
+	if v.ContentKind == domain.LadoSetupContentTree {
+		tree, err := s.treeOfVersion(v)
+		if err != nil {
+			return true
+		}
+		i := slices.IndexFunc(tree.Entries, func(e domain.LadoSetupTreeEntry) bool { return e.Path == skillFile })
+		if i < 0 {
+			// Claude Code loads no skill without its SKILL.md.
+			return false
+		}
+		sum = tree.Entries[i].SHA256
+	}
+	if s.deps.Blobs == nil {
+		return true
+	}
+	data, err := s.deps.Blobs.Get(sum, maxBlobBytes)
+	if err != nil {
+		return true
+	}
+	return domain.LadoSetupNeedsPresence(it.Kind, it.Name, data)
+}
+
+// managedNeedsPresence reports whether keeping an item's managed copy
+// needs the desktop app's confirmation for what the copy holds.
+func managedNeedsPresence(it domain.LadoSetupItem, mc managedContent) bool {
+	if !readsText(it.Kind) || mc.version.ContentKind != domain.LadoSetupContentTree {
+		return domain.LadoSetupNeedsPresence(it.Kind, it.Name, mc.blobs[0])
+	}
+	// readManaged puts the files in the manifest's order, the manifest last.
+	var tree domain.LadoSetupTree
+	if json.Unmarshal(mc.blobs[len(mc.blobs)-1], &tree) != nil {
+		return true
+	}
+	for i, e := range tree.Entries {
+		if e.Path == skillFile && i < len(mc.blobs)-1 {
+			return domain.LadoSetupNeedsPresence(it.Kind, it.Name, mc.blobs[i])
+		}
+	}
+	return false
+}
+
+// readsText reports whether domain.LadoSetupNeedsPresence reads an item
+// kind's text.
+func readsText(kind domain.LadoSetupKind) bool {
+	return kind == domain.LadoSetupKindCommand || kind == domain.LadoSetupKindSkill || kind == domain.LadoSetupKindAgent
 }
 
 func changeInvalid(op ChangeOp, field, reason string) error {

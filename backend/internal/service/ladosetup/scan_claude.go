@@ -180,6 +180,10 @@ func (sc *scanner) claudeSettings(file domain.LadoSetupEntry, typ fs.FileMode) {
 			continue
 		}
 		if key == claudeEnvKey {
+			if providerLoginOn(value) {
+				sc.add(e, domain.LadoSetupStatusNotAdoptable, domain.LadoSetupReasonProviderLoginEnv)
+				continue
+			}
 			if value, e.KeptInPlace, err = withoutLoginEnv(value); err != nil {
 				sc.unreadable(e, err)
 				continue
@@ -194,10 +198,10 @@ func (sc *scanner) claudeSettings(file domain.LadoSetupEntry, typ fs.FileMode) {
 	}
 }
 
-// withoutLoginEnv takes the login variables (domain.LadoSetupClaudeLoginEnv)
+// withoutLoginEnv takes the login variables (domain.LadoSetupIsClaudeLoginEnv)
 // out of the env setting's value, which stay in settings.json when the rest
-// is adopted, and names them. A value with nothing else is nil; a value that
-// is no object is kept as it is.
+// is adopted, and names them in order. A value with nothing else is nil; a
+// value that is no object is kept as it is.
 func withoutLoginEnv(value json.RawMessage) (json.RawMessage, []string, error) {
 	if trimmed := bytes.TrimSpace(value); len(trimmed) == 0 || trimmed[0] != '{' {
 		// Not an object: adopted as it is, with no login variable in it.
@@ -208,8 +212,8 @@ func withoutLoginEnv(value json.RawMessage) (json.RawMessage, []string, error) {
 		return nil, nil, err
 	}
 	var kept []string
-	for _, name := range domain.LadoSetupClaudeLoginEnv {
-		if _, ok := vars[name]; ok {
+	for _, name := range sortedKeys(vars) {
+		if domain.LadoSetupIsClaudeLoginEnv(name) {
 			kept = append(kept, name)
 			delete(vars, name)
 		}
@@ -222,6 +226,21 @@ func withoutLoginEnv(value json.RawMessage) (json.RawMessage, []string, error) {
 	}
 	rest, err := json.Marshal(vars)
 	return rest, kept, err
+}
+
+// providerLoginOn reports whether an env setting's value turns on a cloud
+// provider's login (domain.LadoSetupIsClaudeProviderSwitchOn).
+func providerLoginOn(value json.RawMessage) bool {
+	vars, err := jsonObject(value)
+	if err != nil {
+		return false
+	}
+	for name, v := range vars {
+		if domain.LadoSetupIsClaudeProviderSwitchOn(name, v) {
+			return true
+		}
+	}
+	return false
 }
 
 // claudeJSON lists the user MCP servers of ~/.claude.json and one line for

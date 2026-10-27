@@ -706,7 +706,7 @@ func withLoginEnvOf(content, settings []byte) []byte {
 	}
 	added := false
 	for _, m := range baseVars {
-		if slices.Contains(domain.LadoSetupClaudeLoginEnv, m.Key) && !slices.ContainsFunc(vars, func(v jsonMember) bool { return v.Key == m.Key }) {
+		if domain.LadoSetupIsClaudeLoginEnv(m.Key) && !slices.ContainsFunc(vars, func(v jsonMember) bool { return v.Key == m.Key }) {
 			vars, added = append(vars, m), true
 		}
 	}
