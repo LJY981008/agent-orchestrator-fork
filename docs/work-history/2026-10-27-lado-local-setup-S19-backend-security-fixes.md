@@ -20,6 +20,7 @@
   - **미검증 OS 의 만들기**: `create` 는 `domain.LadoSetupDeliveryVerified` 가 거짓이면 409 `LADO_SETUP_OS_UNVERIFIED`(채택과 같은 코드).
   - **복원 조회의 전제 조건**: `GET /lado/setup/adoptions/{id}` 응답에 `preconditions`(실행 중인 AO 세션·바깥 프로세스, 채택 미리보기와 같은 모양) — 프런트(S20)가 확인 창 전에 보여 준다. DTO·specgen·`npm run api`.
   - **nit**: 바깥 프로세스 표지에 `@anthropic-ai/claude-agent-sdk` 를 더한다.
+  - **증명 먼저(변경)**: S18 회고의 마지막 틈 — 변경(`changes.go` 의 `changeApproval`)도 채택처럼 데스크톱 확인 증명의 서명·만료·재사용을 dry run 계산(영향·검사) **전에** 확인한다(증명 수명 60 s). 테스트 `TestEveryChangeToCodeRunningItemsNeedsPresence` 에 '느린 영향 계산에도 증명이 만료되지 않음' 사례를 더한다.
 - 하지 않는다: 데이터·전달(S18 — 끝남), 프런트(S20).
 
 ## 절차
