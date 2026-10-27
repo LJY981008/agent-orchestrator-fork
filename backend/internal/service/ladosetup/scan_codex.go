@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -164,9 +165,11 @@ func (sc *scanner) codexServers(key domain.LadoSetupEntry, data []byte, value an
 	}
 }
 
-// literalCredentials reports whether a Codex MCP server holds secret values:
-// env with values, http_headers or bearer_token. Their environment variable
-// forms (env_vars, env_http_headers, bearer_token_env_var) hold names only.
+// literalCredentials reports whether a Codex MCP server holds secret values,
+// which its delivery would put on a command line: env with values,
+// http_headers, bearer_token, args that carry a header or a token, or a url
+// with a query or user info. Their environment variable forms (env_vars,
+// env_http_headers, bearer_token_env_var) hold names only.
 func literalCredentials(server map[string]any) bool {
 	if env, ok := server["env"]; ok {
 		if vars, isTable := env.(map[string]any); !isTable || len(vars) > 0 {
@@ -175,5 +178,58 @@ func literalCredentials(server map[string]any) bool {
 	}
 	_, headers := server["http_headers"]
 	_, token := server["bearer_token"]
-	return headers || token
+	if headers || token {
+		return true
+	}
+	if args, ok := server["args"]; ok {
+		list, isList := args.([]any)
+		if !isList {
+			return true
+		}
+		if secretArgs(list) {
+			return true
+		}
+	}
+	if raw, ok := server["url"]; ok {
+		s, isString := raw.(string)
+		if !isString {
+			return true
+		}
+		u, err := url.Parse(s)
+		if err != nil || u.User != nil || u.RawQuery != "" || u.ForceQuery || strings.ContainsAny(s, "?@") {
+			return true
+		}
+	}
+	return false
+}
+
+// secretArgMarks are parts of an argument, in lower case, that name a
+// header or a token.
+var secretArgMarks = []string{"authorization", "bearer ", "token=", "api_key", "apikey", "api-key", "x-api-key", "secret", "password"}
+
+// secretArgFlags are flags whose next argument is a header or a token.
+var secretArgFlags = []string{"--header", "-h", "--token"}
+
+// secretArgs reports whether a server's args carry a header or a token: an
+// argument that names one, or the value after a header or token flag. An
+// argument that is not a string counts as one.
+func secretArgs(args []any) bool {
+	for i, a := range args {
+		s, ok := a.(string)
+		if !ok {
+			return true
+		}
+		lower := strings.ToLower(s)
+		for _, mark := range secretArgMarks {
+			if strings.Contains(lower, mark) {
+				return true
+			}
+		}
+		for _, flag := range secretArgFlags {
+			if lower == flag && i+1 < len(args) || strings.HasPrefix(lower, flag+"=") || flag == "-h" && len(s) > 2 && strings.HasPrefix(s, "-H") {
+				return true
+			}
+		}
+	}
+	return false
 }

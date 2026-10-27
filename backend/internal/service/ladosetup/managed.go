@@ -416,9 +416,11 @@ func checkCodexOverride(name string, content []byte) error {
 	if err != nil {
 		return err
 	}
+	// The errors name the server only: its values can hold secrets, and
+	// they reach logs and responses.
 	var doc map[string]any
-	if err := toml.Unmarshal([]byte(value), &doc); err != nil {
-		return fmt.Errorf("the -c value does not parse: %w", err)
+	if toml.Unmarshal([]byte(value), &doc) != nil {
+		return fmt.Errorf("the -c value of the MCP server %s does not parse", name)
 	}
 	servers, _ := doc[codexServersKey].(map[string]any)
 	got, err := marshalCanonical(servers[name])
@@ -430,7 +432,7 @@ func checkCodexOverride(name string, content []byte) error {
 		return err
 	}
 	if !bytes.Equal(got, want) {
-		return fmt.Errorf("the -c value reads back as %s, not %s", got, want)
+		return fmt.Errorf("the -c value of the MCP server %s reads back as other values", name)
 	}
 	return nil
 }

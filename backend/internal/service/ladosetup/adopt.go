@@ -533,9 +533,10 @@ func (r keyFileReader) read(path string) ([]byte, error) {
 
 // adoptionConflicts runs the conflict checks over the setup as it would be
 // after the adoption: the moved entries with their rewritten values, the
-// settings and servers that stay where they are, and the managed items. It
-// keeps the results about the moved entries and every reference to a moved
-// path that cannot be rewritten.
+// settings and servers that stay where they are (login keys and a moved
+// env's login variables included), and the managed items. It keeps the
+// results about the moved entries and every reference to a moved path that
+// cannot be rewritten.
 func (s *Service) adoptionConflicts(ctx context.Context, plan adoptionPlan, files keyFileReader) ([]Conflict, error) {
 	var setup []SetupContent
 	moving := map[string]bool{}
@@ -549,14 +550,14 @@ func (s *Service) adoptionConflicts(ctx context.Context, plan adoptionPlan, file
 		setup = append(setup, SetupContent{Tool: e.Tool, Kind: e.Kind, Name: e.Name, Path: e.Path, SHA256: sum, Content: pe.content})
 	}
 	for _, e := range plan.inv.Entries {
-		if moving[e.Path] || !isOriginal(e.Location) || e.Status != domain.LadoSetupStatusAdoptable || !isKeyKind(e.Kind) {
+		if !isOriginal(e.Location) || !isKeyKind(e.Kind) || !slices.Contains(inPlaceStatuses, e.Status) {
 			continue
 		}
 		data, err := files.read(s.originalKeyFile(e.Tool, e.Kind))
 		if err != nil {
 			continue
 		}
-		if value, err := keyValue(e.Tool, e.Kind, e.Name, data); err == nil {
+		if value, ok := inPlaceValue(e, data, moving[e.Path]); ok {
 			setup = append(setup, SetupContent{Tool: e.Tool, Kind: e.Kind, Name: e.Name, Path: e.Path, SHA256: e.SHA256, Content: value})
 		}
 	}
@@ -577,11 +578,56 @@ func (s *Service) adoptionConflicts(ctx context.Context, plan adoptionPlan, file
 	}
 	var out []Conflict
 	for _, c := range s.Conflicts(ConflictInput{Setup: setup, Moved: plan.moved}) {
-		if moving[c.Path] || c.Code == ConflictHookPathMoved {
+		if moving[c.Path] || slices.Contains(movedPathCodes, c.Code) {
 			out = append(out, c)
 		}
 	}
 	return out, nil
+}
+
+// movedPathCodes are the conflicts of a value that names a moved path and
+// cannot follow it. They block an adoption.
+var movedPathCodes = []string{ConflictHookPathMoved, ConflictPathUsedInPlace}
+
+// inPlaceStatuses are the inventory statuses of key entries that the tool
+// reads where they are: setup to adopt, and login keys and servers LADO
+// leaves in place.
+var inPlaceStatuses = []domain.LadoSetupStatus{domain.LadoSetupStatusAdoptable, domain.LadoSetupStatusNever, domain.LadoSetupStatusNotAdoptable}
+
+// inPlaceValue is what of a key entry stays in its file after the adoption:
+// the whole value when the entry does not move, and a moving env setting's
+// login variables. ok is false when nothing of it stays or it cannot be
+// read.
+func inPlaceValue(e domain.LadoSetupEntry, data []byte, moving bool) ([]byte, bool) {
+	if e.Tool != domain.LadoSetupToolClaudeCode || e.Kind != domain.LadoSetupKindSetting {
+		if moving {
+			return nil, false
+		}
+		value, err := keyValue(e.Tool, e.Kind, e.Name, data)
+		return value, err == nil
+	}
+	value, ok, err := jsonMemberValue(data, e.Name)
+	if err != nil || !ok {
+		return nil, false
+	}
+	if !moving {
+		return value, true
+	}
+	if e.Name != claudeEnvKey || len(e.KeptInPlace) == 0 {
+		return nil, false
+	}
+	vars, err := jsonObject(value)
+	if err != nil {
+		return nil, false
+	}
+	kept := map[string]json.RawMessage{}
+	for _, name := range e.KeptInPlace {
+		if v, ok := vars[name]; ok {
+			kept[name] = v
+		}
+	}
+	out, err := json.Marshal(kept)
+	return out, err == nil
 }
 
 // preconditions checks the OS and what runs the tools whose setup moves.
@@ -671,14 +717,19 @@ func (s *Service) confirm(req AdoptRequest, plan adoptionPlan) error {
 		return apierr.Invalid(CodeAdoptionInvalid, "Choose at least one entry to move.", nil)
 	}
 	for _, c := range p.Conflicts {
+		if !slices.Contains(movedPathCodes, c.Code) {
+			continue
+		}
+		details := map[string]any{}
+		for k, v := range c.Details {
+			details[k] = v
+		}
 		if c.Code == ConflictHookPathMoved {
-			details := map[string]any{}
-			for k, v := range c.Details {
-				details[k] = v
-			}
 			return apierr.Conflict(ConflictHookPathMoved,
 				"A command names a file that would move, and LADO cannot rewrite it. Move the setting that holds it too, or keep the file in place.", details)
 		}
+		return apierr.Conflict(ConflictPathUsedInPlace,
+			"A setting or MCP server names a file that would move, and LADO cannot point it at the moved copy. Keep that file in place.", details)
 	}
 	pre := p.Preconditions
 	if len(pre.Unverified) > 0 {

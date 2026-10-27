@@ -165,6 +165,14 @@ func TestConflictChecksTable(t *testing.T) {
 		{name: "hook names a script that stays", setup: managedSetting("h", "hooks", hooks("PreToolUse", command("bash ~/.claude/hooks/other.sh"))), code: ConflictHookPathMoved},
 		{name: "prompt hook", setup: managedSetting("h", "hooks", hooks("Stop", `{"hooks":[{"type":"prompt","prompt":"~/.claude/hooks/check.sh"}]}`)), code: ConflictHookPathMoved},
 
+		{name: "login key names a moved script", setup: localSetup(managedSetting("", "apiKeyHelper", `"~/.claude/hooks/check.sh"`), "/home/dev/.claude/settings.json#apiKeyHelper"), code: ConflictPathUsedInPlace, hit: true, severity: blocking, detail: "apiKeyHelper hooks/check.sh"},
+		{name: "env value names a moved script", setup: managedSetting("e", "env", `{"HELPER":"`+absHook+`"}`), code: ConflictPathUsedInPlace, hit: true, severity: blocking, detail: "env.HELPER hooks/check.sh"},
+		{name: "otel helper that stays", setup: managedSetting("o", "otelHeadersHelper", `"bash ~/.claude/hooks/status.sh"`), code: ConflictPathUsedInPlace, hit: true, severity: blocking, detail: "otelHeadersHelper hooks/status.sh"},
+		{name: "MCP args name a moved skill", setup: SetupContent{ItemID: "m", Tool: claudeTool, Kind: domain.LadoSetupKindMCPServer, Name: "docs", SHA256: sha256Hex([]byte("m")), Content: []byte(`{"command":"node","args":["--x","~/.claude/skills/review/server.js"]}`)}, code: ConflictPathUsedInPlace, hit: true, severity: blocking, detail: "args[1] skills/review"},
+		{name: "Codex MCP command names a moved script", setup: SetupContent{ItemID: "c", Tool: codexTool, Kind: domain.LadoSetupKindMCPServer, Name: "lint", SHA256: sha256Hex([]byte("c")), Content: []byte(`{"command":"` + absHook + `"}`)}, code: ConflictPathUsedInPlace, hit: true, severity: blocking, detail: "command hooks/check.sh"},
+		{name: "values that name nothing moved", setup: managedSetting("e", "env", `{"A":"~/.claude/hooks/other.sh","B":"$CLAUDE_CONFIG_DIR/hooks/check.sh"}`), code: ConflictPathUsedInPlace},
+		{name: "MCP fields LADO does not read", setup: SetupContent{ItemID: "m", Tool: claudeTool, Kind: domain.LadoSetupKindMCPServer, Name: "docs", SHA256: sha256Hex([]byte("m")), Content: []byte(`{"command":"node","description":"~/.claude/hooks/check.sh"}`)}, code: ConflictPathUsedInPlace},
+
 		{name: "deny Bash(git push:*)", setup: managedSetting("p", "permissions", deny("Bash(git push:*)")), code: ConflictDeniesGit, hit: true, severity: warning, detail: "Bash(git push:*)"},
 		{name: "deny Bash(git *)", setup: managedSetting("p", "permissions", deny("Bash(git *)")), code: ConflictDeniesGit, hit: true, severity: warning, detail: "Bash(git *)"},
 		{name: "deny Bash(gh pr merge:*)", setup: managedSetting("p", "permissions", deny("Bash(gh pr merge:*)")), code: ConflictDeniesGit, hit: true, severity: warning, detail: "Bash(gh pr merge:*)"},

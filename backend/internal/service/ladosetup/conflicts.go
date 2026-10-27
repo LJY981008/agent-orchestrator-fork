@@ -43,6 +43,12 @@ const (
 	// names an entry adoption moved out of the Claude folder (plan decision
 	// g).
 	ConflictHookPathMoved = "LADO_SETUP_HOOK_PATH_MOVED"
+	// ConflictPathUsedInPlace is any other value that names an entry
+	// adoption moves out of the Claude folder: a settings value that is no
+	// command LADO rewrites (a login key such as apiKeyHelper, an env value,
+	// a key that stays in place) or an MCP server's command, args, env or
+	// url, which no shell reads. The file must stay in place.
+	ConflictPathUsedInPlace = "LADO_SETUP_PATH_USED_IN_PLACE"
 	// ConflictDeniesGit is a permissions.deny rule that covers git or gh
 	// commands.
 	ConflictDeniesGit = "LADO_SETUP_DENIES_GIT"
@@ -83,6 +89,7 @@ var conflictSeverity = map[string]domain.LadoProblemSeverity{
 	ConflictEnvReserved:             domain.LadoSeverityBlocking,
 	ConflictDeniesAO:                domain.LadoSeverityBlocking,
 	ConflictHookPathMoved:           domain.LadoSeverityBlocking,
+	ConflictPathUsedInPlace:         domain.LadoSeverityBlocking,
 	ConflictDeniesGit:               domain.LadoSeverityWarning,
 	ConflictHookMayBlockTools:       domain.LadoSeverityWarning,
 	ConflictHookAddsPromptText:      domain.LadoSeverityWarning,
@@ -208,6 +215,7 @@ type conflictChecker struct {
 }
 
 func (cc *conflictChecker) check(c SetupContent, project map[string]json.RawMessage) {
+	cc.pathsUsed(c)
 	switch c.Kind {
 	case domain.LadoSetupKindMCPServer:
 		if strings.EqualFold(c.Name, aoMCPServerName) {
@@ -480,6 +488,64 @@ func (cc *conflictChecker) statusLine(c SetupContent) {
 	for _, ref := range movedPathReferences(jsonString(keys["command"]), cc.claudeDir, cc.in.Moved) {
 		cc.add(c, ConflictHookPathMoved, map[string]string{"key": "statusLine", "path": ref.Name}, ref.Name)
 	}
+}
+
+// pathsUsed finds the values of a setting or an MCP server that name a moved
+// entry and are not commands adoption rewrites: every string of a setting
+// but hooks and statusLine, which hooks and statusLine check, and an MCP
+// server's command, args, env and url. Each result names the value's key
+// ("apiKeyHelper", "env.KEY", "args[1]") and the entry.
+func (cc *conflictChecker) pathsUsed(c SetupContent) {
+	if len(cc.in.Moved) == 0 || len(c.Content) == 0 {
+		return
+	}
+	var values []keyedString
+	switch {
+	case c.Kind == domain.LadoSetupKindSetting && c.Name != "hooks" && c.Name != "statusLine":
+		var v any
+		if json.Unmarshal(c.Content, &v) != nil {
+			return
+		}
+		values = stringsIn(c.Name, v, nil)
+	case c.Kind == domain.LadoSetupKindMCPServer:
+		var server map[string]any
+		if json.Unmarshal(c.Content, &server) != nil {
+			return
+		}
+		for _, key := range []string{"command", "args", "env", "url"} {
+			if v, ok := server[key]; ok {
+				values = stringsIn(key, v, values)
+			}
+		}
+	}
+	for _, v := range values {
+		for _, ref := range movedPathReferences(v.value, cc.claudeDir, cc.in.Moved) {
+			cc.add(c, ConflictPathUsedInPlace, map[string]string{"key": v.key, "path": ref.Name}, v.key, ref.Name)
+		}
+	}
+}
+
+// keyedString is a string in a JSON value with the key path to it.
+type keyedString struct {
+	key, value string
+}
+
+// stringsIn appends every string in v to out, in key order, with its path
+// under key: ".name" into an object, "[i]" into an array.
+func stringsIn(key string, v any, out []keyedString) []keyedString {
+	switch v := v.(type) {
+	case string:
+		out = append(out, keyedString{key, v})
+	case []any:
+		for i, item := range v {
+			out = stringsIn(fmt.Sprintf("%s[%d]", key, i), item, out)
+		}
+	case map[string]any:
+		for _, name := range sortedKeys(v) {
+			out = stringsIn(key+"."+name, v[name], out)
+		}
+	}
+	return out
 }
 
 // enabledPlugins checks the hooks of the plugins c turns on: hooks/hooks.json
