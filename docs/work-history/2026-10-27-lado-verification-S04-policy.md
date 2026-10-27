@@ -64,12 +64,52 @@ HARNESS §14 의 보호 규칙 4개(통합 승인 필수, 기준 브랜치 직�
 
 ## Before — 수행 전 실측
 
-(단계 시작 때 채운다: 시작 HEAD, 환경, 출발점 실측, 앞 단계 메모 중 이 단계 몫)
+- 시작 HEAD `31668c4b3`(`chore(lado): merge the S02 lane`, 브랜치 `lado8/S04`, 트리 깨끗). S01·S02 커밋이 들어 있고 S03(store)은 다른 레인이라 이 브랜치에 없다.
+- 환경: Ubuntu, go1.27.1(스크래치 툴체인), umask 0022, TZ=UTC, `CHAIN_RUN=1`. 실제 `~/.ao`·`~/.claude`·`~/.codex` 는 쓰지 않음(서비스 테스트는 `sqlitetest` 임시 DB).
+- 기준 실측: `defs-unchanged` → `DEFS_UNCHANGED`; `go test -count=1 ./internal/service/ladopolicy/ ./internal/service/ladotask/ ./internal/service/ladoqueue/` ok(5 s).
+- 출발점(코드로 읽음):
+  - `Builtins()` 4개 — `plan.approval.required`, `agent.permission.ceiling`, `git.commit.message.korean`(prompt 만, config `{}`), `setup.change.requires_presence`; 보호 3. `EnsureBuiltins` 는 없는 규칙만 심는다(`EnsureLadoBuiltinRules`).
+  - store 에 `AddLadoRuleVersion(v, base, proof *…, event)` 가 이미 있다: base 번호 확인 + 버전 + (증명) + 감사가 한 트랜잭션, proof 는 nil 가능.
+  - `Compiler = "lado-policy/2"`, `WorkflowGates` 바로 뒤가 `Capabilities`(validators 없음). `Update` 는 보호 규칙의 편집을 거부하고 천장 모드만 `changeCeiling` 으로 바꾼다(presence `rule.protected_change`, 감사 `rule.protected_changed`). `promptText` 는 규칙마다 `### 이름\n\n지침`.
+  - 도메인(S02): 규칙 id 4개, `LadoProtectedPathsConfig`, `DefaultLadoProtectedPaths()`(9개), `LadoProtectedPathsMax`(50), `ValidateLadoProtectedPaths`(error 만 — index 없음), `LadoCommitLocaleConfig`, `DefaultLadoCommitLocaleConfig()`.
+- 앞 단계 메모 중 이 단계 몫: S02 "규칙(S04)" 의 이름을 그대로 쓴다; "빈 글롭·앞뒤 공백 글롭도 거부 — 서비스가 먼저 trim 하면 된다" → 서비스가 trim 한 뒤 검사. S01 메모는 이 단계와 무관(마이그레이션·쿼리 손대지 않음).
 
 ## After — 수행 후 실측
 
-(커밋, 바꾼 것, 엔트리와 다르게 한 것과 이유, 확인한 명령과 결과, 게이트 결과)
+- 커밋: `78204cc6c` feat(lado): the four protected verification gates and lado-policy/3(9 파일, +1012/−105) · 이 엔트리 커밋.
+- 바꾼 것:
+  - `builtins.go`: `builtinDef{rule, previous []domain.LadoRuleContent}`, `builtinDefs()`(시드 순서), `Builtins()` 는 그 rule 들. 8개 = 기존 4 + `integration.approval.required`(workflow, `[workflow_gate, prompt]`), `git.protected_branch.no_direct_write`(git, `[workflow_gate, prompt]`), `test.command.must_pass`(workflow, `[validator, prompt]`), `paths.protected`(git, `[validator, prompt]`, config `{"globs":[기본 9개]}`) — 모두 보호·Global on, 이름·지침은 플랜 §1 o. 한국어 규칙의 현재 내용 = 내장 v2(enforcement `[prompt, validator]`, config = `DefaultLadoCommitLocaleConfig()` 의 JSON), `previous` = v1. 도우미 `configJSON`.
+  - `service.go`: `EnsureBuiltins` 가 심은 뒤 규칙을 다시 읽고, 활성 버전 sha256 이 `previous` 중 하나인 내장 규칙에 현재 내용을 `AddLadoRuleVersion(next, 활성 번호, nil, 감사)` 로 덧붙인다 — 감사 `rule.builtin_upgraded`, actor `lado`, payload `{"from": n, "to": n+1}`. 그 사이 개발자가 고쳤으면(`ErrLadoRuleChanged`) 로그만 남기고 둔다. `UpdateInput.Paths *domain.LadoProtectedPathsConfig`; 보호 규칙 중 천장과 `paths.protected` 만 설정이 바뀐다; `changeProtectedPaths`(trim → `checkProtectedPaths` → 400 `{index, reason}`); 천장과 같은 몸통 `changeSetting`(같은 설정 → 아무것도 안 씀, dry run → 영향만·증명 없음, 증명 없음 403 `LADO_PRESENCE_REQUIRED`, 증명 → 새 버전 actor `human`/`human:dev-presence`, 감사 `rule.protected_changed {from, to, version, proof, dev, reason}`, 재사용 → `LADO_PRESENCE_REPLAYED`). `LADO_RULE_PROTECTED` 문구에 보호 경로를 더함.
+  - `snapshot.go`: `Compiler = "lado-policy/3"`, `WorkflowGates` 바로 뒤 `Validators []SnapshotValidator`(`validators`), `SnapshotValidator{RuleID, Kind, Config json.RawMessage}`, `ValidatorKind` 상수 3개, `snapshotValidator`. 형식·인코딩 주석.
+  - `prompt.go`: `paths.protected` 부분의 지침 끝에 ``\nProtected paths: `g1`, `g2`…``(설정 순서; 글롭이 없으면 줄 없음).
+  - 테스트: 필수 6개 + 기존 기대값(내장 4→8, 보호 3→7, 프롬프트 규칙 = 한국어 + 게이트 4, 박제 `lado-policy/2` → `TestSnapshotFormatIsLadoPolicy3`, `TestBuiltinsAreTheStepFiveCatalog` → `TestBuiltinsIncludeTheVerificationGates` 로 교체, `TestResolveBindings`·`TestResolveCapabilities`·`TestPromptText`·`TestEffectiveBlocksAnUnsupportedAgent`·`TestSnapshotMatchesCurrentSHA`·`TestEnsureBuiltinsSeedsOnce`·`TestDryRunWritesNothing`), 도우미 `newBareServiceFixture`·`seedStepSevenBuiltins`·`upgradeEvents`·`withoutPromptRules`. `daemon/lado_wiring_test.go` 는 8개 규칙·8 entries.
+- 엔트리와 다르게 한 것과 이유:
+  1. store 메서드를 만들지 않았다 — 기존 `AddLadoRuleVersion`(proof nil)이 "버전 + 감사 한 트랜잭션"과 base 번호 확인을 이미 한다. 버전은 불변이라 base 번호가 같으면 비교한 그 내용이 아직 활성이다.
+  2. 감사 `{from, to}` 는 저장된 버전 번호(내장 버전 번호가 아님) — 개발자가 v1 내용으로 되돌려 만든 v3 같은 이력에서도 맞게. 보통은 1→2.
+  3. 없는 한국어 규칙은 내장 v2 의 **내용**을 버전 번호 1 로 심는다(store 가 첫 버전을 1 로 둔다; `rule.created` payload 도 그대로 `{"version":1,"builtin":true}`).
+  4. 보호 경로 지침은 플랜의 "…names them: {globs}." 대신 절차 4대로 고정 문장 "Do not change protected paths unless the approved plan names them." 에 프롬프트가 `Protected paths: …` 한 줄을 붙인다 — 지침(버전 해시)은 그대로, 글롭은 설정을 따른다.
+  5. `{index, reason}` 는 서비스가 계산한다(도메인 함수는 index 를 주지 않음): 빈 목록 `{0, required}`, 50 초과 `{50, too_many}`(넘친 첫 항목 — 검사 명령의 `too_many` 와 같은 방식), 나쁜 글롭 `{i, invalid}`(그 글롭 하나만 도메인 함수로 다시 본 첫 i). 각 글롭을 먼저 trim(S02 메모). 중복 글롭은 거부하지 않는다(도메인 규칙 그대로). 다른 규칙에 `Paths` 를 보내면 같은 코드에 `{rule}`(천장의 `LADO_RULE_CEILING_INVALID {rule}` 와 같은 방식). 도메인은 고치지 않음.
+  6. 천장 변경과 경로 변경의 공통 몸통을 `changeSetting` 으로 뺐다(실제 호출처 2곳). 천장의 동작·문구·감사 payload 는 그대로(기존 천장 테스트 통과, 변이로도 확인).
+  7. `paths.protected` 에 `CeilingMode` → 400 `LADO_RULE_CEILING_INVALID`(설정이 바뀌는 보호 규칙이라 403 이 아니라 "모드 없음"); 다른 보호 규칙에 `Paths` → 403 `LADO_RULE_PROTECTED`(기존 검사 순서 유지).
+  8. validators 는 엔트리 순서(생성 시각, id) — 스냅숏 `rules`·`workflowGates` 와 같은 순서. 세 내장 규칙 밖의 규칙에는 검사기가 없다(사용자 규칙은 validator 를 가질 수 없음).
+  9. 새 게이트 4개가 prompt enforcement 라 이제 모든 태스크의 워커 글이 비지 않는다 → prompt capability 문제의 규칙 목록 = 한국어 + 게이트 4(cursor·fx·gemini 기대값). cursor·fx 는 이미 permission_mode unverified 로 막혀 있어 차단 여부는 같다. "프롬프트 규칙 없음" 경우는 입력에서 prompt 규칙을 빼서(`withoutPromptRules`) 뜻을 지켰다.
+  10. ladotask·ladoqueue 테스트는 고칠 것이 없었다(해시 하드코딩 없음 — `ladoqueue/fakes_test.go` 는 `ladopolicy.Compiler` 와 상수 해시 id 를 쓴다).
+- 테스트 순서: 필수 6개를 구현 뒤에 써서 첫 실행부터 통과했다. 대신 변이 6건으로 실패를 확인: 업그레이드 끔 → `TestEnsureBuiltinsUpgradesAnUnchangedKoreanRule` FAIL; 경로 검증 끔 → `TestProtectedPathsChangeNeedsPresence` FAIL; presence subject 바꿈 → 경로·천장 테스트 FAIL; validators 를 안 넣음 → `TestValidatorsFollowTheOnRules`·`TestSnapshotFormatIsLadoPolicy3` FAIL; 경로 줄을 안 붙임 → `TestProtectedPathsPromptListsGlobs`·`TestPromptText`·형식 FAIL; 다른 규칙의 `Paths` 거부 끔 → 경로 테스트 FAIL. 원본 복구 확인(diff 없음).
+- 확인한 명령과 결과: `go test -count=1 ./...`(backend 전체) 실패 0(2m04s); `go-tests` 필수 6 → `GO_TESTS_OK 6/6`; `go-pkg` 3 패키지 → `GO_PKG_OK`; `go-run` store → `GO_RUN_OK 11`; `go-build` → `GO_BUILD_OK`; `go-lint ./internal/service/ladopolicy/... ./internal/daemon/...` → `GO_LINT_OK`; gofmt 깨끗.
+- 게이트(HEAD `78204cc6c`, 엔트리 커밋 전): `gate-check.sh --run` → GATES=7 MET=7. 엔트리 커밋 뒤 다시 돌려 그 HEAD 에 증거를 남긴다.
 
 ## 비교/회고
 
-(범위 대비 결과, 남은 틈, 다음 단계 메모 — 검사기 kind 이름, 업그레이드 함수, 변경 입력 필드 이름, S15 가 DTO 에 더할 것)
+- 범위 대비 결과: 절차 1~7 전부와 필수 테스트 6개. HTTP DTO·명세(S15), 렌더러(S18), 검사기 실행(S06·S11)은 손대지 않았다. store·domain·마이그레이션 변경 없음.
+- 남은 틈:
+  - `PATCH /lado/rules/{ruleId}` 컨트롤러는 아직 `paths` 를 읽지 않는다(`UpdateInput.Paths` 를 채우지 않음), 규칙 응답 DTO 에 보호 경로가 없다 — S15.
+  - 렌더러 `lib/lado-rules.ts` 표에 새 게이트 4개가 없다 — S18. `LADO_RULE_PROTECTED`·`LADO_PROTECTED_PATHS_INVALID` 의 렌더러 문구 — S16.
+  - 업그레이드는 데몬 시작 때만 돈다. 한국어 규칙이 켜진 승인된 태스크는 업그레이드 뒤 Review required 가 된다(플랜 §1 p 의 의도) — 미리보기는 없다.
+  - 기존 DB 에서 새 게이트 4개는 업그레이드 시각에 생겨 그전 사용자 규칙보다 뒤 순서다(엔트리 순서 = 생성 시각) — 프롬프트·validators 순서가 새 DB 와 다를 수 있다(해시 비교는 같은 DB 안이라 무해).
+  - 글롭 안의 백틱은 프롬프트 줄의 코드 표기를 깬다(검증이 막지 않음; 실제로는 거의 없음).
+- 다음 단계 메모(이름 그대로 쓴다):
+  - **검사기 kind**(`ladopolicy`): `ValidatorKind` = `ValidatorChecksMustPass`(`checks_must_pass`, config `{}`), `ValidatorProtectedPaths`(`protected_paths`, `domain.LadoProtectedPathsConfig`), `ValidatorCommitMessageLocale`(`commit_message_locale`, `domain.LadoCommitLocaleConfig`; 버전 config 가 `{}` 면 기본값이 들어간다). `SnapshotContent.Validators []SnapshotValidator{RuleID, Kind, Config json.RawMessage}`(JSON `ruleId`·`kind`·`config`), 늘 nil 아님, `WorkflowGates` 바로 뒤. S06·S11: 실행 스냅숏을 `json.Unmarshal` 해 `Compiler` 가 `lado-policy/3` 이면 validators 를 읽고, `lado-policy/2` 면 `commit_messages` 는 `not_required`, `paths` 는 `outside_plan` 만(플랜 §1 g·p). 한국어 검사기는 validators 에 `commit_message_locale` 이 있을 때만(규칙 꺼짐·개발자가 고친 v1 규칙이면 없음).
+  - **업그레이드**: `Service.EnsureBuiltins`(데몬 시작 `wireLadoWork`), 정의 `builtinDefs()` / `builtinDef.previous`, 감사 `rule.builtin_upgraded` actor `lado` `{from, to}`(저장 버전 번호). 내장 내용을 또 바꾸면 옛 내용을 `previous` 에 넣는다(`TestBuiltinsIncludeTheVerificationGates` 의 config 바이트 박제가 알려 준다).
+  - **변경 입력**: `ladopolicy.UpdateInput.Paths *domain.LadoProtectedPathsConfig`(나머지는 천장과 같음: `BaseVersion`, `Reason`, `DryRun`, `Presence`). 오류: 400 `LADO_PROTECTED_PATHS_INVALID` details `{index, reason}`(reason `required`·`too_many`·`invalid`) 또는 다른 규칙이면 `{rule}`; 403 `LADO_PRESENCE_REQUIRED`("Change the protected paths in the AO desktop app. It asks you to confirm, then sends the change itself."); 403 `LADO_PRESENCE_REPLAYED`; 409 `LADO_RULE_CHANGED {baseVersion}`. presence 동작 `rule.protected_change`, subject `paths.protected`. 감사 `rule.protected_changed` payload `{from: [...], to: [...], version, proof, dev, reason}`(to 는 trim 된 글롭). 같은 글롭이면 아무것도 안 쓰고 `Applied: true`.
+  - **S15 가 DTO 에 더할 것**: `UpdateLadoRuleRequest` 에 `paths`(`{globs: string[]}`) → `in.Paths`; 규칙·버전 응답에 보호 경로(`ladoRuleCeiling` 처럼 `paths.protected` 일 때만 config 의 globs); 명세 오류에 400 `LADO_PROTECTED_PATHS_INVALID`; 스냅숏 내용을 내보내는 응답이 있으면 `validators` 스키마(`ruleId`, `kind` enum 3개, `config` 객체).
+  - **S16·S18**: 내장 영어 이름(`seedName`) = "Integration approval required", "No direct writes to the base branch", "Tests must pass", "Protected paths". 데스크톱 `changeRule` 은 `PATCH` 본문 `{"baseVersion": n, "paths": {"globs": [...]}}` 에 서명한다. 워커 글의 줄 형식은 `Protected paths: ` + 백틱으로 감싼 글롭을 `, ` 로 이음.
