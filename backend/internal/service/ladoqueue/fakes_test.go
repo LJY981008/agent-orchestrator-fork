@@ -813,19 +813,27 @@ func (f *fakeMemory) readings() int {
 	return f.reads
 }
 
-// fakeGit names one commit for every ref and counts ahead commits from any
-// other, or fails with its errors.
+// fakeGit names one commit for every ref, or the commit refs gives a ref,
+// and counts ahead commits from any other, or fails with its errors. A ref
+// refs gives no commit names none.
 type fakeGit struct {
 	mu       sync.Mutex
 	sha      string
+	refs     map[string]string
 	ahead    int
 	revErr   error
 	countErr error
 }
 
-func (f *fakeGit) RevParse(context.Context, string, string) (string, error) {
+func (f *fakeGit) RevParse(_ context.Context, _, ref string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if sha, ok := f.refs[ref]; ok {
+		if sha == "" {
+			return "", fmt.Errorf("%s names no commit", ref)
+		}
+		return sha, nil
+	}
 	return f.sha, f.revErr
 }
 

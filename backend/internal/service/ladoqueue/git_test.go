@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -82,6 +83,51 @@ func TestDispatchRecordsTheBaseMove(t *testing.T) {
 				if logged := strings.Contains(sf.logs.String(), warning); logged != (warning == c.warning) {
 					t.Fatalf("logged %q: %v, want %v:\n%s", warning, logged, warning == c.warning, sf.logs.String())
 				}
+			}
+		})
+	}
+}
+
+// Decision h of the step 8 plan: the execution records the base branch and
+// remote the worker starts from, which the base branch check reads after the
+// pull request, and the commit of the local branch at dispatch. A repository
+// without the local branch records none, and the worker starts.
+func TestDispatchRecordsTheLocalBase(t *testing.T) {
+	const localSHA = "10ca1ba5e10ca1ba5e10ca1ba5e10ca1ba5e10c"
+	for _, c := range []struct {
+		name  string
+		local string
+		// warned is whether LADO logs it could not read the local branch.
+		warned bool
+	}{
+		{"a local branch", localSHA, false},
+		{"no local branch", "", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.branches.resolved = ports.WorkspaceDefaultBranch{Remote: "upstream", Branch: "develop", BaseRef: "refs/remotes/upstream/develop"}
+			task := testTask()
+			task.Plan.Latest.BaseRef = "develop"
+			f.store.tasks["task-1"] = task
+			f.git.refs = map[string]string{"refs/heads/develop": c.local}
+			f.store.add(testEntry("entry-1", t0.Add(-10*time.Minute)))
+
+			f.tick(t, t0)
+
+			links := f.store.linked()
+			if len(links) != 1 {
+				t.Fatalf("linked %+v, want the worker's execution", links)
+			}
+			exec := links[0]
+			if exec.BaseBranch != "develop" || exec.BaseRemote != "upstream" || exec.DispatchLocalBaseSHA != c.local {
+				t.Fatalf("execution base %q on %q, local %q; want develop on upstream, local %q", exec.BaseBranch, exec.BaseRemote, exec.DispatchLocalBaseSHA, c.local)
+			}
+			// The remote base is read as before.
+			if exec.DispatchBaseSHA != testDispatchSHA {
+				t.Fatalf("execution base at dispatch %q, want %s", exec.DispatchBaseSHA, testDispatchSHA)
+			}
+			if logged := strings.Contains(f.logs.String(), "could not read the local base branch"); logged != c.warned {
+				t.Fatalf("logged the local branch unread: %v, want %v:\n%s", logged, c.warned, f.logs.String())
 			}
 		})
 	}

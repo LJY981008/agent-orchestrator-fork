@@ -63,6 +63,7 @@ func TestDispatchSpawnsAnApprovedTask(t *testing.T) {
 				SessionID: "sess-1", TaskID: "task-1", QueueEntryID: "entry-1", PlanRevisionID: "rev-2",
 				PlanApprovalID: "approval-1", PolicySnapshotID: "snap-1", Attempt: 1, StartedAt: started,
 				DispatchBaseSHA: testDispatchSHA, BaseCommitsAhead: &ahead,
+				BaseBranch: "main", BaseRemote: "origin", DispatchLocalBaseSHA: testDispatchSHA,
 			}
 			if c.deadline > 0 {
 				wantExec.DeadlineAt = started.Add(c.deadline)
