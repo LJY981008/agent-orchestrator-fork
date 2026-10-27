@@ -93,12 +93,60 @@ MERGE-001 과 PRD 관문 7·10: 사람이 데스크톱 확인으로 정확한 he
 
 ## Before — 수행 전 실측
 
-(단계 시작 때 채운다: 시작 HEAD, 환경, 출발점 실측, 앞 단계 메모 중 이 단계 몫)
+- 시작 HEAD `80e690537`(S12 기록 커밋), 브랜치 `feat/lado-verification`, 통합 워크트리. Ubuntu, go1.27.1 linux/amd64. 트리 깨끗함, `defs-unchanged` → `DEFS_UNCHANGED`.
+- 출발점:
+  - `service/pr/action_service.go` `Merge`: 저장된 PR 확인 → 저장된 head 확인(121-123) → `fetchMergeReadiness`(라이브 읽기) → 병합. 거부할 훅 없음, `ActionService` 에 setter 없음.
+  - `httpd/controllers/prs.go` `writePRError`: PR sentinel 6개만 매핑, 그 밖(`*apierr.Error` 포함)은 500 `PR_OPERATION_FAILED`.
+  - `ladoverify.Service`: `verifyHead(ctx, exec, verifyOptions{forceProtection, startWork})`, `postIntegrationStatus` 는 있음. 승인·병합 게이트·라이브 head 포트 없음; `Store` 포트에 승인 메서드 없음. 테스트 가짜 `verifyStore.GetPR` 는 늘 없음, `verifyGit.Fetch` 는 아무것도 안 함.
+  - daemon.go: `ladoVerify` 688, `prReader` 848, `prActions` 851. 태그 대비 diff: action_service.go 0/20, prs.go 0/8, daemon.go 8(S12).
+- 앞 단계 메모 중 이 단계 몫: S11(다시 계산은 `verifyHead(…, {forceProtection: true})`, exec 의 `PR.HeadSHA` 를 라이브 head 로, `startWork` false; 게시는 `postIntegrationStatus`; 승인 행 `pending`/`not_applicable`; 승인 뒤 `Kick()`; `verifyHead` 안에서 다시 부르지 말 것), S12(`lado_verify_wiring.go` 에 `installLadoMergeGate(prActions, prReader, ladoVerify)`, 라이브 head 는 setter), S03(`ApproveLadoIntegration` 의 거절 순서 replayed → already → changed, 다시 계산한 기록을 먼저 저장; `LadoPresenceProofUsed`), S05(`Fetch` 뒤 `EvaluateBase`), S08(`redactedErrorLine`), S02(`ConfirmCodes()`, presence 동작 `integration.approve`).
 
 ## After — 수행 후 실측
 
-(커밋, 바꾼 것, 엔트리와 다르게 한 것과 이유, 확인한 명령과 결과, 게이트 결과)
+- 커밋: `9d9982362 feat(lado): integration approval, the lado/integration status and the merge gate`(코드·테스트), 이 엔트리는 그 뒤 커밋.
+- 바꾼 것:
+  - `ports/lado_merge_gate.go`(새): `LadoMergeGate.AuthorizeMerge(ctx, pr, headSHA)`.
+  - `service/pr/lado_merge_gate.go`(새): `(*ActionService).SetMergeGate`(`atomic.Pointer`, nil = 업스트림), `ladoMergeGate.authorize`, `LadoSCMRef(pr)`(병합 경로의 `scmRepoForPR` 로 만든 참조). `action_service.go`(diff 5/20): 필드 `ladoMerge` + 저장된 head 확인 바로 뒤·라이브 읽기 앞의 호출.
+  - `httpd/controllers/prs.go`(diff 5/8): `writePRError` 맨 앞에서 `*apierr.Error` 는 `envelope.WriteError`.
+  - `service/ladoverify/approve.go`(새): `ApproveInput`, `ApproveResult`, `ApproveIntegration` — 실제 요청은 증명(`integration.approve`, `<session>@<head>`)과 nonce 재사용 확인이 먼저, 그다음 실행·PR(`GetPR` 의 AO 행)·`LiveHead`·기준 브랜치 fetch·보호 강제 읽기·기록 다시 계산과 저장; dry run 은 기록·해시·확인 코드; 실제는 해시 → wait·fail → 확인 코드 → 기존 승인 순으로 거절, 통과하면 `ApproveLadoIntegration`(GitHub `pending`/GitLab `not_applicable`, 감사 `integration.approved`) → GitHub 면 `postIntegrationStatus` 한 번 → `Kick()`.
+  - `service/ladoverify/mergegate.go`(새): `AuthorizeMerge` — 실행의 PR 은 그 head·그 PR 의 승인이 있어야, 실행이 아닌 세션은 LADO 모드 프로젝트면 거절, 그 밖은 nil, 읽기 오류는 500.
+  - `service/ladoverify/livehead.go`(새): 포트 `LiveHeads`, `SetLiveHeads`.
+  - `service/ladoverify/service.go`: `Store` 에 `LadoPresenceProofUsed`·`ApproveLadoIntegration`·`GetLadoIntegrationApproval`·`LadoProjectSettings`, `Service.liveHeads`. `record.go`: `verifyOptions.fetchBase` 와 `fetchBase`(기준 브랜치, 다르면 PR 대상도; 실패는 로그).
+  - `daemon/lado_verify_wiring.go`: `installLadoMergeGate(actions, reader, verify)`, 어댑터 `ladoLiveHeads`(`prsvc.LadoSCMRef` → `FetchPullRequests` 한 건 → head). `daemon.go` 한 줄(prActions 블록 바로 뒤), 태그 대비 9.
+  - 테스트: ladoverify `approve_test.go`(필수 5)·`mergegate_test.go`(필수 1); pr `lado_merge_gate_test.go`(`TestMergeAsksTheGate`); controllers `prs_lado_test.go`(`TestPRMergeRendersLadoRefusal`); daemon `lado_merge_gate_wiring_test.go`(보조 2: 실제 store 로 AO 병합 409 → 승인 저장 → 병합, 라이브 head 어댑터). `service_test.go` 가짜 확장: `newVerifyFixture(t, adjust...)`, `verifyStore` 의 `proofs`·`ladoModes`, `GetPR` 이 실행의 PR 행을 답함, `verifyGit` 이 저장소별 작업 순서(`opsOf`)를 남기고 `Fetch` 도 기록.
+- 엔트리와 다르게 한 것과 이유:
+  1. setter·게이트 보관은 `action_service.go` 가 아니라 새 LADO 파일 `service/pr/lado_merge_gate.go` 에: 업스트림 파일은 필드 2줄 + 호출 3줄로 줄고, 다른 LADO setter(`session_manager/lado_gate.go`, `chat/lado_gate.go`)와 같은 자리다.
+  2. 라이브 head 어댑터의 SCM 참조는 `prsvc.LadoSCMRef`(새 LADO 파일에서 비공개 `scmRepoForPR` 를 감쌈) — "병합 경로가 쓰는 것과 같은" 참조를 복제 없이.
+  3. 라이브 head 포트는 `Deps` 가 아니라 `SetLiveHeads`: `prReader` 가 검증 서비스 뒤에 생긴다(S12 메모). 리더가 없거나 읽기가 실패하면 503 `LADO_VERIFY_UNAVAILABLE`(오류 원문은 로그만).
+  4. fetch 는 `verifyHead` 의 옵션 `fetchBase` 로, `headInputs` 뒤·평가 앞에: 저장소 폴더·원격·브랜치를 `headInputs` 가 정한다. 기준 브랜치와 PR 대상이 다르면 둘 다 fetch 한다(merge-base 가 대상을 읽음).
+  5. 실행이 없으면 404 `LADO_EXECUTION_NOT_FOUND`(ladoqueue 와 같은 코드), 병합·닫힌 PR 과 AO 행이 없는 PR 도 409 `LADO_EXECUTION_NO_PR`. 다른 PR URL 의 `LADO_INTEGRATION_HEAD_CHANGED` 세부에는 `prUrl`·`currentPrUrl` 도 넣었다.
+  6. 요청 head 는 trim·소문자로 맞춘 뒤 증명 subject·비교·저장에 쓴다; 병합 게이트도 소문자로 비교한다.
+  7. 병합 게이트는 승인의 PR URL 도 본다(같은 세션·같은 head 의 다른 PR 은 409). AO 에 기록이 없는 세션의 PR 은 프로젝트를 알 수 없어 nil(`pr.session_id` 는 CASCADE FK 라 실제로는 없음). 실행의 PR 은 프로젝트 모드와 상관없이 게이트를 지난다.
+  8. GitLab 승인은 이미 `not_applicable` 이라 `postIntegrationStatus` 를 부르지 않는다(쓰기 없음).
+  9. "아무것도 읽지 않음" 은 의존성이 nil 인 서비스(읽으면 panic)로 증명하고, 픽스처로 기록·git·호스트·라이브 head 읽기·승인·감사가 없음을 본다. 필수 밖 보조 테스트 2개(데몬)를 더했다 — 가짜만으로는 실제 store 의 승인 트랜잭션과 게이트 읽기가 맞물리는지 못 보므로.
+- 확인한 명령과 결과:
+  - 게이트 G0~G6(코드 커밋 뒤): `DEFS_UNCHANGED`, `GO_TESTS_OK 6/6`, `GO_TESTS_OK 1/1`, `GO_PKG_OK`, `GO_RUN_OK 12`, `BUDGET_OK 5/20`·`BUDGET_OK 5/8`, `GO_BUILD_OK`.
+  - `go-pkg-isolated ./internal/service/ladoverify/` → `GO_PKG_OK`; `go-race-isolated ./internal/service/ladoverify/ ./internal/service/pr/` → `GO_RACE_OK`; `go-lint` (ladoverify·pr·ports·controllers·daemon) → `GO_LINT_OK`.
+  - `go test -count=1 ./internal/httpd/...` → 전부 ok(`TestRouteSpecParity` 포함); `go test -count=1 ./internal/daemon/ ./internal/service/ladotask/ ./internal/service/ladoqueue/` → ok.
+  - 변이 확인: `fetchBase` 호출을 지우면 `TestIntegrationApprovalRecordsAndPostsStatus` 가 "git operations = [merge-base …], want each request to start with the fetch of origin main" 으로 실패(되돌림).
+- 게이트: 코드 커밋에서 G0~G6 MET, G7 은 이 엔트리 커밋 뒤 `gate-check.sh --run` 으로 확인·기록.
 
 ## 비교/회고
 
-(범위 대비 결과, 남은 틈, 다음 단계 메모 — 오류 코드와 세부 키, S15 가 쓸 메서드, 업스트림 줄 수)
+- 범위 대비 결과: 엔트리 절차 1~6 전부, 필수 테스트 8개 + 보조 2개(daemon). HTTP 라우트(S15)·데스크톱 채널(S16)·명세는 손대지 않았다. 범위 밖 변경은 기존 ladoverify 테스트 가짜의 확장뿐.
+- 남은 틈:
+  - 승인이 기록을 다시 계산·저장한 뒤 저장 트랜잭션 전에 루프가 같은 head 의 다른 기록을 저장하면 409 `LADO_VERIFICATION_CHANGED` — 올바른 거절이지만 개발자는 다시 확인해야 한다.
+  - fetch(최대 30 s)와 보호 읽기를 `verifyMu` 안에서 하므로 승인 요청 동안 루프 패스가 기다린다.
+  - 호스트 오류 문구가 요청마다 바뀌면(요청 id 를 담는 오류 등) `protection_unknown` 세부가 달라져 dry run 과 승인의 해시가 어긋나고 승인이 계속 `LADO_VERIFICATION_CHANGED` 가 될 수 있다. 실측 없음.
+  - 실제 요청은 라이브 head 만 비교하고(엔트리대로) 저장된 head 는 dry run 만 비교한다.
+  - `LADO_VERIFY_UNAVAILABLE` 는 SCM 제공자 없음과 호스트 읽기 실패를 같은 코드로 낸다(문구만 다름).
+  - AO 병합 라우트의 OpenAPI 에 409 `LADO_INTEGRATION_APPROVAL_REQUIRED`·500 `LADO_MERGE_GATE_FAILED` 가 아직 없다(S15). 실제 GitHub 규칙셋 위의 병합 확인은 수동(플랜 §1 Out).
+- 다음 단계 메모:
+  - **S15 가 쓸 메서드**: `(*ladoverify.Service).ApproveIntegration(ctx, ladoverify.ApproveInput{SessionID, PRURL, HeadSHA, VerificationSHA256, Acknowledge, DryRun, Presence})` → `ladoverify.ApproveResult{Verification domain.LadoVerification, SHA256 string, Confirm []string, Approval *domain.LadoIntegrationApproval}`(dry run 이면 `Approval` nil). `Presence` 는 실제 요청에서 다른 무엇보다 먼저 한 번 불린다(동작 `integration.approve`, subject `<sessionId>@<소문자 headSha>`); dry run 은 부르지 않는다 — 컨트롤러는 dry run 이 아닐 때만 증명 확인 closure 를 넘기면 된다. 오류는 모두 `*apierr.Error` 라 `envelope.WriteError` 그대로.
+  - **오류 코드와 세부 키**: 403 `LADO_PRESENCE_REQUIRED`(Presence nil), 증명 확인 오류는 그대로(`LADO_PRESENCE_INVALID`·`EXPIRED`·`UNAVAILABLE`), 403 `LADO_PRESENCE_REPLAYED`; 404 `LADO_EXECUTION_NOT_FOUND`; 409 `LADO_EXECUTION_NO_PR` `{sessionId}`(PR 없음·병합·닫힘); 409 `LADO_INTEGRATION_HEAD_CHANGED` `{headSha, currentHeadSha}`(PR 이 다르면 `prUrl`, `currentPrUrl` 도); 503 `LADO_VERIFY_UNAVAILABLE`; 500 `LADO_VERIFY_FAILED`; 409 `LADO_VERIFICATION_CHANGED`(세부 없음); 409 `LADO_INTEGRATION_NOT_READY` `{reasons}`(wait·fail 항목 코드, 항목 순서, 중복 없음, `verifying` 가능); 400 `LADO_INTEGRATION_ACK_MISMATCH` `{required, given}`(둘 다 정렬·중복 없음·null 아님); 409 `LADO_INTEGRATION_ALREADY_APPROVED`(세부 없음). 병합 라우트: 409 `LADO_INTEGRATION_APPROVAL_REQUIRED` `{prUrl, headSha, sessionId}`, 500 `LADO_MERGE_GATE_FAILED`.
+  - **승인 응답에 실을 것**: 승인 id 접두 `lado-integration-`, `Actor` `human`/`human:dev-presence`, `Acknowledged` = 확인 코드, 바로 게시한 뒤의 상태 `posted`(시도 1, 게시 시각) / `failed`(시도 1, 한 줄 오류) / `pending`(게시 결과를 기록하지 못함 — 루프가 다시) / `not_applicable`(GitLab, 시도 0). 감사 `integration.approved`, subject kind `execution`, payload `{task, session, pr, head, verification, acknowledged, proof, dev}`. dry run 도 기록을 저장한다(루프와 같은 행).
+  - **S16**: 데스크톱은 dry run 의 `prUrl`·`headSha`·`verificationSha256`·`confirm`(= `acknowledge`) 로 본문에 서명한다. dry run 은 PR 의 저장된 head 와 라이브 head 가 모두 요청과 같아야 통과한다.
+  - **업스트림 줄 수**(태그 대비): `action_service.go` 5/20, `prs.go` 5/8, `daemon.go` 9(S12 8 + 1).
+  - **배선**: `ladoverify.Service` 가 `ports.LadoMergeGate`; 데몬 `installLadoMergeGate(prActions, prReader, ladoVerify)`; `prsvc.(*ActionService).SetMergeGate`, `prsvc.LadoSCMRef`.
+  - **패키지 안 새 이름**(뒤 단계 충돌 주의): ladoverify `ApproveInput`, `ApproveResult`, `ApproveIntegration`, `integrationPresence`, `integrationExecution`, `approvable`, `recordApproval`, `notReadyReasons`, `codeSet`, `noOpenPR`, `headChanged`, `verificationChanged`, `alreadyApproved`, `verifyFailed`, `AuthorizeMerge`, `inLadoProject`, `approvalRequired`, `mergeGateFailed`, `LiveHeads`, `SetLiveHeads`, `liveHeadReader`, `fetchBase`; 테스트 `approveFixture`, `newApproveFixture`, `approveHeads`, `presenceProof`, `requireAPIError`, `requireDetails`, `proofBlindStore`, `failingGateStore`, `failingSessions`, `errGateRead`, `verifyStore` 의 `setLadoMode`·`approvalCount`, `verifyReads.addSession`, `verifyGit.opsOf`. daemon `ladoMergeGated`, `installLadoMergeGate`, `ladoPRReader`, `ladoLiveHeads`, 테스트 `ladoSCM`. pr `ladoMergeGate`, `LadoSCMRef`, 테스트 `fakeLadoMergeGate`, `countingSCMAction`.
+  - **S19(문서)**: 다르게 한 것 3·5·7·8(503 코드, 병합·닫힌 PR, 게이트의 PR URL 확인·기록 없는 세션, GitLab 게시 없음)과 dry run 의 저장된 head 비교를 TDD §7·§13 에 적을 것.
