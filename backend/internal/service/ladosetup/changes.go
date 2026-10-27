@@ -252,7 +252,20 @@ func (s *Service) Apply(ctx context.Context, c Change, presence func(action, sub
 		// The drift functions take the write lock themselves.
 		return s.applyDrift(ctx, c, sum, presence)
 	}
+	ap := approval{actor: actorAPI}
 	if !c.DryRun {
+		// The desktop app's proof lives a minute, so it is checked first, as
+		// an adoption's is: before the wait for the write lock and the
+		// conflict and impact checks, which can take longer.
+		first, err := s.prepare(ctx, c)
+		if err != nil {
+			return ChangeResult{}, err
+		}
+		if first.needsPresence && !first.noop {
+			if ap, err = s.changeApproval(ctx, presence, sum); err != nil {
+				return ChangeResult{}, err
+			}
+		}
 		// The checks and the write see the same setup: no adoption or other
 		// change lands in between.
 		if err := s.lockWrite(ctx); err != nil {
@@ -269,16 +282,16 @@ func (s *Service) Apply(ctx context.Context, c Change, presence func(action, sub
 		res.Applied = !c.DryRun
 		return res, nil
 	}
+	if !c.DryRun && p.needsPresence && ap.proof.Nonce == "" {
+		// The item changed while the change waited for the lock.
+		if ap, err = s.changeApproval(ctx, presence, sum); err != nil {
+			return ChangeResult{}, err
+		}
+	}
 	s.preview(ctx, p.scope, p.change, &res)
 	if c.DryRun {
 		p.hideNewIDs(&res)
 		return res, nil
-	}
-	ap := approval{actor: actorAPI}
-	if p.needsPresence {
-		if ap, err = changeApproval(presence, sum); err != nil {
-			return ChangeResult{}, err
-		}
 	}
 	// From the first write on, the change runs to its end.
 	ctx = context.WithoutCancel(ctx)
@@ -880,7 +893,7 @@ func (ap approval) storedProof() *domain.LadoPresenceProof {
 }
 
 // changeApproval takes the desktop app's confirmation of a change.
-func changeApproval(presence func(action, subject string) (domain.LadoPresenceProof, error), sum string) (approval, error) {
+func (s *Service) changeApproval(ctx context.Context, presence func(action, subject string) (domain.LadoPresenceProof, error), sum string) (approval, error) {
 	if presence == nil {
 		return approval{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED",
 			"Make this change in the AO desktop app. It can run commands or widen access, so the app asks you to confirm it.")
@@ -888,6 +901,15 @@ func changeApproval(presence func(action, subject string) (domain.LadoPresencePr
 	proof, err := presence(domain.LadoPresenceSetupChange, sum)
 	if err != nil {
 		return approval{}, err
+	}
+	// The store refuses a reused proof when it records the change; this
+	// refuses it before any check runs.
+	used, err := s.deps.Store.LadoPresenceProofUsed(ctx, proof.Nonce)
+	if err != nil {
+		return approval{}, err
+	}
+	if used {
+		return approval{}, ladopresence.Replayed()
 	}
 	return approvalOf(proof), nil
 }
@@ -968,17 +990,18 @@ func (s *Service) applyDrift(ctx context.Context, c Change, sum string, presence
 		change.Content = mc.blobs[0]
 	}
 	res.NeedsPresence = s.versionNeedsPresence(it, latest) || managedNeedsPresence(it, mc)
+	ap := approval{actor: actorAPI}
+	if !c.DryRun && res.NeedsPresence {
+		// Before the conflict and impact checks, which can outlast the proof.
+		if ap, err = s.changeApproval(ctx, presence, sum); err != nil {
+			return ChangeResult{}, err
+		}
+	}
 	s.preview(ctx, scopeRef{}, change, &res)
 	if c.DryRun {
 		v.ID = ""
 		res.Version = &v
 		return res, nil
-	}
-	ap := approval{actor: actorAPI}
-	if res.NeedsPresence {
-		if ap, err = changeApproval(presence, sum); err != nil {
-			return ChangeResult{}, err
-		}
 	}
 	kept, err := s.keepDrift(ctx, it.ID, c.DriftSHA256, ap)
 	if err != nil {

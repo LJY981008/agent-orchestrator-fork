@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
@@ -194,6 +195,17 @@ const freshSkill = "---\nname: fresh\ndescription: Does fresh things\n---\nUse i
 // impactPolicy stands in for the rule policy: it answers every change with
 // one project and keeps the changes it saw.
 type impactPolicy struct{ seen []ladopolicy.SetupChange }
+
+// expiringPolicy tells when a change's impact was computed.
+type expiringPolicy struct {
+	impactPolicy
+	computed bool
+}
+
+func (p *expiringPolicy) ImpactOfSetupChange(ctx context.Context, change ladopolicy.SetupChange) (ladopolicy.Impact, error) {
+	p.computed = true
+	return p.impactPolicy.ImpactOfSetupChange(ctx, change)
+}
 
 func (p *impactPolicy) ImpactOfSetupChange(_ context.Context, change ladopolicy.SetupChange) (ladopolicy.Impact, error) {
 	p.seen = append(p.seen, change)
@@ -543,6 +555,51 @@ func TestEveryChangeToCodeRunningItemsNeedsPresence(t *testing.T) {
 			return domain.LadoPresenceProof{Nonce: "dev-abcdefghijklmnop", Action: action, SubjectID: subject, Dev: true, ExpiresAt: scanAt, UsedAt: scanAt}, nil
 		})
 	wantAPIError(t, err, "LADO_PRESENCE_REPLAYED")
+
+	// The proof lives a minute and is checked before the conflict and impact
+	// checks, which can take longer: a proof that stops verifying once the
+	// impact is computed still makes the change.
+	t.Run("the proof is checked before the slow checks", func(t *testing.T) {
+		ctx := context.Background()
+		f := newChangeFixture(t)
+		ids := f.adopt(claudeMove(domain.LadoSetupKindSetting, "hooks"), claudeMove(domain.LadoSetupKindHookScript, "check.sh"))
+		policy := &expiringPolicy{}
+		f.svc.SetPolicy(policy)
+		apply := func(c Change) {
+			t.Helper()
+			policy.computed = false
+			fresh := f.presence()
+			res, err := f.svc.Apply(ctx, c, func(action, subject string) (domain.LadoPresenceProof, error) {
+				if policy.computed {
+					return domain.LadoPresenceProof{}, apierr.Forbidden("LADO_PRESENCE_INVALID", "The confirmation expired.")
+				}
+				return fresh(action, subject)
+			})
+			if err != nil || !res.Applied || res.Actor != actorHuman || !policy.computed {
+				t.Fatalf("%s = %+v (%v), impact computed %v", c.Op, res, err, policy.computed)
+			}
+		}
+		apply(Change{Op: OpEdit, ItemID: ids["hooks"], BaseVersion: 1, Content: json.RawMessage(`{"Stop":[]}`)})
+		apply(Change{Op: OpBinding, ItemID: ids["check.sh"], Binding: global(domain.LadoBindingOff)})
+		f.writeMode(filepath.Join(f.state, "lado", "harness", "claude", "hooks", "check.sh"), "#!/bin/sh\nexit 5\n", 0o700)
+		apply(Change{Op: OpDriftKeep, ItemID: ids["check.sh"], DriftSHA256: sumOf([]byte("#!/bin/sh\nexit 5\n"))})
+		apply(Change{Op: OpDelete, ItemID: ids["check.sh"]})
+		// A proof used once is refused before any check runs.
+		policy.computed = false
+		proof := f.presence()
+		c := Change{Op: OpEdit, ItemID: ids["hooks"], BaseVersion: 2, Content: json.RawMessage(`{"Stop":[{"hooks":[]}]}`)}
+		if _, err := f.svc.Apply(ctx, c, proof); err != nil {
+			t.Fatal(err)
+		}
+		policy.computed = false
+		c.BaseVersion, c.Content = 3, json.RawMessage(`{}`)
+		_, err := f.svc.Apply(ctx, c, proof)
+		wantAPIError(t, err, "LADO_PRESENCE_REPLAYED")
+		if policy.computed {
+			t.Fatal("a reused proof ran the impact check")
+		}
+	})
+
 }
 
 // Plan §12: an edit names the version it started from. Another version in
