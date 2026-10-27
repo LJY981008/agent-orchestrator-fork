@@ -221,7 +221,8 @@ ORDER BY e.task_id, e.started_at DESC, e.session_id DESC;
 -- name: ListLiveLadoExecutions :many
 -- Executions whose session still runs, oldest first.
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
-    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.settled_at
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE s.is_terminated = 0
@@ -247,7 +248,8 @@ ORDER BY project_id;
 -- Executions past their deadline whose session still runs. A NULL deadline
 -- means no limit.
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
-    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.settled_at
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE e.deadline_at <= sqlc.arg(now)

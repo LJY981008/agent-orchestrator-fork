@@ -11,7 +11,7 @@ import (
 )
 
 const getLadoProjectSettings = `-- name: GetLadoProjectSettings :one
-SELECT project_id, lado_mode, updated_at, max_concurrent
+SELECT project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes
 FROM lado_project_settings
 WHERE project_id = ?
 `
@@ -24,6 +24,8 @@ func (q *Queries) GetLadoProjectSettings(ctx context.Context, projectID string) 
 		&i.LadoMode,
 		&i.UpdatedAt,
 		&i.MaxConcurrent,
+		&i.CheckCommands,
+		&i.CheckTimeoutMinutes,
 	)
 	return i, err
 }
@@ -34,7 +36,7 @@ VALUES (?, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET
     lado_mode = excluded.lado_mode,
     updated_at = excluded.updated_at
-RETURNING project_id, lado_mode, updated_at, max_concurrent
+RETURNING project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes
 `
 
 type UpsertLadoProjectSettingsParams struct {
@@ -51,6 +53,8 @@ func (q *Queries) UpsertLadoProjectSettings(ctx context.Context, arg UpsertLadoP
 		&i.LadoMode,
 		&i.UpdatedAt,
 		&i.MaxConcurrent,
+		&i.CheckCommands,
+		&i.CheckTimeoutMinutes,
 	)
 	return i, err
 }
