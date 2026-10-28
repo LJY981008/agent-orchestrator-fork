@@ -57,8 +57,8 @@
 - [ ] S19-G4: LADO.md·LADO.ko.md 8행 진행 중
   CHECK: bash .claude/gate/lado-verification.sh has LADO.md "In progress" && bash .claude/gate/lado-verification.sh has LADO.ko.md "진행 중"
   EXPECT: HAS_OK
-- [ ] S19-G5: 이 단계는 코드를 바꾸지 않았다(백엔드·프런트엔드 소스가 직전 단계 커밋과 같다)
-  CHECK: bash -c 'base=$(git log -1 --format=%H -- docs/work-history/2026-10-27-lado-verification-S18-project-ui.md); [ -n "$base" ] && git diff --quiet "$base" HEAD -- backend frontend packages && echo DOCS_ONLY'
+- [ ] S19-G5: 이 단계는 코드를 바꾸지 않았다(백엔드·프런트엔드 소스가 S18 레인 병합 커밋과 같다)
+  CHECK: bash -c 'base=$(git log -1 --format=%H --grep="merge the S18 lane"); [ -n "$base" ] && git diff --quiet "$base" HEAD -- backend frontend packages && echo DOCS_ONLY'
   EXPECT: DOCS_ONLY
 - [ ] S19-G6: 미커밋 변경 없음
   CHECK: bash .claude/gate/lado-verification.sh tree-clean
