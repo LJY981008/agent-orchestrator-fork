@@ -9,7 +9,42 @@ import (
 	"context"
 	"database/sql"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+const beginLadoPlanWorkerAttempt = `-- name: BeginLadoPlanWorkerAttempt :one
+UPDATE lado_plan_requests
+SET worker_attempts = worker_attempts + 1
+WHERE id = ? AND kind = 'worker' AND worker_started_at IS NULL AND failed_at IS NULL AND cleaned_at IS NULL
+RETURNING worker_attempts
+`
+
+func (q *Queries) BeginLadoPlanWorkerAttempt(ctx context.Context, id string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, beginLadoPlanWorkerAttempt, id)
+	var worker_attempts int64
+	err := row.Scan(&worker_attempts)
+	return worker_attempts, err
+}
+
+const cleanLadoPlanRequest = `-- name: CleanLadoPlanRequest :execrows
+UPDATE lado_plan_requests
+SET cleaned_at = ?
+WHERE id = ? AND kind = 'worker' AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type CleanLadoPlanRequestParams struct {
+	CleanedAt sql.NullTime
+	ID        string
+}
+
+func (q *Queries) CleanLadoPlanRequest(ctx context.Context, arg CleanLadoPlanRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cleanLadoPlanRequest, arg.CleanedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
 
 const countLadoPlanRevisionsForTask = `-- name: CountLadoPlanRevisionsForTask :one
 SELECT COUNT(*) FROM lado_plan_revisions WHERE task_id = ?
@@ -47,11 +82,24 @@ func (q *Queries) CountPinnedLadoArtifactVersion(ctx context.Context, arg CountP
 	return count, err
 }
 
+const countRunningLadoPlanWorkers = `-- name: CountRunningLadoPlanWorkers :one
+SELECT COUNT(*)
+FROM lado_plan_requests
+WHERE kind = 'worker' AND worker_started_at IS NOT NULL AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+func (q *Queries) CountRunningLadoPlanWorkers(ctx context.Context) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countRunningLadoPlanWorkers)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const failLadoPlanRequest = `-- name: FailLadoPlanRequest :execrows
 UPDATE lado_plan_requests
 SET failed_at = ?,
     delivery_error = ?
-WHERE id = ? AND delivered_at IS NULL AND failed_at IS NULL
+WHERE id = ? AND kind = 'orchestrator' AND delivered_at IS NULL AND failed_at IS NULL
 `
 
 type FailLadoPlanRequestParams struct {
@@ -68,9 +116,102 @@ func (q *Queries) FailLadoPlanRequest(ctx context.Context, arg FailLadoPlanReque
 	return result.RowsAffected()
 }
 
+const failLadoPlanWorkerRequest = `-- name: FailLadoPlanWorkerRequest :execrows
+UPDATE lado_plan_requests
+SET failed_at = ?,
+    failure_code = ?,
+    delivery_error = ?
+WHERE id = ? AND kind = 'worker' AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type FailLadoPlanWorkerRequestParams struct {
+	FailedAt      sql.NullTime
+	FailureCode   string
+	DeliveryError string
+	ID            string
+}
+
+func (q *Queries) FailLadoPlanWorkerRequest(ctx context.Context, arg FailLadoPlanWorkerRequestParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, failLadoPlanWorkerRequest,
+		arg.FailedAt,
+		arg.FailureCode,
+		arg.DeliveryError,
+		arg.ID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const finishLadoPlanCritique = `-- name: FinishLadoPlanCritique :execrows
+UPDATE lado_plan_critiques
+SET state = ?,
+    failure_reason = ?,
+    findings_json = ?,
+    finished_at = ?
+WHERE lado_plan_critiques.request_id = ? AND lado_plan_critiques.attempt = ?
+    AND lado_plan_critiques.state = 'running'
+`
+
+type FinishLadoPlanCritiqueParams struct {
+	State         string
+	FailureReason string
+	FindingsJson  string
+	FinishedAt    sql.NullTime
+	RequestID     string
+	Attempt       int64
+}
+
+func (q *Queries) FinishLadoPlanCritique(ctx context.Context, arg FinishLadoPlanCritiqueParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, finishLadoPlanCritique,
+		arg.State,
+		arg.FailureReason,
+		arg.FindingsJson,
+		arg.FinishedAt,
+		arg.RequestID,
+		arg.Attempt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const getLadoPlanCritique = `-- name: GetLadoPlanCritique :one
+SELECT id, request_id, attempt, session_id, state, skip_reason, failure_reason, findings_json, started_at, finished_at
+FROM lado_plan_critiques
+WHERE request_id = ? AND attempt = ?
+`
+
+type GetLadoPlanCritiqueParams struct {
+	RequestID string
+	Attempt   int64
+}
+
+func (q *Queries) GetLadoPlanCritique(ctx context.Context, arg GetLadoPlanCritiqueParams) (LadoPlanCritique, error) {
+	row := q.db.QueryRowContext(ctx, getLadoPlanCritique, arg.RequestID, arg.Attempt)
+	var i LadoPlanCritique
+	err := row.Scan(
+		&i.ID,
+		&i.RequestID,
+		&i.Attempt,
+		&i.SessionID,
+		&i.State,
+		&i.SkipReason,
+		&i.FailureReason,
+		&i.FindingsJson,
+		&i.StartedAt,
+		&i.FinishedAt,
+	)
+	return i, err
+}
+
 const getLadoPlanRequest = `-- name: GetLadoPlanRequest :one
 SELECT id, task_id, session_id, issue_snapshot_sha256, source_comment_id, note,
-    based_on_revision_id, requested_at, delivered_at, delivery_attempts, delivery_error, failed_at
+    based_on_revision_id, requested_at, delivered_at, delivery_attempts, delivery_error, failed_at,
+    kind, waiting_reason, worker_attempts, worker_started_at, draft_sha256, draft_submitted_at,
+    feedback_sent_at, final_sha256, submitted_at, fix_requested_at, reminded_at, cleaned_at, failure_code
 FROM lado_plan_requests
 WHERE id = ?
 `
@@ -91,6 +232,19 @@ func (q *Queries) GetLadoPlanRequest(ctx context.Context, id string) (LadoPlanRe
 		&i.DeliveryAttempts,
 		&i.DeliveryError,
 		&i.FailedAt,
+		&i.Kind,
+		&i.WaitingReason,
+		&i.WorkerAttempts,
+		&i.WorkerStartedAt,
+		&i.DraftSha256,
+		&i.DraftSubmittedAt,
+		&i.FeedbackSentAt,
+		&i.FinalSha256,
+		&i.SubmittedAt,
+		&i.FixRequestedAt,
+		&i.RemindedAt,
+		&i.CleanedAt,
+		&i.FailureCode,
 	)
 	return i, err
 }
@@ -120,6 +274,35 @@ func (q *Queries) GetLadoPlanRevision(ctx context.Context, id string) (LadoPlanR
 		&i.IssueSnapshotSha256,
 		&i.ProblemsJson,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getLadoPlanRevisionMetrics = `-- name: GetLadoPlanRevisionMetrics :one
+SELECT revision_id, request_id, design_ms, critique_ms, revise_ms, review, p1_count, major_count,
+    minor_count, addressed_count, not_addressed_count, sessions_json, change_kinds_json, updated_at
+FROM lado_plan_revision_metrics
+WHERE revision_id = ?
+`
+
+func (q *Queries) GetLadoPlanRevisionMetrics(ctx context.Context, revisionID string) (LadoPlanRevisionMetric, error) {
+	row := q.db.QueryRowContext(ctx, getLadoPlanRevisionMetrics, revisionID)
+	var i LadoPlanRevisionMetric
+	err := row.Scan(
+		&i.RevisionID,
+		&i.RequestID,
+		&i.DesignMs,
+		&i.CritiqueMs,
+		&i.ReviseMs,
+		&i.Review,
+		&i.P1Count,
+		&i.MajorCount,
+		&i.MinorCount,
+		&i.AddressedCount,
+		&i.NotAddressedCount,
+		&i.SessionsJson,
+		&i.ChangeKindsJson,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -213,13 +396,50 @@ func (q *Queries) InsertLadoPlanApproval(ctx context.Context, arg InsertLadoPlan
 	return i, err
 }
 
+const insertLadoPlanCritique = `-- name: InsertLadoPlanCritique :exec
+INSERT INTO lado_plan_critiques (
+    id, request_id, attempt, session_id, state, skip_reason, failure_reason, findings_json, started_at, finished_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertLadoPlanCritiqueParams struct {
+	ID            string
+	RequestID     string
+	Attempt       int64
+	SessionID     string
+	State         string
+	SkipReason    string
+	FailureReason string
+	FindingsJson  string
+	StartedAt     time.Time
+	FinishedAt    sql.NullTime
+}
+
+func (q *Queries) InsertLadoPlanCritique(ctx context.Context, arg InsertLadoPlanCritiqueParams) error {
+	_, err := q.db.ExecContext(ctx, insertLadoPlanCritique,
+		arg.ID,
+		arg.RequestID,
+		arg.Attempt,
+		arg.SessionID,
+		arg.State,
+		arg.SkipReason,
+		arg.FailureReason,
+		arg.FindingsJson,
+		arg.StartedAt,
+		arg.FinishedAt,
+	)
+	return err
+}
+
 const insertLadoPlanRequest = `-- name: InsertLadoPlanRequest :one
 INSERT INTO lado_plan_requests (
     id, task_id, session_id, issue_snapshot_sha256, source_comment_id, note,
-    based_on_revision_id, requested_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    based_on_revision_id, requested_at, kind
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id, task_id, session_id, issue_snapshot_sha256, source_comment_id, note,
-    based_on_revision_id, requested_at, delivered_at, delivery_attempts, delivery_error, failed_at
+    based_on_revision_id, requested_at, delivered_at, delivery_attempts, delivery_error, failed_at,
+    kind, waiting_reason, worker_attempts, worker_started_at, draft_sha256, draft_submitted_at,
+    feedback_sent_at, final_sha256, submitted_at, fix_requested_at, reminded_at, cleaned_at, failure_code
 `
 
 type InsertLadoPlanRequestParams struct {
@@ -231,6 +451,7 @@ type InsertLadoPlanRequestParams struct {
 	Note                string
 	BasedOnRevisionID   string
 	RequestedAt         time.Time
+	Kind                string
 }
 
 func (q *Queries) InsertLadoPlanRequest(ctx context.Context, arg InsertLadoPlanRequestParams) (LadoPlanRequest, error) {
@@ -243,6 +464,7 @@ func (q *Queries) InsertLadoPlanRequest(ctx context.Context, arg InsertLadoPlanR
 		arg.Note,
 		arg.BasedOnRevisionID,
 		arg.RequestedAt,
+		arg.Kind,
 	)
 	var i LadoPlanRequest
 	err := row.Scan(
@@ -258,6 +480,19 @@ func (q *Queries) InsertLadoPlanRequest(ctx context.Context, arg InsertLadoPlanR
 		&i.DeliveryAttempts,
 		&i.DeliveryError,
 		&i.FailedAt,
+		&i.Kind,
+		&i.WaitingReason,
+		&i.WorkerAttempts,
+		&i.WorkerStartedAt,
+		&i.DraftSha256,
+		&i.DraftSubmittedAt,
+		&i.FeedbackSentAt,
+		&i.FinalSha256,
+		&i.SubmittedAt,
+		&i.FixRequestedAt,
+		&i.RemindedAt,
+		&i.CleanedAt,
+		&i.FailureCode,
 	)
 	return i, err
 }
@@ -426,9 +661,95 @@ func (q *Queries) ListLadoPlanApprovalsByTask(ctx context.Context, taskID string
 	return items, nil
 }
 
+const listLadoPlanCritiquesByRequest = `-- name: ListLadoPlanCritiquesByRequest :many
+SELECT id, request_id, attempt, session_id, state, skip_reason, failure_reason, findings_json, started_at, finished_at
+FROM lado_plan_critiques
+WHERE request_id = ?
+ORDER BY attempt
+`
+
+func (q *Queries) ListLadoPlanCritiquesByRequest(ctx context.Context, requestID string) ([]LadoPlanCritique, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoPlanCritiquesByRequest, requestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoPlanCritique{}
+	for rows.Next() {
+		var i LadoPlanCritique
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestID,
+			&i.Attempt,
+			&i.SessionID,
+			&i.State,
+			&i.SkipReason,
+			&i.FailureReason,
+			&i.FindingsJson,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLadoPlanCritiquesByTask = `-- name: ListLadoPlanCritiquesByTask :many
+SELECT c.id, c.request_id, c.attempt, c.session_id, c.state, c.skip_reason, c.failure_reason, c.findings_json,
+    c.started_at, c.finished_at
+FROM lado_plan_critiques c
+JOIN lado_plan_requests r ON r.id = c.request_id
+WHERE r.task_id = ?
+ORDER BY r.requested_at, r.id, c.attempt
+`
+
+func (q *Queries) ListLadoPlanCritiquesByTask(ctx context.Context, taskID string) ([]LadoPlanCritique, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoPlanCritiquesByTask, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoPlanCritique{}
+	for rows.Next() {
+		var i LadoPlanCritique
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestID,
+			&i.Attempt,
+			&i.SessionID,
+			&i.State,
+			&i.SkipReason,
+			&i.FailureReason,
+			&i.FindingsJson,
+			&i.StartedAt,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLadoPlanRequestsByProject = `-- name: ListLadoPlanRequestsByProject :many
 SELECT r.id, r.task_id, r.session_id, r.issue_snapshot_sha256, r.source_comment_id, r.note,
-    r.based_on_revision_id, r.requested_at, r.delivered_at, r.delivery_attempts, r.delivery_error, r.failed_at
+    r.based_on_revision_id, r.requested_at, r.delivered_at, r.delivery_attempts, r.delivery_error, r.failed_at,
+    r.kind, r.waiting_reason, r.worker_attempts, r.worker_started_at, r.draft_sha256, r.draft_submitted_at,
+    r.feedback_sent_at, r.final_sha256, r.submitted_at, r.fix_requested_at, r.reminded_at, r.cleaned_at, r.failure_code
 FROM lado_plan_requests r
 JOIN lado_tasks t ON t.id = r.task_id
 WHERE t.project_id = ?
@@ -457,6 +778,19 @@ func (q *Queries) ListLadoPlanRequestsByProject(ctx context.Context, projectID s
 			&i.DeliveryAttempts,
 			&i.DeliveryError,
 			&i.FailedAt,
+			&i.Kind,
+			&i.WaitingReason,
+			&i.WorkerAttempts,
+			&i.WorkerStartedAt,
+			&i.DraftSha256,
+			&i.DraftSubmittedAt,
+			&i.FeedbackSentAt,
+			&i.FinalSha256,
+			&i.SubmittedAt,
+			&i.FixRequestedAt,
+			&i.RemindedAt,
+			&i.CleanedAt,
+			&i.FailureCode,
 		); err != nil {
 			return nil, err
 		}
@@ -473,7 +807,9 @@ func (q *Queries) ListLadoPlanRequestsByProject(ctx context.Context, projectID s
 
 const listLadoPlanRequestsByTask = `-- name: ListLadoPlanRequestsByTask :many
 SELECT id, task_id, session_id, issue_snapshot_sha256, source_comment_id, note,
-    based_on_revision_id, requested_at, delivered_at, delivery_attempts, delivery_error, failed_at
+    based_on_revision_id, requested_at, delivered_at, delivery_attempts, delivery_error, failed_at,
+    kind, waiting_reason, worker_attempts, worker_started_at, draft_sha256, draft_submitted_at,
+    feedback_sent_at, final_sha256, submitted_at, fix_requested_at, reminded_at, cleaned_at, failure_code
 FROM lado_plan_requests
 WHERE task_id = ?
 ORDER BY requested_at, id
@@ -501,6 +837,19 @@ func (q *Queries) ListLadoPlanRequestsByTask(ctx context.Context, taskID string)
 			&i.DeliveryAttempts,
 			&i.DeliveryError,
 			&i.FailedAt,
+			&i.Kind,
+			&i.WaitingReason,
+			&i.WorkerAttempts,
+			&i.WorkerStartedAt,
+			&i.DraftSha256,
+			&i.DraftSubmittedAt,
+			&i.FeedbackSentAt,
+			&i.FinalSha256,
+			&i.SubmittedAt,
+			&i.FixRequestedAt,
+			&i.RemindedAt,
+			&i.CleanedAt,
+			&i.FailureCode,
 		); err != nil {
 			return nil, err
 		}
@@ -517,7 +866,9 @@ func (q *Queries) ListLadoPlanRequestsByTask(ctx context.Context, taskID string)
 
 const listLadoPlanRequestsForLiveTasks = `-- name: ListLadoPlanRequestsForLiveTasks :many
 SELECT r.id, r.task_id, r.session_id, r.issue_snapshot_sha256, r.source_comment_id, r.note,
-    r.based_on_revision_id, r.requested_at, r.delivered_at, r.delivery_attempts, r.delivery_error, r.failed_at
+    r.based_on_revision_id, r.requested_at, r.delivered_at, r.delivery_attempts, r.delivery_error, r.failed_at,
+    r.kind, r.waiting_reason, r.worker_attempts, r.worker_started_at, r.draft_sha256, r.draft_submitted_at,
+    r.feedback_sent_at, r.final_sha256, r.submitted_at, r.fix_requested_at, r.reminded_at, r.cleaned_at, r.failure_code
 FROM lado_plan_requests r
 JOIN lado_tasks t ON t.id = r.task_id
 WHERE t.cancelled_at IS NULL
@@ -546,6 +897,66 @@ func (q *Queries) ListLadoPlanRequestsForLiveTasks(ctx context.Context) ([]LadoP
 			&i.DeliveryAttempts,
 			&i.DeliveryError,
 			&i.FailedAt,
+			&i.Kind,
+			&i.WaitingReason,
+			&i.WorkerAttempts,
+			&i.WorkerStartedAt,
+			&i.DraftSha256,
+			&i.DraftSubmittedAt,
+			&i.FeedbackSentAt,
+			&i.FinalSha256,
+			&i.SubmittedAt,
+			&i.FixRequestedAt,
+			&i.RemindedAt,
+			&i.CleanedAt,
+			&i.FailureCode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLadoPlanRevisionMetricsByTask = `-- name: ListLadoPlanRevisionMetricsByTask :many
+SELECT m.revision_id, m.request_id, m.design_ms, m.critique_ms, m.revise_ms, m.review, m.p1_count, m.major_count,
+    m.minor_count, m.addressed_count, m.not_addressed_count, m.sessions_json, m.change_kinds_json, m.updated_at
+FROM lado_plan_revision_metrics m
+JOIN lado_plan_revisions v ON v.id = m.revision_id
+WHERE v.task_id = ?
+ORDER BY v.number
+`
+
+func (q *Queries) ListLadoPlanRevisionMetricsByTask(ctx context.Context, taskID string) ([]LadoPlanRevisionMetric, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoPlanRevisionMetricsByTask, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoPlanRevisionMetric{}
+	for rows.Next() {
+		var i LadoPlanRevisionMetric
+		if err := rows.Scan(
+			&i.RevisionID,
+			&i.RequestID,
+			&i.DesignMs,
+			&i.CritiqueMs,
+			&i.ReviseMs,
+			&i.Review,
+			&i.P1Count,
+			&i.MajorCount,
+			&i.MinorCount,
+			&i.AddressedCount,
+			&i.NotAddressedCount,
+			&i.SessionsJson,
+			&i.ChangeKindsJson,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -592,6 +1003,50 @@ func (q *Queries) ListLadoPlanRevisionsByTask(ctx context.Context, taskID string
 			&i.IssueSnapshotSha256,
 			&i.ProblemsJson,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLatestLadoPlanCritiquesByProject = `-- name: ListLatestLadoPlanCritiquesByProject :many
+SELECT c.id, c.request_id, c.attempt, c.session_id, c.state, c.skip_reason, c.failure_reason, c.findings_json,
+    c.started_at, c.finished_at
+FROM lado_plan_critiques c
+JOIN lado_plan_requests r ON r.id = c.request_id
+JOIN lado_tasks t ON t.id = r.task_id
+WHERE t.project_id = ?
+  AND c.attempt = (SELECT MAX(c2.attempt) FROM lado_plan_critiques c2 WHERE c2.request_id = c.request_id)
+`
+
+func (q *Queries) ListLatestLadoPlanCritiquesByProject(ctx context.Context, projectID string) ([]LadoPlanCritique, error) {
+	rows, err := q.db.QueryContext(ctx, listLatestLadoPlanCritiquesByProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoPlanCritique{}
+	for rows.Next() {
+		var i LadoPlanCritique
+		if err := rows.Scan(
+			&i.ID,
+			&i.RequestID,
+			&i.Attempt,
+			&i.SessionID,
+			&i.State,
+			&i.SkipReason,
+			&i.FailureReason,
+			&i.FindingsJson,
+			&i.StartedAt,
+			&i.FinishedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -653,12 +1108,71 @@ func (q *Queries) ListLatestLadoPlanRevisionsByProject(ctx context.Context, proj
 	return items, nil
 }
 
+const listOpenLadoPlanWorkerRequests = `-- name: ListOpenLadoPlanWorkerRequests :many
+SELECT r.id, r.task_id, r.session_id, r.issue_snapshot_sha256, r.source_comment_id, r.note,
+    r.based_on_revision_id, r.requested_at, r.delivered_at, r.delivery_attempts, r.delivery_error, r.failed_at,
+    r.kind, r.waiting_reason, r.worker_attempts, r.worker_started_at, r.draft_sha256, r.draft_submitted_at,
+    r.feedback_sent_at, r.final_sha256, r.submitted_at, r.fix_requested_at, r.reminded_at, r.cleaned_at, r.failure_code
+FROM lado_plan_requests r
+WHERE r.kind = 'worker' AND r.failed_at IS NULL AND r.cleaned_at IS NULL
+ORDER BY r.requested_at, r.id
+`
+
+func (q *Queries) ListOpenLadoPlanWorkerRequests(ctx context.Context) ([]LadoPlanRequest, error) {
+	rows, err := q.db.QueryContext(ctx, listOpenLadoPlanWorkerRequests)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoPlanRequest{}
+	for rows.Next() {
+		var i LadoPlanRequest
+		if err := rows.Scan(
+			&i.ID,
+			&i.TaskID,
+			&i.SessionID,
+			&i.IssueSnapshotSha256,
+			&i.SourceCommentID,
+			&i.Note,
+			&i.BasedOnRevisionID,
+			&i.RequestedAt,
+			&i.DeliveredAt,
+			&i.DeliveryAttempts,
+			&i.DeliveryError,
+			&i.FailedAt,
+			&i.Kind,
+			&i.WaitingReason,
+			&i.WorkerAttempts,
+			&i.WorkerStartedAt,
+			&i.DraftSha256,
+			&i.DraftSubmittedAt,
+			&i.FeedbackSentAt,
+			&i.FinalSha256,
+			&i.SubmittedAt,
+			&i.FixRequestedAt,
+			&i.RemindedAt,
+			&i.CleanedAt,
+			&i.FailureCode,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const markLadoPlanRequestDelivered = `-- name: MarkLadoPlanRequestDelivered :execrows
 UPDATE lado_plan_requests
 SET delivered_at = ?,
     delivery_attempts = delivery_attempts + 1,
     delivery_error = ''
-WHERE id = ? AND delivered_at IS NULL AND failed_at IS NULL
+WHERE id = ? AND kind = 'orchestrator' AND delivered_at IS NULL AND failed_at IS NULL
 `
 
 type MarkLadoPlanRequestDeliveredParams struct {
@@ -674,11 +1188,112 @@ func (q *Queries) MarkLadoPlanRequestDelivered(ctx context.Context, arg MarkLado
 	return result.RowsAffected()
 }
 
+const recordLadoPlanDraft = `-- name: RecordLadoPlanDraft :execrows
+UPDATE lado_plan_requests
+SET draft_sha256 = ?,
+    draft_submitted_at = ?
+WHERE id = ? AND kind = 'worker' AND worker_started_at IS NOT NULL AND draft_submitted_at IS NULL
+    AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type RecordLadoPlanDraftParams struct {
+	DraftSha256      string
+	DraftSubmittedAt sql.NullTime
+	ID               string
+}
+
+func (q *Queries) RecordLadoPlanDraft(ctx context.Context, arg RecordLadoPlanDraftParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordLadoPlanDraft, arg.DraftSha256, arg.DraftSubmittedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordLadoPlanFeedback = `-- name: RecordLadoPlanFeedback :execrows
+UPDATE lado_plan_requests
+SET feedback_sent_at = ?
+WHERE id = ? AND kind = 'worker' AND draft_submitted_at IS NOT NULL AND feedback_sent_at IS NULL
+    AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type RecordLadoPlanFeedbackParams struct {
+	FeedbackSentAt sql.NullTime
+	ID             string
+}
+
+func (q *Queries) RecordLadoPlanFeedback(ctx context.Context, arg RecordLadoPlanFeedbackParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordLadoPlanFeedback, arg.FeedbackSentAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordLadoPlanFinal = `-- name: RecordLadoPlanFinal :execrows
+UPDATE lado_plan_requests
+SET final_sha256 = ?,
+    submitted_at = ?
+WHERE id = ? AND kind = 'worker' AND feedback_sent_at IS NOT NULL AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type RecordLadoPlanFinalParams struct {
+	FinalSha256 string
+	SubmittedAt sql.NullTime
+	ID          string
+}
+
+func (q *Queries) RecordLadoPlanFinal(ctx context.Context, arg RecordLadoPlanFinalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordLadoPlanFinal, arg.FinalSha256, arg.SubmittedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordLadoPlanFixRequested = `-- name: RecordLadoPlanFixRequested :execrows
+UPDATE lado_plan_requests
+SET fix_requested_at = ?
+WHERE id = ? AND kind = 'worker' AND fix_requested_at IS NULL AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type RecordLadoPlanFixRequestedParams struct {
+	FixRequestedAt sql.NullTime
+	ID             string
+}
+
+func (q *Queries) RecordLadoPlanFixRequested(ctx context.Context, arg RecordLadoPlanFixRequestedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordLadoPlanFixRequested, arg.FixRequestedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const recordLadoPlanReminder = `-- name: RecordLadoPlanReminder :execrows
+UPDATE lado_plan_requests
+SET reminded_at = ?
+WHERE id = ? AND kind = 'worker' AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type RecordLadoPlanReminderParams struct {
+	RemindedAt sql.NullTime
+	ID         string
+}
+
+func (q *Queries) RecordLadoPlanReminder(ctx context.Context, arg RecordLadoPlanReminderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, recordLadoPlanReminder, arg.RemindedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const recordLadoPlanRequestAttempt = `-- name: RecordLadoPlanRequestAttempt :execrows
 UPDATE lado_plan_requests
 SET delivery_attempts = delivery_attempts + 1,
     delivery_error = ?
-WHERE id = ? AND delivered_at IS NULL AND failed_at IS NULL
+WHERE id = ? AND kind = 'orchestrator' AND delivered_at IS NULL AND failed_at IS NULL
 `
 
 type RecordLadoPlanRequestAttemptParams struct {
@@ -692,4 +1307,160 @@ func (q *Queries) RecordLadoPlanRequestAttempt(ctx context.Context, arg RecordLa
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const setLadoPlanCritiqueSession = `-- name: SetLadoPlanCritiqueSession :execrows
+UPDATE lado_plan_critiques
+SET session_id = ?
+WHERE lado_plan_critiques.request_id = ? AND lado_plan_critiques.attempt = ?
+    AND lado_plan_critiques.state = 'running' AND lado_plan_critiques.session_id = ''
+`
+
+type SetLadoPlanCritiqueSessionParams struct {
+	SessionID string
+	RequestID string
+	Attempt   int64
+}
+
+func (q *Queries) SetLadoPlanCritiqueSession(ctx context.Context, arg SetLadoPlanCritiqueSessionParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setLadoPlanCritiqueSession, arg.SessionID, arg.RequestID, arg.Attempt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setLadoPlanRequestWaiting = `-- name: SetLadoPlanRequestWaiting :execrows
+UPDATE lado_plan_requests
+SET waiting_reason = ?
+WHERE id = ? AND kind = 'worker' AND worker_started_at IS NULL AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type SetLadoPlanRequestWaitingParams struct {
+	WaitingReason string
+	ID            string
+}
+
+func (q *Queries) SetLadoPlanRequestWaiting(ctx context.Context, arg SetLadoPlanRequestWaitingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setLadoPlanRequestWaiting, arg.WaitingReason, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const startLadoPlanWorker = `-- name: StartLadoPlanWorker :execrows
+UPDATE lado_plan_requests
+SET session_id = ?,
+    worker_started_at = ?,
+    waiting_reason = ''
+WHERE id = ? AND kind = 'worker' AND worker_started_at IS NULL AND failed_at IS NULL AND cleaned_at IS NULL
+`
+
+type StartLadoPlanWorkerParams struct {
+	SessionID       string
+	WorkerStartedAt sql.NullTime
+	ID              string
+}
+
+func (q *Queries) StartLadoPlanWorker(ctx context.Context, arg StartLadoPlanWorkerParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, startLadoPlanWorker, arg.SessionID, arg.WorkerStartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const sumLadoSessionUsage = `-- name: SumLadoSessionUsage :one
+SELECT
+    CAST(COALESCE(SUM(mue.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COALESCE(SUM(mue.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COALESCE(SUM(mue.cached_input_tokens), 0) AS INTEGER) AS cache_read_tokens,
+    CAST(COALESCE(SUM(CASE WHEN json_valid(mue.provider_usage_json)
+        THEN json_extract(mue.provider_usage_json, '$.cache_creation_input_tokens') END), 0) AS INTEGER) AS cache_write_tokens,
+    CAST(COUNT(mue.estimated_cost_nanos) AS INTEGER) AS priced_events,
+    CAST(COALESCE(SUM(mue.estimated_cost_nanos), 0) AS INTEGER) AS cost_nanos
+FROM model_usage_events mue
+JOIN usage_bindings ub ON ub.id = mue.binding_id
+WHERE ub.session_id = ?
+`
+
+type SumLadoSessionUsageRow struct {
+	InputTokens      int64
+	OutputTokens     int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	PricedEvents     int64
+	CostNanos        int64
+}
+
+func (q *Queries) SumLadoSessionUsage(ctx context.Context, sessionID domain.SessionID) (SumLadoSessionUsageRow, error) {
+	row := q.db.QueryRowContext(ctx, sumLadoSessionUsage, sessionID)
+	var i SumLadoSessionUsageRow
+	err := row.Scan(
+		&i.InputTokens,
+		&i.OutputTokens,
+		&i.CacheReadTokens,
+		&i.CacheWriteTokens,
+		&i.PricedEvents,
+		&i.CostNanos,
+	)
+	return i, err
+}
+
+const upsertLadoPlanRevisionMetrics = `-- name: UpsertLadoPlanRevisionMetrics :exec
+INSERT INTO lado_plan_revision_metrics (
+    revision_id, request_id, design_ms, critique_ms, revise_ms, review, p1_count, major_count, minor_count,
+    addressed_count, not_addressed_count, sessions_json, change_kinds_json, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (revision_id) DO UPDATE SET
+    design_ms = excluded.design_ms,
+    critique_ms = excluded.critique_ms,
+    revise_ms = excluded.revise_ms,
+    review = excluded.review,
+    p1_count = excluded.p1_count,
+    major_count = excluded.major_count,
+    minor_count = excluded.minor_count,
+    addressed_count = excluded.addressed_count,
+    not_addressed_count = excluded.not_addressed_count,
+    sessions_json = excluded.sessions_json,
+    change_kinds_json = excluded.change_kinds_json,
+    updated_at = excluded.updated_at
+`
+
+type UpsertLadoPlanRevisionMetricsParams struct {
+	RevisionID        string
+	RequestID         string
+	DesignMs          int64
+	CritiqueMs        int64
+	ReviseMs          int64
+	Review            string
+	P1Count           int64
+	MajorCount        int64
+	MinorCount        int64
+	AddressedCount    int64
+	NotAddressedCount int64
+	SessionsJson      string
+	ChangeKindsJson   string
+	UpdatedAt         time.Time
+}
+
+func (q *Queries) UpsertLadoPlanRevisionMetrics(ctx context.Context, arg UpsertLadoPlanRevisionMetricsParams) error {
+	_, err := q.db.ExecContext(ctx, upsertLadoPlanRevisionMetrics,
+		arg.RevisionID,
+		arg.RequestID,
+		arg.DesignMs,
+		arg.CritiqueMs,
+		arg.ReviseMs,
+		arg.Review,
+		arg.P1Count,
+		arg.MajorCount,
+		arg.MinorCount,
+		arg.AddressedCount,
+		arg.NotAddressedCount,
+		arg.SessionsJson,
+		arg.ChangeKindsJson,
+		arg.UpdatedAt,
+	)
+	return err
 }

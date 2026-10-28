@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -110,15 +111,26 @@ func (s *Service) Settings(ctx context.Context) (domain.LadoDispatchSettings, er
 
 // SetSettings replaces the dispatch settings and returns them as stored. The
 // next dispatch pass uses them; running executions keep their deadlines.
-// Nothing verifies who sent the change, so its audit event's actor is "api".
-// Sending the current settings changes nothing.
+// A zero MaxPlanWorkers keeps the stored plan request cap, and a zero
+// PlanReview.MaxPaths the stored review skip settings, so a caller that knows
+// only the executions' settings changes nothing else. Nothing verifies who
+// sent the change, so its audit event's actor is "api". Sending the current
+// settings changes nothing.
 func (s *Service) SetSettings(ctx context.Context, settings domain.LadoDispatchSettings) (domain.LadoDispatchSettings, error) {
-	if err := settings.Validate(); err != nil {
-		return domain.LadoDispatchSettings{}, InvalidSettings(strings.TrimPrefix(err.Error(), domain.ErrLadoDispatchSettingsInvalid.Error()+": "))
-	}
 	current, err := s.Settings(ctx)
 	if err != nil {
 		return domain.LadoDispatchSettings{}, err
+	}
+	if settings.MaxPlanWorkers == 0 {
+		settings.MaxPlanWorkers = current.MaxPlanWorkers
+	}
+	if settings.PlanReview.MaxPaths == 0 {
+		settings.PlanReview = current.PlanReview
+	} else if settings.PlanReview.Patterns == nil {
+		settings.PlanReview.Patterns = current.PlanReview.Patterns
+	}
+	if err := settings.Validate(); err != nil {
+		return domain.LadoDispatchSettings{}, InvalidSettings(strings.TrimPrefix(err.Error(), domain.ErrLadoDispatchSettingsInvalid.Error()+": "))
 	}
 	if sameSettings(current, settings) {
 		return current, nil
@@ -149,9 +161,15 @@ func InvalidSettings(message string) error {
 }
 
 func sameSettings(a, b domain.LadoDispatchSettings) bool {
-	return a.MaxConcurrent == b.MaxConcurrent && a.MaxRunMinutes == b.MaxRunMinutes && a.HoldOnMemoryTight == b.HoldOnMemoryTight
+	return a.MaxConcurrent == b.MaxConcurrent && a.MaxRunMinutes == b.MaxRunMinutes && a.HoldOnMemoryTight == b.HoldOnMemoryTight &&
+		a.MaxPlanWorkers == b.MaxPlanWorkers && a.PlanReview.Skip == b.PlanReview.Skip && a.PlanReview.MaxPaths == b.PlanReview.MaxPaths &&
+		reflect.DeepEqual(a.PlanReview.Patterns, b.PlanReview.Patterns)
 }
 
 func settingsPayload(s domain.LadoDispatchSettings) map[string]any {
-	return map[string]any{"maxConcurrent": s.MaxConcurrent, "maxRunMinutes": s.MaxRunMinutes, "holdOnMemoryTight": s.HoldOnMemoryTight}
+	return map[string]any{
+		"maxConcurrent": s.MaxConcurrent, "maxRunMinutes": s.MaxRunMinutes, "holdOnMemoryTight": s.HoldOnMemoryTight,
+		"maxPlanWorkers": s.MaxPlanWorkers, "planReviewSkip": s.PlanReview.Skip, "planReviewSkipMaxPaths": s.PlanReview.MaxPaths,
+		"planReviewPatterns": s.PlanReview.Patterns,
+	}
 }

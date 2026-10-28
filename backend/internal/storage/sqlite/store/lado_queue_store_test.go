@@ -519,7 +519,7 @@ func TestLadoQueueChangesPublishEvents(t *testing.T) {
 	expect("execution of a session AO no longer has", "lado_execution mer-gone/")
 
 	// Dispatch settings and project caps publish nothing.
-	if err := q.UpsertLadoDispatchSettings(ctx, gen.UpsertLadoDispatchSettingsParams{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: 0, UpdatedAt: at}); err != nil {
+	if err := q.UpsertLadoDispatchSettings(ctx, gen.UpsertLadoDispatchSettingsParams{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: 0, UpdatedAt: at, MaxPlanWorkers: 2, PlanReviewSkip: 1, PlanReviewSkipMaxPaths: 3}); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.UpsertLadoProjectMaxConcurrent(ctx, gen.UpsertLadoProjectMaxConcurrentParams{ProjectID: "mer", MaxConcurrent: 2, UpdatedAt: at}); err != nil {
@@ -1367,7 +1367,7 @@ func TestLadoDispatchSettingsDefaultsAndUpdate(t *testing.T) {
 	s, raw := openLadoQueueStore(t)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
-	if got, err := s.LadoDispatchSettings(ctx); err != nil || got != domain.DefaultLadoDispatchSettings() {
+	if got, err := s.LadoDispatchSettings(ctx); err != nil || !reflect.DeepEqual(got, domain.DefaultLadoDispatchSettings()) {
 		t.Fatalf("LadoDispatchSettings without a row = (%+v, %v), want the defaults", got, err)
 	}
 	countEvents := func() int {
@@ -1381,18 +1381,19 @@ func TestLadoDispatchSettingsDefaultsAndUpdate(t *testing.T) {
 
 	// Each change stores the settings and its audit event together and
 	// replaces the one before.
+	plans, review := domain.LadoDefaultMaxPlanWorkers, domain.DefaultLadoPlanReviewSettings()
 	for i, settings := range []domain.LadoDispatchSettings{
-		{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: false},
-		{MaxConcurrent: 1, MaxRunMinutes: 0, HoldOnMemoryTight: true},
+		{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: false, MaxPlanWorkers: plans, PlanReview: review},
+		{MaxConcurrent: 1, MaxRunMinutes: 0, HoldOnMemoryTight: true, MaxPlanWorkers: plans, PlanReview: review},
 	} {
 		changedAt := at.Add(time.Duration(i) * time.Hour)
 		stored, err := s.SetLadoDispatchSettings(ctx, settings, event("dispatch.settings_changed", changedAt))
 		want := settings
 		want.UpdatedAt = changedAt
-		if err != nil || stored != want {
+		if err != nil || !reflect.DeepEqual(stored, want) {
 			t.Fatalf("SetLadoDispatchSettings %d = (%+v, %v), want %+v", i+1, stored, err, want)
 		}
-		if got, err := s.LadoDispatchSettings(ctx); err != nil || got != want {
+		if got, err := s.LadoDispatchSettings(ctx); err != nil || !reflect.DeepEqual(got, want) {
 			t.Fatalf("LadoDispatchSettings after change %d = (%+v, %v), want %+v", i+1, got, err, want)
 		}
 		if n, action := countEvents(), latestLadoAuditAction(t, raw); n != i+1 || action != "dispatch.settings_changed" {
@@ -1413,7 +1414,7 @@ func TestLadoDispatchSettingsDefaultsAndUpdate(t *testing.T) {
 		if _, err := s.SetLadoDispatchSettings(ctx, change.settings, event("dispatch.settings_changed", change.at)); err == nil {
 			t.Fatalf("%s: SetLadoDispatchSettings succeeded", name)
 		}
-		if got, _ := s.LadoDispatchSettings(ctx); got != current || countEvents() != 2 {
+		if got, _ := s.LadoDispatchSettings(ctx); !reflect.DeepEqual(got, current) || countEvents() != 2 {
 			t.Fatalf("%s: settings %+v with %d audit events, want %+v with 2", name, got, countEvents(), current)
 		}
 	}

@@ -4,6 +4,7 @@ package store
 // snapshots approvals fix (docs/LJY-PRD/TDD.md §3.1, §5.1 and §5.2).
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -18,7 +19,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/gen"
 )
 
-// CreateLadoPlanRequest stores a plan request before LADO delivers it.
+// CreateLadoPlanRequest stores a plan request before LADO delivers it or
+// starts its plan worker. A request without a kind goes to an orchestrator.
 func (s *Store) CreateLadoPlanRequest(ctx context.Context, req domain.LadoPlanRequest) (domain.LadoPlanRequest, error) {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return domain.LadoPlanRequest{}, err
@@ -33,6 +35,7 @@ func (s *Store) CreateLadoPlanRequest(ctx context.Context, req domain.LadoPlanRe
 		Note:                req.Note,
 		BasedOnRevisionID:   string(req.BasedOn),
 		RequestedAt:         req.RequestedAt.UTC(),
+		Kind:                string(cmp.Or(req.Kind, domain.LadoPlanRequestOrchestrator)),
 	})
 	if err != nil {
 		return domain.LadoPlanRequest{}, fmt.Errorf("create LADO plan request: %w", err)
@@ -493,6 +496,13 @@ func (s *Store) ladoTaskPlan(ctx context.Context, id domain.LadoTaskID) (domain.
 	}
 	if len(requests) > 0 {
 		plan.Request = ladoPlanRequestFromGen(requests[len(requests)-1])
+		critiques, err := s.qr.ListLadoPlanCritiquesByRequest(ctx, string(plan.Request.ID))
+		if err != nil {
+			return plan, fmt.Errorf("read LADO plan critiques: %w", err)
+		}
+		if len(critiques) > 0 {
+			plan.Critique = ladoPlanCritiqueFromGen(critiques[len(critiques)-1])
+		}
 	}
 	latest, err := s.qr.GetLatestLadoPlanRevision(ctx, string(id))
 	switch {
@@ -533,6 +543,20 @@ func (s *Store) ladoProjectPlans(ctx context.Context, projectID domain.ProjectID
 		plan := plans[id]
 		plan.Request = ladoPlanRequestFromGen(row)
 		plans[id] = plan
+	}
+	critiques, err := s.qr.ListLatestLadoPlanCritiquesByProject(ctx, string(projectID))
+	if err != nil {
+		return nil, fmt.Errorf("read LADO plan critiques: %w", err)
+	}
+	byRequest := make(map[domain.LadoPlanRequestID]gen.LadoPlanCritique, len(critiques))
+	for _, row := range critiques {
+		byRequest[domain.LadoPlanRequestID(row.RequestID)] = row
+	}
+	for id, plan := range plans {
+		if row, ok := byRequest[plan.Request.ID]; ok {
+			plan.Critique = ladoPlanCritiqueFromGen(row)
+			plans[id] = plan
+		}
 	}
 	revisions, err := s.qr.ListLatestLadoPlanRevisionsByProject(ctx, string(projectID))
 	if err != nil {
@@ -594,6 +618,19 @@ func ladoPlanRequestFromGen(row gen.LadoPlanRequest) domain.LadoPlanRequest {
 		DeliveryAttempts:    int(row.DeliveryAttempts),
 		DeliveryError:       row.DeliveryError,
 		FailedAt:            ladoTimeFromNull(row.FailedAt),
+		Kind:                domain.LadoPlanRequestKind(row.Kind),
+		WaitingReason:       row.WaitingReason,
+		WorkerAttempts:      int(row.WorkerAttempts),
+		WorkerStartedAt:     ladoTimeFromNull(row.WorkerStartedAt),
+		DraftSHA256:         row.DraftSha256,
+		DraftSubmittedAt:    ladoTimeFromNull(row.DraftSubmittedAt),
+		FeedbackSentAt:      ladoTimeFromNull(row.FeedbackSentAt),
+		FinalSHA256:         row.FinalSha256,
+		SubmittedAt:         ladoTimeFromNull(row.SubmittedAt),
+		FixRequestedAt:      ladoTimeFromNull(row.FixRequestedAt),
+		RemindedAt:          ladoTimeFromNull(row.RemindedAt),
+		CleanedAt:           ladoTimeFromNull(row.CleanedAt),
+		FailureCode:         row.FailureCode,
 	}
 }
 

@@ -94,8 +94,10 @@ func TestSetSettingsAuditsTheChangeAsTheAPI(t *testing.T) {
 	want := domain.LadoDispatchSettings{MaxConcurrent: 3, MaxRunMinutes: 120, HoldOnMemoryTight: false}
 
 	stored, err := f.svc.SetSettings(ctx, want)
+	// The plan request settings the change leaves out keep their values.
+	want.MaxPlanWorkers, want.PlanReview = domain.LadoDefaultMaxPlanWorkers, domain.DefaultLadoPlanReviewSettings()
 	want.UpdatedAt = t0
-	if err != nil || stored != want {
+	if err != nil || !reflect.DeepEqual(stored, want) {
 		t.Fatalf("SetSettings = %+v, %v; want %+v", stored, err, want)
 	}
 	if len(f.store.settingsEvents) != 1 {
@@ -107,8 +109,11 @@ func TestSetSettingsAuditsTheChangeAsTheAPI(t *testing.T) {
 		t.Fatalf("payload %s: %v", event.Payload, err)
 	}
 	wantPayload := map[string]map[string]any{
-		"from": {"maxConcurrent": 2.0, "maxRunMinutes": 480.0, "holdOnMemoryTight": true},
-		"to":   {"maxConcurrent": 3.0, "maxRunMinutes": 120.0, "holdOnMemoryTight": false},
+		"from": {"maxConcurrent": 2.0, "maxRunMinutes": 480.0, "holdOnMemoryTight": true, "maxPlanWorkers": 2.0, "planReviewSkip": true, "planReviewSkipMaxPaths": 3.0},
+		"to":   {"maxConcurrent": 3.0, "maxRunMinutes": 120.0, "holdOnMemoryTight": false, "maxPlanWorkers": 2.0, "planReviewSkip": true, "planReviewSkipMaxPaths": 3.0},
+	}
+	for side := range payload {
+		delete(payload[side], "planReviewPatterns")
 	}
 	if event.Actor != "api" || event.Action != "dispatch.settings_changed" || event.SubjectKind != "dispatch_settings" ||
 		!event.At.Equal(t0) || !reflect.DeepEqual(payload, wantPayload) {
@@ -116,7 +121,7 @@ func TestSetSettingsAuditsTheChangeAsTheAPI(t *testing.T) {
 	}
 
 	f.setClock(t0.Add(time.Minute))
-	if again, err := f.svc.SetSettings(ctx, want); err != nil || again != want || len(f.store.settingsEvents) != 1 {
+	if again, err := f.svc.SetSettings(ctx, want); err != nil || !reflect.DeepEqual(again, want) || len(f.store.settingsEvents) != 1 {
 		t.Fatalf("SetSettings with the current settings = %+v, %v after %d events; want them unchanged", again, err, len(f.store.settingsEvents))
 	}
 
@@ -132,7 +137,7 @@ func TestSetSettingsAuditsTheChangeAsTheAPI(t *testing.T) {
 			t.Fatalf("SetSettings(%+v) = %v, want LADO_DISPATCH_SETTINGS_INVALID", bad, err)
 		}
 	}
-	if current, err := f.svc.Settings(ctx); err != nil || current != want || len(f.store.settingsEvents) != 1 {
+	if current, err := f.svc.Settings(ctx); err != nil || !reflect.DeepEqual(current, want) || len(f.store.settingsEvents) != 1 {
 		t.Fatalf("settings after refused changes = %+v, %v; want %+v", current, err, want)
 	}
 }

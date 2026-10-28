@@ -2,6 +2,7 @@ package domain
 
 import (
 	"path"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -157,13 +158,17 @@ func LadoIssueFilePath(task LadoTaskID) string {
 	return "lado/" + string(task) + "/issue.md"
 }
 
-// LadoPlanRequest is one request to the project's orchestrator for a plan or
-// a changed plan (docs/LJY-PRD/TDD.md §5.1).
+// LadoPlanRequest is one request for a plan or a changed plan
+// (docs/LJY-PRD/TDD.md §5.1): to a plan worker, or, before plan workers, to
+// the project's orchestrator.
 type LadoPlanRequest struct {
 	ID     LadoPlanRequestID
 	TaskID LadoTaskID
-	// SessionID is the orchestrator asked. Its artifact directory receives
-	// the plan.
+	// Kind says who writes the plan.
+	Kind LadoPlanRequestKind
+	// SessionID is the session whose artifact directory receives the plan:
+	// the orchestrator asked, or the plan worker's designer. A plan worker
+	// request holds LadoPlanRequestPlaceholder until its designer starts.
 	SessionID SessionID
 	// IssueSnapshotSHA256 is the issue snapshot pinned for this request.
 	// Every revision written for the request records it.
@@ -181,8 +186,35 @@ type LadoPlanRequest struct {
 	DeliveredAt      time.Time
 	DeliveryAttempts int
 	DeliveryError    string
-	// FailedAt is when LADO stopped trying to deliver the request.
+	// FailedAt is when LADO stopped trying to deliver the request, or when a
+	// plan worker request failed; DeliveryError then holds the details.
 	FailedAt time.Time
+
+	// The plan worker facts (plan_worker.go); zero for a request to an
+	// orchestrator. WaitingReason says why the designer has not started yet.
+	WaitingReason string
+	// WorkerAttempts counts the designer's spawns.
+	WorkerAttempts  int
+	WorkerStartedAt time.Time
+	// DraftSHA256 is the draft's blob; the draft is never a revision.
+	DraftSHA256      string
+	DraftSubmittedAt time.Time
+	// FeedbackSentAt is when LADO sent the designer the critique's findings,
+	// the reason it skipped the review, or that the review failed.
+	FeedbackSentAt time.Time
+	// FinalSHA256 is the plan the designer last submitted, which LADO wrote
+	// into its artifact directory and pins.
+	FinalSHA256 string
+	SubmittedAt time.Time
+	// FixRequestedAt is when LADO sent a pinned revision's problems back,
+	// once per request.
+	FixRequestedAt time.Time
+	// RemindedAt is when LADO last reminded the designer to submit after its
+	// turn ended without the submission.
+	RemindedAt time.Time
+	// CleanedAt is when LADO stopped the request's sessions after pinning.
+	CleanedAt   time.Time
+	FailureCode string
 }
 
 // LadoPlanRevision is one pinned version of a task's plan file
@@ -297,6 +329,10 @@ type LadoPlan struct {
 	// PlanSource is "issue", or "comment:<id>" for a plan converted from an
 	// issue comment.
 	PlanSource string
+	// ChangeKinds is the optional change_kinds list: which of
+	// LadoChangeKinds the work makes. It decides, with the paths, whether a
+	// plan worker's draft is reviewed.
+	ChangeKinds []string
 	// Body is the Markdown after the front matter.
 	Body string
 }
@@ -345,6 +381,7 @@ func ParseLadoPlan(content []byte, want LadoPlanExpectations) (LadoPlan, []LadoP
 	plan.PermissionCeiling = PermissionMode(r.text("permission_ceiling"))
 	plan.ReviewRequired, plan.Reviewer = r.review()
 	plan.PlanSource = r.text("plan_source")
+	plan.ChangeKinds = r.changeKinds()
 
 	if plan.Task != "" && plan.Task != string(want.Task) {
 		r.add(LadoPlanWrongTask, "task", plan.Task)
@@ -495,6 +532,32 @@ func (r *planReader) review() (bool, string) {
 		return false, ""
 	}
 	return *review.Required, strings.TrimSpace(review.Reviewer)
+}
+
+// changeKinds reads the optional change_kinds list: missing or null is none,
+// and each entry must be one of LadoChangeKinds.
+func (r *planReader) changeKinds() []string {
+	node, ok := r.fields["change_kinds"]
+	if !ok || node.Tag == "!!null" {
+		return nil
+	}
+	var values []string
+	if node.Kind != yaml.SequenceNode || node.Decode(&values) != nil {
+		r.add(LadoPlanInvalidField, "change_kinds", "")
+		return nil
+	}
+	kinds := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if !slices.Contains(LadoChangeKinds, value) {
+			r.add(LadoPlanInvalidField, "change_kinds", value)
+			continue
+		}
+		if !slices.Contains(kinds, value) {
+			kinds = append(kinds, value)
+		}
+	}
+	return kinds
 }
 
 // validLadoBaseRef accepts a branch or tag name the way a plan names its
