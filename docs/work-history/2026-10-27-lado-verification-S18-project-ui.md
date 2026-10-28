@@ -62,12 +62,58 @@
 
 ## Before — 수행 전 실측
 
-(단계 시작 때 채운다: 시작 HEAD, 환경, 출발점 실측, 앞 단계 메모 중 이 단계 몫)
+- 시작 HEAD `521ae6e17`(브랜치 `lado8/S18`, 체인 lane-S18; S16 엔트리 커밋 뒤, S17 은 병렬 레인), 트리 깨끗. Ubuntu, node v24.21.0, TZ=UTC, 체인 무인 세션. G0 `DEFS_UNCHANGED`.
+- 출발점 실측:
+  - `LadoProjectSection.tsx` 는 머리 없는 카드 하나(LADO 모드 스위치, 프로젝트 동시 실행 select)뿐 — 검사·보호 카드 없음.
+  - Settings → Rules 의 보호 카드(`LadoProtectedRuleRow`): 천장만 공유 select, 나머지는 muted "Always on"; 보호 경로 편집 없음. `lib/lado-rules.ts` 내장 표는 4행(계획 승인, 천장, 한국어 커밋, setup 확인) — 새 게이트 4개는 seed 영어 이름 그대로, 설명 없이 보였을 것.
+  - S16 데이터 계층은 있음: `useUpdateLadoProjectChecks`·`useUpdateLadoCheckTimeout`·`useLadoProtection`·`useRefreshLadoProtection`·`useChangeLadoProtectedPaths`, `ladoCheckCommandProblemText`·`ladoProtectedPathProblemText`, `LADO_PROTECTED_PATHS_RULE_ID`, 문구 `lado.checkCommand.problem.*`·`lado.protectedPaths.problem.*`.
+  - typecheck 는 시작 때 재지 않음(한 번 약 10분).
+- 앞 단계 메모 중 이 단계 몫: S04(내장 영어 이름 4개 = `seedName`, 데스크톱 `changeRule` 이 `PATCH {"baseVersion": n, "paths": {"globs": [...]}}` 에 서명), S07(400 `LADO_CHECK_COMMANDS_INVALID {index, field, reason}` → 행 아래 문구, `checkTimeoutMinutes` 는 시간 선택 아래; 시간 제한은 증명 없이 저장), S08·S15(보호 상태 `protected|unprotected|unknown|unsupported`, `missing` 값 `pull_request`·`required_status_checks:lado/integration`·`non_fast_forward`·`deletion`, `checkedAt`, `error`), S16(훅 이름, 취소면 null, 문제 문구 함수). 메모리: `<fieldset>` 은 스크롤 안 됨(div 로), 버튼 글꼴은 안쪽 span, 대화상자 autofocus.
 
 ## After — 수행 후 실측
 
-(커밋, 바꾼 것, 엔트리와 다르게 한 것과 이유, 확인한 명령과 결과, 게이트 결과)
+- 커밋: `69e7ee2c2` feat(lado): project checks, protection status and protected paths in settings · `28e715da7` style(lado): size the protected paths Edit like the row's other text · 이 엔트리 커밋.
+- 바꾼 것:
+  - 새 `components/lado/LadoProjectChecksCard.tsx`(Project settings → LADO → "Checks"): 머리 아래 muted 한 줄(toolbar), 카드 안 폼 블록(`settings-content-row`)에 열 이름 Name·Command(aria-hidden, 입력마다 aria-label "Name n"·"Command n"), 행마다 이름 입력(w-40)·명령 입력(감싼 div 의 font-mono)·지우기 아이콘("Remove <이름>" 또는 "Remove command n"), 행 아래 문제 문구(role=alert, 입력 `aria-invalid`·`aria-describedby`). 조용한 "Add command"(10행이면 비활성 + muted "LADO runs at most 10 commands.", 새 행에 포커스, 행을 지우면 Add command 로 포커스), primary "Save commands"(바뀐 것이 있을 때만). 저장 → `useUpdateLadoProjectChecks` → 브리지(없으면 PUT); null(취소) → 편집 그대로, 성공 → 저장된 목록. 오류: `LADO_CHECK_COMMANDS_INVALID` 의 index·field 가 보낸 행을 가리키면 그 행 아래 `ladoCheckCommandProblemText`, 그 밖은 목록 아래 `ladoErrorText`, 브라우저의 `LADO_PRESENCE_UNAVAILABLE` 는 `lado.checks.unavailable`. "Time limit" 행: 공유 `SettingsOptionMenu` 5·10·15·30·60·90·120분(저장값이 목록 밖이면 끼워 넣음), 바로 `useUpdateLadoCheckTimeout`, 저장 중 고른 값, 실패는 행 설명 아래. 저장된 명령이 다른 곳에서 바뀌면 편집이 없을 때만 행이 따라감.
+  - 새 `LadoProjectProtectionCard.tsx`("Branch protection"): 머리 action 에 가장 오래된 `checkedAt` 의 시각("Last checked 11:38 AM", `formatResetTime`, title 은 전체 시각)과 조용한 "Check again"(RefreshCw, 진행 중 회전·"Checking…", `useRefreshLadoProtection` = `fetchLadoProtection(id, true)`). 저장소마다 `SettingsRow`(`data-state`): 라벨 `<repo> · <branch>`(각각 mono, `github:`·`@host` 뗌), 오른쪽 점 + 상태 — protected = ready 점 "Protected"; unprotected = caution 점 "Not protected" + muted "Missing: Pull requests required, lado/integration required, Force pushes blocked, Deletion blocked"(모르는 값은 그대로); unknown = caution 점 "Could not check" + "Could not read the rules: <오류>"; unsupported = caution 점 "Not protected" + "GitLab: LADO only detects". 카드 아래 muted 안내(unprotected·unknown 이 있을 때만, `Trans` 로 `lado/integration` mono), 다시 읽기 실패는 카드 아래 alert(마지막 읽기는 남음), 저장소 없음 "No repositories to check.", 로딩·읽기 오류.
+  - 새 `LadoProtectedPathsDialog.tsx`("Edit protected paths"): 설정 대화상자 틀(규칙 편집기와 같은 머리·바닥), 스크롤은 div(fieldset 아님). 라벨 "Paths and patterns" + 개수("12 paths"), muted 문법 한 줄, mono textarea(12줄). 줄마다 trim, 빈 줄 무시. 클라이언트 검사 = 데몬 `validLadoAffectedPath` 규칙(앞 `/`, 역슬래시, 제어 문자, 드라이브 문자, `..` 마디, Go `path.Match` 문자 클래스 모양) → "Line n: …" 목록, 0개 → "Enter a path or a pattern.", 50 초과 → tooMany; 문제·변경 없음·진행 중이면 "Save paths" 비활성. 저장 → `useChangeLadoProtectedPaths` → 브리지 `changeRule("paths.protected", {globs})`; null 이면 열린 채 편집 유지, 규칙이 오면 닫힘. 거절 `{index, reason}` 은 보낸 줄의 번호로 "Line n: …", `{rule}` 등은 `ladoErrorText`, 브라우저의 `LADO_PRESENCE_UNAVAILABLE` 는 `lado.protectedPaths.unavailable`. 열 때 textarea 포커스, 닫을 때 포커스 복원.
+  - `LadoProjectSection.tsx`: 기존 카드 아래 두 카드(세 섹션을 section gap 의 열로).
+  - `LadoRuleRows.tsx` `LadoProtectedRuleRow`: 필수 prop `onEditPaths`; `paths.protected` 행은 "Always on" 대신 muted 개수("9 paths", `rule.paths.globs`)와 조용한 "Edit"(aria-label "Edit protected paths", 글자 14px).
+  - `RulesSection.tsx`: 보호 경로 편집기 상태(열 때의 글롭 고정, 열 때마다 key 로 다시 마운트), 머리 주석.
+  - `lib/lado-rules.ts`: 상수 `LADO_RULE_INTEGRATION_APPROVAL`·`LADO_RULE_NO_DIRECT_WRITE`·`LADO_RULE_TESTS_MUST_PASS`·`LADO_RULE_PROTECTED_PATHS`(= `LADO_PROTECTED_PATHS_RULE_ID`), `builtinRules` 4행(seedName = S04 영어 이름).
+  - 로캘 8개: 키 +52(`lado.checks.*` 20, `lado.protection.*` 16, `lado.rules.builtin.{integrationApproval,noDirectWrite,testsMustPass,protectedPaths}.{name,description}` 8, `lado.rules.protectedPaths.count_{one,other}` 2, `lado.protectedPaths.{title,label,hint,line,save,unavailable}` 6) + es·fr·pt-BR 의 `_many` 2개씩. 한국어 이름: 통합 승인 필수, 기준 브랜치 직접 쓰기 금지, 테스트 통과 필수, 보호 경로.
+  - `DESIGN.md` 결정 기록 한 행("2026-10-27 | LADO fork: project checks, protection and protected paths …").
+  - 테스트: 새 3파일(검사 5, 보호 5, 대화상자 4), `RulesSection.test.tsx` +2(게이트 넷, 보호 경로 편집), `lado-rules.test.ts` +1(한국어 이름·설명, 이름 바꾸면 그대로), `LadoProjectSection.test.tsx` +1(카드 둘) + `fetchLadoProtection` 모킹 + 옛 응답 fixture 1곳에 `checkCommands`·`checkTimeoutMinutes`.
+- 엔트리와 다르게 한 것과 이유:
+  1. 보호 카드 제목은 "Branch protection"(플랜 §17 의 "Protection") — 프로젝트 설정 안에서 보호 규칙·보호 경로와 헷갈리지 않게.
+  2. 확인 시각은 저장소마다가 아니라 카드 머리에 하나(가장 오래된 읽기 = 카드 전체가 그만큼은 새로움), 문구 "Last checked {{time}}".
+  3. unknown 은 "Could not check" + 오류 줄, GitLab 은 "Not protected" + "GitLab: LADO only detects", 둘 다 caution 점. GitHub 안내는 unprotected·unknown 이 있을 때만(전부 보호됨이거나 GitLab 뿐이면 숨김 — 결정에 쓸모없는 글은 빼는 DESIGN 규칙).
+  4. 이름·명령이 모두 빈 행은 보내지 않고, 이름·명령의 앞뒤 공백을 뗀다(main·데몬은 trim 하지 않음 — 앞 공백은 이름 정규식이 거절, 뒤 공백은 다른 이름이 됨). 그래서 "Add command" 만으로는 저장이 켜지지 않는다.
+  5. 브라우저(dev)의 `LADO_PRESENCE_UNAVAILABLE` 는 "approve" 문구 대신 `lado.checks.unavailable`·`lado.protectedPaths.unavailable`(모드 끄기의 `modeOffUnavailable` 선례).
+  6. 보호 경로는 잘못된 줄을 보내기 전에 줄 번호로 보이고(데몬과 같은 규칙의 클라이언트 검사), 거절 index 도 보낸 줄의 번호로 바꿔 보인다. 개수는 라벨 옆. 저장 전 영향(승인된 작업) 목록은 없음 — S16 의 `useChangeLadoProtectedPaths` 가 곧장 브리지로 가고, 데스크톱 확인 본문이 다시 승인이 필요함을 말한다.
+  7. 보호 경로 행은 "Always on" 대신 개수 + Edit(천장 행이 select 를 두는 자리).
+  8. 명령 목록은 행마다 `settings-row-bar` 가 아니라 카드 안 폼 블록 하나(열 이름 + 입력 행, 행 사이 구분선 없음); 시간 제한은 그 아래 일반 행.
+  9. 플레이스홀더 예시 `lint`·`npm run lint` 는 8개 로캘 모두 같은 값(이름은 ASCII 만 허용).
+  10. es·fr·pt-BR `_many` 복수형 — `i18n/instance.test.ts` 의 CLDR 검사가 넓은 실행에서 잡았다.
+  11. 랩에서 "Edit" 가 13px 로 이웃("9 paths"·"Always on" 14px)보다 작아 별도 커밋으로 맞춤.
+- 테스트 순서: 필수 테스트가 새 컴포넌트를 렌더링해 구현 뒤에 썼다(실패부터 보지 못함).
+- 확인한 명령과 결과:
+  - 필수 7파일 46/46(G1 세트). 넓게 `src/renderer/components/lado src/renderer/components/settings src/renderer/lib src/renderer/i18n SettingsDialog.test.tsx` 167파일 중 1 실패(es `lado.checks.minutes_many` 없음) → 고친 뒤 i18n 21/21; 전체 `npx vitest run` 534파일 8794 통과·7 skip(2m01s).
+  - `tsc --noEmit` 증분 0(9m49s), `tsc -p tsconfig.e2e.json` 0(9 s). `_many` 추가 뒤 증분은 590 s `timeout` 에 걸려(rc=124) G3 전체 실행으로 확인. 프런트엔드 lint·format 도구는 이 저장소에 없음.
+  - 랩(렌더러만, 데몬 없이): dev-web(5199) + Playwright 가 `127.0.0.1:3917` 의 LADO 경로만 채움(프로젝트 설정·보호·규칙), 나머지는 중단. 프로젝트 설정 → LADO(두 카드, 네 상태, 안내), 설정 → 규칙(게이트 넷, "9 paths"·Edit), "Edit protected paths"(mono textarea, 잘못된 줄 3개, 저장 비활성)을 라이트 테마 1400px 스크린숏으로 봄. 콘솔 오류는 모두 중단한 데몬 요청. 스크린숏은 scratchpad 로 옮기고 `.playwright-mcp/` 지움.
+- 게이트: HEAD `28e715da7` 에서 G0·G1·G2·G4 MET, G3 MET(9m49s — Bash 10분 한도 직전), G5 는 엔트리 커밋 뒤. 엔트리 커밋 뒤 전건 다시 돌려 그 HEAD 에 증거를 남김.
 
 ## 비교/회고
 
-(범위 대비 결과, 남은 틈, 다음 단계 메모 — 랩에서 볼 것, S19 문서에 적을 화면 이름)
+- 범위 대비 결과: 엔트리 범위(만든다 3 + 테스트, 바꾼다 `LadoProjectSection`·`RulesSection`·`lado-rules` + 테스트·로캘·DESIGN.md) 전부, 필수 테스트 7파일. 실행 화면(S17)은 손대지 않음. 범위 밖 변경: `LadoRuleRows.tsx`(보호 행이 그려지는 곳), 기존 fixture 1곳.
+- 남은 틈:
+  - 실제 Electron 창의 데스크톱 확인까지 이어 보지 않았다(브리지 모킹 + dev-web 렌더러만). 다크 테마·좁은 폭은 보지 않음.
+  - 클라이언트 경로 검사는 Go `path.Match` 를 UTF-16 단위로 흉내 — 서로게이트 쌍이 든 문자 클래스는 다르게 볼 수 있다(데몬이 다시 거절하므로 저장은 안전).
+  - 편집 중 다른 창이 명령을 바꾸면 편집이 있는 동안 새 값을 따라가지 않고, 저장하면 이 목록으로 덮는다(확인 본문이 바뀌는 줄을 모두 보임).
+  - 이름 규칙 위반(공백으로 시작 등)은 저장 뒤 main 의 첫 문제 하나로만 보인다. 보호 상태의 `requiredChecks` 는 화면에 없다.
+  - typecheck 한 번이 약 9m50s — G3 가 Bash 도구 10분 한도에 닿을락말락(러너의 `GATE_TIMEOUT=1800` 은 넉넉함).
+- 다음 단계 메모:
+  - S19(docs) 화면 이름: Project settings → LADO 의 "Checks" 카드(Name·Command 행, Add command, Save commands, Time limit)와 "Branch protection" 카드(Protected / Not protected / Could not check, "GitLab: LADO only detects", Last checked, Check again, GitHub 룰셋 안내), Settings → Rules 보호 카드의 게이트 넷과 "Protected paths" 행(개수·Edit) → "Edit protected paths" 대화상자(Paths and patterns, Save paths). 다르게 한 것 1~7 을 TDD §7.1·§8.2, HARNESS §14, LADO.md·LADO.ko.md 에.
+  - 랩에서 볼 것(메인 세션): 다크 테마와 좁은 설정 창, 실제 Electron 확인 창의 줄(명령 추가·변경·삭제, 경로 더함·뺌), 실제 GitHub 저장소의 보호 상태(소유자 허락 뒤).
+  - 병합: S17 레인도 `DESIGN.md` 결정 기록 표 끝에 행을 더한다 — 병합 충돌이면 두 행 모두 남길 것(S17 → S18 순).
+  - 패키지 안 새 이름(충돌 주의): `LadoProjectChecksCard`, `LADO_MAX_CHECK_COMMANDS`, `LadoProjectProtectionCard`, `LadoProtectedPathsDialog`, `LADO_RULE_INTEGRATION_APPROVAL`, `LADO_RULE_NO_DIRECT_WRITE`, `LADO_RULE_TESTS_MUST_PASS`, `LADO_RULE_PROTECTED_PATHS`, `LadoProtectedRuleRow` 의 `onEditPaths`; 테스트 id `lado-project-checks`, `lado-check-commands`, `lado-check-command`, `lado-project-protection`, `lado-protection-repository`, `lado-protection-guide`, `lado-protected-paths`, `lado-protected-path-count`, `lado-protected-path-problems`.

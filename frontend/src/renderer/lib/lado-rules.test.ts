@@ -160,6 +160,33 @@ describe("rule presentation", () => {
 		expect(ladoStrengthLabel(ko, "advisory")).toBe("권고");
 	});
 
+	it("translates the gates of a pull request unless the developer renamed the rule", () => {
+		const ko = createFullAppI18n("ko").t;
+		const gates: [string, string, string, string][] = [
+			[
+				"integration.approval.required",
+				"Integration approval required",
+				"통합 승인 필수",
+				"워커는 풀 리퀘스트를 병합하지 않습니다. 각 head의 통합은 LADO에서 직접 승인합니다.",
+			],
+			[
+				"git.protected_branch.no_direct_write",
+				"No direct writes to the base branch",
+				"기준 브랜치 직접 쓰기 금지",
+				"워커는 기준 브랜치에 푸시하거나 리셋하거나 갱신하지 않습니다. 작업은 풀 리퀘스트로만 기준 브랜치에 들어갑니다.",
+			],
+			["test.command.must_pass", "Tests must pass", "테스트 통과 필수", "프로젝트의 검사 명령과 필수 CI 검사가 통과해야 풀 리퀘스트 head가 준비됩니다."],
+			["paths.protected", "Protected paths", "보호 경로", "승인된 계획이 이름을 댄 경우에만 워커가 보호 경로를 바꿉니다."],
+		];
+		for (const [ruleId, seedName, name, description] of gates) {
+			expect(ladoRuleName(ko, ruleId, seedName)).toBe(name);
+			expect(ladoRuleDescription(ko, ruleId, seedName)).toBe(description);
+			// A rule renamed after it was seeded keeps the name it was given.
+			expect(ladoRuleName(ko, ruleId, "우리 팀 규칙")).toBe("우리 팀 규칙");
+			expect(ladoRuleDescription(ko, ruleId, "우리 팀 규칙")).toBeUndefined();
+		}
+	});
+
 	it("names conflicting rules as the app shows them", () => {
 		const en = createFullAppI18n("en").t;
 		const problem = { code: "LADO_RULES_CONFLICT", severity: "blocking" as const, rules: ["git.commit.message.korean", "team.english"], details: {} };

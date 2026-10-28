@@ -1,6 +1,7 @@
-// LADO fork: Settings → Rules (docs/LJY-PRD/HARNESS.md §12, PRD §6 Rules
-// manager). Protected rules are always on; only the permission ceiling's mode
-// changes, through the desktop app's confirmation. Every other rule is turned
+// LADO fork: Settings → Rules (docs/LJY-PRD/HARNESS.md §12 and §14, PRD §6
+// Rules manager). Protected rules are always on; only the permission
+// ceiling's mode and the protected paths change, through the desktop app's
+// confirmation. Every other rule is turned
 // on or off for all LADO projects here, edited, archived or deleted, and a
 // change that reaches approved tasks names them before it is made.
 import { useQueryClient } from "@tanstack/react-query";
@@ -16,6 +17,7 @@ import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { LadoRuleEditorDialog } from "../lado/LadoRuleEditorDialog";
 import { LadoRuleHistoryDialog } from "../lado/LadoRuleHistoryDialog";
+import { LadoProtectedPathsDialog } from "../lado/LadoProtectedPathsDialog";
 import { LadoRuleImpactDialog } from "../lado/LadoRuleImpactDialog";
 import { ladoCategoryKey, ladoCategoryLabel, LadoProtectedRuleRow, LadoRuleRow, type LadoRuleRowActions } from "../lado/LadoRuleRows";
 import { Button } from "../ui/button";
@@ -59,6 +61,8 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const [editor, setEditor] = useState<Opening>({ key: 0, open: false, rule: null });
 	const [history, setHistory] = useState<Opening>({ key: 0, open: false, rule: null });
 	const [deleting, setDeleting] = useState<{ open: boolean; rule: LadoRule | null }>({ open: false, rule: null });
+	// The protected paths as they were when the editor opened.
+	const [pathsEditor, setPathsEditor] = useState<{ key: number; open: boolean; globs: string[] }>({ key: 0, open: false, globs: [] });
 	const [archivedOpen, setArchivedOpen] = useState(false);
 
 	const all = rules.data ?? [];
@@ -156,6 +160,9 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 											onCeilingChange={(mode) =>
 												run(rule, { kind: "ceiling", ruleId: rule.id, baseVersion: rule.version, mode })
 											}
+											onEditPaths={() =>
+												setPathsEditor((current) => ({ key: current.key + 1, open: true, globs: rule.paths?.globs ?? [] }))
+											}
 											onHistory={actionsFor(rule).onHistory}
 										/>
 									))}
@@ -222,6 +229,12 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 				rule={editor.rule ?? undefined}
 				rules={all}
 				onOpenChange={(open) => setEditor((current) => ({ ...current, open }))}
+			/>
+			<LadoProtectedPathsDialog
+				key={`paths-${pathsEditor.key}`}
+				open={pathsEditor.open}
+				globs={pathsEditor.globs}
+				onOpenChange={(open) => setPathsEditor((current) => ({ ...current, open }))}
 			/>
 			<LadoRuleHistoryDialog
 				key={`history-${history.key}`}

@@ -22,6 +22,7 @@ const { cloudProjectsState, localWorkspacesState } = vi.hoisted(() => ({
 vi.mock("../../lib/lado", async (original) => ({
 	...(await original<typeof import("../../lib/lado")>()),
 	fetchLadoProjectSettings: vi.fn(),
+	fetchLadoProtection: vi.fn(),
 }));
 
 // The settings dialog around the page, as SettingsDialog.test.tsx stubs it.
@@ -81,6 +82,7 @@ describe("LadoProjectSection", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
 		vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue(off);
+		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({ projectId: "demo", repositories: [] });
 		vi.spyOn(apiClient, "PUT").mockImplementation((async (_path: string, init: { body: Partial<lado.LadoProjectSettings> }) => ({
 			data: { ...off, ...init.body },
 			error: undefined,
@@ -101,6 +103,35 @@ describe("LadoProjectSection", () => {
 		expect(capSelect()).toHaveTextContent("3");
 		expect(rowOf(modeSwitch())).toHaveTextContent("When on, this project's workers start only from plans you approved.");
 		expect(lado.fetchLadoProjectSettings).toHaveBeenCalledWith("demo");
+	});
+
+	it("follows the mode with the project's checks and branch protection", async () => {
+		vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({
+			...on,
+			checkCommands: [{ name: "unit tests", command: "npm test" }],
+			checkTimeoutMinutes: 15,
+		});
+		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({
+			projectId: "demo",
+			repositories: [
+				{ repository: "github:acme/demo", branch: "main", state: "unprotected", missing: ["deletion"], requiredChecks: [], checkedAt: "2026-10-27T09:00:00Z" },
+			],
+		});
+		renderSection();
+
+		await screen.findByRole("switch", { name: "LADO mode" });
+		const checks = screen.getByTestId("lado-project-checks");
+		expect(within(checks).getByRole("heading", { name: "Checks" })).toBeInTheDocument();
+		expect(within(checks).getByRole("textbox", { name: "Name 1" })).toHaveValue("unit tests");
+		expect(within(checks).getByRole("textbox", { name: "Command 1" })).toHaveValue("npm test");
+		expect(within(checks).getByRole("button", { name: "Time limit" })).toHaveTextContent("15 minutes");
+
+		const protection = screen.getByTestId("lado-project-protection");
+		expect(within(protection).getByRole("heading", { name: "Branch protection" })).toBeInTheDocument();
+		expect(await within(protection).findByText("Missing: Deletion blocked")).toBeInTheDocument();
+		expect(lado.fetchLadoProtection).toHaveBeenCalledWith("demo");
+		// The mode and the cap stay one card above them, under the page's own title.
+		expect(screen.queryByRole("heading", { name: "LADO" })).not.toBeInTheDocument();
 	});
 
 	it("turns LADO mode on with a plain call", async () => {
@@ -232,7 +263,7 @@ describe("LadoProjectSection", () => {
 		renderSettings();
 		await user.click(await screen.findByRole("button", { name: "LADO" }));
 		expect(navNames()).not.toContain("Rules");
-		put().mockResolvedValue({ data: { projectId: "plain", ladoMode: true, maxConcurrent: 1 }, error: undefined } as never);
+		put().mockResolvedValue({ data: { projectId: "plain", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 }, error: undefined } as never);
 		await user.click(await screen.findByRole("switch", { name: "LADO mode" }));
 		await waitFor(() => expect(navNames().slice(-2)).toEqual(["LADO", "Rules"]));
 		cleanup();

@@ -77,6 +77,19 @@ const review = rule({
 	],
 });
 
+// The gates of a pull request (step 8), protected like the two above.
+const gate = (id: string, name: string, category: string, enforcement: string[]) =>
+	rule({ id, name, builtin: true, protected: true, category, enforcement, strength: "prevents" });
+const integrationApproval = gate("integration.approval.required", "Integration approval required", "workflow", ["workflow_gate", "prompt"]);
+const noDirectWrite = gate("git.protected_branch.no_direct_write", "No direct writes to the base branch", "git", ["workflow_gate", "prompt"]);
+const testsMustPass = gate("test.command.must_pass", "Tests must pass", "workflow", ["validator", "prompt"]);
+const DEFAULT_PATHS = [".github/**", ".gitlab-ci.yml", ".gitlab/**", "**/CLAUDE.md", "**/AGENTS.md", ".claude/**", ".codex/**", ".mcp.json", ".ao/**"];
+const protectedPaths = {
+	...gate("paths.protected", "Protected paths", "git", ["validator", "prompt"]),
+	strength: "detects" as const,
+	paths: { globs: DEFAULT_PATHS },
+};
+
 const noImpact: lado.LadoRuleImpact = { projects: [], tasks: [] };
 const impact: lado.LadoRuleImpact = {
 	projects: [{ id: "demo", name: "Demo" }],
@@ -142,6 +155,63 @@ describe("RulesSection", () => {
 		expect(within(reviewRow).getByRole("switch", { name: "Ask for a review for every LADO project" })).toBeChecked();
 		expect(within(row(korean.id)!).getByRole("switch", { name: "Commit messages in Korean for every LADO project" })).not.toBeChecked();
 		expect(within(reviewRow).getByText("Advisory · On in 1 project · Off in 2 tasks")).toBeInTheDocument();
+	});
+
+	it("lists the gates of a pull request with the protected rules", async () => {
+		vi.mocked(lado.fetchLadoRules).mockResolvedValue([planApproval, ceiling, integrationApproval, noDirectWrite, testsMustPass, protectedPaths, korean, review]);
+		renderSection();
+
+		const protectedCard = (await screen.findByRole("heading", { name: "Protected rules" })).closest("section")!;
+		await findRow(protectedPaths.id);
+		const expected: [lado.LadoRule, string, string][] = [
+			[integrationApproval, "Integration approval required", "Workers never merge their pull requests; you approve each head's integration in LADO."],
+			[
+				noDirectWrite,
+				"No direct writes to the base branch",
+				"Workers never push to, reset or update the base branch; their work reaches it only through a pull request.",
+			],
+			[testsMustPass, "Tests must pass", "A pull request's head is ready only when the project's check commands and the required CI checks pass."],
+			[protectedPaths, "Protected paths", "Workers change a protected path only when the approved plan names it."],
+		];
+		for (const [gateRule, name, description] of expected) {
+			const gateRow = row(gateRule.id)!;
+			expect(protectedCard).toContainElement(gateRow);
+			expect(within(gateRow).getByText(name)).toBeInTheDocument();
+			expect(within(gateRow).getByText(description)).toBeInTheDocument();
+			expect(within(gateRow).queryByRole("switch")).not.toBeInTheDocument();
+		}
+		for (const gateRule of [integrationApproval, noDirectWrite, testsMustPass]) {
+			expect(within(row(gateRule.id)!).getByText("Always on")).toBeInTheDocument();
+		}
+		// The protected paths show how many there are and open their editor instead.
+		const pathsRow = row(protectedPaths.id)!;
+		expect(within(pathsRow).queryByText("Always on")).not.toBeInTheDocument();
+		expect(within(pathsRow).getByText("9 paths")).toBeInTheDocument();
+		expect(within(pathsRow).getByRole("button", { name: "Edit protected paths" })).toHaveTextContent("Edit");
+	});
+
+	it("edits the protected paths through the desktop confirmation", async () => {
+		const user = userEvent.setup();
+		const changed = { ...protectedPaths, version: 2, paths: { globs: [...DEFAULT_PATHS, "deploy/**"] } };
+		vi.mocked(lado.fetchLadoRules)
+			.mockResolvedValueOnce([planApproval, ceiling, protectedPaths, korean, review])
+			.mockResolvedValue([planApproval, ceiling, changed, korean, review]);
+		const changeRule = vi.spyOn(aoBridge.lado.presence, "changeRule").mockResolvedValue({ status: "changed", rule: changed });
+		renderSection();
+
+		await user.click(within(await findRow(protectedPaths.id)).getByRole("button", { name: "Edit protected paths" }));
+		const dialog = await screen.findByRole("dialog", { name: "Edit protected paths" });
+		const field = within(dialog).getByRole("textbox", { name: "Paths and patterns" });
+		expect(field).toHaveValue(DEFAULT_PATHS.join("\n"));
+
+		await user.type(field, "{Enter}deploy/**");
+		await user.click(within(dialog).getByRole("button", { name: "Save paths" }));
+
+		await waitFor(() => expect(changeRule).toHaveBeenCalledWith("paths.protected", { globs: [...DEFAULT_PATHS, "deploy/**"] }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(await within(row(protectedPaths.id)!).findByText("10 paths")).toBeInTheDocument();
+		// The desktop app made the change; the renderer sent no rule change of its own.
+		expect(lado.updateLadoRule).not.toHaveBeenCalled();
 	});
 
 	it("changes the permission ceiling through the desktop confirmation", async () => {
