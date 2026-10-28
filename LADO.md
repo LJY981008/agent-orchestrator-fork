@@ -7,7 +7,7 @@ LADO is a fork of [Orchestrator.inc's Agent Orchestrator](https://github.com/Orc
 - **Work items are issues.** A task is an issue on the project's GitHub or GitLab repository. You create it from the New Task composer or import open issues; LADO tracks the issue and never edits it behind your back.
 - **A worker starts only from a plan you approved.** The project's orchestrator writes a plan for the issue. You review it, ask for changes, and approve one exact revision in the desktop app. An agent cannot approve its own work.
 - **Rules decide what agents may do**: global, project and task rules with protected gates, fixed into a snapshot with each plan approval. The worker gets that snapshot's rules in its instructions, runs within its permission ceiling, and keeps the agent it was approved with.
-- **Verification before integration** (step 8, in progress): LADO checks each head of the worker's pull request (the required CI checks, the project's own check commands, commit messages and changed paths, and AO's code review when the plan asks for it) and matches the worker's evidence against what it found. You approve the integration of that exact head in the desktop app. LADO then marks the head on GitHub (`lado/integration`), and AO's Merge refuses a head you did not approve.
+- **Verification before integration**: LADO checks each head of the worker's pull request (the required CI checks, the project's own check commands, commit messages and changed paths, and AO's code review when the plan asks for it) and matches the worker's evidence against what it found. You approve the integration of that exact head in the desktop app. LADO then marks the head on GitHub (`lado/integration`), and AO's Merge refuses a head you did not approve.
 
 LADO is built as additions to AO, not a rewrite: new code lives in new files inside AO's layers, and upstream files get only small hook lines, so upstream changes keep merging in.
 
@@ -27,7 +27,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | Merged |
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Merged |
 | 7 | Adopting your local agent setup (CLAUDE.md and AGENTS.md, settings, hooks, skills, MCP servers) into one managed place that every session the app starts gets, with restore | Merged |
-| 8 | Verification, evidence and integration approval: each PR head is checked (required checks, the project's check commands, commit messages, changed paths, the base branch, branch protection, review when the plan asks), the worker's evidence is matched against those records, and AO's merge needs your approval of that head | In progress |
+| 8 | Verification, evidence and integration approval: each PR head is checked (required checks, the project's check commands, commit messages, changed paths, the base branch, branch protection, review when the plan asks), the worker's evidence is matched against those records, and AO's merge needs your approval of that head | Merged |
 | 9 | Releases of this fork: a workflow that builds the desktop app (Windows first) and publishes it where the app looks for updates, and the checks that need a real Windows install | Planned |
 
 ## Trying it
@@ -72,6 +72,5 @@ Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables
 - Local setup adoption works on Linux only until step 9 checks Windows and macOS; restore works everywhere. AO's reviewer gets only the adopted instructions, and the background tasks that write titles get no adopted items.
 - A plan's base must be the branch workers start from. If that branch moved on after the plan was made, the run records by how many commits, but still starts.
 - GitLab projects have no remote merge control yet: LADO only detects a merge without approval there, and each integration asks you to confirm that. The same goes for a GitHub branch without the rules LADO needs.
-- The integration has not been checked against a real GitHub repository with a ruleset yet. LADO verifies only the newest pull request of a run.
-- Check commands run on your computer outside any agent sandbox. On Windows, stopping the processes they start waits for step 9's checks.
-- Protected paths are case-sensitive, so on Windows and macOS a new `docs/claude.md`, which the agent tools may read as `CLAUDE.md`, does not match `**/CLAUDE.md`.
+- A GitHub ruleset that takes `lado/integration` from one app only cannot be met by LADO's status, so LADO reads that branch as not protected and says to allow any source. LADO verifies only the newest pull request of a run.
+- Check commands run on your computer outside any agent sandbox. LADO keeps the daemon's tokens and git credentials out of their environment, but a command can still read any file you can, such as a stored token. On Windows, stopping the processes they start waits for step 9's checks.

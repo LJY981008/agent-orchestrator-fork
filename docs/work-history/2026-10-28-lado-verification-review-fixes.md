@@ -37,23 +37,27 @@
 | S10 | gate-6 테스트를 루프 경로로: `ao report --done` 뒤 세션이 끝나고 PR 이 열린 실행 | 고침 | 31d1ee0f0 | `TestFailingRequiredCheckKeepsValidatingDespiteReport` |
 | U7 데몬 | 설정 응답에 `checkCommandsSha256`, 변경 PUT 에 `checkCommandsBase` 필수. 다르면 409 `LADO_CHECK_COMMANDS_CHANGED`, 저장소도 트랜잭션 안에서 비교 | 고침 | 31d1ee0f0 | `TestLadoCheckCommandsSHA256`, `TestCheckCommandsChangeNeedsPresence`, `TestLadoProjectCheckSettings`, `TestLadoAPI_CheckCommandsNeedPresence` |
 | 데몬 상태 | 실행 응답에 `state`·`stateReason`(`LadoExecution.State`) | 고침 | 31d1ee0f0 | 단계 5 의 렌더러 테스트 |
-| S2 main | main 이 제어 문자(Cc, U+2028/2029)·방향 제어 문자가 든 명령을 묻기 전에 거부. 확인 창은 명령을 자르지 않고 공백을 접지 않음. 데몬도 U+2028/2029 를 제어 문자로 거부 | 고침 | S21 | `lado-presence.test.ts`("names a new order, and shows a long command whole", "refuses commands the daemon would refuse without asking"), `TestValidateLadoCheckCommands`(line separator) |
-| U1 | 보호 부족분을 공용 `ladoProtectionPartText` 로 번역(실행 패널, 카드, 데스크톱 확인 창). main 카탈로그에 `lado.protection.part.*` 5개 | 고침 | S21 | `LadoVerificationSection.test.tsx`(실제 값 fixture), `lado-presence.test.ts`("words protection and the base branch as they stand") |
-| U2 | Output 은 끝난 실행에만. 로그 query key 에 상태, `lado_execution` 이벤트에도 로그 무효화 | 고침 | S21 | "offers a command's output only once it ended, and reads it again for each state" |
-| U3 | 보호 경로 저장이 dry run → 영향받는 승인된 작업 목록 → 데스크톱 확인 | 고침 | S21 | `LadoProtectedPathsDialog.test.tsx`("lists the approved tasks…"), `RulesSection.test.tsx` |
-| U4 | `nextUnprotected` 는 `unprotected`·`unprotected_gitlab` 에만 | 고침 | S21 | "words protection and the base branch as they stand" |
-| U5 | 항목마다 sr-only 결과 단어 | 고침 | S21 | "lists the eight items…"(`Check commands, failed`) |
-| U6 | 병합 성공 뒤 PR 이 merged 로 보일 때까지 버튼 끔, AO PR 쿼리 무효화, 거절 뒤에도 다시 읽기 | 고침 | S21 | "keeps Merge off once the merge went through…" |
-| U7 main | main 이 읽은 설정의 `checkCommandsSha256` 을 서명 본문 `checkCommandsBase` 로. 브라우저 경로는 카드가 보인 목록의 해시 | 고침 | S21 | `lado-presence.test.ts`(서명 본문), `LadoProjectChecksCard.test.tsx` |
-| U8 | 검증 중을 `--color-status-validating` 으로 | 고침 | S21 | `lado-task-status.test.ts`, `LadoTaskDialog.test.tsx`, `LadoVerificationSection.test.tsx` |
-| U9 | DESIGN.md S17 행(Run again 위치, 나올 수 없는 예시)을 코드와 맞춤, 리뷰 수정 행 추가 | 고침 | S21 | — |
-| U10 | ko "헤드: {{head}}" → "head: {{head}}" | 고침 | S21 | 카탈로그 생성 |
-| 새 코드 | `worktree_changed`, `head_unavailable`, `base_deleted`, `LADO_INTEGRATION_TARGET_CHANGED`, `LADO_INTEGRATION_NOT_APPROVED`, `LADO_CHECK_COMMANDS_CHANGED`, `control_character`·`bidi_control`, 부족분 `any_source` 와 안내 | 고침 | S21 | `lado-errors.test.ts`, "names a deleted local base branch and a check taken from one app only", `LadoProjectProtectionCard.test.tsx` |
-| 데몬 상태 | 실행 패널이 `execution.state`/`stateReason` 을 그대로 씀 | 고침 | S21 | "shows the state and reason the daemon sends, not one of its own" |
-| 다시 게시 | 상태 게시 실패 시 "상태 다시 게시"(실행 패널, 작업 창) | 고침 | S21 | "posts a status that could not be posted again" |
-| 문서 23건 | 문서 대 코드 리뷰의 불일치 23건(TDD, HARNESS, PRD, ADR-0003)과 리뷰가 찾은 미기재 동작: 기준 브랜치 항목은 코드 하나(`already_on_base` → `base_deleted` → `base_moved` → `reflog_off`), 끝난 세션의 worktree 가 사라지면 `worktree_missing` 이 계속되고 수정 요청 없음, 거절된 승인도 다시 계산한 기록은 저장, 고전 브랜치 보호는 `unprotected` | 고침 | S24 | 옛 문구 grep 0건 |
-| ADR·PRD | ADR-0002 에 main 의 이른 거절과 통합 확인 문구, ADR-0003 에 토큰 사슬·확인 코드 집합·게이트 S5·S7, PRD PRJ-003·EXEC-004·MERGE-001·EVD-002·VER-002·VER-003 | 고침 | S24 | — |
-| 플랜·TDD 기록 | 8단계 플랜 §20 변경 기록(a, e·§16, h, l, Q1–Q4, 이 플랜의 결정)과 §0 용어집 head, TDD §15 항목 8 "Review fixes", TDD §8.2·HARNESS T2 한계, TDD §1.2 `go.yml` 행 | 고침 | S24 | — |
+| S2 main | main 이 제어 문자(Cc, U+2028/2029)·방향 제어 문자가 든 명령을 묻기 전에 거부. 확인 창은 명령을 자르지 않고 공백을 접지 않음. 데몬도 U+2028/2029 를 제어 문자로 거부 | 고침 | 4ca6877cd | `lado-presence.test.ts`("names a new order, and shows a long command whole", "refuses commands the daemon would refuse without asking"), `TestValidateLadoCheckCommands`(line separator) |
+| U1 | 보호 부족분을 공용 `ladoProtectionPartText` 로 번역(실행 패널, 카드, 데스크톱 확인 창). main 카탈로그에 `lado.protection.part.*` 5개 | 고침 | 4ca6877cd | `LadoVerificationSection.test.tsx`(실제 값 fixture), `lado-presence.test.ts`("words protection and the base branch as they stand") |
+| U2 | Output 은 끝난 실행에만. 로그 query key 에 상태, `lado_execution` 이벤트에도 로그 무효화 | 고침 | 4ca6877cd | "offers a command's output only once it ended, and reads it again for each state" |
+| U3 | 보호 경로 저장이 dry run → 영향받는 승인된 작업 목록 → 데스크톱 확인 | 고침 | 4ca6877cd | `LadoProtectedPathsDialog.test.tsx`("lists the approved tasks…"), `RulesSection.test.tsx` |
+| U4 | `nextUnprotected` 는 `unprotected`·`unprotected_gitlab` 에만 | 고침 | 4ca6877cd | "words protection and the base branch as they stand" |
+| U5 | 항목마다 sr-only 결과 단어 | 고침 | 4ca6877cd | "lists the eight items…"(`Check commands, failed`) |
+| U6 | 병합 성공 뒤 PR 이 merged 로 보일 때까지 버튼 끔, AO PR 쿼리 무효화, 거절 뒤에도 다시 읽기 | 고침 | 4ca6877cd | "keeps Merge off once the merge went through…" |
+| U7 main | main 이 읽은 설정의 `checkCommandsSha256` 을 서명 본문 `checkCommandsBase` 로. 브라우저 경로는 카드가 보인 목록의 해시 | 고침 | 4ca6877cd | `lado-presence.test.ts`(서명 본문), `LadoProjectChecksCard.test.tsx` |
+| U8 | 검증 중을 `--color-status-validating` 으로 | 고침 | 4ca6877cd | `lado-task-status.test.ts`, `LadoTaskDialog.test.tsx`, `LadoVerificationSection.test.tsx` |
+| U9 | DESIGN.md S17 행(Run again 위치, 나올 수 없는 예시)을 코드와 맞춤, 리뷰 수정 행 추가 | 고침 | 4ca6877cd | — |
+| U10 | ko "헤드: {{head}}" → "head: {{head}}" | 고침 | 4ca6877cd | 카탈로그 생성 |
+| 새 코드 | `worktree_changed`, `head_unavailable`, `base_deleted`, `LADO_INTEGRATION_TARGET_CHANGED`, `LADO_INTEGRATION_NOT_APPROVED`, `LADO_CHECK_COMMANDS_CHANGED`, `control_character`·`bidi_control`, 부족분 `any_source` 와 안내 | 고침 | 4ca6877cd | `lado-errors.test.ts`, "names a deleted local base branch and a check taken from one app only", `LadoProjectProtectionCard.test.tsx` |
+| 데몬 상태 | 실행 패널이 `execution.state`/`stateReason` 을 그대로 씀 | 고침 | 4ca6877cd | "shows the state and reason the daemon sends, not one of its own" |
+| 다시 게시 | 상태 게시 실패 시 "상태 다시 게시"(실행 패널, 작업 창) | 고침 | 4ca6877cd | "posts a status that could not be posted again" |
+| 문서 23건 | 문서 대 코드 리뷰의 불일치 23건(TDD, HARNESS, PRD, ADR-0003)과 리뷰가 찾은 미기재 동작: 기준 브랜치 항목은 코드 하나(`already_on_base` → `base_deleted` → `base_moved` → `reflog_off`), 끝난 세션의 worktree 가 사라지면 `worktree_missing` 이 계속되고 수정 요청 없음, 거절된 승인도 다시 계산한 기록은 저장, 고전 브랜치 보호는 `unprotected` | 고침 | f022834da | 옛 문구 grep 0건 |
+| ADR·PRD | ADR-0002 에 main 의 이른 거절과 통합 확인 문구, ADR-0003 에 토큰 사슬·확인 코드 집합·게이트 S5·S7, PRD PRJ-003·EXEC-004·MERGE-001·EVD-002·VER-002·VER-003 | 고침 | f022834da | — |
+| 플랜·TDD 기록 | 8단계 플랜 §20 변경 기록(a, e·§16, h, l, Q1–Q4, 이 플랜의 결정)과 §0 용어집 head, TDD §15 항목 8 "Review fixes", TDD §8.2·HARNESS T2 한계, TDD §1.2 `go.yml` 행 | 고침 | f022834da | — |
+| 랩: 레인 | PR 이 열린(검증 중·통합 대기·통합 중) 작업이 계획 레인에도 남아 세션 카드와 겹침 → 워커가 시작한 작업은 이 상태들에서도 레인에서 뺌 | 고침 | 21c7d42a6 | `LadoLanes.test.tsx`("a task whose worker started leaves the lanes…") |
+| 랩: 명령 충돌 | `LADO_CHECK_COMMANDS_CHANGED` 뒤에도 옛 기준으로 같은 거절이 되풀이되고 "지금 목록"을 볼 수 없음 → 설정을 다시 읽고 카드가 지금 목록을 보임 | 고침 | 21c7d42a6 | `LadoProjectChecksCard.test.tsx`("shows the current list when the commands changed…") |
+| 랩: 병합 뒤 오류 | 병합되거나 닫힌 PR 에도 상태 게시 오류가 남음 → 열린 PR 에만 | 고침 | 21c7d42a6 | "posts a status that could not be posted again"(병합 PR 사례) |
+| 랩: any source 줄 | 보호 카드에서 "빠진 것: …"과 Q3 안내가 마침표 없이 한 줄로 이어짐 → 안내를 따로 한 줄로 | 고침 | 4c6d61f88 | `LadoProjectProtectionCard.test.tsx`("says to take lado/integration from any source") |
 
 ## 결정과 이탈
 
@@ -71,7 +75,20 @@
 - 렌더러에는 보호 경로를 실제 경로에 맞춰 보는 미리보기가 없다(글롭 문법만 검사). 그래서 Q1 의 "렌더러 미리보기도 같은 규칙"은 할 일이 없었다.
 - 단계 3·4 를 push 한 5289e3b5c 에서는 프런트 typecheck 가 테스트 fixture 15건(새 필수 필드)으로 실패했다. 백엔드 CI 를 먼저 보려고 그대로 올렸고, 단계 5 에서 고쳤다.
 
+## 랩 확인 (2026-10-28)
+
+- 구성: 이 브랜치를 빌드한 격리 데몬(3917, 임시 HOME·AO_DATA_DIR, `AO_LADO_DEV_PRESENCE=1`, tmux 소켓 따로)과 dev-web(5199, `AO_DEV_API_TARGET=http://127.0.0.1:9`). 실사용 데몬(3001)과 실제 `~/.ao` 는 건드리지 않았다. 스크린숏은 세션 산출물 폴더 `lab/` 에 있다.
+- 데이터: 오케스트레이터·트래커·디스패처·PR 관찰자가 만들 행(작업 2개, 전달된 플랜 요청, 플랜 판과 blob, 실행, 세션, PR)은 python `sqlite3` 로 넣고, 플랜 승인·검사 명령·보호 경로·상태 다시 게시는 진짜 화면으로 몰았다. 실행 세션 id 는 미리보기 보드의 `demo-working`·`demo-needs-input` 을 써서 세션 인스펙터에 실행 패널이 뜨게 했다. 에이전트는 설치되지 않은 `cursor` 로 두어 디스패처가 워커를 띄우지 않게 했다.
+- 가짜 토큰 단계(합성 저장소): 루프가 실제로 기록을 계산(통합 대기, `protection_unknown` 의 `http_401`). S2: 방향 제어 문자(U+202E)와 줄 구분 문자(U+2028)가 든 명령을 데몬이 위치·문자와 함께 거절하고, 입력란은 뒤집힌 글자와 한 줄처럼 보이는 두 명령을 그대로 보여 위험을 확인했다. U7: 다른 곳에서 목록을 바꾼 뒤 저장하면 충돌 문구와 지금 목록. U2: 실행 중에는 Output 없음, 끝나면 Output 에 로그. U3: 보호 경로에 글롭을 더하면 다시 검토될 승인된 작업(#9002) 목록. S8: 실패한 상태(시도 12회)에 "상태 다시 게시" → 시도가 0 으로 돌아가 한 번 다시 시도(가짜 토큰이라 다시 실패). V9: 시간 초과를 넣어도 열린 PR 의 상태(통합 중)와 "최대 실행 시간에 도달해 중지됨". V7: 로컬 `main` 을 지우자 `base_deleted`("실행 시작 때 있던 로컬 브랜치가 없어짐"). 병합 표시 뒤 완료(병합 색). 영어·다크, 한국어·라이트.
+- 실제 GitHub 단계(소유자 사전 승인, PRD 게이트 7 의 수동 절반): 포크에 임시 브랜치 `lado-gate7-base`(main 에서)와 `lado-gate7-head`(`[skip ci]` 커밋 하나), `lado-gate7-base` 에만 거는 임시 규칙셋 `lado-gate7-temp`(PR 필수, `lado/integration` 필수(모든 출처), 강제 푸시·삭제 차단), PR #35. 랩 데몬에는 실제 토큰을 환경 변수로만 줬다(파일에 쓰지 않음, 끝난 뒤 로그·데이터에서 토큰 문자열 0건).
+  - 규칙셋 전: LADO 가 `unprotected`, 빠진 것 넷을 번역해 보임(U1).
+  - 규칙셋 뒤: LADO `protected`, 실행의 보호 항목 pass. GitHub 는 PR #35 를 `BLOCKED` 로 막음.
+  - 랩에서 통합 승인 → head `a25b0d02f` 에 `lado/integration` `success`("Approved in LADO") 게시, 시도 1회 → GitHub `CLEAN`. 병합하지 않았다.
+  - 검사를 GitHub Actions 앱(`integration_id` 15368)에서만 받도록 바꾸자 LADO 가 `unprotected`·`required_status_checks:lado/integration:any_source` 와 안내를 보였고, GitHub 는 LADO 의 상태가 있어도 PR 을 다시 `BLOCKED` 로 막았다. Q3 판단(토큰으로는 그 규칙을 채울 수 없음)이 실제로 맞다.
+  - 정리: 규칙셋 삭제, PR #35 닫음(병합 안 됨), 두 브랜치 삭제. `GET /repos/LJY981008/agent-orchestrator-fork/rulesets` 가 빈 목록이고 `main` 의 규칙도 0개다. 랩 데몬은 바로 멈췄다.
+- 도구: 실제 GitHub 단계 중간에 AO 브라우저가 탭 대상 불일치(`BROWSER_TARGET_MISMATCH`)로 멈춰, 마지막 스크린숏 세 장은 별도 Playwright 브라우저로 같은 dev-web 을 찍었다.
+
 ## 다음 단계 메모 (진행 중, 끝나면 지운다)
 
-- 단계 6(S24 문서)은 끝났다. 커밋 해시는 진행표의 S21·S24 자리에 채운다.
-- 그다음: 로컬 test_commands 전체, 랩, 실제 GitHub ruleset, AO 리뷰, 마무리(LADO.md·ko 8행 Merged, PR 본문).
+- 랩과 실제 GitHub 확인은 끝났다. LADO.md·LADO.ko.md 의 8행과 알려진 한계(대소문자, 실제 규칙셋, 검사 명령의 T2)를 고쳤다.
+- 남은 것: 로컬 test_commands 전체(sqlite race 는 다른 작업이 없을 때 다시), PR CI, AO 리뷰(최대 3회), PR 본문, ready.
