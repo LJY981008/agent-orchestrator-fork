@@ -58,6 +58,9 @@ func (pf *planFixture) auditActions(t *testing.T) []string {
 		}
 		actions = append(actions, action)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return actions
 }
 
@@ -534,6 +537,38 @@ func TestSubmitPlanAndCritiqueRefuseWhatTheRequestDoesNotTake(t *testing.T) {
 	legacy := pf.legacyRequest(t, "", "", true)
 	if _, err := pf.svc.SubmitPlan(ctx, SubmitPlanInput{RequestID: legacy.ID, SessionID: orchestratorID, Content: []byte(plan), Draft: true}); apiCode(err) != "LADO_PLAN_REQUEST_NOT_FOUND" {
 		t.Fatalf("a submission for an orchestrator's request = %v", err)
+	}
+}
+
+// A final plan LADO cannot write into the designer's artifact folder is
+// refused, and the request waits for it as before, so the designer can
+// submit it again.
+func TestSubmitPlanReportsAPlanFileItCannotWrite(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	req := pf.requestAndStart(t, PlanRequestInput{TaskID: pf.task.ID})
+	designer := pf.designer(t, req.ID)
+	plan := pf.workerPlan("issue", "", "backend/**")
+	pf.submit(t, req.ID, designer, plan, true)
+	// A small plan: LADO skips the review and asks for the final plan.
+	pf.svc.DrivePlanWorkers(ctx)
+	if got := pf.request(t, req.ID); got.WorkerPhase() != domain.LadoPlanPhaseRevising {
+		t.Fatalf("phase = %q, want revising", got.WorkerPhase())
+	}
+	blocked := filepath.Join(t.TempDir(), "a-file")
+	if err := os.WriteFile(blocked, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pf.sessions.mu.Lock()
+	rec := pf.sessions.records[designer]
+	rec.Metadata.ArtifactDir = filepath.Join(blocked, "artifacts")
+	pf.sessions.records[designer] = rec
+	pf.sessions.mu.Unlock()
+	if _, err := pf.svc.SubmitPlan(ctx, SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte(plan)}); apiCode(err) != "LADO_PLAN_SUBMIT_FAILED" {
+		t.Fatalf("a plan LADO cannot write = %v, want LADO_PLAN_SUBMIT_FAILED", err)
+	}
+	if got := pf.request(t, req.ID); !got.SubmittedAt.IsZero() || got.WorkerPhase() != domain.LadoPlanPhaseRevising {
+		t.Fatalf("request = phase %q, submitted %v; want it still revising", got.WorkerPhase(), got.SubmittedAt)
 	}
 }
 

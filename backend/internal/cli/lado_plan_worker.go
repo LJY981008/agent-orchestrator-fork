@@ -105,7 +105,7 @@ func ladoPlanSubmission(command string) bool {
 		return false
 	}
 	head := ladoPlanSubmitHead.FindStringSubmatch(lines[0])
-	if head == nil || lines[len(lines)-1] != head[2] {
+	if len(head) < 3 || lines[len(lines)-1] != head[2] {
 		return false
 	}
 	// The shell ends the here-document at the first line equal to its

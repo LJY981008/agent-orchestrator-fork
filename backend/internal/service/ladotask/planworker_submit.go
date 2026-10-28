@@ -87,7 +87,8 @@ func (s *Service) SubmitPlan(ctx context.Context, in SubmitPlanInput) (domain.La
 		return domain.LadoPlanRequest{}, apierr.Internal("LADO_PLAN_SUBMIT_FAILED", "LADO could not find the plan worker's session")
 	}
 	target := filepath.Join(s.artifactDir(rec), filepath.FromSlash(domain.LadoPlanPath(req.TaskID)))
-	if err := os.MkdirAll(filepath.Dir(target), 0o750); err == nil {
+	err = os.MkdirAll(filepath.Dir(target), 0o750)
+	if err == nil {
 		err = writeFileAtomic(target, content)
 	}
 	if err != nil {

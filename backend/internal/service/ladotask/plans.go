@@ -8,8 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"unicode/utf8"
 
@@ -67,8 +65,7 @@ type Artifacts interface {
 	Read(ctx context.Context, version domain.SessionArtifactVersion) ([]byte, error)
 }
 
-// PlanRequestInput asks the orchestrator for a plan, or for changes to the
-// latest one.
+// PlanRequestInput asks for a plan, or for changes to the latest one.
 type PlanRequestInput struct {
 	TaskID domain.LadoTaskID
 	// SourceCommentID names the issue comment that holds the plan, when the
@@ -184,28 +181,6 @@ func issueReadFailed(ref domain.IssueID, err error) error {
 		return fmt.Errorf("%w: %w", domain.ErrLadoIssueNotFound, failed)
 	}
 	return failed
-}
-
-// writeIssueFile puts the pinned snapshot where an orchestrator reads it, for
-// a request made before plan workers. The file is a copy for reading; the
-// blob store keeps the original.
-func writeIssueFile(artifactDir string, task domain.LadoTask, snapshot domain.LadoIssueSnapshot, sum string, selection domain.LadoCommentSelection) error {
-	if artifactDir == "" {
-		return errors.New("the orchestrator has no artifact directory")
-	}
-	target := filepath.Join(artifactDir, filepath.FromSlash(domain.LadoIssueFilePath(task.ID)))
-	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
-		return err
-	}
-	tmp := target + ".tmp"
-	if err := os.WriteFile(tmp, []byte(renderIssueFile(task, snapshot, sum, selection)), 0o600); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, target); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
 }
 
 // deliver sends a request made before plan workers to its orchestrator once.

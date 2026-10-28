@@ -385,8 +385,8 @@ func DefaultLadoPlanReviewPatterns() map[string][]string {
 	}
 }
 
-// DefaultLadoPlanReviewSettings: skip on, up to three paths, the default
-// patterns.
+// DefaultLadoPlanReviewSettings returns the review skip defaults: skip on, up
+// to three paths, the default patterns.
 func DefaultLadoPlanReviewSettings() LadoPlanReviewSettings {
 	return LadoPlanReviewSettings{Skip: true, MaxPaths: 3, Patterns: DefaultLadoPlanReviewPatterns()}
 }

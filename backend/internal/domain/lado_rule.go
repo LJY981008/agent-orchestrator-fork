@@ -112,21 +112,6 @@ const (
 	LadoRulePlanCritic   LadoRuleID = "plan.role.critic"
 )
 
-// PlanRole returns the plan worker role whose instructions the rule holds, and
-// whether it is a role's rule.
-func (c LadoRuleContent) PlanRole(id LadoRuleID) (LadoPlanRole, bool) {
-	if !c.Has(LadoEnforcementPlanRole) {
-		return "", false
-	}
-	switch id {
-	case LadoRulePlanDesigner:
-		return LadoPlanRoleDesigner, true
-	case LadoRulePlanCritic:
-		return LadoPlanRoleCritic, true
-	}
-	return "", false
-}
-
 // LadoRuleContent is what one rule version says (docs/LJY-PRD/HARNESS.md
 // §5). Its hash tells versions apart: an edit that leaves the hash as it was
 // adds no version.
@@ -201,6 +186,21 @@ func (c LadoRuleContent) Strength() LadoStrength {
 // Has reports whether the rule uses the enforcement class.
 func (c LadoRuleContent) Has(e LadoEnforcement) bool {
 	return slices.Contains(c.Enforcement, e)
+}
+
+// PlanRole returns the plan worker role whose instructions the rule holds, and
+// whether it is a role's rule.
+func (c LadoRuleContent) PlanRole(id LadoRuleID) (LadoPlanRole, bool) {
+	if !c.Has(LadoEnforcementPlanRole) {
+		return "", false
+	}
+	switch id {
+	case LadoRulePlanDesigner:
+		return LadoPlanRoleDesigner, true
+	case LadoRulePlanCritic:
+		return LadoPlanRoleCritic, true
+	}
+	return "", false
 }
 
 // LadoRuleVersion is one version of a rule. Versions never change; an edit

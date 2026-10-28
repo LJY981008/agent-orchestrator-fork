@@ -190,6 +190,9 @@ func TestLadoPlanWorkerRequestLifecycle(t *testing.T) {
 		}
 		actions = append(actions, action)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	if want := []string{"plan_worker.started", "plan_worker.critique_started", "plan_worker.submitted", "plan_worker.cleaned"}; !slices.Equal(actions, want) {
 		t.Fatalf("audit actions = %v, want %v", actions, want)
 	}
