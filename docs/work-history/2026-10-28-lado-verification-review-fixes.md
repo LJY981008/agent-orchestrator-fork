@@ -87,6 +87,10 @@
 
 - 1회차(run 9ad21d83, claude-code, head b7eec9030): 변경 요청. 인라인 6건(워크스페이스 보호 경로, 병합 게이트 대상, 승인의 실시간 읽기, merge-base, 워크트리 내용, 보호 경로 확인 창)을 모두 고쳤다. 선택 4건 중 기록의 PR 과 구분자는 고쳤다. 나머지 둘은 고치지 않았다. 데스크톱 경로의 `base` 는 플랜의 U7 결정대로 main 이 직접 읽은 목록으로 서명하고 그 차이를 확인 창에 보이므로 그대로 둔다. 작업 창의 병합 head 는 작업 읽기의 `integrating` 이 곧 현재 head 의 승인이라 같은 값이다.
 - 처음 두 번의 시작은 데몬의 tmux 오류(`system tmux is unavailable`)로 실패했다. 소유자가 시스템 tmux 를 설치하고 데몬을 다시 띄운 뒤 시작됐다.
+- 2회차(run f9f41faf, head a8d020134): 승인. 1회차 지적 6건과 선택 2건의 반영을 확인했다. 선택 의견 셋은 고치지 않고 남긴다(승인된 head 를 그대로 둔다).
+  - 워크트리 상태가 바뀐 파일과 추적하지 않는 파일을 매번 모두 읽어 해시한다. `.gitignore` 에 없는 큰 빌드 산출물이 있으면 비용이 크고, 파일 읽기에는 ctx 취소가 걸리지 않는다. 크기 상한이나 mtime·크기 캐시는 후속 작업이다.
+  - 상태 해시 형식이 바뀌었다. 하지만 `lado_check_runs` 는 이 PR 의 0008 이 처음 만들므로 옛 형식의 기록이 남아 있는 head 는 없다.
+  - 데스크톱 경로의 `base` 는 플랜의 U7 결정대로 둔다(1회차와 같음).
 
 ## 랩 확인 (2026-10-28)
 
@@ -101,7 +105,7 @@
   - 정리: 규칙셋 삭제, PR #35 닫음(병합 안 됨), 두 브랜치 삭제. `GET /repos/LJY981008/agent-orchestrator-fork/rulesets` 가 빈 목록이고 `main` 의 규칙도 0개다. 랩 데몬은 바로 멈췄다.
 - 도구: 실제 GitHub 단계 중간에 AO 브라우저가 탭 대상 불일치(`BROWSER_TARGET_MISMATCH`)로 멈춰, 마지막 스크린숏 세 장은 별도 Playwright 브라우저로 같은 dev-web 을 찍었다.
 
-## 다음 단계 메모 (진행 중, 끝나면 지운다)
+## 확인
 
-- 랩과 실제 GitHub 확인은 끝났다. LADO.md·LADO.ko.md 의 8행과 알려진 한계(대소문자, 실제 규칙셋, 검사 명령의 T2)를 고쳤다.
-- 남은 것: 로컬 test_commands 전체(sqlite race 는 다른 작업이 없을 때 다시), PR CI, AO 리뷰(최대 3회), PR 본문, ready.
+- 로컬(Ubuntu, go1.27.1, Node 24): `npm run sqlc`·`npm run api` 차이 없음, gofmt·build·vet, `GOOS=windows go vet ./internal/service/ladoverify/...`, golangci-lint v2.13.2, LADO 패키지 race(격리 HOME), sqlite·store 패키지(race 없이, 로컬 race 는 부하 속 10분 제한에 걸려 CI 의 4 샤드로 확인), cloud-client, vitest 535 파일 8822 통과, typecheck·typecheck:e2e, 렌더러 smoke 96 통과, gitleaks, 깨끗한 트리, `go.work.sum` 그대로, 4719d76fd 조상 확인.
+- PR CI: 중간 push 에서 sqlite-race 두 샤드가 0008 테스트의 기대 열 목록(`target_branch` 누락)으로 실패해 1687383c3 에서 고쳤고, 그 커밋의 Go 실행은 통과했다. 마지막 head 의 CI 결과는 PR 본문에 적는다.
