@@ -132,11 +132,15 @@ function LadoLane({
 	);
 }
 
+// The states of a task whose worker started: its session card carries it,
+// with its pull request's verification and integration.
+const startedStates = new Set<LadoTask["state"]>(["running", "validating", "integration_pending", "integrating", "completed"]);
+
 // The daemon leaves cancelled tasks out; the lanes also leave out the tasks
-// whose worker started, since its session card carries them. A failed run
-// stays, to be approved again, and so does an issue closed before any run.
+// whose worker started. A failed run stays, to be approved again, and so
+// does an issue closed before any run.
 function inLanes(task: LadoTask): boolean {
-	if (task.state === "running" || task.state === "completed") return false;
+	if (startedStates.has(task.state)) return false;
 	return task.state !== "closed_unmerged" || task.execution === undefined;
 }
 

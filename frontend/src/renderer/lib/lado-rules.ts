@@ -9,8 +9,10 @@ import { useState } from "react";
 import type { MessageKey } from "../i18n/messages";
 import {
 	changeLadoCeiling,
+	changeLadoProtectedPaths,
 	createLadoRule,
 	invalidateLadoRuleQueries,
+	LADO_PROTECTED_PATHS_RULE_ID,
 	setLadoBinding,
 	updateLadoRule,
 	type LadoBindingInput,
@@ -29,6 +31,12 @@ export const LADO_RULE_PLAN_APPROVAL = "plan.approval.required";
 export const LADO_RULE_PERMISSION_CEILING = "agent.permission.ceiling";
 export const LADO_RULE_KOREAN_COMMITS = "git.commit.message.korean";
 export const LADO_RULE_SETUP_PRESENCE = "setup.change.requires_presence";
+// The gates of a pull request (step 8): LADO's verification and the
+// integration approval enforce them.
+export const LADO_RULE_INTEGRATION_APPROVAL = "integration.approval.required";
+export const LADO_RULE_NO_DIRECT_WRITE = "git.protected_branch.no_direct_write";
+export const LADO_RULE_TESTS_MUST_PASS = "test.command.must_pass";
+export const LADO_RULE_PROTECTED_PATHS = LADO_PROTECTED_PATHS_RULE_ID;
 
 type BuiltinKeys = { seedName: string; name: MessageKey; description: MessageKey };
 
@@ -54,6 +62,26 @@ const builtinRules: Partial<Record<string, BuiltinKeys>> = {
 		seedName: "Local setup changes need the desktop app's confirmation",
 		name: "lado.rules.builtin.setupPresence.name",
 		description: "lado.rules.builtin.setupPresence.description",
+	},
+	[LADO_RULE_INTEGRATION_APPROVAL]: {
+		seedName: "Integration approval required",
+		name: "lado.rules.builtin.integrationApproval.name",
+		description: "lado.rules.builtin.integrationApproval.description",
+	},
+	[LADO_RULE_NO_DIRECT_WRITE]: {
+		seedName: "No direct writes to the base branch",
+		name: "lado.rules.builtin.noDirectWrite.name",
+		description: "lado.rules.builtin.noDirectWrite.description",
+	},
+	[LADO_RULE_TESTS_MUST_PASS]: {
+		seedName: "Tests must pass",
+		name: "lado.rules.builtin.testsMustPass.name",
+		description: "lado.rules.builtin.testsMustPass.description",
+	},
+	[LADO_RULE_PROTECTED_PATHS]: {
+		seedName: "Protected paths",
+		name: "lado.rules.builtin.protectedPaths.name",
+		description: "lado.rules.builtin.protectedPaths.description",
 	},
 };
 
@@ -92,14 +120,16 @@ export function ladoProblemText(
 
 /**
  * A rule change. Each runs first as a dry run, which needs no confirmation;
- * the permission ceiling's mode is then changed through the desktop app's
- * confirmation (changeLadoCeiling).
+ * the permission ceiling's mode and the protected paths are then changed
+ * through the desktop app's confirmation (changeLadoCeiling,
+ * changeLadoProtectedPaths).
  */
 export type LadoRuleChangeRequest =
 	| { kind: "create"; input: Omit<LadoCreateRuleInput, "dryRun"> }
 	| { kind: "update"; ruleId: string; input: Omit<LadoUpdateRuleInput, "dryRun" | "ceiling"> }
 	| { kind: "binding"; input: Omit<LadoBindingInput, "dryRun"> }
-	| { kind: "ceiling"; ruleId: string; baseVersion: number; mode: LadoCeilingMode };
+	| { kind: "ceiling"; ruleId: string; baseVersion: number; mode: LadoCeilingMode }
+	| { kind: "paths"; ruleId: string; baseVersion: number; globs: string[] };
 
 export type LadoRuleChangeOutcome =
 	| { status: "applied"; rule?: LadoRule }
@@ -125,6 +155,12 @@ function dryRun(request: LadoRuleChangeRequest): Promise<LadoRuleChangeResult> {
 				ceiling: { mode: request.mode },
 				dryRun: true,
 			});
+		case "paths":
+			return updateLadoRule(request.ruleId, {
+				baseVersion: request.baseVersion,
+				paths: { globs: request.globs },
+				dryRun: true,
+			});
 	}
 }
 
@@ -138,6 +174,10 @@ async function apply(request: LadoRuleChangeRequest): Promise<LadoRuleChangeOutc
 			return { status: "applied", rule: (await setLadoBinding(request.input)).rule };
 		case "ceiling": {
 			const rule = await changeLadoCeiling(request.ruleId, request.mode);
+			return rule ? { status: "applied", rule } : { status: "cancelled" };
+		}
+		case "paths": {
+			const rule = await changeLadoProtectedPaths(request.globs);
 			return rule ? { status: "applied", rule } : { status: "cancelled" };
 		}
 	}

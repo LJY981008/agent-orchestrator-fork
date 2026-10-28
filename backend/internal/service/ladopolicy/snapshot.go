@@ -12,14 +12,15 @@ import (
 // Compiler names the snapshot format. SnapshotContent's fields, their JSON
 // names and their order are the format: changing any of them needs a new
 // name.
-const Compiler = "lado-policy/2"
+const Compiler = "lado-policy/3"
 
 // SnapshotContent is what applied to one approval (docs/LJY-PRD/HARNESS.md
 // §8): the on rules with the binding behind each, the AO worker
 // instructions, the on setup items of the agent's tool with the binding
 // behind each, the AO system layer, the accepted setup warnings, the worker's
-// rule text, the agent and its permission mode, and the problems found. Lists
-// are never nil, so they encode as [].
+// rule text, the workflow gates and the validators of the on rules, the agent
+// and its permission mode, and the problems found. Lists are never nil, so
+// they encode as [].
 type SnapshotContent struct {
 	Compiler          string                `json:"compiler"`
 	AOBuild           string                `json:"aoBuild"`
@@ -35,9 +36,12 @@ type SnapshotContent struct {
 	AcceptedConflicts []SnapshotAcceptedConflict `json:"acceptedConflicts"`
 	Prompt            string                     `json:"prompt"`
 	// WorkflowGates are the on rules the daemon enforces as gates.
-	WorkflowGates []domain.LadoRuleID        `json:"workflowGates"`
-	Capabilities  []SnapshotCapability       `json:"capabilities"`
-	Problems      []domain.LadoPolicyProblem `json:"problems"`
+	WorkflowGates []domain.LadoRuleID `json:"workflowGates"`
+	// Validators are the checks LADO runs on an execution's pull request for
+	// the on rules with validator enforcement, in rule order.
+	Validators   []SnapshotValidator        `json:"validators"`
+	Capabilities []SnapshotCapability       `json:"capabilities"`
+	Problems     []domain.LadoPolicyProblem `json:"problems"`
 }
 
 // SnapshotAgent is the agent that runs the task and the permission mode it
@@ -106,6 +110,34 @@ type SnapshotAcceptedConflict struct {
 	AcceptanceID domain.LadoConflictAcceptanceID `json:"acceptanceId"`
 }
 
+// ValidatorKind is a check LADO runs on an execution's pull request
+// (docs/LJY-PRD/HARNESS.md §6, §14).
+type ValidatorKind string
+
+// Validator kinds, each of one built-in rule.
+const (
+	// ValidatorChecksMustPass reads the required CI checks and runs the
+	// project's check commands on the head (test.command.must_pass). Its
+	// config is {}.
+	ValidatorChecksMustPass ValidatorKind = "checks_must_pass"
+	// ValidatorProtectedPaths refuses a changed path that a protected glob
+	// matches unless the approved plan names it (paths.protected). Its
+	// config is a domain.LadoProtectedPathsConfig.
+	ValidatorProtectedPaths ValidatorKind = "protected_paths"
+	// ValidatorCommitMessageLocale judges the language of the commit
+	// messages and the PR title (git.commit.message.korean). Its config is a
+	// domain.LadoCommitLocaleConfig.
+	ValidatorCommitMessageLocale ValidatorKind = "commit_message_locale"
+)
+
+// SnapshotValidator is the validator of one on rule: its kind and the config
+// it runs with, as raw JSON.
+type SnapshotValidator struct {
+	RuleID domain.LadoRuleID `json:"ruleId"`
+	Kind   ValidatorKind     `json:"kind"`
+	Config json.RawMessage   `json:"config"`
+}
+
 // SnapshotCapability is what the agent can do about one class the rules
 // need.
 type SnapshotCapability struct {
@@ -132,6 +164,7 @@ func snapshotContent(in Input, r Resolution) SnapshotContent {
 		AcceptedConflicts: accepted,
 		Prompt:            r.Prompt,
 		WorkflowGates:     []domain.LadoRuleID{},
+		Validators:        []SnapshotValidator{},
 		Capabilities:      []SnapshotCapability{},
 		Problems:          r.Problems,
 	}
@@ -154,6 +187,11 @@ func snapshotContent(in Input, r Resolution) SnapshotContent {
 		if content.Has(domain.LadoEnforcementWorkflowGate) {
 			c.WorkflowGates = append(c.WorkflowGates, e.Rule.ID)
 		}
+		if content.Has(domain.LadoEnforcementValidator) {
+			if v, ok := snapshotValidator(e.Rule.ID, content); ok {
+				c.Validators = append(c.Validators, v)
+			}
+		}
 	}
 	for _, rule := range in.AORules {
 		if rule.Kind == AORuleWorkerInstructions || rule.Kind == AORuleWorkerInstructionsFile {
@@ -169,14 +207,37 @@ func snapshotContent(in Input, r Resolution) SnapshotContent {
 	return c
 }
 
+// snapshotValidator returns the validator of the on rule id, whose
+// normalized content has validator enforcement. LADO has validators for three
+// built-in rules; any other rule gives none.
+func snapshotValidator(id domain.LadoRuleID, content domain.LadoRuleContent) (SnapshotValidator, bool) {
+	v := SnapshotValidator{RuleID: id, Config: content.Config}
+	switch id {
+	case domain.LadoRuleTestsMustPass:
+		v.Kind, v.Config = ValidatorChecksMustPass, json.RawMessage("{}")
+	case domain.LadoRuleProtectedPaths:
+		v.Kind = ValidatorProtectedPaths
+	case domain.LadoRuleKoreanCommits:
+		v.Kind = ValidatorCommitMessageLocale
+		// A version without settings checks with the defaults.
+		if string(v.Config) == "{}" {
+			v.Config = configJSON(domain.DefaultLadoCommitLocaleConfig())
+		}
+	default:
+		return SnapshotValidator{}, false
+	}
+	return v, true
+}
+
 // encodeCanonical returns the snapshot's canonical bytes: the fields in
 // declaration order, HTML characters as they are, no trailing newline.
 func encodeCanonical(c SnapshotContent) []byte {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	// The content holds only strings, numbers, booleans and string maps,
-	// which cannot fail to encode.
+	// The content holds only strings, numbers, booleans, string maps and
+	// validator configs, which are normalized rule configs and so valid JSON:
+	// it cannot fail to encode.
 	_ = enc.Encode(c)
 	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }

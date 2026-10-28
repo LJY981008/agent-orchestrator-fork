@@ -41,6 +41,14 @@ func (c *fakeRepoClient) IssueComments(context.Context, domain.TrackerID) ([]dom
 	return nil, nil
 }
 
+func (c *fakeRepoClient) BranchRules(context.Context, domain.TrackerRepo, string) (ports.LadoBranchRules, error) {
+	return ports.LadoBranchRules{}, errors.New("not used")
+}
+
+func (c *fakeRepoClient) PostCommitStatus(context.Context, domain.TrackerRepo, string, ports.LadoCommitStatus) error {
+	return errors.New("not used")
+}
+
 // fakeClients records which token each client was built with.
 type fakeClients struct {
 	client *fakeRepoClient

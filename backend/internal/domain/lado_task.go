@@ -113,14 +113,34 @@ const (
 	// returns it: a valid approval now has its queue entry, so the task is
 	// Queued or later, and an approval given before the queue existed asks to
 	// be approved again (LadoReviewApprovedBeforeQueue).
-	LadoTaskApproved       LadoTaskState = "approved"
-	LadoTaskQueued         LadoTaskState = "queued"
-	LadoTaskDispatching    LadoTaskState = "dispatching"
-	LadoTaskRunning        LadoTaskState = "running"
-	LadoTaskFailed         LadoTaskState = "failed"
-	LadoTaskCompleted      LadoTaskState = "completed"
-	LadoTaskCancelled      LadoTaskState = "cancelled"
-	LadoTaskClosedUnmerged LadoTaskState = "closed_unmerged"
+	LadoTaskApproved    LadoTaskState = "approved"
+	LadoTaskQueued      LadoTaskState = "queued"
+	LadoTaskDispatching LadoTaskState = "dispatching"
+	LadoTaskRunning     LadoTaskState = "running"
+	// LadoTaskValidating, LadoTaskIntegrationPending and LadoTaskIntegrating
+	// follow an execution's open PR: its current head is being verified,
+	// verified and waiting for the integration approval, or approved.
+	LadoTaskValidating         LadoTaskState = "validating"
+	LadoTaskIntegrationPending LadoTaskState = "integration_pending"
+	LadoTaskIntegrating        LadoTaskState = "integrating"
+	LadoTaskFailed             LadoTaskState = "failed"
+	LadoTaskCompleted          LadoTaskState = "completed"
+	LadoTaskCancelled          LadoTaskState = "cancelled"
+	LadoTaskClosedUnmerged     LadoTaskState = "closed_unmerged"
+)
+
+// Reasons of the states after a PR. A Validating task's reason is otherwise
+// the code of the verification item that fails or waits first (LadoCode*).
+const (
+	// LadoValidatingVerifying means the PR's current head has no
+	// verification record yet.
+	LadoValidatingVerifying = "verifying"
+	// LadoIntegratingStatusNotPosted means LADO could not post the
+	// lado/integration commit status on the approved head; it tries again.
+	LadoIntegratingStatusNotPosted = "status_not_posted"
+	// LadoCompletedWithoutApproval means the PR merged a head that had no
+	// integration approval.
+	LadoCompletedWithoutApproval = "merged_without_approval"
 )
 
 // State derives the task's state now, as StateAt does.
@@ -131,17 +151,22 @@ func (t LadoTask) State() LadoTaskState {
 // StateAt derives the task's state at now. A cancelled task is Cancelled.
 // After dispatch its execution decides: Completed once the PR merged, Closed
 // unmerged once the PR closed without a merge, Failed when the run timed out
-// or its session ended without a PR, and Running otherwise. A failed run
-// leaves a task whose issue is closed Closed unmerged, and a run of an older
-// approval that ended without a merge no longer counts. Without an execution,
-// a closed issue makes the task Closed unmerged. A valid approval needs
-// review when the rules changed since it or its queue entry was marked so,
-// and is Blocked when its snapshot holds a blocking problem or the entry was
-// blocked; review wins over Blocked. An entry out of attempts is Failed, one
-// a lease holds is Dispatching, and one that waits is Queued. A valid
-// approval without an entry that can still run needs review too: approving
-// again queues the task. A task whose latest revision has no valid approval
-// is Planned, and one without a revision a Draft.
+// or its session ended without a PR, and Running while it has no PR. With
+// its PR open, the PR's current head decides: Integrating once it has an
+// integration approval, Integration pending once its verification record
+// passes or needs confirming, and Validating while it has no record or one
+// that waits or fails. A failed run leaves a task whose issue is closed
+// Closed unmerged, and a run of an older approval no longer counts once it
+// ended without a merge: it still does while it runs, is verified or is
+// integrated. Without an execution, a closed issue makes the task Closed
+// unmerged. A valid approval needs review when the rules changed since it or
+// its queue entry was marked so, and is Blocked when its snapshot holds a
+// blocking problem or the entry was blocked; review wins over Blocked. An
+// entry out of attempts is Failed, one a lease holds is Dispatching, and one
+// that waits is Queued. A valid approval without an entry that can still run
+// needs review too: approving again queues the task. A task whose latest
+// revision has no valid approval is Planned, and one without a revision a
+// Draft.
 func (t LadoTask) StateAt(now time.Time) LadoTaskState {
 	state, _ := t.stateAt(now)
 	return state
@@ -149,8 +174,12 @@ func (t LadoTask) StateAt(now time.Time) LadoTaskState {
 
 // StateReason returns the reason behind the task's state now: what needs
 // review (LadoReview*), what blocks it (LadoBlocked*), why it failed
-// (LadoFailed*), or why its queue entry waits (LadoWaiting*). Other states
-// have none.
+// (LadoFailed*), why its queue entry waits (LadoWaiting*), what its PR's
+// head waits for or fails on (LadoValidatingVerifying or a LadoCode*), that
+// the approved head's commit status is not posted
+// (LadoIntegratingStatusNotPosted), or that the merged head had no
+// integration approval (LadoCompletedWithoutApproval). Other states have
+// none.
 func (t LadoTask) StateReason() string {
 	_, reason := t.stateAt(time.Now())
 	return reason
@@ -165,7 +194,11 @@ func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
 		state, reason := e.taskState()
 		// A run of an older approval that ended without a merge is history:
 		// a task approved again after a failed run shows its new entry.
-		current := e.PlanApprovalID == t.Plan.Approval.ID || state == LadoTaskRunning || state == LadoTaskCompleted
+		current := e.PlanApprovalID == t.Plan.Approval.ID
+		switch state {
+		case LadoTaskRunning, LadoTaskValidating, LadoTaskIntegrationPending, LadoTaskIntegrating, LadoTaskCompleted:
+			current = true
+		}
 		if current && (state != LadoTaskFailed || !closed) {
 			return state, reason
 		}
@@ -212,19 +245,51 @@ func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
 	}
 }
 
-// taskState is the state an execution gives its task.
+// State is the state the execution gives its task, and its reason: what the
+// run panel shows for the run itself, as the daemon derives it (decision l;
+// a task shows another state only when it was cancelled, its issue closed
+// or it was approved again after this run failed).
+func (e LadoExecution) State() (LadoTaskState, string) {
+	return e.taskState()
+}
+
+// taskState is the state an execution gives its task. A PR decides once
+// there is one: a run stopped at its deadline while its PR opened still has
+// the PR to review, as the run time limit stops once a PR is open. A merge
+// without an integration approval counts only for an execution dispatched
+// under integration approval.
 func (e LadoExecution) taskState() (LadoTaskState, string) {
 	switch {
+	case e.PR.Merged && e.IntegrationGated && !e.Integration.MergedHeadApproved:
+		return LadoTaskCompleted, LadoCompletedWithoutApproval
 	case e.PR.Merged:
 		return LadoTaskCompleted, ""
 	case e.PR.Closed:
 		return LadoTaskClosedUnmerged, ""
-	case !e.TimedOutAt.IsZero():
+	case e.PR.URL == "" && !e.TimedOutAt.IsZero():
 		return LadoTaskFailed, LadoFailedTimedOut
-	case e.SessionTerminated && e.PR.URL == "":
+	case e.PR.URL == "" && e.SessionTerminated:
 		return LadoTaskFailed, LadoFailedEndedWithoutPR
-	default:
+	case e.PR.URL == "":
 		return LadoTaskRunning, ""
+	}
+	// The PR is open: its current head decides. A record of another head
+	// says nothing about this one.
+	v := e.Verification
+	switch {
+	case e.Integration.HeadApproved && e.Integration.StatusState == LadoIntegrationStatusFailed:
+		return LadoTaskIntegrating, LadoIntegratingStatusNotPosted
+	case e.Integration.HeadApproved:
+		return LadoTaskIntegrating, ""
+	case v.HeadSHA == "" || v.HeadSHA != e.PR.HeadSHA:
+		return LadoTaskValidating, LadoValidatingVerifying
+	case v.Outcome == LadoVerifyPass || v.Outcome == LadoVerifyConfirm:
+		return LadoTaskIntegrationPending, ""
+	case v.Reason != "" && (v.Outcome == LadoVerifyWait || v.Outcome == LadoVerifyFail):
+		// A record that waits or fails names its first such item.
+		return LadoTaskValidating, v.Reason
+	default:
+		return LadoTaskValidating, LadoValidatingVerifying
 	}
 }
 

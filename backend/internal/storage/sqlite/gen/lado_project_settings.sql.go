@@ -10,8 +10,26 @@ import (
 	"time"
 )
 
+const getLadoProjectChecks = `-- name: GetLadoProjectChecks :one
+SELECT check_commands, check_timeout_minutes
+FROM lado_project_settings
+WHERE project_id = ?
+`
+
+type GetLadoProjectChecksRow struct {
+	CheckCommands       string
+	CheckTimeoutMinutes int64
+}
+
+func (q *Queries) GetLadoProjectChecks(ctx context.Context, projectID string) (GetLadoProjectChecksRow, error) {
+	row := q.db.QueryRowContext(ctx, getLadoProjectChecks, projectID)
+	var i GetLadoProjectChecksRow
+	err := row.Scan(&i.CheckCommands, &i.CheckTimeoutMinutes)
+	return i, err
+}
+
 const getLadoProjectSettings = `-- name: GetLadoProjectSettings :one
-SELECT project_id, lado_mode, updated_at, max_concurrent
+SELECT project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes
 FROM lado_project_settings
 WHERE project_id = ?
 `
@@ -24,8 +42,46 @@ func (q *Queries) GetLadoProjectSettings(ctx context.Context, projectID string) 
 		&i.LadoMode,
 		&i.UpdatedAt,
 		&i.MaxConcurrent,
+		&i.CheckCommands,
+		&i.CheckTimeoutMinutes,
 	)
 	return i, err
+}
+
+const upsertLadoProjectCheckCommands = `-- name: UpsertLadoProjectCheckCommands :exec
+INSERT INTO lado_project_settings (project_id, lado_mode, check_commands, updated_at)
+VALUES (?, 0, ?, ?)
+ON CONFLICT (project_id) DO UPDATE SET check_commands = excluded.check_commands, updated_at = excluded.updated_at
+`
+
+type UpsertLadoProjectCheckCommandsParams struct {
+	ProjectID     string
+	CheckCommands string
+	UpdatedAt     time.Time
+}
+
+// A project without a settings row gets one with LADO mode off.
+func (q *Queries) UpsertLadoProjectCheckCommands(ctx context.Context, arg UpsertLadoProjectCheckCommandsParams) error {
+	_, err := q.db.ExecContext(ctx, upsertLadoProjectCheckCommands, arg.ProjectID, arg.CheckCommands, arg.UpdatedAt)
+	return err
+}
+
+const upsertLadoProjectCheckTimeout = `-- name: UpsertLadoProjectCheckTimeout :exec
+INSERT INTO lado_project_settings (project_id, lado_mode, check_timeout_minutes, updated_at)
+VALUES (?, 0, ?, ?)
+ON CONFLICT (project_id) DO UPDATE SET check_timeout_minutes = excluded.check_timeout_minutes, updated_at = excluded.updated_at
+`
+
+type UpsertLadoProjectCheckTimeoutParams struct {
+	ProjectID           string
+	CheckTimeoutMinutes int64
+	UpdatedAt           time.Time
+}
+
+// A project without a settings row gets one with LADO mode off.
+func (q *Queries) UpsertLadoProjectCheckTimeout(ctx context.Context, arg UpsertLadoProjectCheckTimeoutParams) error {
+	_, err := q.db.ExecContext(ctx, upsertLadoProjectCheckTimeout, arg.ProjectID, arg.CheckTimeoutMinutes, arg.UpdatedAt)
+	return err
 }
 
 const upsertLadoProjectSettings = `-- name: UpsertLadoProjectSettings :one
@@ -34,7 +90,7 @@ VALUES (?, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET
     lado_mode = excluded.lado_mode,
     updated_at = excluded.updated_at
-RETURNING project_id, lado_mode, updated_at, max_concurrent
+RETURNING project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes
 `
 
 type UpsertLadoProjectSettingsParams struct {
@@ -51,6 +107,8 @@ func (q *Queries) UpsertLadoProjectSettings(ctx context.Context, arg UpsertLadoP
 		&i.LadoMode,
 		&i.UpdatedAt,
 		&i.MaxConcurrent,
+		&i.CheckCommands,
+		&i.CheckTimeoutMinutes,
 	)
 	return i, err
 }

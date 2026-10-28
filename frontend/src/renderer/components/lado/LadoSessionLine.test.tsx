@@ -66,7 +66,7 @@ function renderWith(children: React.ReactNode) {
 
 beforeEach(() => {
 	vi.resetAllMocks();
-	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: true, maxConcurrent: 1 });
+	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 });
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task, { ...task, id: "lado-task-2", state: "queued", execution: undefined }]);
 });
 
@@ -104,7 +104,7 @@ test("leaves out what the task list omits", async () => {
 });
 
 test("a project out of LADO mode shows no line and reads no tasks", async () => {
-	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: false, maxConcurrent: 1 });
+	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 });
 	const { container } = renderWith(<LadoSessionLine session={session("demo-7")} />);
 
 	await waitFor(() => expect(lado.fetchLadoProjectSettings).toHaveBeenCalledWith("demo"));
@@ -125,4 +125,37 @@ test("another computer's and orchestrator sessions ask nothing", async () => {
 	expect(lado.fetchLadoProjectSettings).not.toHaveBeenCalled();
 	expect(lado.fetchLadoTasks).not.toHaveBeenCalled();
 	expect(container).toBeEmptyDOMElement();
+});
+
+test("adds where LADO's verification and integration of the PR stand, only while that is news", async () => {
+	const named: [Partial<lado.LadoTask>, string][] = [
+		[{ state: "validating", stateReason: "checks_pending" }, "Validating"],
+		[{ state: "integration_pending" }, "Integration pending"],
+		[{ state: "integrating", stateReason: "status_not_posted" }, "Integrating"],
+		[{ state: "completed", stateReason: "merged_without_approval" }, "Merged without an integration approval"],
+	];
+	for (const [fields, word] of named) {
+		vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, ...fields }]);
+		renderWith(<LadoSessionLine session={session("demo-7")} />);
+		const line = await screen.findByTestId("lado-session-line");
+		expect(line).toHaveTextContent(`LADO · plan r3 · rules 1a2b3c4 · ${word}`);
+		// Still one muted line; only the integration approval is the human's turn.
+		expect(line.tagName).toBe("P");
+		expect(line).toHaveClass("truncate", "text-muted-foreground");
+		const dot = within(line).queryByTestId("lado-session-line-dot");
+		if (fields.state === "integration_pending") expect(dot).toHaveClass("bg-[var(--color-status-needs-you)]");
+		else expect(dot).not.toBeInTheDocument();
+		cleanup();
+	}
+
+	// The card's own status says the rest: a running worker, work merged with
+	// an approval, work closed without a merge.
+	for (const fields of [{ state: "running" }, { state: "completed" }, { state: "closed_unmerged" }] as Partial<lado.LadoTask>[]) {
+		vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, ...fields }]);
+		renderWith(<LadoSessionLine session={session("demo-7")} />);
+		const line = await screen.findByTestId("lado-session-line");
+		expect(line).toHaveTextContent(/^LADO · plan r3 · rules 1a2b3c4$/);
+		expect(within(line).queryByTestId("lado-session-line-dot")).not.toBeInTheDocument();
+		cleanup();
+	}
 });

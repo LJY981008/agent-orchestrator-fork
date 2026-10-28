@@ -11,9 +11,16 @@ import { LADO_CEILING_MODES, type LadoCeilingMode } from "../../../shared/lado-p
 import type { MessageKey } from "../../i18n/messages";
 import type { LadoRule } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
-import { LADO_RULE_PERMISSION_CEILING, ladoRuleDescription, ladoRuleName, ladoStrengthLabel } from "../../lib/lado-rules";
+import {
+	LADO_RULE_PERMISSION_CEILING,
+	LADO_RULE_PROTECTED_PATHS,
+	ladoRuleDescription,
+	ladoRuleName,
+	ladoStrengthLabel,
+} from "../../lib/lado-rules";
 import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { SettingsRow } from "../settings/SettingsRow";
+import { Button } from "../ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { Switch } from "../ui/switch";
 
@@ -76,20 +83,24 @@ function withFailure(t: TFunction, detail: ReactNode, error: unknown): ReactNode
 
 /**
  * A protected rule: always on, so it has no switch, and its menu only opens
- * the history, where the permission ceiling's changes show. The ceiling keeps
- * one control, its mode, which the desktop app confirms before it changes.
+ * the history, where the permission ceiling's and the protected paths'
+ * changes show. The ceiling keeps one control, its mode, and the protected
+ * paths theirs, an editor of the paths; the desktop app confirms either
+ * change before it is made.
  */
 export function LadoProtectedRuleRow({
 	rule,
 	busy,
 	error,
 	onCeilingChange,
+	onEditPaths,
 	onHistory,
 }: {
 	rule: LadoRule;
 	busy: boolean;
 	error?: unknown;
 	onCeilingChange: (mode: LadoCeilingMode) => void;
+	onEditPaths: () => void;
 	onHistory: () => void;
 }) {
 	const { t } = useTranslation();
@@ -114,6 +125,24 @@ export function LadoProtectedRuleRow({
 							if (mode && mode !== rule.ceiling?.mode) onCeilingChange(mode);
 						}}
 					/>
+				) : rule.id === LADO_RULE_PROTECTED_PATHS ? (
+					<>
+						<span className="text-sm tabular-nums text-settings-muted">
+							{t("lado.rules.protectedPaths.count", { count: rule.paths?.globs.length ?? 0 })}
+						</span>
+						<Button
+							type="button"
+							variant="ghost"
+							size="sm"
+							aria-label={t("lado.protectedPaths.title")}
+							className="text-settings-muted hover:text-settings-label"
+							disabled={busy}
+							onClick={onEditPaths}
+						>
+							{/* The size of the count and "Always on" beside it. */}
+							<span className="text-sm">{t("lado.rules.edit")}</span>
+						</Button>
+					</>
 				) : (
 					<span className="text-sm text-settings-muted">{t("lado.rules.alwaysOn")}</span>
 				)}

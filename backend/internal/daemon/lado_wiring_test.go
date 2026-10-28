@@ -231,7 +231,8 @@ func TestWireLadoWorkStartsTheDispatcher(t *testing.T) {
 	}
 	sessions := &ladoWorkerSessions{}
 
-	_, tasks, _, queue, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{sessions: sessions}, slog.New(slog.DiscardHandler))
+	tasks, queue := work.tasks, work.queue
 	done := queue.Start(ctx)
 
 	deadline := time.Now().Add(10 * time.Second)
@@ -281,7 +282,8 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	}
 	log := slog.New(slog.DiscardHandler)
 
-	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	tasks, rules := work.tasks, work.rules
 
 	if tasks == nil || rules == nil {
 		t.Fatalf("wireLadoWork returned tasks %v, rules %v", tasks, rules)
@@ -304,9 +306,10 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	}
 	want := map[domain.LadoRuleID]int{
 		domain.LadoRulePlanApproval: 1, domain.LadoRulePermissionCeiling: 1, domain.LadoRuleKoreanCommits: 1, domain.LadoRuleSetupPresence: 1,
+		domain.LadoRuleIntegrationApproval: 1, domain.LadoRuleNoDirectWrite: 1, domain.LadoRuleTestsMustPass: 1, domain.LadoRuleProtectedPaths: 1,
 	}
 	if got := stored(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rules after wiring = %v, want the four built-ins at version 1", got)
+		t.Fatalf("rules after wiring = %v, want the eight built-ins at version 1", got)
 	}
 
 	// A restart seeds nothing again.
@@ -318,7 +321,7 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	// The returned service resolves the seeded rules and stamps the running
 	// AO build into every snapshot.
 	view, err := rules.Effective(ctx, ladopolicy.EffectiveInput{ProjectID: "mer"})
-	if err != nil || len(view.Entries) != 4 || view.Ceiling != domain.PermissionModeAuto || view.Content.AOBuild != "0.12.0" {
+	if err != nil || len(view.Entries) != 8 || view.Ceiling != domain.PermissionModeAuto || view.Content.AOBuild != "0.12.0" {
 		t.Fatalf("Effective = %d rules, ceiling %q, AO build %q, err %v", len(view.Entries), view.Ceiling, view.Content.AOBuild, err)
 	}
 }
@@ -365,7 +368,8 @@ func TestWireLadoWorkGivesTasksTheRules(t *testing.T) {
 		t.Fatalf("ApproveLadoPlan: %v", err)
 	}
 
-	_, tasks, rules, _, _ := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler))
+	tasks, rules := work.tasks, work.rules
 
 	listed, err := tasks.List(ctx, "mer", false)
 	if err != nil || len(listed) != 1 {

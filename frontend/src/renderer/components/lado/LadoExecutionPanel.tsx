@@ -3,7 +3,8 @@
 // fixed, never the rules now: the agent and the mode it started in, the
 // permission ceiling, the rules that were on and the text the worker got, the
 // local setup items its session got, the plan revision, how far the base
-// moved, and when LADO stops the run.
+// moved, and when LADO stops the run. Once the worker opened a PR, the
+// Verification section under it shows what LADO verified on the PR's head.
 import { agentLabel, InspectorSection } from "@aoagents/product-ui";
 import { ChevronDown } from "lucide-react";
 import { type ReactNode, useState } from "react";
@@ -18,12 +19,21 @@ import type { WorkspaceSession } from "../../types/workspace";
 import { formatResetTime } from "../settings/CodexAccountDetails";
 import { ladoCeilingModeLabel } from "./LadoRuleRows";
 import { ladoSessionProjectId } from "./LadoSessionLine";
+import { LadoVerificationSection } from "./LadoVerificationSection";
 
 export function LadoExecutionPanel({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
-	const execution = useLadoExecution(session.id, ladoSessionProjectId(session, hostId) !== undefined);
+	const projectId = ladoSessionProjectId(session, hostId);
+	const execution = useLadoExecution(session.id, projectId !== undefined);
 	// Every run has its snapshot; an answer without one is not a run to show.
-	if (execution.data?.snapshot) return <ExecutionSnapshot execution={execution.data} />;
+	if (execution.data?.snapshot && projectId) {
+		return (
+			<>
+				<ExecutionSnapshot execution={execution.data} />
+				<LadoVerificationSection execution={execution.data} projectId={projectId} />
+			</>
+		);
+	}
 	// Most sessions are not LADO runs, so nothing shows while the run loads or
 	// when the daemon cannot be reached; a daemon that answers for the run
 	// with an error says why.

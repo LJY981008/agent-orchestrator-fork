@@ -220,7 +220,7 @@ func (q *Queries) GetLadoDispatchSettings(ctx context.Context) (LadoDispatchSett
 }
 
 const getLadoExecution = `-- name: GetLadoExecution :one
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
@@ -251,6 +251,13 @@ func (q *Queries) GetLadoExecution(ctx context.Context, sessionID string) (GetLa
 		&i.LadoExecution.StartedAt,
 		&i.LadoExecution.DeadlineAt,
 		&i.LadoExecution.TimedOutAt,
+		&i.LadoExecution.BaseBranch,
+		&i.LadoExecution.BaseRemote,
+		&i.LadoExecution.DispatchLocalBaseSha,
+		&i.LadoExecution.IntegrationGated,
+		&i.LadoExecution.SettledAt,
+		&i.LadoExecution.SettledPRURL,
+		&i.LadoExecution.SettledPRState,
 		&i.SessionTerminated,
 	)
 	return i, err
@@ -406,25 +413,30 @@ func (q *Queries) HoldLadoQueueEntry(ctx context.Context, arg HoldLadoQueueEntry
 const insertLadoExecution = `-- name: InsertLadoExecution :exec
 INSERT INTO lado_executions (
     session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
-    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at,
+    base_branch, base_remote, dispatch_local_base_sha, integration_gated
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 `
 
 type InsertLadoExecutionParams struct {
-	SessionID        string
-	TaskID           string
-	QueueEntryID     string
-	PlanRevisionID   string
-	PlanApprovalID   string
-	PolicySnapshotID string
-	Attempt          int64
-	PlanBaseSha      string
-	DispatchBaseSha  string
-	BaseCommitsAhead sql.NullInt64
-	StartedAt        time.Time
-	DeadlineAt       sql.NullTime
+	SessionID            string
+	TaskID               string
+	QueueEntryID         string
+	PlanRevisionID       string
+	PlanApprovalID       string
+	PolicySnapshotID     string
+	Attempt              int64
+	PlanBaseSha          string
+	DispatchBaseSha      string
+	BaseCommitsAhead     sql.NullInt64
+	StartedAt            time.Time
+	DeadlineAt           sql.NullTime
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSha string
 }
 
+// Every execution this dispatcher starts runs under integration approval.
 func (q *Queries) InsertLadoExecution(ctx context.Context, arg InsertLadoExecutionParams) error {
 	_, err := q.db.ExecContext(ctx, insertLadoExecution,
 		arg.SessionID,
@@ -439,6 +451,9 @@ func (q *Queries) InsertLadoExecution(ctx context.Context, arg InsertLadoExecuti
 		arg.BaseCommitsAhead,
 		arg.StartedAt,
 		arg.DeadlineAt,
+		arg.BaseBranch,
+		arg.BaseRemote,
+		arg.DispatchLocalBaseSha,
 	)
 	return err
 }
@@ -539,7 +554,7 @@ func (q *Queries) ListClaimableLadoQueueEntries(ctx context.Context, arg ListCla
 }
 
 const listLadoExecutionsForTasks = `-- name: ListLadoExecutionsForTasks :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
@@ -588,6 +603,13 @@ func (q *Queries) ListLadoExecutionsForTasks(ctx context.Context, taskIds []stri
 			&i.LadoExecution.StartedAt,
 			&i.LadoExecution.DeadlineAt,
 			&i.LadoExecution.TimedOutAt,
+			&i.LadoExecution.BaseBranch,
+			&i.LadoExecution.BaseRemote,
+			&i.LadoExecution.DispatchLocalBaseSha,
+			&i.LadoExecution.IntegrationGated,
+			&i.LadoExecution.SettledAt,
+			&i.LadoExecution.SettledPRURL,
+			&i.LadoExecution.SettledPRState,
 			&i.SessionTerminated,
 		); err != nil {
 			return nil, err
@@ -605,7 +627,9 @@ func (q *Queries) ListLadoExecutionsForTasks(ctx context.Context, taskIds []stri
 
 const listLadoExecutionsPastDeadline = `-- name: ListLadoExecutionsPastDeadline :many
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
-    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
+    e.settled_pr_state
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE e.deadline_at <= ?1
@@ -639,6 +663,13 @@ func (q *Queries) ListLadoExecutionsPastDeadline(ctx context.Context, now sql.Nu
 			&i.StartedAt,
 			&i.DeadlineAt,
 			&i.TimedOutAt,
+			&i.BaseBranch,
+			&i.BaseRemote,
+			&i.DispatchLocalBaseSha,
+			&i.IntegrationGated,
+			&i.SettledAt,
+			&i.SettledPRURL,
+			&i.SettledPRState,
 		); err != nil {
 			return nil, err
 		}
@@ -771,7 +802,9 @@ func (q *Queries) ListLeasedLadoQueueEntries(ctx context.Context) ([]LadoQueueEn
 
 const listLiveLadoExecutions = `-- name: ListLiveLadoExecutions :many
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
-    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at
+    e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
+    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
+    e.settled_pr_state
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE s.is_terminated = 0
@@ -802,6 +835,13 @@ func (q *Queries) ListLiveLadoExecutions(ctx context.Context) ([]LadoExecution, 
 			&i.StartedAt,
 			&i.DeadlineAt,
 			&i.TimedOutAt,
+			&i.BaseBranch,
+			&i.BaseRemote,
+			&i.DispatchLocalBaseSha,
+			&i.IntegrationGated,
+			&i.SettledAt,
+			&i.SettledPRURL,
+			&i.SettledPRState,
 		); err != nil {
 			return nil, err
 		}

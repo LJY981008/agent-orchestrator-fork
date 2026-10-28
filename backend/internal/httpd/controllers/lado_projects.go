@@ -29,12 +29,18 @@ type LadoController struct {
 	Rules       LadoRuleService
 	Queue       LadoQueueService
 	Setup       LadoSetupService
+	Verify      LadoVerifyService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
 }
 
-const ladoProjectSettingsPath = "/api/v1/lado/projects/{projectId}/settings"
+const (
+	ladoProjectSettingsPath = "/api/v1/lado/projects/{projectId}/settings"
+	// maxLadoSettingsBody fits ten check commands of 2000 characters each,
+	// escaped.
+	maxLadoSettingsBody = 128 << 10
+)
 
 // Register mounts the LADO routes.
 func (c *LadoController) Register(r chi.Router) {
@@ -69,6 +75,7 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
 	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
 	c.registerSetup(r)
+	c.registerVerify(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {
@@ -89,8 +96,9 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 		apispec.NotImplemented(w, r, "PUT", ladoProjectSettingsPath)
 		return
 	}
-	// Turning LADO mode off needs a presence proof over these exact bytes.
-	body, ok := readLadoPresenceBody(w, r, maxLadoPresenceBody)
+	// Turning LADO mode off and changing the check commands need a presence
+	// proof over these exact bytes.
+	body, ok := readLadoPresenceBody(w, r, maxLadoSettingsBody)
 	if !ok {
 		return
 	}
@@ -98,11 +106,21 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 	if !decodeLadoBytes(w, r, body, &req) {
 		return
 	}
-	settings, err := c.Projects.UpdateSettings(r.Context(), ladoProjectID(r), ladoproject.UpdateInput{
-		LadoMode:      req.LadoMode,
-		MaxConcurrent: req.MaxConcurrent,
-		Presence:      c.presenceCheck(r, body),
-	})
+	in := ladoproject.UpdateInput{
+		LadoMode:            req.LadoMode,
+		MaxConcurrent:       req.MaxConcurrent,
+		CheckTimeoutMinutes: req.CheckTimeoutMinutes,
+		CheckCommandsBase:   req.CheckCommandsBase,
+		Presence:            c.presenceCheck(r, body),
+	}
+	if req.CheckCommands != nil {
+		commands := make([]domain.LadoCheckCommand, 0, len(*req.CheckCommands))
+		for _, command := range *req.CheckCommands {
+			commands = append(commands, domain.LadoCheckCommand{Name: command.Name, Command: command.Command})
+		}
+		in.CheckCommands = &commands
+	}
+	settings, err := c.Projects.UpdateSettings(r.Context(), ladoProjectID(r), in)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -115,5 +133,16 @@ func ladoProjectID(r *http.Request) domain.ProjectID {
 }
 
 func ladoProjectSettingsResponse(settings domain.LadoProjectSettings) LadoProjectSettingsResponse {
-	return LadoProjectSettingsResponse{ProjectID: string(settings.ProjectID), LadoMode: settings.LadoMode, MaxConcurrent: settings.MaxConcurrent}
+	commands := make([]LadoCheckCommandBody, 0, len(settings.CheckCommands))
+	for _, command := range settings.CheckCommands {
+		commands = append(commands, LadoCheckCommandBody{Name: command.Name, Command: command.Command})
+	}
+	return LadoProjectSettingsResponse{
+		ProjectID:           string(settings.ProjectID),
+		LadoMode:            settings.LadoMode,
+		MaxConcurrent:       settings.MaxConcurrent,
+		CheckCommands:       commands,
+		CheckCommandsSHA256: domain.LadoCheckCommandsSHA256(settings.CheckCommands),
+		CheckTimeoutMinutes: settings.CheckTimeoutMinutes,
+	}
 }

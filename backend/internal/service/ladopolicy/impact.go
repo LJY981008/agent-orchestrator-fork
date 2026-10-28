@@ -123,8 +123,8 @@ func (s *Service) impactOf(ctx context.Context, rules []domain.LadoRule, after f
 }
 
 // awaitsDispatch reports whether the task's valid approval still waits for
-// its worker: the task is not running, done or closed, and no execution of
-// this approval exists, such as one that failed.
+// its worker: the task is not running, verified, integrated, done or closed,
+// and no execution of this approval exists, such as one that failed.
 func awaitsDispatch(task domain.LadoTask) bool {
 	switch task.State() {
 	case domain.LadoTaskQueued, domain.LadoTaskDispatching, domain.LadoTaskBlocked, domain.LadoTaskFailed, domain.LadoTaskReviewRequired:

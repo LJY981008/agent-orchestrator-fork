@@ -22,6 +22,8 @@ vi.mock("../../lib/lado", async (original) => ({
 	approveLadoPlan: vi.fn(),
 	fetchLadoEffective: vi.fn(),
 	fetchLadoRules: vi.fn(),
+	approveLadoIntegration: vi.fn(),
+	mergeLadoPR: vi.fn(),
 }));
 
 const task: lado.LadoTask = {
@@ -469,7 +471,7 @@ test("a failed task whose worker still runs cannot be approved, and says why", a
 	await within(dialog).findByTestId("lado-run-status");
 	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
 	expect(
-		within(dialog).getByText("This task's worker still runs, or its work merged. LADO runs one worker per task, so no plan can be approved now."),
+		within(dialog).getByText("This task's worker still runs, LADO is verifying or integrating its work, or its work merged. LADO runs one worker per task, so no plan can be approved now."),
 	).toHaveAttribute("role", "status");
 });
 
@@ -541,4 +543,78 @@ test("work that closed without a merge shows the run and takes no decisions", as
 	expect(within(run).getByRole("button", { name: "Open session" })).toBeInTheDocument();
 	expect(within(run).getByRole("link", { name: "Open PR #45" })).toBeInTheDocument();
 	for (const name of ["Approve plan", "Request changes"]) expect(within(dialog).queryByRole("button", { name })).not.toBeInTheDocument();
+});
+
+const prHead = "1a2b3c4".padEnd(40, "0");
+const openPR: lado.LadoExecutionPR = { url: "https://github.com/acme/demo/pull/45", number: 45, merged: false, closed: false, headSha: prHead };
+
+test("a task whose PR LADO verifies says what it waits for, and offers no decision yet", async () => {
+	mockApproved(approvedTask({ state: "validating", stateReason: "checks_pending", execution: { ...execution, sessionEnded: true, pr: openPR } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(within(run).getByRole("status")).toHaveTextContent("Validating · Waiting for required checks");
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-validating)]");
+	expect(within(run).getByRole("link", { name: "Open PR #45" })).toBeInTheDocument();
+	for (const name of ["Approve integration…", "Merge", "Approve plan"]) expect(within(dialog).queryByRole("button", { name })).not.toBeInTheDocument();
+	expect(within(dialog).getByText("Approved")).toBeInTheDocument();
+});
+
+test("a head waiting for its integration approval is approved from the footer; a cancel leaves it as it was", async () => {
+	vi.mocked(lado.approveLadoIntegration).mockResolvedValue(null);
+	mockApproved(approvedTask({ state: "integration_pending", execution: { ...execution, sessionEnded: true, pr: openPR } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(within(run).getByRole("status")).toHaveTextContent(/^Integration pending$/);
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-needs-you)]");
+	expect(within(run).queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
+	const approve = within(run).getByRole("button", { name: "Approve integration…" });
+	// The decision is a control, not status text.
+	expect(within(run).getByRole("status")).not.toContainElement(approve);
+	fireEvent.click(approve);
+	await waitFor(() => expect(lado.approveLadoIntegration).toHaveBeenCalledWith("demo-7"));
+	await waitFor(() => expect(within(run).getByRole("button", { name: "Approve integration…" })).toBeEnabled());
+	expect(within(run).queryByRole("alert")).not.toBeInTheDocument();
+});
+
+test("an approved head merges from the footer, and one LADO could not post a status for says so in the caution color", async () => {
+	vi.mocked(lado.mergeLadoPR).mockRejectedValueOnce(new lado.LadoApiError("LADO could not check this merge", "LADO_MERGE_GATE_FAILED"));
+	mockApproved(approvedTask({ state: "integrating", stateReason: "status_not_posted", execution: { ...execution, sessionEnded: true, pr: openPR } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(within(run).getByRole("status")).toHaveTextContent(/^Integrating$/);
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-ready)]");
+	const line = within(run).getByTestId("lado-run-not-posted");
+	expect(line).toHaveTextContent("LADO could not post the integration status yet");
+	expect(line).toHaveClass("text-[var(--color-status-in-review)]");
+	expect(within(run).getByRole("status")).not.toContainElement(line);
+	expect(within(run).queryByRole("button", { name: "Approve integration…" })).not.toBeInTheDocument();
+	fireEvent.click(within(run).getByRole("button", { name: "Merge" }));
+	await waitFor(() => expect(lado.mergeLadoPR).toHaveBeenCalledWith({ number: 45, url: openPR.url, headSha: prHead }));
+	expect(await within(run).findByRole("alert")).toHaveTextContent("LADO could not check this merge's approval, so it refused the merge. Try again.");
+	cleanup();
+
+	// A posted status needs no line.
+	mockApproved(approvedTask({ state: "integrating", execution: { ...execution, sessionEnded: true, pr: openPR } }));
+	renderDialog();
+	const posted = await within(await screen.findByTestId("lado-task-dialog")).findByTestId("lado-run-status");
+	expect(within(posted).queryByTestId("lado-run-not-posted")).not.toBeInTheDocument();
+	expect(within(posted).getByRole("button", { name: "Merge" })).toBeEnabled();
+});
+
+test("work merged without an integration approval says so and takes no decision", async () => {
+	mockApproved(approvedTask({ state: "completed", stateReason: "merged_without_approval", execution: { ...execution, sessionEnded: true, pr: { ...openPR, merged: true } } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(within(run).getByRole("status")).toHaveTextContent("Completed · Merged without an integration approval");
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-needs-you)]");
+	for (const name of ["Approve integration…", "Merge"]) expect(within(run).queryByRole("button", { name })).not.toBeInTheDocument();
 });

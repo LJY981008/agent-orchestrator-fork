@@ -2,10 +2,11 @@ package daemon
 
 // LADO fork: LADO's local setup in the daemon (step 7 plan §9, §10 and §13).
 // The service gets the computer's own tool folders as the daemon finds them,
-// and its hooks go into the session manager and the Codex adapter before
-// anything spawns or restores, so every session AO launches gets the setup
-// LADO manages. The first scan and the removal of ended sessions' config
-// homes run in the background once the daemon starts.
+// and its hooks go into the session manager, the Codex adapter and AO's
+// reviewer launcher before anything spawns or restores, so every session AO
+// launches gets the setup LADO manages and every reviewer its instructions.
+// The first scan and the removal of ended sessions' config homes run in the
+// background once the daemon starts.
 
 import (
 	"context"
@@ -18,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -85,13 +87,17 @@ type ladoSetupDeps struct {
 	agents ports.AgentResolver
 	// processes lists the computer's processes; nil uses procmem.
 	processes func(context.Context) ([]procmem.Process, error)
+	// reviewers installs LADO's section of AO reviewers' system prompts;
+	// nil uses review.SetLadoSystemSection.
+	reviewers func(reviewcore.LadoSystemSection)
 }
 
 // wireLadoSetup builds LADO's local setup service over the daemon's folders
 // and installs its hooks: Claude Code config homes and the MCP servers of
 // Codex Chat sessions on the session manager, -c options on the Codex
-// adapter, and the Codex instructions in the LADO section of standing
-// instructions, which replaces the one wireLado installed.
+// adapter, the Codex instructions in the LADO section of standing
+// instructions, which replaces the one wireLado installed, and the adopted
+// instructions in AO reviewers' system prompts.
 func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store, deps ladoSetupDeps, log *slog.Logger) *ladosetup.Service {
 	ignore := os.Getenv(ladoSetupIgnoreProcessesEnv) == "1"
 	if ignore {
@@ -117,6 +123,11 @@ func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store
 			return setup.CodexChatServers(ctx, rec.ID, rec.ClientRequestID, rec.ProjectID)
 		})
 		deps.sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Setup: setup}.Section)
+		reviewers := deps.reviewers
+		if reviewers == nil {
+			reviewers = reviewcore.SetLadoSystemSection
+		}
+		reviewers(setup.ReviewerSection)
 	}
 	if deps.agents != nil {
 		installLadoCodexOverrides(deps.agents, store, setup, log)

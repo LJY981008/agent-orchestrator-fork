@@ -118,7 +118,9 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 
 	// 4. The plan's base is the branch AO starts the worker from. How far
 	// that branch moved since the plan was made is recorded, not refused
-	// (decision e of the step 6 plan).
+	// (decision e of the step 6 plan), and so are the branch, its remote and
+	// the commit of the local branch, for the base branch check after the
+	// pull request (decision h of the step 8 plan).
 	dir, base, err := s.workerBase(ctx, task)
 	if err != nil {
 		s.deps.Log.Warn("LADO could not tell which branch a queued task's worker starts from", "entry", entry.ID, "task", task.ID,
@@ -129,6 +131,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.block(ctx, entry, domain.LadoBlockedBaseRefMismatch)
 	}
 	dispatchSHA, ahead := s.baseMove(ctx, entry, dir, base, task.Plan.Latest)
+	localSHA := s.localBase(ctx, entry, dir, base)
 
 	// 5. Admission took place before the dispatch: the pass claimed the
 	// entry for a free run slot, within its project's cap, while memory
@@ -157,12 +160,26 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.block(ctx, entry, domain.LadoBlockedSnapshot)
 	}
 
+	// The worker's prompt names the project's check commands, which LADO
+	// runs on its pull request's head.
+	checks, _, err := s.deps.Store.LadoProjectChecks(ctx, task.ProjectID)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, s.handBack(ctx, entry)
+		}
+		s.deps.Log.Warn("LADO could not read the check commands of a queued task's project", "entry", entry.ID, "task", task.ID, "err", err)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+	}
+
 	if ctx.Err() != nil {
 		return false, s.handBack(ctx, entry)
 	}
-	cfg := spawnConfig(task, entry, in, agent)
+	cfg := spawnConfig(task, entry, in, agent, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
-	exec := domain.LadoExecution{SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead}
+	exec := domain.LadoExecution{
+		SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead,
+		BaseBranch: base.Branch, BaseRemote: base.Remote, DispatchLocalBaseSHA: localSHA,
+	}
 	if err != nil {
 		// AO can fail a spawn after it started the session, as when the
 		// reply is lost. The attempt's session then runs, and it is the
@@ -202,7 +219,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 // and from the plan and issue the developer approved, in Chat (decisions c,
 // d and n of the step 6 plan). The attempt's own client request id is what
 // the worker gate grants the spawn by. The branch is left to AO's naming.
-func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent) ports.SpawnConfig {
+func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent, checks []domain.LadoCheckCommand) ports.SpawnConfig {
 	return ports.SpawnConfig{
 		ProjectID:         task.ProjectID,
 		IssueID:           task.IssueRef,
@@ -211,7 +228,7 @@ func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.
 		IssueContext:      in.IssueContext,
 		Kind:              domain.KindWorker,
 		Harness:           agent.Harness,
-		Prompt:            workerPrompt(task, in),
+		Prompt:            workerPrompt(task, in, checks),
 		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName(task.Issue.Title),
@@ -322,6 +339,21 @@ func (s *Service) baseMove(ctx context.Context, entry domain.LadoQueueEntry, dir
 	return sha, &ahead
 }
 
+// localBase reads the commit the local branch of the worker's base names at
+// dispatch, in the repository at dir. The execution keeps it with the branch
+// and its remote, which the base branch check reads after the pull request
+// (decision h of the step 8 plan). A repository without the local branch, or
+// one git cannot read, records none and holds nothing up.
+func (s *Service) localBase(ctx context.Context, entry domain.LadoQueueEntry, dir string, base ports.WorkspaceDefaultBranch) string {
+	sha, err := s.deps.Git.RevParse(ctx, dir, "refs/heads/"+base.Branch)
+	if err != nil {
+		s.deps.Log.Warn("LADO could not read the local base branch of a queued task", "entry", entry.ID, "dir", dir, "branch", base.Branch,
+			"problem", problem(err, "git could not read the local branch"))
+		return ""
+	}
+	return sha
+}
+
 // namesBase reports whether a plan's base_ref names the branch a worker
 // starts from: the branch itself, or its local or remote-tracking ref in a
 // longer form.
@@ -341,7 +373,7 @@ func namesBase(ref string, base ports.WorkspaceDefaultBranch) bool {
 
 // link records the session of exec as the entry's execution, with the
 // deadline its start and the settings give. The caller gives the session,
-// the start and the base move; the entry gives the rest. A claim lost
+// the start, the base and its move; the entry gives the rest. A claim lost
 // meanwhile is domain.ErrLadoLeaseLost: the session exists, and recovery
 // links the session of the entry's attempt.
 func (s *Service) link(ctx context.Context, entry domain.LadoQueueEntry, exec domain.LadoExecution, settings domain.LadoDispatchSettings) error {

@@ -137,6 +137,8 @@ func insertLadoExecution(t *testing.T, raw *sql.DB, exec domain.LadoExecution) d
 	exec.PlanRevisionID = domain.LadoPlanRevisionID(revision)
 	exec.PlanApprovalID = domain.LadoPlanApprovalID(entry.PlanApprovalID)
 	exec.PolicySnapshotID = domain.LadoPolicySnapshotID(entry.PolicySnapshotID)
+	// The dispatcher's insert gates every execution's integration.
+	exec.IntegrationGated = true
 	var ahead sql.NullInt64
 	if exec.BaseCommitsAhead != nil {
 		ahead = sql.NullInt64{Int64: int64(*exec.BaseCommitsAhead), Valid: true}
@@ -314,7 +316,8 @@ func TestLadoTaskReadsCarryQueueAndExecution(t *testing.T) {
 	}
 	wants := map[domain.LadoTaskID]facts{
 		"lado-task-1": {queue: "lado-queue-2", state: domain.LadoTaskQueued},
-		"lado-task-2": {queue: "lado-queue-4", session: merged.SessionID, execution: merged, state: domain.LadoTaskCompleted},
+		// The PR merged a head without an integration approval.
+		"lado-task-2": {queue: "lado-queue-4", session: merged.SessionID, execution: merged, state: domain.LadoTaskCompleted, reason: domain.LadoCompletedWithoutApproval},
 		"lado-task-3": {queue: "lado-queue-5", session: closed.SessionID, execution: closed, state: domain.LadoTaskClosedUnmerged},
 		"lado-task-4": {queue: "lado-queue-6", session: ended.SessionID, execution: ended, state: domain.LadoTaskFailed, reason: domain.LadoFailedEndedWithoutPR},
 	}
@@ -934,7 +937,7 @@ func TestLinkLadoExecutionAtomically(t *testing.T) {
 		SessionID: session, TaskID: "lado-task-1", QueueEntryID: first, PlanRevisionID: "lado-plan-1",
 		PlanApprovalID: "lado-approval-1", PolicySnapshotID: "lado-snapshot-1", Attempt: 1,
 		PlanBaseSHA: strings.Repeat("c", 40), DispatchBaseSHA: exec.DispatchBaseSHA, BaseCommitsAhead: &ahead,
-		StartedAt: exec.StartedAt, DeadlineAt: exec.DeadlineAt,
+		StartedAt: exec.StartedAt, DeadlineAt: exec.DeadlineAt, IntegrationGated: true,
 	}
 	dispatched := unleased(entry)
 	dispatched.DispatchedSessionID = session
@@ -1348,9 +1351,15 @@ func TestLadoExecutionsPastDeadline(t *testing.T) {
 	}; !slices.Equal(audited, want) || rows.Err() != nil {
 		t.Fatalf("time-out audit events = %v (%v), want %v", audited, rows.Err(), want)
 	}
-	task, _, err := s.LadoTask(ctx, overdue.TaskID)
+	// A run stopped at its deadline fails without a PR; one whose PR opened
+	// meanwhile shows its PR's state (decision l, as changed for #15).
+	task, _, err := s.LadoTask(ctx, marked.TaskID)
 	if err != nil || task.State() != domain.LadoTaskFailed || task.StateReason() != domain.LadoFailedTimedOut {
 		t.Fatalf("task state %q (%s) %v, want failed (timed_out)", task.State(), task.StateReason(), err)
+	}
+	task, _, err = s.LadoTask(ctx, overdue.TaskID)
+	if err != nil || task.State() != domain.LadoTaskValidating || task.StateReason() != domain.LadoValidatingVerifying {
+		t.Fatalf("task state with an open PR %q (%s) %v, want validating (verifying)", task.State(), task.StateReason(), err)
 	}
 }
 

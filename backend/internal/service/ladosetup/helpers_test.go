@@ -182,3 +182,12 @@ func (p fakeProjects) ListProjects(context.Context) ([]domain.ProjectRecord, err
 type fakeSessions []domain.SessionRecord
 
 func (s fakeSessions) ListAllSessions(context.Context) ([]domain.SessionRecord, error) { return s, nil }
+
+func (s fakeSessions) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	for _, rec := range s {
+		if rec.ID == id {
+			return rec, true, nil
+		}
+	}
+	return domain.SessionRecord{}, false, nil
+}

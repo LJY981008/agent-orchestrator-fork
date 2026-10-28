@@ -64,6 +64,8 @@ type ActionService struct {
 	threadWriter interface {
 		MarkPRReviewThreadResolved(context.Context, string, string) error
 	}
+	// LADO fork: the merge gate SetMergeGate installs (lado_merge_gate.go).
+	ladoMerge ladoMergeGate
 }
 
 var _ ActionManager = (*ActionService)(nil)
@@ -121,6 +123,9 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	if !strings.EqualFold(expectedHead, tracked.HeadSHA) {
 		return MergeResult{}, ErrPRHeadChanged
 	}
+	if err := s.ladoMerge.authorize(ctx, tracked, expectedHead); err != nil { // LADO fork
+		return MergeResult{}, err
+	}
 
 	repo, ok := scmRepoForPR(tracked)
 	if !ok {
@@ -133,6 +138,9 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	}
 	if !strings.EqualFold(fresh.PR.HeadSHA, expectedHead) {
 		return MergeResult{}, ErrPRHeadChanged
+	}
+	if err := s.ladoMerge.authorizeFresh(ctx, tracked, fresh.PR, expectedHead); err != nil { // LADO fork
+		return MergeResult{}, err
 	}
 	if !readyToMerge(fresh, review) {
 		return MergeResult{}, ErrPRPreconditions

@@ -151,6 +151,26 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoEffectiveSetupResponse":        "LadoEffectiveSetupResponse",
 	"ControllersLadoSnapshotSetupItemResponse":     "LadoSnapshotSetupItemResponse",
 	"ControllersLadoExecutionSetupItemResponse":    "LadoExecutionSetupItemResponse",
+	"ControllersLadoCheckCommandBody":              "LadoCheckCommandBody",
+	"ControllersLadoRulePaths":                     "LadoRulePaths",
+	"ControllersLadoCheckRunLogParams":             "LadoCheckRunLogParams",
+	"ControllersLadoProjectProtectionQuery":        "LadoProjectProtectionQuery",
+	"ControllersLadoVerifyCheckResponse":           "LadoVerifyCheckResponse",
+	"ControllersLadoVerifyCommandRunResponse":      "LadoVerifyCommandRunResponse",
+	"ControllersLadoVerifyCommitResponse":          "LadoVerifyCommitResponse",
+	"ControllersLadoVerifyTextResponse":            "LadoVerifyTextResponse",
+	"ControllersLadoReflogEntryResponse":           "LadoReflogEntryResponse",
+	"ControllersLadoEvidenceRefResponse":           "LadoEvidenceRefResponse",
+	"ControllersLadoEvidenceCriterionResponse":     "LadoEvidenceCriterionResponse",
+	"ControllersLadoVerifyItemDetailsResponse":     "LadoVerifyItemDetailsResponse",
+	"ControllersLadoVerifyItemResponse":            "LadoVerifyItemResponse",
+	"ControllersLadoVerificationResponse":          "LadoVerificationResponse",
+	"ControllersLadoIntegrationApprovalResponse":   "LadoIntegrationApprovalResponse",
+	"ControllersApproveLadoIntegrationRequest":     "ApproveLadoIntegrationRequest",
+	"ControllersLadoIntegrationApproveResponse":    "LadoIntegrationApproveResponse",
+	"ControllersLadoRunChecksResponse":             "LadoRunChecksResponse",
+	"ControllersLadoBranchProtectionResponse":      "LadoBranchProtectionResponse",
+	"ControllersLadoProjectProtectionResponse":     "LadoProjectProtectionResponse",
 }
 
 func ladoOperations() []operation {
@@ -173,7 +193,7 @@ func ladoOperations() []operation {
 		},
 		{
 			method: http.MethodPut, path: "/api/v1/lado/projects/{projectId}/settings", id: "updateLadoProjectSettings", tag: "lado",
-			summary:    "Change a project's LADO mode or its cap on running executions; turning LADO mode off needs a human-presence proof",
+			summary:    "Change a project's LADO mode, its cap on running executions or its check commands and their time limit; turning LADO mode off and changing the check commands need a human-presence proof",
 			pathParams: []any{controllers.LadoProjectIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			reqBody:    controllers.UpdateLadoProjectSettingsRequest{},
 			resps: []respUnit{
@@ -311,7 +331,7 @@ func ladoOperations() []operation {
 		},
 		{
 			method: http.MethodPatch, path: "/api/v1/lado/rules/{ruleId}", id: "updateLadoRule", tag: "lado",
-			summary:    "Edit, archive or unarchive a rule, or show what the change reaches with dryRun; the permission ceiling's mode needs a human-presence proof",
+			summary:    "Edit, archive or unarchive a rule, or show what the change reaches with dryRun; the permission ceiling's mode and the protected paths' globs need a human-presence proof",
 			pathParams: []any{controllers.LadoRuleIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			reqBody:    controllers.UpdateLadoRuleRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoRuleChangeResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
@@ -342,9 +362,41 @@ func ladoOperations() []operation {
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/lado/executions/{sessionId}", id: "getLadoExecution", tag: "lado",
-			summary:    "Get the execution a worker session runs: its task, plan, rule snapshot, base and run",
+			summary:    "Get the execution a worker session runs: its task, plan, rule snapshot, base and run, and what LADO verified about its PR's current head",
 			pathParams: []any{controllers.LadoSessionIDParam{}},
 			resps:      ladoResps(http.StatusOK, controllers.LadoExecutionResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/integration-approve", id: "approveLadoIntegration", tag: "lado",
+			summary:    "Approve the integration of the head of an execution's PR with a human-presence proof, or preview it with dryRun; LADO then posts the lado/integration status and never merges",
+			pathParams: []any{controllers.LadoSessionIDParam{}, controllers.LadoPresenceHeaderParam{}},
+			reqBody:    controllers.ApproveLadoIntegrationRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoIntegrationApproveResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/integration-status", id: "repostLadoIntegrationStatus", tag: "lado",
+			summary:    "Post the lado/integration status of the PR's approved current head again, its attempts started over; needs no presence proof",
+			pathParams: []any{controllers.LadoSessionIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoIntegrationApprovalResponse{}, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/checks/run", id: "runLadoChecks", tag: "lado",
+			summary:    "Run the project's check commands again on the current head of an execution's PR",
+			pathParams: []any{controllers.LadoSessionIDParam{}},
+			resps:      ladoResps(http.StatusAccepted, controllers.LadoRunChecksResponse{}, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/executions/{sessionId}/checks/{checkRunId}/log", id: "getLadoCheckLog", tag: "lado",
+			summary:      "Get the end of a check command run's output, at most 1 MiB, as plain text",
+			pathParams:   []any{controllers.LadoCheckRunLogParams{}},
+			resps:        ladoResps(http.StatusOK, "", http.StatusNotFound, http.StatusServiceUnavailable),
+			contentTypes: map[int]string{http.StatusOK: "text/plain"},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/protection", id: "getLadoProjectProtection", tag: "lado",
+			summary:    "Read the protection of the base branch of each of a project's repositories",
+			pathParams: []any{controllers.LadoProjectIDParam{}, controllers.LadoProjectProtectionQuery{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoProjectProtectionResponse{}, http.StatusBadRequest, http.StatusNotFound),
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/lado/dispatch-settings", id: "getLadoDispatchSettings", tag: "lado",

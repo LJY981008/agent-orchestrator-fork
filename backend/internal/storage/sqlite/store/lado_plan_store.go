@@ -421,7 +421,9 @@ func (s *Store) SetLadoModeWithProof(ctx context.Context, projectID domain.Proje
 		if err != nil {
 			return err
 		}
-		settings = ladoProjectSettingsFromGen(row)
+		if settings, err = ladoProjectSettingsFromGen(row); err != nil {
+			return err
+		}
 		_, err = appendLadoAuditEventTx(ctx, q, event)
 		return err
 	})
@@ -472,6 +474,8 @@ func unwrapLadoSentinel(err error) error {
 		domain.ErrLadoSetupItemNotLive,
 		domain.ErrLadoSetupAlreadyRestored,
 		domain.ErrLadoConflictAcceptanceNotLive,
+		domain.ErrLadoIntegrationAlreadyApproved,
+		domain.ErrLadoVerificationChanged,
 	} {
 		if errors.Is(err, sentinel) {
 			return sentinel

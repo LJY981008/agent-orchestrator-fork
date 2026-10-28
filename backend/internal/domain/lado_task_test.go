@@ -244,6 +244,7 @@ func dispatchedLadoTask(startedAt time.Time) domain.LadoTask {
 		Attempt:          1,
 		StartedAt:        startedAt,
 		DeadlineAt:       startedAt.Add(8 * time.Hour),
+		IntegrationGated: true,
 	}
 	return task
 }
@@ -275,8 +276,9 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 		want domain.LadoTaskState
 	}{
 		{"session lives", func(*domain.LadoTask) {}, domain.LadoTaskRunning},
-		{"session lives with its PR open", func(task *domain.LadoTask) { task.Execution.PR = openPR }, domain.LadoTaskRunning},
-		{"session ended with its PR open", func(task *domain.LadoTask) { ended(task); task.Execution.PR = openPR }, domain.LadoTaskRunning},
+		// An open PR's head is verified first (TestLadoTaskStateFollowsVerification).
+		{"session lives with its PR open", func(task *domain.LadoTask) { task.Execution.PR = openPR }, domain.LadoTaskValidating},
+		{"session ended with its PR open", func(task *domain.LadoTask) { ended(task); task.Execution.PR = openPR }, domain.LadoTaskValidating},
 		{"PR merged", func(task *domain.LadoTask) { task.Execution.PR = mergedPR }, domain.LadoTaskCompleted},
 		{"PR merged after the session ended", func(task *domain.LadoTask) { ended(task); task.Execution.PR = mergedPR }, domain.LadoTaskCompleted},
 		{"PR both merged and closed", func(task *domain.LadoTask) {
@@ -286,9 +288,10 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 		{"PR closed unmerged", func(task *domain.LadoTask) { ended(task); task.Execution.PR = closedPR }, domain.LadoTaskClosedUnmerged},
 		{"timed out", func(task *domain.LadoTask) { task.Execution.TimedOutAt = now }, domain.LadoTaskFailed},
 		{"timed out and ended", func(task *domain.LadoTask) { ended(task); task.Execution.TimedOutAt = now }, domain.LadoTaskFailed},
+		// The PR opened while LADO stopped the run: the PR decides (V9 of #15).
 		{"timed out with its PR open", func(task *domain.LadoTask) {
 			task.Execution.TimedOutAt, task.Execution.PR = now, openPR
-		}, domain.LadoTaskFailed},
+		}, domain.LadoTaskValidating},
 		{"timed out, then the PR merged", func(task *domain.LadoTask) {
 			task.Execution.TimedOutAt, task.Execution.PR = now, mergedPR
 		}, domain.LadoTaskCompleted},
@@ -306,7 +309,7 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 		{"issue closed while the PR is open", func(task *domain.LadoTask) {
 			ended(task)
 			task.Execution.PR, task.Issue.State = openPR, domain.IssueDone
-		}, domain.LadoTaskRunning},
+		}, domain.LadoTaskValidating},
 		{"issue closed after the session ended without a PR", func(task *domain.LadoTask) {
 			ended(task)
 			task.Issue.State = domain.IssueDone
@@ -344,14 +347,14 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 			approveLadoTaskAgain(task, now)
 			task.Issue.State = domain.IssueDone
 		}, domain.LadoTaskClosedUnmerged},
-		// A run of an older approval still counts while it runs, and once its
-		// PR merged.
+		// A run of an older approval still counts while it runs or its PR is
+		// open, and once its PR merged.
 		{"newer approval while the session runs", func(task *domain.LadoTask) { approveLadoTaskAgain(task, now) }, domain.LadoTaskRunning},
 		{"newer approval while the PR is open", func(task *domain.LadoTask) {
 			ended(task)
 			task.Execution.PR = openPR
 			approveLadoTaskAgain(task, now)
-		}, domain.LadoTaskRunning},
+		}, domain.LadoTaskValidating},
 		{"approved again after a timeout, then the old PR merged", func(task *domain.LadoTask) {
 			ended(task)
 			task.Execution.TimedOutAt, task.Execution.PR = now.Add(-time.Minute), mergedPR
@@ -363,6 +366,131 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 			tc.edit(&task)
 			if got := task.StateAt(now); got != tc.want {
 				t.Fatalf("StateAt = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLadoTaskStateFollowsVerification(t *testing.T) {
+	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	head, older := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	openPR := domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8, HeadSHA: head, TargetBranch: "main", Title: "로그인 추가"}
+	mergedPR, closedPR := openPR, openPR
+	mergedPR.Merged, closedPR.Closed = true, true
+	record := func(head string, outcome domain.LadoVerifyOutcome, reason string) func(*domain.LadoTask) {
+		return func(task *domain.LadoTask) {
+			task.Execution.PR = openPR
+			task.Execution.Verification = domain.LadoExecutionVerification{HeadSHA: head, Outcome: outcome, Reason: reason}
+		}
+	}
+	approved := func(status domain.LadoIntegrationStatusState) func(*domain.LadoTask) {
+		return func(task *domain.LadoTask) {
+			record(head, domain.LadoVerifyPass, "")(task)
+			task.Execution.Integration = domain.LadoExecutionIntegration{HeadApproved: true, StatusState: status}
+		}
+	}
+	ended := func(task *domain.LadoTask) { task.Execution.SessionTerminated = true }
+	for _, tc := range []struct {
+		name   string
+		edit   func(*domain.LadoTask)
+		state  domain.LadoTaskState
+		reason string
+	}{
+		{"PR open without a record", func(task *domain.LadoTask) { task.Execution.PR = openPR }, domain.LadoTaskValidating, domain.LadoValidatingVerifying},
+		{"PR whose head is not known yet", func(task *domain.LadoTask) {
+			task.Execution.PR = openPR
+			task.Execution.PR.HeadSHA = ""
+		}, domain.LadoTaskValidating, domain.LadoValidatingVerifying},
+		{"record waits", record(head, domain.LadoVerifyWait, domain.LadoCodeChecksPending), domain.LadoTaskValidating, domain.LadoCodeChecksPending},
+		{"record fails", record(head, domain.LadoVerifyFail, domain.LadoCodeCommandsFailed), domain.LadoTaskValidating, domain.LadoCodeCommandsFailed},
+		{"record fails without a reason", record(head, domain.LadoVerifyFail, ""), domain.LadoTaskValidating, domain.LadoValidatingVerifying},
+		{"record passes", record(head, domain.LadoVerifyPass, ""), domain.LadoTaskIntegrationPending, ""},
+		{"record needs confirming", record(head, domain.LadoVerifyConfirm, ""), domain.LadoTaskIntegrationPending, ""},
+		{"record of an older head", record(older, domain.LadoVerifyPass, ""), domain.LadoTaskValidating, domain.LadoValidatingVerifying},
+		{"record passes after the session ended", func(task *domain.LadoTask) {
+			ended(task)
+			record(head, domain.LadoVerifyPass, "")(task)
+		}, domain.LadoTaskIntegrationPending, ""},
+		{"current head approved", approved(domain.LadoIntegrationStatusPosted), domain.LadoTaskIntegrating, ""},
+		{"current head approved, status not posted yet", approved(domain.LadoIntegrationStatusPending), domain.LadoTaskIntegrating, ""},
+		{"current head approved on GitLab", approved(domain.LadoIntegrationStatusNotApplicable), domain.LadoTaskIntegrating, ""},
+		{"current head approved, status post failed", approved(domain.LadoIntegrationStatusFailed), domain.LadoTaskIntegrating, domain.LadoIntegratingStatusNotPosted},
+		{"current head approved, then its record fails", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.Verification.Outcome, task.Execution.Verification.Reason = domain.LadoVerifyFail, domain.LadoCodeChecksFailed
+		}, domain.LadoTaskIntegrating, ""},
+		{"merged with the head approved", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.PR = mergedPR
+			task.Execution.Integration.MergedHeadApproved = true
+		}, domain.LadoTaskCompleted, ""},
+		{"merged without an approval", func(task *domain.LadoTask) {
+			record(head, domain.LadoVerifyFail, domain.LadoCodeChecksFailed)(task)
+			task.Execution.PR = mergedPR
+		}, domain.LadoTaskCompleted, domain.LadoCompletedWithoutApproval},
+		{"merged after another head was approved", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.PR = mergedPR
+		}, domain.LadoTaskCompleted, domain.LadoCompletedWithoutApproval},
+		// V4 of #15: a run dispatched before LADO gated integrations had no
+		// approval to ask for.
+		{"merged, dispatched before integration approval", func(task *domain.LadoTask) {
+			task.Execution.PR, task.Execution.IntegrationGated = mergedPR, false
+		}, domain.LadoTaskCompleted, ""},
+		{"closed", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.PR = closedPR
+		}, domain.LadoTaskClosedUnmerged, ""},
+		{"no PR", func(task *domain.LadoTask) {
+			task.Execution.Verification = domain.LadoExecutionVerification{HeadSHA: head, Outcome: domain.LadoVerifyPass}
+		}, domain.LadoTaskRunning, ""},
+		{"timed out", func(task *domain.LadoTask) { task.Execution.TimedOutAt = now }, domain.LadoTaskFailed, domain.LadoFailedTimedOut},
+		// V9 of #15: the run time limit stops once a PR is open, so a run
+		// stopped while its PR opened shows its PR, not Failed: a Failed
+		// task could be approved again next to the open PR.
+		{"timed out with a passing record", func(task *domain.LadoTask) {
+			record(head, domain.LadoVerifyPass, "")(task)
+			task.Execution.TimedOutAt = now
+		}, domain.LadoTaskIntegrationPending, ""},
+		{"timed out while its PR opened", func(task *domain.LadoTask) {
+			task.Execution.PR = openPR
+			task.Execution.TimedOutAt, task.Execution.SessionTerminated = now, true
+		}, domain.LadoTaskValidating, domain.LadoValidatingVerifying},
+		{"timed out with its head approved", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.TimedOutAt = now
+		}, domain.LadoTaskIntegrating, ""},
+		{"timed out, PR merged", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.PR = mergedPR
+			task.Execution.Integration.MergedHeadApproved = true
+			task.Execution.TimedOutAt = now
+		}, domain.LadoTaskCompleted, ""},
+		// A run of an older approval still shows while its PR is verified
+		// or integrated.
+		{"newer approval while integration is pending", func(task *domain.LadoTask) {
+			ended(task)
+			record(head, domain.LadoVerifyConfirm, "")(task)
+			approveLadoTaskAgain(task, now)
+		}, domain.LadoTaskIntegrationPending, ""},
+		{"newer approval while integrating", func(task *domain.LadoTask) {
+			ended(task)
+			approved(domain.LadoIntegrationStatusFailed)(task)
+			approveLadoTaskAgain(task, now)
+		}, domain.LadoTaskIntegrating, domain.LadoIntegratingStatusNotPosted},
+		{"issue closed while the head is verified", func(task *domain.LadoTask) {
+			record(head, domain.LadoVerifyWait, domain.LadoCodeReviewPending)(task)
+			task.Issue.State = domain.IssueDone
+		}, domain.LadoTaskValidating, domain.LadoCodeReviewPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := dispatchedLadoTask(now.Add(-time.Hour))
+			tc.edit(&task)
+			if got := task.StateAt(now); got != tc.state {
+				t.Fatalf("StateAt = %q, want %q", got, tc.state)
+			}
+			if got := task.StateReason(); got != tc.reason {
+				t.Fatalf("StateReason = %q, want %q", got, tc.reason)
 			}
 		})
 	}
@@ -520,9 +648,16 @@ func TestLadoTaskStateReason(t *testing.T) {
 		{"failed run of a closed issue", true, func(task *domain.LadoTask) {
 			task.Execution.SessionTerminated, task.Issue.State = true, domain.IssueDone
 		}, domain.LadoTaskClosedUnmerged, ""},
+		{"validating", true, func(task *domain.LadoTask) {
+			task.Execution.PR = domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8, HeadSHA: strings.Repeat("a", 40)}
+		}, domain.LadoTaskValidating, domain.LadoValidatingVerifying},
 		{"completed", true, func(task *domain.LadoTask) {
 			task.Execution.PR = domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8, Merged: true}
+			task.Execution.Integration.MergedHeadApproved = true
 		}, domain.LadoTaskCompleted, ""},
+		{"merged without approval", true, func(task *domain.LadoTask) {
+			task.Execution.PR = domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8, Merged: true}
+		}, domain.LadoTaskCompleted, domain.LadoCompletedWithoutApproval},
 		{"PR closed", true, func(task *domain.LadoTask) {
 			task.Execution.PR = domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8, Closed: true}
 		}, domain.LadoTaskClosedUnmerged, ""},

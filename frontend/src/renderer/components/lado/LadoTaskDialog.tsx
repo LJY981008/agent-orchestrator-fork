@@ -5,7 +5,8 @@
 // confirmation (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md)
 // and fixes the rules that apply at that moment; the Rules tab shows them.
 // Once approved, the footer follows the queue and the run: what the queued
-// plan waits for, then the worker's session and PR, or why the run failed.
+// plan waits for, then the worker's session and PR, or why the run failed,
+// and once LADO verified the PR's head, its integration approval and merge.
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
@@ -43,8 +44,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoTaskRules } from "./LadoTaskRules";
+import { LadoIntegrationAction, LadoRepostStatus } from "./LadoVerificationSection";
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
+
+/** The states of a task whose worker runs, or whose PR LADO verifies, integrates or saw merged. */
+const runStates = new Set<LadoTask["state"]>(["running", "validating", "integration_pending", "integrating", "completed"]);
 
 /** The daemon refused an approval because the rules changed after they were read. */
 function rulesChanged(error: unknown): boolean {
@@ -148,13 +153,14 @@ function TaskViewBody({
 	const reapprove = task.state === "review_required" || task.state === "failed";
 	const blocked = task.state === "blocked";
 	const queueing = task.state === "queued" || task.state === "dispatching";
-	// LADO runs one worker per task: while its session lives, or once its work
-	// merged, the daemon approves no plan of the task.
-	const runHolds = task.state === "running" || task.state === "completed" || (task.execution !== undefined && !task.execution.sessionEnded);
+	// LADO runs one worker per task: while its session lives, while LADO
+	// verifies or integrates its PR, or once its work merged, the daemon
+	// approves no plan of the task.
+	const runHolds = runStates.has(task.state) || (task.execution !== undefined && !task.execution.sessionEnded);
 	const approving = readingRules || approve.isPending;
 	const approvable = open && !pending && shown !== undefined && shown.latest && shown.revision.valid && (!shown.approved || reapprove);
 	const canApprove = approvable && !runHolds && !approving;
-	const runLine = task.state === "failed" || (task.execution !== undefined && (task.state === "running" || task.state === "completed" || task.state === "closed_unmerged"));
+	const runLine = task.state === "failed" || (task.execution !== undefined && (runStates.has(task.state) || task.state === "closed_unmerged"));
 	const notice = approvalNotice(task, view, t);
 	const mutationError = requestPlan.error ?? approve.error ?? rulesReadError;
 	const staleRules = rulesChanged(approve.error);
@@ -401,19 +407,26 @@ function QueueStatus({ task }: { task: LadoTask }) {
 }
 
 /**
- * The run above the footer's actions: its state, why it failed, and the
- * worker's session and PR, with what the last attempt ran into under it.
+ * The run above the footer's actions: its state and why (it failed, what
+ * LADO's verification of the PR waits for or found, or that the work merged
+ * without approval), the worker's session and PR, and the decision on the
+ * PR's head (approve its integration, then merge it), with what the last
+ * attempt ran into, or that the approved head has no status yet, under it.
  * Opening the session leaves the board for it.
  */
 function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
-	const { t } = useTranslation();
+	const { t, i18n } = useTranslation();
 	const navigateToSession = useNavigateToSession();
 	// The run's own state, also while a new plan for the task is on its way.
 	const failed = task.state === "failed";
 	const status = failed ? { label: t("lado.task.state.failed"), tone: "attention" as const } : ladoTaskStatus(task, t);
-	const reason = failed ? ladoReasonText(t, task.stateReason) : "";
+	// An approved head whose status LADO could not post yet gets its own line.
+	const notPosted = task.state === "integrating" && task.stateReason === "status_not_posted";
+	const reason = failed ? ladoReasonText(t, task.stateReason) : notPosted ? "" : (ladoTaskReason(task, t, i18n.language) ?? "");
 	const error = failed && task.queue?.error ? ladoQueueErrorText(t, task.queue.error) : "";
 	const execution = task.execution;
+	const pr = execution?.pr && !execution.pr.merged && !execution.pr.closed ? execution.pr : undefined;
+	const action = !pr ? null : task.state === "integration_pending" ? "approve" : task.state === "integrating" ? "merge" : null;
 	// Spaces for the text read aloud; the flex gap lays the row out.
 	const separator = (
 		<>
@@ -463,7 +476,28 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 						</ProductExternalLink>
 					</>
 				) : null}
+				{execution && pr && action ? (
+					<span className="ml-auto">
+						<LadoIntegrationAction
+							projectId={task.projectId}
+							sessionId={execution.sessionId}
+							action={action}
+							pr={pr}
+							headSha={pr.headSha}
+							variant="footer-primary"
+							className={compactButtonClass}
+						/>
+					</span>
+				) : null}
 			</div>
+			{notPosted ? (
+				<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
+					<p className="text-[var(--color-status-in-review)]" data-testid="lado-run-not-posted">
+						{ladoReasonText(t, "status_not_posted")}
+					</p>
+					{execution && pr ? <LadoRepostStatus projectId={task.projectId} sessionId={execution.sessionId} /> : null}
+				</div>
+			) : null}
 			{/* Under the label, past the dot and its gap; the whole text on hover. */}
 			{error ? (
 				<p className="truncate pl-3.5 text-settings-muted" title={error} data-testid="lado-run-error">

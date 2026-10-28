@@ -147,7 +147,7 @@ type LadoSetupConflictResponse struct {
 	Path          string            `json:"path"`
 	Detail        string            `json:"detail" description:"Tells apart results of one code on one item, such as the hook event; an acceptance names it."`
 	ContentSHA256 string            `json:"contentSha256" description:"The content the result was found in; an acceptance holds for that content only."`
-	Details       map[string]string `json:"details" nullable:"false" description:"The values the app shows: item or origin, and by code event, matcher, rule, key, mode, ceiling, plugin and path."`
+	Details       map[string]string `json:"details" nullable:"false" description:"The values the app shows: item or origin, and by code event, matcher, rule, key, mode, ceiling, plugin, path and commands, the protected git commands an allow rule covers, comma-separated."`
 	AcceptanceID  string            `json:"acceptanceId" description:"The live acceptance that covers a warning; empty when none does."`
 }
 

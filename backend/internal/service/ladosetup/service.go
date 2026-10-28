@@ -82,9 +82,10 @@ type Projects interface {
 	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
 }
 
-// Sessions lists AO's sessions. *sqlite.Store implements it.
+// Sessions lists AO's sessions and reads one. *sqlite.Store implements it.
 type Sessions interface {
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
 // Deps wires a Service. Every path is the daemon's: an empty one lists
@@ -114,7 +115,8 @@ type Deps struct {
 	Projects Projects
 	// Sessions lists AO's sessions, whose live Claude Code and Codex ones
 	// hold adoption and restore back, and whose ended ones lose their config
-	// homes. RunningTools and CleanupHomes refuse to answer without it.
+	// homes. RunningTools and CleanupHomes refuse to answer without it, and
+	// ReviewerSection reads the reviewer's worker from it.
 	Sessions Sessions
 	// Processes lists the computer's processes; nil uses procmem.Snapshot.
 	Processes func(ctx context.Context) ([]procmem.Process, error)

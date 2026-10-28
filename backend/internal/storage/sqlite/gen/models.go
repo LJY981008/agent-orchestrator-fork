@@ -427,6 +427,21 @@ type LadoAuditEvent struct {
 	PrevSha256  string
 }
 
+type LadoCheckRun struct {
+	ID                 string
+	ExecutionSessionID string
+	HeadSha            string
+	Name               string
+	Command            string
+	Status             string
+	ExitCode           sql.NullInt64
+	LogSha256          string
+	ErrorMessage       string
+	WorktreeSha256     string
+	StartedAt          time.Time
+	FinishedAt         sql.NullTime
+}
+
 type LadoConflictAcceptance struct {
 	ID            string
 	Code          string
@@ -448,20 +463,65 @@ type LadoDispatchSetting struct {
 	UpdatedAt         time.Time
 }
 
+type LadoEvidenceLink struct {
+	ID                 string
+	ExecutionSessionID string
+	HeadSha            string
+	Criterion          int64
+	State              string
+	RefKind            string
+	RefKey             string
+	Sha                string
+	CreatedAt          time.Time
+}
+
 type LadoExecution struct {
-	SessionID        string
-	TaskID           string
-	QueueEntryID     string
-	PlanRevisionID   string
-	PlanApprovalID   string
-	PolicySnapshotID string
-	Attempt          int64
-	PlanBaseSha      string
-	DispatchBaseSha  string
-	BaseCommitsAhead sql.NullInt64
-	StartedAt        time.Time
-	DeadlineAt       sql.NullTime
-	TimedOutAt       sql.NullTime
+	SessionID            string
+	TaskID               string
+	QueueEntryID         string
+	PlanRevisionID       string
+	PlanApprovalID       string
+	PolicySnapshotID     string
+	Attempt              int64
+	PlanBaseSha          string
+	DispatchBaseSha      string
+	BaseCommitsAhead     sql.NullInt64
+	StartedAt            time.Time
+	DeadlineAt           sql.NullTime
+	TimedOutAt           sql.NullTime
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSha string
+	IntegrationGated     int64
+	SettledAt            sql.NullTime
+	SettledPRURL         string
+	SettledPRState       string
+}
+
+type LadoExecutionReview struct {
+	ReviewRunID        string
+	ExecutionSessionID string
+	HeadSha            string
+	Round              int64
+	CreatedAt          time.Time
+	CancelledAt        sql.NullTime
+}
+
+type LadoIntegrationApproval struct {
+	ID                 string
+	ExecutionSessionID string
+	PRURL              string
+	HeadSha            string
+	TargetBranch       string
+	VerificationSha256 string
+	AcknowledgedJson   string
+	ProofNonce         string
+	Actor              string
+	ApprovedAt         time.Time
+	StatusState        string
+	StatusAttempts     int64
+	StatusPostedAt     sql.NullTime
+	StatusError        string
 }
 
 type LadoPlanApproval struct {
@@ -535,10 +595,12 @@ type LadoPresenceProof struct {
 }
 
 type LadoProjectSetting struct {
-	ProjectID     string
-	LadoMode      int64
-	UpdatedAt     time.Time
-	MaxConcurrent int64
+	ProjectID           string
+	LadoMode            int64
+	UpdatedAt           time.Time
+	MaxConcurrent       int64
+	CheckCommands       string
+	CheckTimeoutMinutes int64
 }
 
 type LadoQueueEntry struct {
@@ -654,6 +716,19 @@ type LadoTask struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	CancelledAt         sql.NullTime
+}
+
+type LadoVerification struct {
+	ExecutionSessionID string
+	HeadSha            string
+	PRURL              string
+	Outcome            string
+	Reason             string
+	ContentJson        string
+	Sha256             string
+	NotifiedJson       string
+	ProtectionError    string
+	ComputedAt         time.Time
 }
 
 type ModelUsageEvent struct {

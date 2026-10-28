@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -83,6 +84,10 @@ func (c *PRsController) resolveComments(w http.ResponseWriter, r *http.Request) 
 // writePRError maps PR sentinel errors to their locked HTTP envelopes,
 // falling back to 500 for unexpected failures.
 func writePRError(w http.ResponseWriter, r *http.Request, err error) {
+	if apiErr := (*apierr.Error)(nil); errors.As(err, &apiErr) { // LADO fork: the merge gate's refusal
+		envelope.WriteError(w, r, err)
+		return
+	}
 	switch {
 	case errors.Is(err, prsvc.ErrInvalidPR):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_PR", "Invalid PR", nil)

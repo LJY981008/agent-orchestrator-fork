@@ -683,8 +683,9 @@ func Run() error {
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
-	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
-		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}}, log)
+	lado := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
+		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}, reviews: reviewSvc, ladoModes: ladoProjects}, log)
+	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup, ladoVerify := lado.connections, lado.tasks, lado.rules, lado.queue, lado.setup, lado.verify
 	ladoTasksDone := ladoTasks.Start(ctx)
 	ladoSetupDone := startLadoSetup(ctx, ladoSetup, log)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
@@ -858,6 +859,7 @@ func Run() error {
 	} else {
 		log.Warn("pr action service disabled: no usable SCM provider")
 	}
+	installLadoMergeGate(prActions, prReader, ladoVerify) // LADO fork: merges need LADO's integration approval
 
 	// Codex switch recovery is best effort and never blocks unrelated daemon
 	// startup. Its own credential gate still protects any local mutation.
@@ -885,6 +887,7 @@ func Run() error {
 	// LADO fork: the dispatcher spawns and stops workers, so like automations
 	// it starts after the startup reconcile above has settled the sessions.
 	ladoQueueDone := ladoQueue.Start(ctx)
+	ladoVerify.Start(ctx) // LADO fork: verifies the workers' PRs, which may message them
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
 	// Push-device registry: persisted phones that receive OS push notifications.
@@ -1027,6 +1030,7 @@ func Run() error {
 		LadoRules:          ladoRules,
 		LadoQueue:          ladoQueue,
 		LadoSetup:          ladoSetup,
+		LadoVerify:         ladoVerify,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1227,6 +1231,8 @@ func Run() error {
 	<-ladoTasksDone // LADO fork
 	<-ladoQueueDone // LADO fork
 	<-ladoSetupDone // LADO fork
+	// LADO fork: the verification loop and the check commands it started.
+	ladoVerify.Wait()
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight
 	// turns; the replacement daemon reconnects to the same initialized stream and

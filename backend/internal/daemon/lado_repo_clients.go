@@ -27,6 +27,8 @@ type ladoIssueOps interface {
 	Login(ctx context.Context) (string, error)
 	CheckAccess(ctx context.Context, repo domain.TrackerRepo) (ports.LadoRepoAccess, error)
 	IssueComments(ctx context.Context, id domain.TrackerID) ([]domain.LadoIssueComment, error)
+	BranchRules(ctx context.Context, repo domain.TrackerRepo, branch string) (ports.LadoBranchRules, error)
+	PostCommitStatus(ctx context.Context, repo domain.TrackerRepo, sha string, status ports.LadoCommitStatus) error
 }
 
 // ladoRepoClient joins an adapter's tracker reads and LADO operations.
@@ -49,6 +51,14 @@ func (c ladoRepoClient) CheckAccess(ctx context.Context, repo domain.TrackerRepo
 
 func (c ladoRepoClient) IssueComments(ctx context.Context, id domain.TrackerID) ([]domain.LadoIssueComment, error) {
 	return c.issues.IssueComments(ctx, id)
+}
+
+func (c ladoRepoClient) BranchRules(ctx context.Context, repo domain.TrackerRepo, branch string) (ports.LadoBranchRules, error) {
+	return c.issues.BranchRules(ctx, repo, branch)
+}
+
+func (c ladoRepoClient) PostCommitStatus(ctx context.Context, repo domain.TrackerRepo, sha string, status ports.LadoCommitStatus) error {
+	return c.issues.PostCommitStatus(ctx, repo, sha, status)
 }
 
 // ladoRepoClients builds repository clients. A client on a host's token

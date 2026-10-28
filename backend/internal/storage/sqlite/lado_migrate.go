@@ -93,6 +93,22 @@ END`,
 	ladoExecutionCDCTrigger("lado_cdc_executions_insert", "AFTER INSERT ON lado_executions", ""),
 	ladoExecutionCDCTrigger("lado_cdc_executions_update", "AFTER UPDATE ON lado_executions",
 		"WHEN OLD.timed_out_at IS NOT NEW.timed_out_at"),
+	// A verification record, an integration approval and a check run publish
+	// their execution's change when they are made and when the fact the
+	// execution's state and view read changes: a record's outcome, reason or
+	// hash, an approval's status state, a run's status. Recomputing an
+	// unchanged record touches only computed_at, and a fix request only
+	// notified_json. Evidence links and review rounds publish nothing; the
+	// record covers them.
+	ladoExecutionChildCDCTrigger("lado_cdc_verifications_insert", "AFTER INSERT ON lado_verifications", ""),
+	ladoExecutionChildCDCTrigger("lado_cdc_verifications_update", "AFTER UPDATE ON lado_verifications",
+		"WHEN OLD.outcome IS NOT NEW.outcome OR OLD.reason IS NOT NEW.reason OR OLD.sha256 IS NOT NEW.sha256"),
+	ladoExecutionChildCDCTrigger("lado_cdc_integration_approvals_insert", "AFTER INSERT ON lado_integration_approvals", ""),
+	ladoExecutionChildCDCTrigger("lado_cdc_integration_approvals_update", "AFTER UPDATE ON lado_integration_approvals",
+		"WHEN OLD.status_state IS NOT NEW.status_state"),
+	ladoExecutionChildCDCTrigger("lado_cdc_check_runs_insert", "AFTER INSERT ON lado_check_runs", ""),
+	ladoExecutionChildCDCTrigger("lado_cdc_check_runs_update", "AFTER UPDATE ON lado_check_runs",
+		"WHEN OLD.status IS NOT NEW.status"),
 	// Rules apply in every LADO project, so a rule, a new version or a Global
 	// binding publishes a lado_rules change in each project with LADO mode on.
 	// Versions never change, and their deletes follow the rule's.
@@ -154,6 +170,27 @@ BEGIN
     FROM lado_tasks
     JOIN projects ON projects.id = lado_tasks.project_id
     WHERE lado_tasks.id = NEW.task_id;
+END`
+}
+
+// ladoExecutionChildCDCTrigger publishes, like ladoExecutionCDCTrigger, a
+// change of the execution that NEW.execution_session_id names, for a row that
+// belongs to it.
+func ladoExecutionChildCDCTrigger(name, event, when string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, (SELECT sessions.id FROM sessions WHERE sessions.id = NEW.execution_session_id), 'session_updated',
+        json_object('kind', 'lado_execution', 'sessionId', NEW.execution_session_id, 'taskId', lado_tasks.id, 'projectId', projects.id),
+        datetime('now')
+    FROM lado_executions
+    JOIN lado_tasks ON lado_tasks.id = lado_executions.task_id
+    JOIN projects ON projects.id = lado_tasks.project_id
+    WHERE lado_executions.session_id = NEW.execution_session_id;
 END`
 }
 

@@ -19,7 +19,20 @@ import (
 func wantPrompt() string {
 	return "You are implementing a plan the developer approved in LADO for github:acme/app#12: Fix the login timeout.\n" +
 		"Follow the approved plan below and keep to its scope. When you open the pull request, link the issue in its description (for example \"Closes #12\").\n\n" +
-		"## Approved plan (revision 2, sha256 a1b2c3d4e5f6)\n\n" + testPlanText
+		"## Approved plan (revision 2, sha256 a1b2c3d4e5f6)\n\n" + testPlanText +
+		"\n## Verification and evidence\n\n" +
+		"Before the developer approves the integration, LADO verifies your pull request's head. " +
+		"The CI checks its base branch requires must pass, or every check reported on the head when it requires none. " +
+		"A changed path outside the plan's affected_paths needs the developer's confirmation. " +
+		"When a check fails, you get a message: push a fix, and LADO checks the new head. " +
+		"Before you run `ao report --done`, write `lado/evidence.md` in your session artifact directory, not in the repository, in the form below, " +
+		"listing for each acceptance criterion of the approved plan the CI checks, LADO check commands or commits that show it is met. " +
+		"LADO matches every entry against its records, shows the developer the entries it cannot match as claims, " +
+		"and marks evidence written for another head as stale, so write the file again whenever you push again.\n\n" +
+		"```markdown\n---\nhead: <the full SHA of the commit this evidence describes>\ncriteria:\n" +
+		"  - criterion: 1            # the 1-based number of the acceptance criterion in the approved plan\n" +
+		"    evidence:\n      - check: <a CI check name on the pull request>\n      - command: <a LADO check command name>\n" +
+		"      - commit: <a commit SHA in this branch>\n    note: <one line>\n---\n```\n"
 }
 
 func TestDispatchSpawnsAnApprovedTask(t *testing.T) {
@@ -63,6 +76,7 @@ func TestDispatchSpawnsAnApprovedTask(t *testing.T) {
 				SessionID: "sess-1", TaskID: "task-1", QueueEntryID: "entry-1", PlanRevisionID: "rev-2",
 				PlanApprovalID: "approval-1", PolicySnapshotID: "snap-1", Attempt: 1, StartedAt: started,
 				DispatchBaseSHA: testDispatchSHA, BaseCommitsAhead: &ahead,
+				BaseBranch: "main", BaseRemote: "origin", DispatchLocalBaseSHA: testDispatchSHA,
 			}
 			if c.deadline > 0 {
 				wantExec.DeadlineAt = started.Add(c.deadline)
@@ -168,6 +182,8 @@ func TestDispatchStopsAtTheFirstFailingCheck(t *testing.T) {
 			4, held(domain.LadoWaitingRetry)},
 		{"a blocking snapshot", func(f *fixture) { f.tasks.input.Snapshot = testSnapshot(claudeAgent(), true) },
 			6, blocked(domain.LadoBlockedSnapshot)},
+		{"check commands that cannot be read", func(f *fixture) { f.store.checksErr = errors.New("read LADO project checks: disk I/O error") },
+			6, held(domain.LadoWaitingRetry)},
 		{"an unsupported agent", withAgent(func(a *ladopolicy.SnapshotAgent) { a.Harness = domain.HarnessCursor }),
 			6, blocked(domain.LadoBlockedAgentUnsupported)},
 		{"no permission mode", withAgent(func(a *ladopolicy.SnapshotAgent) { a.PermissionMode = "" }),
