@@ -221,18 +221,18 @@ func TestLadoCheckRunsLifecycle(t *testing.T) {
 
 	// A run finishes once: its first outcome stays.
 	exit := 0
-	if err := s.FinishLadoCheckRun(ctx, lint.ID, domain.LadoCheckRunPassed, &exit, ladoSHA('1'), "", at.Add(4*time.Minute)); err != nil {
+	if err := s.FinishLadoCheckRun(ctx, lint.ID, domain.LadoCheckRunPassed, &exit, ladoSHA('1'), "", ladoSHA('3'), at.Add(4*time.Minute)); err != nil {
 		t.Fatalf("FinishLadoCheckRun: %v", err)
 	}
-	lint.Status, lint.ExitCode, lint.LogSHA256, lint.FinishedAt = domain.LadoCheckRunPassed, &exit, ladoSHA('1'), at.Add(4*time.Minute)
+	lint.Status, lint.ExitCode, lint.LogSHA256, lint.WorktreeSHA256, lint.FinishedAt = domain.LadoCheckRunPassed, &exit, ladoSHA('1'), ladoSHA('3'), at.Add(4*time.Minute)
 	failed := 1
-	if err := s.FinishLadoCheckRun(ctx, lint.ID, domain.LadoCheckRunFailed, &failed, ladoSHA('2'), "again", at.Add(5*time.Minute)); !errors.Is(err, domain.ErrLadoCheckRunFinished) {
+	if err := s.FinishLadoCheckRun(ctx, lint.ID, domain.LadoCheckRunFailed, &failed, ladoSHA('2'), "again", ladoSHA('4'), at.Add(5*time.Minute)); !errors.Is(err, domain.ErrLadoCheckRunFinished) {
 		t.Fatalf("finishing a finished run = %v, want ErrLadoCheckRunFinished", err)
 	}
-	if err := s.FinishLadoCheckRun(ctx, "run-missing", domain.LadoCheckRunFailed, nil, "", "", at); err == nil || errors.Is(err, domain.ErrLadoCheckRunFinished) {
+	if err := s.FinishLadoCheckRun(ctx, "run-missing", domain.LadoCheckRunFailed, nil, "", "", "", at); err == nil || errors.Is(err, domain.ErrLadoCheckRunFinished) {
 		t.Fatalf("finishing an unknown run = %v, want an error of its own", err)
 	}
-	if err := s.FinishLadoCheckRun(ctx, test.ID, domain.LadoCheckRunRunning, nil, "", "", at); err == nil {
+	if err := s.FinishLadoCheckRun(ctx, test.ID, domain.LadoCheckRunRunning, nil, "", "", "", at); err == nil {
 		t.Fatal("finishing a run as running was accepted")
 	}
 	if got, ok, err := s.GetLadoCheckRun(ctx, lint.ID); err != nil || !ok || !reflect.DeepEqual(got, lint) {
@@ -251,7 +251,7 @@ func TestLadoCheckRunsLifecycle(t *testing.T) {
 	if n, err := s.CancelRunningLadoCheckRuns(ctx, cancelled.Add(time.Minute)); err != nil || n != 0 {
 		t.Fatalf("CancelRunningLadoCheckRuns again = (%d, %v), want 0", n, err)
 	}
-	if err := s.FinishLadoCheckRun(ctx, test.ID, domain.LadoCheckRunPassed, &exit, "", "", cancelled.Add(time.Minute)); !errors.Is(err, domain.ErrLadoCheckRunFinished) {
+	if err := s.FinishLadoCheckRun(ctx, test.ID, domain.LadoCheckRunPassed, &exit, "", "", "", cancelled.Add(time.Minute)); !errors.Is(err, domain.ErrLadoCheckRunFinished) {
 		t.Fatalf("finishing a cancelled run = %v, want ErrLadoCheckRunFinished", err)
 	}
 	test.Status, test.FinishedAt = domain.LadoCheckRunCancelled, cancelled
@@ -831,9 +831,10 @@ func TestListLadoExecutionsToVerify(t *testing.T) {
 	ctx := context.Background()
 	at := ladoVerifyAt
 	started := func(n int) time.Time { return at.Add(time.Duration(n) * time.Minute) }
-	settle := func(exec *domain.LadoExecution, settled time.Time, audit *domain.LadoAuditEvent) {
+	settle := func(exec *domain.LadoExecution, number int, state domain.PRState, settled time.Time, audit *domain.LadoAuditEvent) {
 		t.Helper()
-		if err := s.SettleLadoExecution(ctx, exec.SessionID, settled, audit); err != nil {
+		url := fmt.Sprintf("https://github.com/acme/demo/pull/%d", number)
+		if err := s.SettleLadoExecution(ctx, exec.SessionID, url, state, settled, audit); err != nil {
 			t.Fatalf("SettleLadoExecution %s: %v", exec.SessionID, err)
 		}
 		if exec.SettledAt.IsZero() {
@@ -855,7 +856,7 @@ func TestListLadoExecutionsToVerify(t *testing.T) {
 	// lado-task-4's closed PR is settled.
 	settledClosed := mustLadoExecution(t, s, "4", started(4), true)
 	mustWriteLadoHeadPR(t, s, settledClosed.SessionID, 44, domain.PRStateClosed, ladoHead('4'), at.Add(time.Hour))
-	settle(&settledClosed, at.Add(2*time.Hour), nil)
+	settle(&settledClosed, 44, domain.PRStateClosed, at.Add(2*time.Hour), nil)
 	closed := mustLadoExecution(t, s, "5", started(5), true)
 	closed.PR = mustWriteLadoHeadPR(t, s, closed.SessionID, 45, domain.PRStateClosed, ladoHead('5'), at.Add(time.Hour))
 	// lado-task-6's newest PR merged and is settled: its older open PR does
@@ -863,13 +864,13 @@ func TestListLadoExecutionsToVerify(t *testing.T) {
 	replaced := mustLadoExecution(t, s, "6", started(6), false)
 	mustWriteLadoHeadPR(t, s, replaced.SessionID, 46, domain.PRStateOpen, ladoHead('6'), at.Add(time.Hour))
 	mustWriteLadoHeadPR(t, s, replaced.SessionID, 47, domain.PRStateMerged, ladoHead('7'), at.Add(2*time.Hour))
-	settle(&replaced, at.Add(3*time.Hour), nil)
+	settle(&replaced, 47, domain.PRStateMerged, at.Add(3*time.Hour), nil)
 	// lado-task-7's newest PR, a draft, is open after an older one merged;
 	// a settled time does not stop an open PR's verification.
 	reopened := mustLadoExecution(t, s, "7", started(7), false)
 	mustWriteLadoHeadPR(t, s, reopened.SessionID, 48, domain.PRStateMerged, ladoHead('8'), at.Add(time.Hour))
 	reopened.PR = mustWriteLadoHeadPR(t, s, reopened.SessionID, 49, domain.PRStateDraft, ladoHead('9'), at.Add(2*time.Hour))
-	settle(&reopened, at.Add(3*time.Hour), nil)
+	settle(&reopened, 48, domain.PRStateMerged, at.Add(3*time.Hour), nil)
 
 	expect := func(step string, limit int, want ...domain.LadoExecution) {
 		t.Helper()
@@ -891,24 +892,156 @@ func TestListLadoExecutionsToVerify(t *testing.T) {
 			}
 		}
 	}
-	expect("start", 50, open, merged, closed, reopened)
-	expect("limit", 2, open, merged)
+	// Heads without a record come first, by start; then the records
+	// computed longest ago.
+	expect("start", 50, merged, closed, reopened, open)
+	expect("limit", 2, merged, closed)
 	expect("no limit", 0)
 
 	// Settling a merged PR with its audit event takes it off the list; the
 	// event is appended once, and the first settled time stays.
 	audit := domain.LadoAuditEvent{At: at.Add(4 * time.Hour), Actor: "lado", Action: "execution.merged_without_approval", SubjectKind: "execution", SubjectID: string(merged.SessionID)}
 	before := ladoAuditProbe(t, s)
-	settle(&merged, at.Add(4*time.Hour), &audit)
-	settle(&merged, at.Add(5*time.Hour), &audit)
+	settle(&merged, 43, domain.PRStateMerged, at.Add(4*time.Hour), &audit)
+	settle(&merged, 43, domain.PRStateMerged, at.Add(5*time.Hour), &audit)
 	if after := ladoAuditProbe(t, s); after != before+2 {
 		t.Fatalf("settling twice appended %d audit events, want 1", after-before-1)
 	}
 	if got, _, err := s.LadoExecution(ctx, merged.SessionID); err != nil || !got.SettledAt.Equal(at.Add(4*time.Hour)) {
 		t.Fatalf("settled at %s (%v), want the first settling time", got.SettledAt, err)
 	}
-	settle(&closed, at.Add(4*time.Hour), nil)
-	expect("settled", 50, open, reopened)
+	settle(&closed, 45, domain.PRStateClosed, at.Add(4*time.Hour), nil)
+	expect("settled", 50, reopened, open)
+	if err := s.SettleLadoExecution(ctx, open.SessionID, open.PR.URL, domain.PRStateOpen, at, nil); err == nil {
+		t.Fatal("settling an open PR was accepted")
+	}
+}
+
+// The loop takes executions in turns: heads without a record first, by the
+// execution's start, then the records computed longest ago, so that a pile
+// of old open PRs never keeps a new execution from its record (decision a,
+// as changed for #15). An open PR whose head AO has not observed waits for
+// AO and is not listed.
+func TestListLadoExecutionsToVerifyTakesTurns(t *testing.T) {
+	s := openLadoVerifyStore(t)
+	ctx := context.Background()
+	at := ladoVerifyAt
+	var execs []domain.LadoExecution
+	for i := range 4 {
+		exec := mustLadoExecution(t, s, fmt.Sprint(i+1), at.Add(time.Duration(i)*time.Minute), false)
+		exec.PR = mustWriteLadoHeadPR(t, s, exec.SessionID, 50+i, domain.PRStateOpen, ladoHead(byte('1'+i)), at.Add(time.Hour))
+		execs = append(execs, exec)
+	}
+	headless := mustLadoExecution(t, s, "5", at.Add(5*time.Minute), false)
+	mustWriteLadoHeadPR(t, s, headless.SessionID, 59, domain.PRStateOpen, "", at.Add(time.Hour))
+	record := func(i int, computed time.Time) {
+		t.Helper()
+		exec := &execs[i]
+		mustUpsertLadoVerification(t, s, ladoVerification(t, exec.SessionID, exec.PR.URL, exec.PR.HeadSHA, computed,
+			mustLadoVerifyItem(t, domain.LadoVerifyRequiredChecks, domain.LadoVerifyPass, "", nil)))
+		exec.Verification = domain.LadoExecutionVerification{HeadSHA: exec.PR.HeadSHA, Outcome: domain.LadoVerifyPass}
+	}
+	order := func(step string, limit int) []domain.SessionID {
+		t.Helper()
+		got, err := s.ListLadoExecutionsToVerify(ctx, limit)
+		if err != nil {
+			t.Fatalf("%s: ListLadoExecutionsToVerify: %v", step, err)
+		}
+		var sessions []domain.SessionID
+		for _, exec := range got {
+			sessions = append(sessions, exec.SessionID)
+		}
+		return sessions
+	}
+	ids := func(indexes ...int) []domain.SessionID {
+		var sessions []domain.SessionID
+		for _, i := range indexes {
+			sessions = append(sessions, execs[i].SessionID)
+		}
+		return sessions
+	}
+
+	// The two oldest executions have records; the newer ones come first.
+	record(0, at.Add(3*time.Hour))
+	record(1, at.Add(2*time.Hour))
+	if got := order("records of the two oldest", 2); !slices.Equal(got, ids(2, 3)) {
+		t.Fatalf("first turn = %v, want the executions without a record %v", got, ids(2, 3))
+	}
+	// Once every head has a record, the one computed longest ago is next,
+	// and a recomputed record goes to the back.
+	record(2, at.Add(4*time.Hour))
+	record(3, at.Add(5*time.Hour))
+	if got := order("every head recorded", 50); !slices.Equal(got, ids(1, 0, 2, 3)) {
+		t.Fatalf("turns = %v, want %v", got, ids(1, 0, 2, 3))
+	}
+	record(1, at.Add(6*time.Hour))
+	if got := order("after recomputing", 2); !slices.Equal(got, ids(0, 2)) {
+		t.Fatalf("turns after recomputing = %v, want %v", got, ids(0, 2))
+	}
+}
+
+// A PR settles per URL and state: a closed PR that opens again and then
+// merges, or a newer PR of the execution, is listed and settled again, and
+// its audit event is appended for that state.
+func TestSettleLadoExecutionPerPRAndState(t *testing.T) {
+	s := openLadoVerifyStore(t)
+	ctx := context.Background()
+	at := ladoVerifyAt
+	exec := mustLadoExecution(t, s, "1", at, false)
+	listed := func() bool {
+		t.Helper()
+		got, err := s.ListLadoExecutionsToVerify(ctx, 50)
+		if err != nil {
+			t.Fatalf("ListLadoExecutionsToVerify: %v", err)
+		}
+		return slices.ContainsFunc(got, func(e domain.LadoExecution) bool { return e.SessionID == exec.SessionID })
+	}
+	audit := func(state string) *domain.LadoAuditEvent {
+		return &domain.LadoAuditEvent{At: at, Actor: "lado", Action: "execution.merged_without_approval", SubjectKind: "execution", SubjectID: string(exec.SessionID), Payload: []byte(`{"state":"` + state + `"}`)}
+	}
+	pr := mustWriteLadoHeadPR(t, s, exec.SessionID, 7, domain.PRStateClosed, ladoHead('1'), at.Add(time.Hour))
+	if err := s.SettleLadoExecution(ctx, exec.SessionID, pr.URL, domain.PRStateClosed, at.Add(time.Hour), nil); err != nil {
+		t.Fatalf("settle the closed PR: %v", err)
+	}
+	if listed() {
+		t.Fatal("a settled closed PR is listed")
+	}
+	// The PR opens again: it is verified again.
+	mustWriteLadoHeadPR(t, s, exec.SessionID, 7, domain.PRStateOpen, ladoHead('1'), at.Add(2*time.Hour))
+	if !listed() {
+		t.Fatal("a reopened PR is not listed")
+	}
+	// It merges: it is listed to settle again, once, with its event.
+	mustWriteLadoHeadPR(t, s, exec.SessionID, 7, domain.PRStateMerged, ladoHead('1'), at.Add(3*time.Hour))
+	if !listed() {
+		t.Fatal("a PR merged after it was settled closed is not listed")
+	}
+	before := ladoAuditProbe(t, s)
+	for range 2 {
+		if err := s.SettleLadoExecution(ctx, exec.SessionID, pr.URL, domain.PRStateMerged, at.Add(4*time.Hour), audit("merged")); err != nil {
+			t.Fatalf("settle the merged PR: %v", err)
+		}
+	}
+	if after := ladoAuditProbe(t, s); after != before+2 {
+		t.Fatalf("settling the merged PR twice appended %d audit events, want 1", after-before-1)
+	}
+	if listed() {
+		t.Fatal("a settled merged PR is listed")
+	}
+	// A newer PR merges: it settles on its own.
+	newer := mustWriteLadoHeadPR(t, s, exec.SessionID, 8, domain.PRStateMerged, ladoHead('2'), at.Add(5*time.Hour))
+	if !listed() {
+		t.Fatal("a newer merged PR is not listed")
+	}
+	if err := s.SettleLadoExecution(ctx, exec.SessionID, newer.URL, domain.PRStateMerged, at.Add(6*time.Hour), nil); err != nil {
+		t.Fatalf("settle the newer PR: %v", err)
+	}
+	if got, _, err := s.LadoExecution(ctx, exec.SessionID); err != nil || !got.SettledAt.Equal(at.Add(6*time.Hour)) {
+		t.Fatalf("settled at %s (%v), want the newer PR's settling time", got.SettledAt, err)
+	}
+	if listed() {
+		t.Fatal("the settled newer PR is listed")
+	}
 }
 
 func TestListLadoCommitChecksReadsOneCommit(t *testing.T) {

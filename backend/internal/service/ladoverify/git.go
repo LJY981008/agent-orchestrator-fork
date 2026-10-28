@@ -22,6 +22,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -71,11 +72,18 @@ type Git interface {
 	// RevParse returns the commit ref names, or ErrRefNotFound when it
 	// names none.
 	RevParse(ctx context.Context, dir, ref string) (string, error)
-	// StatusClean reports whether the work tree at dir has no change,
-	// untracked files included.
-	StatusClean(ctx context.Context, dir string) (bool, error)
+	// HasCommit reports whether the repository holds the commit sha.
+	HasCommit(ctx context.Context, dir, sha string) (bool, error)
+	// Status returns git status --porcelain of the work tree at dir: one
+	// line per change, untracked files included, and nothing when it has
+	// none.
+	Status(ctx context.Context, dir string) (string, error)
 	// Fetch updates refs/remotes/<remote>/<branch> from the remote's branch.
 	Fetch(ctx context.Context, dir, remote, branch string) error
+	// FetchPullHead brings the objects of a pull request's head from the
+	// remote, by the ref the host keeps for it (PullHeadRef), without
+	// writing any ref.
+	FetchPullHead(ctx context.Context, dir, remote, ref string) error
 }
 
 // ExecGit runs the system git.
@@ -262,14 +270,30 @@ func (ExecGit) RevParse(ctx context.Context, dir, ref string) (string, error) {
 	return oneCommit(out, "rev-parse")
 }
 
-// StatusClean runs git status --porcelain, which lists the untracked files
+// HasCommit runs git rev-parse --verify --quiet on sha^{commit}.
+func (g ExecGit) HasCommit(ctx context.Context, dir, sha string) (bool, error) {
+	if !commitID.MatchString(sha) {
+		return false, fmt.Errorf("look for commit %q: not a commit id", sha)
+	}
+	_, err := g.RevParse(ctx, dir, sha)
+	switch {
+	case err == nil:
+		return true, nil
+	case errors.Is(err, ErrRefNotFound):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
+// Status runs git status --porcelain, which lists the untracked files
 // whatever status.showUntrackedFiles says.
-func (ExecGit) StatusClean(ctx context.Context, dir string) (bool, error) {
+func (ExecGit) Status(ctx context.Context, dir string) (string, error) {
 	out, err := runGit(ctx, dir, gitTimeout, "status", "--porcelain", "--untracked-files=normal")
 	if err != nil {
-		return false, fmt.Errorf("read the status of %s: %w", dir, err)
+		return "", fmt.Errorf("read the status of %s: %w", dir, err)
 	}
-	return len(bytes.TrimSpace(out)) == 0, nil
+	return string(out), nil
 }
 
 // Fetch runs git fetch of the one branch into its remote-tracking ref, with
@@ -281,6 +305,41 @@ func (ExecGit) Fetch(ctx context.Context, dir, remote, branch string) error {
 	refspec := "+refs/heads/" + branch + ":refs/remotes/" + remote + "/" + branch
 	if _, err := runGit(ctx, dir, fetchTimeout, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--end-of-options", remote, refspec); err != nil {
 		return fmt.Errorf("fetch %s from %s in %s: %w", branch, remote, dir, err)
+	}
+	return nil
+}
+
+// pullHeadRef matches the refs GitHub (refs/pull/<n>/head) and GitLab
+// (refs/merge-requests/<iid>/head) keep for a pull request's head.
+var pullHeadRef = regexp.MustCompile(`^refs/(pull|merge-requests)/[1-9]\d*/head$`)
+
+// PullHeadRef is the ref the host of provider keeps for the head of pull
+// request number: refs/pull/<n>/head on GitHub and refs/merge-requests/<iid>/head
+// on GitLab. Another provider, or no number, has none.
+func PullHeadRef(provider domain.TrackerProvider, number int) string {
+	if number <= 0 {
+		return ""
+	}
+	switch provider {
+	case domain.TrackerProviderGitHub:
+		return "refs/pull/" + strconv.Itoa(number) + "/head"
+	case domain.TrackerProviderGitLab:
+		return "refs/merge-requests/" + strconv.Itoa(number) + "/head"
+	}
+	return ""
+}
+
+// FetchPullHead runs git fetch of the pull request's head ref without a
+// destination and without writing FETCH_HEAD, so no ref of the developer's
+// repository changes: the head's commits arrive as objects the integration
+// reads. Tags and submodules are left out.
+func (ExecGit) FetchPullHead(ctx context.Context, dir, remote, ref string) error {
+	if !refName(remote) || !pullHeadRef.MatchString(ref) {
+		return fmt.Errorf("fetch %q from %q: not a pull request head and remote git can fetch", ref, remote)
+	}
+	if _, err := runGit(ctx, dir, fetchTimeout, "fetch", "--quiet", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head",
+		"--end-of-options", remote, ref); err != nil {
+		return fmt.Errorf("fetch %s from %s in %s: %w", ref, remote, dir, err)
 	}
 	return nil
 }

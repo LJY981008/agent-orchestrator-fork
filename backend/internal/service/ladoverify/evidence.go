@@ -195,17 +195,20 @@ type EvidenceInput struct {
 	// CriteriaCount is how many acceptance criteria the approved plan has.
 	CriteriaCount int
 	HeadSHA       string
-	// Checks are the PR's checks of the head, Runs LADO's check command runs
-	// of the head, and Commits the commits merge-base..head.
-	Checks  []domain.PullRequestCheck
-	Runs    []domain.LadoCheckRun
-	Commits []string
+	// Checks are the PR's checks of the head, Commands the project's check
+	// commands, Runs LADO's check command runs of the head, and Commits the
+	// commits merge-base..head.
+	Checks   []domain.PullRequestCheck
+	Commands []domain.LadoCheckCommand
+	Runs     []domain.LadoCheckRun
+	Commits  []string
 }
 
 // ResolveEvidence checks every entry of the evidence file against the
 // records of the head (decision k of the step 8 plan): a check names a
-// passed check of the head, a command a passed run of a LADO check command
-// on the head, a commit one of merge-base..head (by at least its first 7
+// passed check of the head, a command one of the project's check commands
+// whose newest run on the head, of its name and text, passed, a commit one
+// of merge-base..head (by at least its first 7
 // characters); any other entry is a claim. A criterion with a resolved entry
 // is linked, or stale when the file describes another head; one with
 // entries but none resolved is claimed; one the file does not list is
@@ -304,20 +307,27 @@ func evidenceCheckRef(in EvidenceInput, name string) domain.LadoEvidenceRef {
 	return evidenceClaim("check", name)
 }
 
-// evidenceCommandRef resolves a LADO check command name, compared without
-// case, to the newest passed run of the command on the head.
+// evidenceCommandRef resolves the name of one of the project's check
+// commands, compared without case, to the command's newest run on the head,
+// matched by name and text as the commands item counts runs, when that run
+// passed. A run of a command whose text changed since, or of a command the
+// project no longer has, is a claim.
 func evidenceCommandRef(in EvidenceInput, name string) domain.LadoEvidenceRef {
-	var found *domain.LadoCheckRun
-	for i, run := range in.Runs {
-		if run.Status == domain.LadoCheckRunPassed && strings.EqualFold(run.Name, name) &&
-			evidenceSameCommit(run.HeadSHA, in.HeadSHA) && (found == nil || !run.StartedAt.Before(found.StartedAt)) {
-			found = &in.Runs[i]
-		}
-	}
-	if found == nil {
+	i := slices.IndexFunc(in.Commands, func(command domain.LadoCheckCommand) bool { return strings.EqualFold(command.Name, name) })
+	if i < 0 {
 		return evidenceClaim("command", name)
 	}
-	return domain.LadoEvidenceRef{Kind: domain.LadoEvidenceRefCheckRun, Key: found.ID, SHA: in.HeadSHA}
+	var head []domain.LadoCheckRun
+	for _, run := range in.Runs {
+		if evidenceSameCommit(run.HeadSHA, in.HeadSHA) {
+			head = append(head, run)
+		}
+	}
+	run, ran := newestCheckRun(head, in.Commands[i])
+	if !ran || run.Status != domain.LadoCheckRunPassed {
+		return evidenceClaim("command", name)
+	}
+	return domain.LadoEvidenceRef{Kind: domain.LadoEvidenceRefCheckRun, Key: run.ID, SHA: in.HeadSHA}
 }
 
 // evidenceCommitRef resolves a commit SHA, or a prefix of at least 7

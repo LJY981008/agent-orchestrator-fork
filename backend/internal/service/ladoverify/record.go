@@ -14,21 +14,32 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 )
 
-// finishTimeout bounds the writes that record a check command's end, which
-// outlive the context the command ran under.
-const finishTimeout = 10 * time.Second
+const (
+	// finishTimeout bounds the writes that record a check command's end,
+	// which outlive the context the command ran under.
+	finishTimeout = 10 * time.Second
+	// headFetchEvery is how often the loop fetches a head the repository
+	// lacks; an integration approval and its dry run fetch it every time.
+	headFetchEvery = 5 * time.Minute
+)
+
+// errHeadUnavailable is why an item git reads cannot be computed while the
+// repository lacks the head: it waits as head_unavailable.
+var errHeadUnavailable = errors.New("the repository does not have the head, and LADO could not fetch it")
 
 // verifyOptions say how a head's record is computed. forceProtection reads
 // the base branch's rules again whatever the cache holds; startWork starts
 // the check command, the review round or its cancellation and the fix
 // requests the record calls for; fetchBase fetches the base branch from its
-// remote before git reads anything, as an integration approval does.
+// remote before git reads anything, and the PR's head when the repository
+// lacks it, as an integration approval does.
 type verifyOptions struct {
 	forceProtection bool
 	startWork       bool
@@ -48,8 +59,11 @@ type headInputs struct {
 	// recorded none; live says whether the worker session still runs.
 	worktree string
 	live     bool
-	env      map[string]string
-	plan     domain.LadoPlan
+	// headMissing says that the repository lacks the head and LADO could
+	// not fetch it (ensureHead).
+	headMissing bool
+	env         map[string]string
+	plan        domain.LadoPlan
 	// validators are those of the execution's rule snapshot.
 	validators validatorSet
 	commands   []domain.LadoCheckCommand
@@ -91,6 +105,9 @@ type evaluation struct {
 	// evidence item could be computed.
 	links    []domain.LadoEvidenceLink
 	resolved bool
+	// protectionError is the message of a failed read of the base branch's
+	// rules, which the record keeps outside its hash.
+	protectionError string
 }
 
 // verifyHead computes and stores the record of the execution's PR head. The
@@ -107,6 +124,7 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 	if opts.fetchBase {
 		s.fetchBase(ctx, in)
 	}
+	in.headMissing = !s.ensureHead(ctx, in, opts.fetchBase)
 	ev := s.evaluate(ctx, in, opts)
 	if ctx.Err() != nil {
 		// A stopping daemon leaves the stored record as it was.
@@ -119,6 +137,7 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 		PRURL:              exec.PR.URL,
 		Items:              ev.items,
 		Notified:           []string{},
+		ProtectionError:    ev.protectionError,
 		ComputedAt:         now,
 	}
 	previous, found, err := s.deps.Store.GetLadoVerification(ctx, exec.SessionID, in.head)
@@ -138,6 +157,7 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 	}
 	if opts.startWork {
 		record.Notified = s.requestFixes(ctx, in, ev, record.Notified)
+		record.Notified = s.requestPull(ctx, in, record.Notified)
 	}
 	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
 		return domain.LadoVerification{}, fmt.Errorf("store the record of head %s: %w", in.head, err)
@@ -268,6 +288,7 @@ func (s *Service) readValidators(ctx context.Context, exec domain.LadoExecution)
 func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOptions) evaluation {
 	var ev evaluation
 	read := s.protection.Read(ctx, in.task.Repo, in.target, opts.forceProtection)
+	ev.protectionError = read.ErrorMessage()
 	required, named := RequiredContexts(read.Rules)
 	checks, checksErr := s.deps.Store.ListLadoCommitChecks(ctx, in.exec.PR.URL, in.head)
 	if checksErr != nil {
@@ -320,7 +341,10 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 			})
 		}},
 		{domain.LadoVerifyBaseBranch, func() (domain.LadoVerifyItem, error) {
-			return EvaluateBase(ctx, s.deps.Git, BaseInput{Dir: in.dir, Branch: in.baseBranch, Remote: in.baseRemote, HeadSHA: in.head, StartedAt: in.exec.StartedAt})
+			return EvaluateBase(ctx, s.deps.Git, BaseInput{
+				Dir: in.dir, Branch: in.baseBranch, Remote: in.baseRemote, HeadSHA: in.head, StartedAt: in.exec.StartedAt,
+				DispatchLocalSHA: in.exec.DispatchLocalBaseSHA,
+			})
 		}},
 		{domain.LadoVerifyProtection, func() (domain.LadoVerifyItem, error) {
 			return EvaluateProtection(read)
@@ -337,13 +361,60 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 	}
 	for _, step := range steps {
 		item, err := step.evaluate()
-		if err != nil {
+		switch {
+		case errors.Is(err, errHeadUnavailable):
+			item = domain.LadoVerifyItem{Kind: step.kind, Outcome: domain.LadoVerifyWait, Code: domain.LadoCodeHeadUnavailable, Details: json.RawMessage("{}")}
+		case err != nil:
 			s.deps.Log.Warn("LADO could not compute a verification item; it waits", "session", in.exec.SessionID, "head", in.head, "item", step.kind, "err", err)
 			item = verifyingItem(step.kind)
 		}
 		ev.items = append(ev.items, item)
 	}
 	return ev
+}
+
+// ensureHead reports whether the repository that holds the issue has the
+// head. When it lacks it, as after GitHub's Update branch, an applied
+// suggestion or a bot's push, LADO fetches the head ref the host keeps for
+// the PR from the base remote (prompts off, 30 seconds): the loop at most
+// once per head every headFetchEvery, an integration approval and its dry
+// run (force) every time. A head git cannot tell about counts as there, so
+// the reads that need it report their own error.
+func (s *Service) ensureHead(ctx context.Context, in headInputs, force bool) bool {
+	has, err := s.deps.Git.HasCommit(ctx, in.dir, in.head)
+	if err != nil || has {
+		return true
+	}
+	ref := PullHeadRef(in.task.Repo.Provider, in.exec.PR.Number)
+	if ref == "" {
+		return false
+	}
+	key, now := headKey(in.exec.SessionID, in.head), s.now()
+	s.mu.Lock()
+	last, tried := s.headFetched[key]
+	if !force && tried && now.Sub(last) < headFetchEvery {
+		s.mu.Unlock()
+		return false
+	}
+	for other, at := range s.headFetched {
+		if now.Sub(at) >= headFetchEvery {
+			delete(s.headFetched, other)
+		}
+	}
+	s.headFetched[key] = now
+	s.mu.Unlock()
+	if err := s.deps.Git.FetchPullHead(ctx, in.dir, in.baseRemote, ref); err != nil {
+		s.deps.Log.Warn("LADO could not fetch a pull request's head; the items git reads wait", "session", in.exec.SessionID,
+			"head", in.head, "ref", ref, "err", redactedErrorLine(err))
+		return false
+	}
+	has, err = s.deps.Git.HasCommit(ctx, in.dir, in.head)
+	return err != nil || has
+}
+
+// headKey names one head of an execution.
+func headKey(session domain.SessionID, head string) string {
+	return string(session) + "@" + head
 }
 
 // fetchBase brings the remote-tracking base branch, and the PR's target
@@ -367,6 +438,9 @@ func verifyingItem(kind domain.LadoVerifyKind) domain.LadoVerifyItem {
 // branch reads where the head's branch left the target and the commits
 // since.
 func (s *Service) branch(ctx context.Context, in headInputs) branchFacts {
+	if in.headMissing {
+		return branchFacts{err: errHeadUnavailable}
+	}
 	base, err := s.mergeBase(ctx, in)
 	if err != nil {
 		return branchFacts{err: err}
@@ -404,9 +478,9 @@ func (s *Service) commandsItem(ctx context.Context, in headInputs, runs []domain
 	due := CommandsToRun(in.commands, runs)
 	code := ""
 	if len(due) > 0 {
-		// After the head's first run, the worktree may hold what a command
-		// left, such as build output: then only its HEAD must be the head.
-		code = worktreeAt(ctx, s.deps.Git, in.worktree, in.head, len(runs) == 0)
+		// After a run, the worktree may hold what the run left, such as build
+		// output, and nothing else.
+		code = WorktreeReady(ctx, s.deps.Git, in.worktree, in.head, runs)
 		if code == "" && opts.startWork {
 			if run, ok := s.startCommand(ctx, in, due[0]); ok {
 				runs, due = append(slices.Clip(runs), run), due[1:]
@@ -451,7 +525,7 @@ func (s *Service) startCommand(ctx context.Context, in headInputs, command domai
 		defer s.wg.Done()
 		defer s.Kick()
 		defer s.freeSlot()
-		s.finishCommand(ctx, run, s.deps.Run(ctx, spec))
+		s.finishCommand(ctx, run, spec.Dir, s.deps.Run(ctx, spec))
 	}()
 	return run, true
 }
@@ -463,11 +537,19 @@ func (s *Service) freeSlot() {
 }
 
 // finishCommand records how a check command run ended, with its output as
-// the run's log. It records even when ctx is done, as when the daemon stops:
-// a run left running would read as one going on until the next start.
-func (s *Service) finishCommand(ctx context.Context, run domain.LadoCheckRun, result CommandResult) {
+// the run's log and the status of the worktree at dir after it, which the
+// next command on the head compares with (WorktreeReady). It records even
+// when ctx is done, as when the daemon stops: a run left running would read
+// as one going on until the next start.
+func (s *Service) finishCommand(ctx context.Context, run domain.LadoCheckRun, dir string, result CommandResult) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
 	defer cancel()
+	worktree := ""
+	if status, err := s.deps.Git.Status(ctx, dir); err == nil {
+		worktree = domain.LadoWorktreeStatusSHA256(status)
+	} else {
+		s.deps.Log.Warn("LADO could not read the worktree after a check command", "session", run.ExecutionSessionID, "command", run.Name, "err", err)
+	}
 	logSHA256 := ""
 	if s.deps.Blobs != nil {
 		sum, err := s.deps.Blobs.Put(result.Output)
@@ -480,7 +562,7 @@ func (s *Service) finishCommand(ctx context.Context, run domain.LadoCheckRun, re
 	if result.Err != nil {
 		message = redactedErrorLine(result.Err)
 	}
-	if err := s.deps.Store.FinishLadoCheckRun(ctx, run.ID, result.Status, result.ExitCode, logSHA256, message, s.now()); err != nil {
+	if err := s.deps.Store.FinishLadoCheckRun(ctx, run.ID, result.Status, result.ExitCode, logSHA256, message, worktree, s.now()); err != nil {
 		s.deps.Log.Warn("LADO could not record how a check command ended", "session", run.ExecutionSessionID, "command", run.Name, "run", run.ID, "err", err)
 	}
 }
@@ -580,6 +662,7 @@ func (s *Service) evidenceItem(ctx context.Context, in headInputs, checks []doma
 		CriteriaCount: len(in.plan.AcceptanceCriteria),
 		HeadSHA:       in.head,
 		Checks:        checks,
+		Commands:      in.commands,
 		Runs:          ev.runs,
 		Commits:       shas,
 	})
@@ -588,6 +671,31 @@ func (s *Service) evidenceItem(ctx context.Context, in headInputs, checks []doma
 	}
 	ev.links, ev.resolved = links, true
 	return item, nil
+}
+
+// requestPull asks the worker once per head to pull its branch when its
+// worktree is behind a head made on the host: the head holds the worktree's
+// commit and is another one. The check commands run only in a worktree at
+// the head. The notified list records the message (outside the hash).
+func (s *Service) requestPull(ctx context.Context, in headInputs, notified []string) []string {
+	if s.deps.Sender == nil || !in.live || in.worktree == "" || in.headMissing || slices.Contains(notified, domain.LadoNotifiedWorktreeBehind) {
+		return notified
+	}
+	current, err := s.deps.Git.RevParse(ctx, in.worktree, "HEAD")
+	if err != nil || strings.EqualFold(current, in.head) {
+		return notified
+	}
+	if behind, err := s.deps.Git.IsAncestor(ctx, in.worktree, current, in.head); err != nil || !behind {
+		return notified
+	}
+	message := fmt.Sprintf("LADO checks head %s of your pull request, which was made on the host, for example by Update branch or an applied suggestion. "+
+		"Your worktree is at %s, which the head builds on. Pull your branch so that your worktree is at the head: "+
+		"LADO runs the project's check commands there. If you change anything after that, push again.", shortCommit(in.head), shortCommit(current))
+	if err := s.deps.Sender.Send(ctx, in.exec.SessionID, message); err != nil {
+		s.deps.Log.Warn("LADO could not ask a worker to pull its branch; it tries again", "session", in.exec.SessionID, "head", in.head, "err", err)
+		return notified
+	}
+	return append(slices.Clone(notified), domain.LadoNotifiedWorktreeBehind)
 }
 
 // sameItem reports whether both lists hold the same item of kind.

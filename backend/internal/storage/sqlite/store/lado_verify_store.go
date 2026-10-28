@@ -49,9 +49,10 @@ func (s *Store) StartLadoCheckRun(ctx context.Context, run domain.LadoCheckRun) 
 
 // FinishLadoCheckRun records how a running check run ended at at: its final
 // status, its exit code (nil when the command did not exit), the sha256 of
-// its log blob and its error, without secrets. A run that finished before
-// keeps its outcome, and the error is domain.ErrLadoCheckRunFinished.
-func (s *Store) FinishLadoCheckRun(ctx context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage string, at time.Time) error {
+// its log blob, its error, without secrets, and the hash of the worktree's
+// status after it (empty when unread). A run that finished before keeps its
+// outcome, and the error is domain.ErrLadoCheckRunFinished.
+func (s *Store) FinishLadoCheckRun(ctx context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage, worktreeSHA256 string, at time.Time) error {
 	if status == "" || status == domain.LadoCheckRunRunning || at.IsZero() {
 		return errors.New("finish LADO check run: a final status and a time are required")
 	}
@@ -64,12 +65,13 @@ func (s *Store) FinishLadoCheckRun(ctx context.Context, id string, status domain
 	}
 	defer s.writeMu.Unlock()
 	n, err := s.qw.FinishLadoCheckRun(ctx, gen.FinishLadoCheckRunParams{
-		Status:       string(status),
-		ExitCode:     exit,
-		LogSha256:    logSHA256,
-		ErrorMessage: errorMessage,
-		FinishedAt:   ladoNullTime(at),
-		ID:           id,
+		Status:         string(status),
+		ExitCode:       exit,
+		LogSha256:      logSHA256,
+		ErrorMessage:   errorMessage,
+		WorktreeSha256: worktreeSHA256,
+		FinishedAt:     ladoNullTime(at),
+		ID:             id,
 	})
 	if err != nil {
 		return fmt.Errorf("finish LADO check run: %w", err)
@@ -185,6 +187,7 @@ func (s *Store) UpsertLadoVerification(ctx context.Context, v domain.LadoVerific
 			ContentJson:        string(content),
 			Sha256:             sum,
 			NotifiedJson:       string(notified),
+			ProtectionError:    v.ProtectionError,
 			ComputedAt:         v.ComputedAt.UTC(),
 		})
 	})
@@ -223,6 +226,7 @@ func (s *Store) GetLadoVerification(ctx context.Context, session domain.SessionI
 		PRURL:              row.PRURL,
 		Items:              content.Items,
 		Notified:           notified,
+		ProtectionError:    row.ProtectionError,
 		ComputedAt:         row.ComputedAt.UTC(),
 	}, true, nil
 }
@@ -377,10 +381,12 @@ func (s *Store) ListLadoCommitChecks(ctx context.Context, prURL, commit string) 
 }
 
 // ListLadoExecutionsToVerify returns up to limit executions for the
-// verification loop, oldest first: those whose session's newest PR is open,
-// and those whose newest PR merged or closed and that are not settled yet.
-// Each carries that PR, whether its session ended and the verification facts
-// of the PR's head, as task reads give them.
+// verification loop: those whose session's newest PR is open with a head AO
+// observed, and those whose newest PR merged or closed and is not settled in
+// that state yet. Heads without a record come first, then the records
+// computed longest ago, so that each execution takes its turn however many
+// wait. Each carries that PR, whether its session ended and the verification
+// facts of the PR's head, as task reads give them.
 func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]domain.LadoExecution, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -402,20 +408,27 @@ func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]do
 	return executions, nil
 }
 
-// SettleLadoExecution records that the loop settled the execution's merged or
-// closed PR at at, with audit in the same transaction when it is given. An
-// execution settled before, and a session that is not an execution, write
-// nothing, so the audit event is appended once.
-func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionID, at time.Time, audit *domain.LadoAuditEvent) error {
-	if at.IsZero() {
-		return errors.New("settle LADO execution: a time is required")
+// SettleLadoExecution records that the loop settled the execution's PR
+// prURL in state (merged or closed) at at, with audit in the same
+// transaction when it is given. An execution settled before with that PR in
+// that state, and a session that is not an execution, write nothing, so the
+// audit event is appended once per PR and state: a PR that was closed and
+// merges after it opened again, or a newer PR, settles again.
+func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error {
+	if at.IsZero() || prURL == "" {
+		return errors.New("settle LADO execution: a PR and a time are required")
+	}
+	if state != domain.PRStateMerged && state != domain.PRStateClosed {
+		return fmt.Errorf("settle LADO execution: a PR settles merged or closed, not %q", state)
 	}
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
 	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "settle LADO execution", func(q *gen.Queries) error {
-		n, err := q.SettleLadoExecution(ctx, gen.SettleLadoExecutionParams{SettledAt: ladoNullTime(at), SessionID: string(session)})
+		n, err := q.SettleLadoExecution(ctx, gen.SettleLadoExecutionParams{
+			SettledAt: ladoNullTime(at), PRURL: prURL, PRState: string(state), SessionID: string(session),
+		})
 		if err != nil || n == 0 || audit == nil {
 			return err
 		}
@@ -574,6 +587,7 @@ func ladoCheckRunFromGen(row gen.LadoCheckRun) domain.LadoCheckRun {
 		ExitCode:           exit,
 		LogSHA256:          row.LogSha256,
 		ErrorMessage:       row.ErrorMessage,
+		WorktreeSHA256:     row.WorktreeSha256,
 		StartedAt:          row.StartedAt.UTC(),
 		FinishedAt:         ladoTimeFromNull(row.FinishedAt),
 	}

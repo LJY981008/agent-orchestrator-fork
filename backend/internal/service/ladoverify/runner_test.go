@@ -228,7 +228,7 @@ func TestRunCommandKeepsTheOutputTail(t *testing.T) {
 	}
 }
 
-func TestWorktreeAtHead(t *testing.T) {
+func TestWorktreeReady(t *testing.T) {
 	ctx := context.Background()
 	git := ExecGit{}
 	r := newTestRepo(t, t0)
@@ -237,6 +237,7 @@ func TestWorktreeAtHead(t *testing.T) {
 	r.write(wt, "app.txt", "one\n")
 	head := r.commit(t0, wt, "Add the app")
 
+	// Before the head's first run, the worktree must have no change.
 	for _, tc := range []struct {
 		name, dir, head, want string
 		prepare, undo         func()
@@ -256,14 +257,52 @@ func TestWorktreeAtHead(t *testing.T) {
 		if tc.prepare != nil {
 			tc.prepare()
 		}
-		if got := WorktreeAtHead(ctx, git, tc.dir, tc.head); got != tc.want {
-			t.Fatalf("%s: WorktreeAtHead = %q, want %q", tc.name, got, tc.want)
+		if got := WorktreeReady(ctx, git, tc.dir, tc.head, nil); got != tc.want {
+			t.Fatalf("%s: WorktreeReady = %q, want %q", tc.name, got, tc.want)
 		}
 		if tc.undo != nil {
 			tc.undo()
 		}
 	}
-	if got := WorktreeAtHead(ctx, git, wt, head); got != "" {
+	if got := WorktreeReady(ctx, git, wt, head, nil); got != "" {
 		t.Fatalf("after the changes were undone: %q, want ready", got)
+	}
+
+	// V2 of #15: after a run, the worktree may hold what the run left, and
+	// nothing else. A first command builds into dist/; the next one runs
+	// with that output, but not on an edit the worker did not commit.
+	r.write(wt, "dist/app.js", "built\n")
+	status, err := git.Status(ctx, wt)
+	if err != nil || status == "" {
+		t.Fatalf("Status after a build = (%q, %v), want the build output", status, err)
+	}
+	built := domain.LadoCheckRun{
+		Name: "build", Status: domain.LadoCheckRunPassed, StartedAt: t0, FinishedAt: t0.Add(time.Minute),
+		WorktreeSHA256: domain.LadoWorktreeStatusSHA256(status),
+	}
+	// A run LADO marked to run again, or one a stopped daemon left, has no
+	// status of its own: the last run that left one counts.
+	marker := domain.LadoCheckRun{Name: "build", Status: domain.LadoCheckRunCancelled, StartedAt: t0.Add(2 * time.Minute), FinishedAt: t0.Add(2 * time.Minute)}
+	runs := []domain.LadoCheckRun{built, marker}
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != "" {
+		t.Fatalf("with the run's own output: %q, want ready", got)
+	}
+	r.write(wt, "app.txt", "edited\n")
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != domain.LadoCodeWorktreeChanged {
+		t.Fatalf("with an edit after the run: %q, want worktree_changed", got)
+	}
+	r.write(wt, "app.txt", "one\n")
+	r.write(wt, "notes.txt", "draft\n")
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != domain.LadoCodeWorktreeChanged {
+		t.Fatalf("with a new file after the run: %q, want worktree_changed", got)
+	}
+	_ = os.Remove(filepath.Join(wt, "notes.txt"))
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != "" {
+		t.Fatalf("after the edits were undone: %q, want ready", got)
+	}
+	// A run whose status LADO could not read leaves the one before it.
+	unread := domain.LadoCheckRun{Name: "lint", Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(3 * time.Minute), FinishedAt: t0.Add(4 * time.Minute)}
+	if got := WorktreeReady(ctx, git, wt, head, append(runs, unread)); got != "" {
+		t.Fatalf("after a run without a status: %q, want ready", got)
 	}
 }

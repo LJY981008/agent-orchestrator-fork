@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -105,7 +106,7 @@ func TestEvidenceResolvesAgainstRecords(t *testing.T) {
 				{Criterion: 1, Evidence: []EvidenceEntry{{Check: "build"}}},
 				// A failed check.
 				{Criterion: 2, Evidence: []EvidenceEntry{{Check: "lint"}}},
-				// A command whose newest passed run on the head is run-2.
+				// A command whose newest run on the head, run-2, passed.
 				{Criterion: 3, Evidence: []EvidenceEntry{{Command: "unit tests"}}},
 				// A commit of the branch by its short SHA, and a claim.
 				{Criterion: 4, Evidence: []EvidenceEntry{{Commit: "2222222"}, {Check: "lint"}, {Commit: "2222222"}}},
@@ -124,11 +125,12 @@ func TestEvidenceResolvesAgainstRecords(t *testing.T) {
 				{Name: "Build", CommitHash: head, Status: domain.PRCheckPassed},
 				{Name: "lint", CommitHash: head, Status: domain.PRCheckFailed},
 			},
+			Commands: []domain.LadoCheckCommand{{Name: "Unit tests", Command: "go test ./..."}},
 			Runs: []domain.LadoCheckRun{
-				{ID: "run-1", Name: "unit tests", HeadSHA: head, Status: domain.LadoCheckRunFailed, StartedAt: t0},
-				{ID: "run-2", Name: "unit tests", HeadSHA: head, Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(time.Minute)},
+				{ID: "run-1", Name: "Unit tests", Command: "go test ./...", HeadSHA: head, Status: domain.LadoCheckRunFailed, StartedAt: t0},
+				{ID: "run-2", Name: "Unit tests", Command: "go test ./...", HeadSHA: head, Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(time.Minute)},
 				// A run of another head does not count, however new.
-				{ID: "run-3", Name: "unit tests", HeadSHA: other, Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(time.Hour)},
+				{ID: "run-3", Name: "Unit tests", Command: "go test ./...", HeadSHA: other, Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(time.Hour)},
 			},
 			Commits: []string{"1111111" + strings.Repeat("a", 33), inRange, head},
 		}
@@ -262,6 +264,46 @@ func TestEvidenceResolvesAgainstRecords(t *testing.T) {
 			if item.Kind != domain.LadoVerifyEvidence || item.Outcome != domain.LadoVerifyInfo || item.Code != "" ||
 				string(item.Details) != string(want.Details) {
 				t.Fatalf("item = %s %s %q %s\nwant evidence info with %s", item.Kind, item.Outcome, item.Code, item.Details, want.Details)
+			}
+		})
+	}
+}
+
+// V1 of #15: an evidence entry that names a check command resolves to the
+// run the commands item counts, matched by name and text: a pass of the
+// command before its text changed, a run of a command the project no longer
+// has and a newest run that did not pass are claims.
+func TestEvidenceCommandRunsMatchTheCommandText(t *testing.T) {
+	head := strings.Repeat("c0ffee00", 5)
+	file := &EvidenceFile{Head: head, Criteria: []EvidenceCriterion{{Criterion: 1, Evidence: []EvidenceEntry{{Command: "unit"}}}}}
+	passedOld := domain.LadoCheckRun{ID: "run-old", Name: "unit", Command: "go test ./pkg/a", HeadSHA: head, Status: domain.LadoCheckRunPassed, StartedAt: t0}
+	for _, tc := range []struct {
+		name     string
+		commands []domain.LadoCheckCommand
+		runs     []domain.LadoCheckRun
+		want     domain.LadoEvidenceRef
+	}{
+		{name: "a pass of the old text", commands: []domain.LadoCheckCommand{{Name: "unit", Command: "go test ./..."}}, runs: []domain.LadoCheckRun{passedOld},
+			want: domain.LadoEvidenceRef{Kind: domain.LadoEvidenceRefClaim, Key: "command: unit"}},
+		{name: "a pass of the current text", commands: []domain.LadoCheckCommand{{Name: "unit", Command: "go test ./pkg/a"}}, runs: []domain.LadoCheckRun{passedOld},
+			want: domain.LadoEvidenceRef{Kind: domain.LadoEvidenceRefCheckRun, Key: "run-old", SHA: head}},
+		{name: "a command the project no longer has", runs: []domain.LadoCheckRun{passedOld},
+			want: domain.LadoEvidenceRef{Kind: domain.LadoEvidenceRefClaim, Key: "command: unit"}},
+		{name: "a newest run that failed", commands: []domain.LadoCheckCommand{{Name: "unit", Command: "go test ./pkg/a"}},
+			runs: []domain.LadoCheckRun{passedOld, {ID: "run-again", Name: "unit", Command: "go test ./pkg/a", HeadSHA: head, Status: domain.LadoCheckRunFailed, StartedAt: t0.Add(time.Minute)}},
+			want: domain.LadoEvidenceRef{Kind: domain.LadoEvidenceRefClaim, Key: "command: unit"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, item, err := ResolveEvidence(EvidenceInput{File: file, CriteriaCount: 1, HeadSHA: head, Commands: tc.commands, Runs: tc.runs})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var details domain.LadoEvidenceDetails
+			if err := json.Unmarshal(item.Details, &details); err != nil {
+				t.Fatal(err)
+			}
+			if refs := details.Criteria[0].Refs; len(refs) != 1 || refs[0] != tc.want {
+				t.Fatalf("refs = %+v, want %+v", refs, tc.want)
 			}
 		})
 	}

@@ -130,3 +130,68 @@ func TestBaseItemCases(t *testing.T) {
 		checkBase(t, r, "", head, t0, domain.LadoVerifyPass, "", domain.LadoBaseBranchDetails{Branch: "main"})
 	})
 }
+
+// V7 of #15: the local base branch's commit at dispatch, which the
+// dispatcher records, is read. A branch deleted since, which takes its
+// reflog with it, needs confirming instead of passing as no_local_branch,
+// and commits the developer had on the branch before the dispatch, never
+// pushed, are not the run's.
+func TestBaseUsesTheDispatchCommit(t *testing.T) {
+	evaluate := func(t *testing.T, r *testRepo, head, dispatched string) domain.LadoVerifyItem {
+		t.Helper()
+		item, err := EvaluateBase(context.Background(), ExecGit{}, BaseInput{
+			Dir: r.dir, Branch: "main", Remote: "origin", HeadSHA: head, StartedAt: t0, DispatchLocalSHA: dispatched,
+		})
+		if err != nil {
+			t.Fatalf("EvaluateBase = %v", err)
+		}
+		return item
+	}
+	expect := func(t *testing.T, got domain.LadoVerifyItem, outcome domain.LadoVerifyOutcome, code string, details domain.LadoBaseBranchDetails) {
+		t.Helper()
+		want, err := domain.NewLadoVerifyItem(domain.LadoVerifyBaseBranch, outcome, code, details)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("base_branch = %s %q %s\nwant %s %q %s", got.Outcome, got.Code, got.Details, want.Outcome, want.Code, want.Details)
+		}
+	}
+
+	t.Run("the local branch deleted from the worktree", func(t *testing.T) {
+		r := newTestRepo(t, t0.Add(-time.Hour))
+		dispatched := r.git(t0, r.dir, "rev-parse", "refs/heads/main")
+		work := r.worktree(t0.Add(time.Minute), "lado/work")
+		head := r.commit(t0.Add(2*time.Minute), work, "Fix the login timeout")
+		r.git(t0.Add(3*time.Minute), r.dir, "switch", "-q", "--detach")
+		r.git(t0.Add(3*time.Minute), work, "update-ref", "-d", "refs/heads/main")
+
+		expect(t, evaluate(t, r, head, dispatched), domain.LadoVerifyConfirm, domain.LadoCodeBaseDeleted, domain.LadoBaseBranchDetails{
+			Branch: "main", Remote: "origin", DispatchCommit: dispatched, Deleted: true,
+		})
+		// Without the dispatch's commit, as for an execution dispatched
+		// before LADO recorded it, the branch was never known to exist.
+		expect(t, evaluate(t, r, head, ""), domain.LadoVerifyPass, domain.LadoCodeNoLocalBranch, domain.LadoBaseBranchDetails{Branch: "main", Remote: "origin"})
+	})
+
+	t.Run("unpushed commits from before the dispatch", func(t *testing.T) {
+		r := newTestRepo(t, t0.Add(-time.Hour))
+		r.write(r.dir, "local.txt", "a local draft\n")
+		draft := r.commit(t0.Add(-30*time.Minute), r.dir, "Draft locally")
+		work := r.worktree(t0.Add(time.Minute), "lado/work")
+		head := r.commit(t0.Add(2*time.Minute), work, "Fix the login timeout")
+
+		expect(t, evaluate(t, r, head, draft), domain.LadoVerifyPass, "", domain.LadoBaseBranchDetails{Branch: "main", Remote: "origin", DispatchCommit: draft})
+		// The same tip without the dispatch's commit still needs confirming.
+		expect(t, evaluate(t, r, head, ""), domain.LadoVerifyConfirm, domain.LadoCodeBaseMoved, domain.LadoBaseBranchDetails{
+			Branch: "main", Remote: "origin",
+			Moved: []domain.LadoReflogEntry{{Selector: fmt.Sprintf("main@{%d}", t0.Add(-30*time.Minute).Unix()), Commit: draft, Subject: "commit: Draft locally"}},
+		})
+		// A move after the dispatch counts, whatever the branch held before.
+		r.git(t0.Add(3*time.Minute), work, "update-ref", "refs/heads/main", "HEAD")
+		moved := evaluate(t, r, head, draft)
+		if moved.Code != domain.LadoCodeBaseMoved {
+			t.Fatalf("after a move from the worktree: %s %q, want base_moved", moved.Outcome, moved.Code)
+		}
+	})
+}

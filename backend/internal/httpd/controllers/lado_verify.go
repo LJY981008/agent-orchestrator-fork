@@ -188,7 +188,7 @@ func ladoBranchProtectionResponse(read ladoverify.ProtectionRead) LadoBranchProt
 	}
 	resp.Missing = ladoOrEmptyStrings(details.Missing)
 	resp.RequiredChecks = ladoOrEmptyStrings(details.RequiredChecks)
-	resp.Error = details.Error
+	resp.Error = read.ErrorMessage()
 	return resp
 }
 
@@ -212,6 +212,10 @@ func ladoVerificationResponse(v domain.LadoVerification, sum string) LadoVerific
 		// a record that cannot be read keeps empty details.
 		if len(item.Details) > 0 {
 			_ = json.Unmarshal(item.Details, &entry.Details)
+		}
+		if item.Kind == domain.LadoVerifyProtection {
+			// The read's message is kept next to the record, outside its hash.
+			entry.Details.Error = v.ProtectionError
 		}
 		if item.Kind == domain.LadoVerifyEvidence && entry.Details.Criteria != nil {
 			resp.Evidence = entry.Details.Criteria

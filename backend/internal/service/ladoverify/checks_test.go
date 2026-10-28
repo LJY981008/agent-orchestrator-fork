@@ -192,6 +192,12 @@ func TestRequiredChecksWithoutARuleset(t *testing.T) {
 
 // checkRunAt is a run of a check command on the head, finished a minute
 // after it started unless it still runs.
+// withCommand is run as a run of another text of its command.
+func withCommand(run domain.LadoCheckRun, command string) domain.LadoCheckRun {
+	run.Command = command
+	return run
+}
+
 func checkRunAt(id, name string, status domain.LadoCheckRunStatus, started time.Time, exit int) domain.LadoCheckRun {
 	run := domain.LadoCheckRun{ID: id, ExecutionSessionID: "lado-1", HeadSHA: strings.Repeat("a", 40), Name: name, Command: "make " + name, Status: status, StartedAt: started}
 	if status != domain.LadoCheckRunRunning {
@@ -239,6 +245,11 @@ func TestCommandsItem(t *testing.T) {
 		{name: "a failure wins over the worktree wait", commands: commands, runs: []domain.LadoCheckRun{checkRunAt("r1", "unit", domain.LadoCheckRunFailed, at(0), 1)}, worktree: domain.LadoCodeWorktreeNotAtHead, outcome: domain.LadoVerifyFail, code: domain.LadoCodeCommandsFailed, toRun: []string{"lint"}},
 		{name: "the first failing command names the code", commands: commands, runs: []domain.LadoCheckRun{checkRunAt("r1", "unit", domain.LadoCheckRunTimedOut, at(0), 0), checkRunAt("r2", "lint", domain.LadoCheckRunFailed, at(2), 1)}, outcome: domain.LadoVerifyFail, code: domain.LadoCodeCommandTimedOut},
 		{name: "runs of a command no longer configured do not count", commands: commands[:1], runs: []domain.LadoCheckRun{passed("r1", "unit", 0), checkRunAt("r2", "lint", domain.LadoCheckRunFailed, at(2), 1)}, outcome: domain.LadoVerifyPass},
+		// V1 of #15: a run counts for a command by its name and its text, so
+		// a pass of the command before its text changed is not this command's.
+		{name: "a pass of the command's old text does not count", commands: commands, runs: []domain.LadoCheckRun{withCommand(passed("r1", "unit", 0), "make unit-fast"), passed("r2", "lint", 2)}, outcome: domain.LadoVerifyWait, code: domain.LadoCodeCommandsRunning, toRun: []string{"unit"}},
+		{name: "a failure of the command's old text does not count", commands: commands, runs: []domain.LadoCheckRun{withCommand(checkRunAt("r1", "unit", domain.LadoCheckRunFailed, at(0), 1), "make unit-old"), passed("r2", "unit", 1), passed("r3", "lint", 2)}, outcome: domain.LadoVerifyPass},
+		{name: "the worktree changed since the last run", commands: commands, runs: []domain.LadoCheckRun{passed("r1", "unit", 0)}, worktree: domain.LadoCodeWorktreeChanged, outcome: domain.LadoVerifyWait, code: domain.LadoCodeWorktreeChanged, toRun: []string{"lint"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -265,8 +276,21 @@ func TestCommandsItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(item.Details) != `{"runs":[{"name":"unit","checkRunId":"r2","status":"running","exitCode":null,"durationMs":0},{"name":"lint","checkRunId":"","status":"","exitCode":null,"durationMs":0}]}` {
-		t.Fatalf("details = %s", item.Details)
+	unitSHA, lintSHA := domain.LadoCheckCommandSHA256("make unit"), domain.LadoCheckCommandSHA256("make lint")
+	if want := `{"runs":[{"name":"unit","commandSha256":"` + unitSHA + `","checkRunId":"r2","status":"running","exitCode":null,"durationMs":0},{"name":"lint","commandSha256":"` + lintSHA + `","checkRunId":"","status":"","exitCode":null,"durationMs":0}]}`; string(item.Details) != want {
+		t.Fatalf("details = %s\nwant %s", item.Details, want)
+	}
+	// The hash of a command's text is in the details, so changing the text
+	// changes the record's hash even before the command runs again.
+	changed, err := EvaluateCommands(CommandsInput{Commands: []domain.LadoCheckCommand{{Name: "unit", Command: "make unit-all"}, commands[1]}, Runs: []domain.LadoCheckRun{
+		checkRunAt("r1", "unit", domain.LadoCheckRunFailed, at(0), 2),
+		checkRunAt("r2", "unit", domain.LadoCheckRunRunning, at(3), 0),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(changed.Details) == string(item.Details) {
+		t.Fatalf("details of a changed command = %s, want them to differ", changed.Details)
 	}
 	item, err = EvaluateCommands(CommandsInput{Commands: commands, Runs: []domain.LadoCheckRun{
 		checkRunAt("r1", "unit", domain.LadoCheckRunFailed, at(0), 2), passed("r2", "lint", 1),
@@ -274,8 +298,8 @@ func TestCommandsItem(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(item.Details) != `{"runs":[{"name":"unit","checkRunId":"r1","status":"failed","exitCode":2,"durationMs":60000},{"name":"lint","checkRunId":"r2","status":"passed","exitCode":0,"durationMs":60000}]}` {
-		t.Fatalf("details = %s", item.Details)
+	if want := `{"runs":[{"name":"unit","commandSha256":"` + unitSHA + `","checkRunId":"r1","status":"failed","exitCode":2,"durationMs":60000},{"name":"lint","commandSha256":"` + lintSHA + `","checkRunId":"r2","status":"passed","exitCode":0,"durationMs":60000}]}`; string(item.Details) != want {
+		t.Fatalf("details = %s\nwant %s", item.Details, want)
 	}
 
 	// A worktree code or a run state LADO does not know is an error.

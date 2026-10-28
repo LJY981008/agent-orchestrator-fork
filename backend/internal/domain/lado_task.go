@@ -245,18 +245,22 @@ func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
 	}
 }
 
-// taskState is the state an execution gives its task.
+// taskState is the state an execution gives its task. A PR decides once
+// there is one: a run stopped at its deadline while its PR opened still has
+// the PR to review, as the run time limit stops once a PR is open. A merge
+// without an integration approval counts only for an execution dispatched
+// under integration approval.
 func (e LadoExecution) taskState() (LadoTaskState, string) {
 	switch {
-	case e.PR.Merged && !e.Integration.MergedHeadApproved:
+	case e.PR.Merged && e.IntegrationGated && !e.Integration.MergedHeadApproved:
 		return LadoTaskCompleted, LadoCompletedWithoutApproval
 	case e.PR.Merged:
 		return LadoTaskCompleted, ""
 	case e.PR.Closed:
 		return LadoTaskClosedUnmerged, ""
-	case !e.TimedOutAt.IsZero():
+	case e.PR.URL == "" && !e.TimedOutAt.IsZero():
 		return LadoTaskFailed, LadoFailedTimedOut
-	case e.SessionTerminated && e.PR.URL == "":
+	case e.PR.URL == "" && e.SessionTerminated:
 		return LadoTaskFailed, LadoFailedEndedWithoutPR
 	case e.PR.URL == "":
 		return LadoTaskRunning, ""

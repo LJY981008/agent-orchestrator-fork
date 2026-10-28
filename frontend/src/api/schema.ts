@@ -7788,7 +7788,7 @@ export interface components {
              * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
         };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];
@@ -7835,7 +7835,7 @@ export interface components {
              * @description The code of the first item that fails, else of the first that waits; omitted otherwise.
              * @enum {string}
              */
-            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested";
+            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested";
             /** @description The record's hash, which an integration approval signs as verificationSha256. */
             sha256: string;
         };
@@ -7883,8 +7883,14 @@ export interface components {
             commits?: components["schemas"]["LadoVerifyCommitResponse"][];
             /** @description evidence: each acceptance criterion's evidence. */
             criteria?: components["schemas"]["LadoEvidenceCriterionResponse"][];
-            /** @description protection: why the rules could not be read, without secrets. */
+            /** @description base_branch: the local base branch existed at dispatch and is gone. */
+            deleted?: boolean;
+            /** @description base_branch: the local base branch's commit when the run was dispatched; omitted when it had none or LADO did not record it. */
+            dispatchCommit?: string;
+            /** @description protection: why the rules could not be read, without secrets; outside the record's hash. */
             error?: string;
+            /** @description protection: the class of a failed read of the rules, which the record's hash covers: http_<status>, rate_limited, transport or other. */
+            errorClass?: string;
             /** @description evidence: the head the file says it describes. */
             fileHead?: string;
             fileSha256?: string;
@@ -7932,10 +7938,10 @@ export interface components {
         };
         LadoVerifyItemResponse: {
             /**
-             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet.
+             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone.
              * @enum {string}
              */
-            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "reflog_off" | "already_on_base" | "no_local_branch" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
+            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
             details: components["schemas"]["LadoVerifyItemDetailsResponse"];
             /** @enum {string} */
             kind: "required_checks" | "commands" | "commit_messages" | "paths" | "base_branch" | "protection" | "review" | "evidence";

@@ -95,11 +95,11 @@ func TestLadoVerificationContentIsTheFormat(t *testing.T) {
 	// here needs a new LadoVerifyFormat.
 	want := `{"format":"lado-verify/1","prUrl":"https://github.com/acme/demo/pull/8","headSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","items":[` +
 		`{"kind":"required_checks","outcome":"pass","code":"","details":{"required":["build"],"rulesetRead":true,"checks":[{"name":"build","status":"passed","required":true},{"name":"lint","status":"failed","required":false}]}},` +
-		`{"kind":"commands","outcome":"fail","code":"commands_failed","details":{"runs":[{"name":"unit","checkRunId":"lado-check-1","status":"passed","exitCode":0,"durationMs":1200},{"name":"e2e","checkRunId":"lado-check-2","status":"failed","exitCode":1,"durationMs":5300},{"name":"lint","checkRunId":"","status":"running","exitCode":null,"durationMs":0}]}},` +
+		`{"kind":"commands","outcome":"fail","code":"commands_failed","details":{"runs":[{"name":"unit","commandSha256":"","checkRunId":"lado-check-1","status":"passed","exitCode":0,"durationMs":1200},{"name":"e2e","commandSha256":"","checkRunId":"lado-check-2","status":"failed","exitCode":1,"durationMs":5300},{"name":"lint","commandSha256":"","checkRunId":"","status":"running","exitCode":null,"durationMs":0}]}},` +
 		`{"kind":"commit_messages","outcome":"confirm","code":"commit_messages_unclear","details":{"commits":[{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","subject":"feat: 로그인 <beta> & 세션 추가","result":"ok"}],"prTitle":{"text":"wip","result":"unclear"}}},` +
 		`{"kind":"paths","outcome":"confirm","code":"outside_plan","details":{"protected":[],"outsidePlan":["docs/notes.md"],"outsideCount":1}},` +
-		`{"kind":"base_branch","outcome":"pass","code":"no_local_branch","details":{"branch":"main","remote":"origin","moved":[],"alreadyOnBase":false}},` +
-		`{"kind":"protection","outcome":"confirm","code":"unprotected","details":{"provider":"github","repo":"acme/demo","branch":"main","missing":["pull_request","required_status_checks"],"requiredChecks":[],"error":""}},` +
+		`{"kind":"base_branch","outcome":"pass","code":"no_local_branch","details":{"branch":"main","remote":"origin","moved":[],"alreadyOnBase":false,"dispatchCommit":"","deleted":false}},` +
+		`{"kind":"protection","outcome":"confirm","code":"unprotected","details":{"provider":"github","repo":"acme/demo","branch":"main","missing":["pull_request","required_status_checks"],"requiredChecks":[],"errorClass":""}},` +
 		`{"kind":"review","outcome":"info","code":"not_required","details":{}},` +
 		`{"kind":"evidence","outcome":"info","code":"","details":{"fileVersion":2,"fileSha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","fileHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","criteria":[{"index":1,"state":"linked","refs":[{"kind":"pr_check","key":"build","sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}]},{"index":2,"state":"inferred","refs":[]}]}}]}`
 	content, err := v.Content()
@@ -109,7 +109,7 @@ func TestLadoVerificationContentIsTheFormat(t *testing.T) {
 	if string(content) != want {
 		t.Fatalf("Content =\n%s\nwant\n%s", content, want)
 	}
-	const wantSHA = "f19d30a036e0d25407bad04ee036e3dc2b61543b64f216d58f92a9ca86c3ffbf"
+	const wantSHA = "13c8fd899ec18cbd14d62756d40f53903f73fa31b95f1112bb01e905b76f12d3"
 	sum := sha256.Sum256([]byte(want))
 	if got := ladoVerifySHA(t, v); got != hex.EncodeToString(sum[:]) || got != wantSHA {
 		t.Fatalf("SHA256 = %s, want %s, the sha256 of the content", got, wantSHA)
@@ -181,8 +181,8 @@ func TestLadoVerificationContentIsTheFormat(t *testing.T) {
 		{domain.LadoVerifyCommands, domain.LadoCommandsDetails{}, `{"runs":[]}`},
 		{domain.LadoVerifyCommitMessages, domain.LadoCommitMessagesDetails{}, `{"commits":[],"prTitle":{"text":"","result":""}}`},
 		{domain.LadoVerifyPaths, domain.LadoPathsDetails{}, `{"protected":[],"outsidePlan":[],"outsideCount":0}`},
-		{domain.LadoVerifyBaseBranch, domain.LadoBaseBranchDetails{}, `{"branch":"","remote":"","moved":[],"alreadyOnBase":false}`},
-		{domain.LadoVerifyProtection, domain.LadoProtectionDetails{}, `{"provider":"","repo":"","branch":"","missing":[],"requiredChecks":[],"error":""}`},
+		{domain.LadoVerifyBaseBranch, domain.LadoBaseBranchDetails{}, `{"branch":"","remote":"","moved":[],"alreadyOnBase":false,"dispatchCommit":"","deleted":false}`},
+		{domain.LadoVerifyProtection, domain.LadoProtectionDetails{}, `{"provider":"","repo":"","branch":"","missing":[],"requiredChecks":[],"errorClass":""}`},
 		{domain.LadoVerifyReview, domain.LadoReviewDetails{}, `{"rounds":0,"runId":"","verdict":"","harness":"","note":""}`},
 		{domain.LadoVerifyEvidence, domain.LadoEvidenceDetails{Criteria: []domain.LadoEvidenceCriterion{{Index: 1, State: domain.LadoEvidenceClaimed}}}, `{"fileVersion":0,"fileSha256":"","fileHead":"","criteria":[{"index":1,"state":"claimed","refs":[]}]}`},
 		{domain.LadoVerifyEvidence, domain.LadoEvidenceDetails{}, `{"fileVersion":0,"fileSha256":"","fileHead":"","criteria":[]}`},

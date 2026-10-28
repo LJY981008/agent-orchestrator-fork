@@ -22369,6 +22369,8 @@ components:
           - checks_failed
           - commands_running
           - worktree_not_at_head
+          - worktree_changed
+          - head_unavailable
           - commands_failed
           - command_timed_out
           - worktree_missing
@@ -22483,6 +22485,8 @@ components:
           - checks_failed
           - commands_running
           - worktree_not_at_head
+          - worktree_changed
+          - head_unavailable
           - commands_failed
           - command_timed_out
           - worktree_missing
@@ -22597,8 +22601,21 @@ components:
           items:
             $ref: '#/components/schemas/LadoEvidenceCriterionResponse'
           type: array
+        deleted:
+          description: 'base_branch: the local base branch existed at dispatch and
+            is gone.'
+          type: boolean
+        dispatchCommit:
+          description: 'base_branch: the local base branch''s commit when the run
+            was dispatched; omitted when it had none or LADO did not record it.'
+          type: string
         error:
-          description: 'protection: why the rules could not be read, without secrets.'
+          description: 'protection: why the rules could not be read, without secrets;
+            outside the record''s hash.'
+          type: string
+        errorClass:
+          description: 'protection: the class of a failed read of the rules, which
+            the record''s hash covers: http_<status>, rate_limited, transport or other.'
           type: string
         fileHead:
           description: 'evidence: the head the file says it describes.'
@@ -22691,7 +22708,11 @@ components:
       properties:
         code:
           description: 'Omitted for a plain pass. not_required: the item does not
-            apply to the execution; verifying: LADO could not compute the item yet.'
+            apply to the execution; verifying: LADO could not compute the item yet;
+            worktree_changed: the worktree changed since LADO''s last check command
+            on the head; head_unavailable: the head is not in the local repository
+            and LADO could not fetch it; base_deleted: the local base branch that
+            existed at dispatch is gone.'
           enum:
           - not_required
           - verifying
@@ -22700,16 +22721,19 @@ components:
           - none_reported
           - commands_running
           - worktree_not_at_head
+          - worktree_changed
           - commands_failed
           - command_timed_out
           - worktree_missing
           - no_tests
           - none_configured
+          - head_unavailable
           - commit_messages_failed
           - commit_messages_unclear
           - protected_path
           - outside_plan
           - base_moved
+          - base_deleted
           - reflog_off
           - already_on_base
           - no_local_branch

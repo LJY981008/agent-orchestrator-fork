@@ -847,6 +847,7 @@ func ladoExecutionFromGen(row gen.LadoExecution) domain.LadoExecution {
 		DeadlineAt:           ladoTimeFromNull(row.DeadlineAt),
 		TimedOutAt:           ladoTimeFromNull(row.TimedOutAt),
 		SettledAt:            ladoTimeFromNull(row.SettledAt),
+		IntegrationGated:     row.IntegrationGated == 1,
 	}
 }
 

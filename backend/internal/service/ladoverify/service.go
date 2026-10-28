@@ -27,8 +27,13 @@ import (
 
 const (
 	defaultInterval = 15 * time.Second
-	// verifyBatch caps the executions one pass verifies, oldest first.
+	// verifyBatch caps the executions one pass verifies: heads without a
+	// record first, then those whose record is oldest.
 	verifyBatch = 50
+	// failedRetryAfter is how long the loop leaves an execution it could not
+	// verify, such as one whose task or project is gone, before it tries
+	// again, so that such executions never fill a pass.
+	failedRetryAfter = 5 * time.Minute
 	// statusBatch caps the approvals whose status one pass posts again.
 	statusBatch = 50
 	// protectionTTL is how long a read of a base branch's rules is kept.
@@ -47,7 +52,7 @@ type Store interface {
 	GetPR(ctx context.Context, url string) (domain.PullRequest, bool, error)
 	ListLadoCommitChecks(ctx context.Context, prURL, commit string) ([]domain.PullRequestCheck, error)
 	StartLadoCheckRun(ctx context.Context, run domain.LadoCheckRun) error
-	FinishLadoCheckRun(ctx context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage string, at time.Time) error
+	FinishLadoCheckRun(ctx context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage, worktreeSHA256 string, at time.Time) error
 	CancelRunningLadoCheckRuns(ctx context.Context, at time.Time) (int, error)
 	ListLadoCheckRuns(ctx context.Context, session domain.SessionID, headSHA string) ([]domain.LadoCheckRun, error)
 	GetLadoCheckRun(ctx context.Context, id string) (domain.LadoCheckRun, bool, error)
@@ -57,7 +62,7 @@ type Store interface {
 	AddLadoExecutionReview(ctx context.Context, r domain.LadoExecutionReview) error
 	MarkLadoExecutionReviewCancelled(ctx context.Context, runID string, at time.Time) error
 	ReplaceLadoEvidenceLinks(ctx context.Context, session domain.SessionID, headSHA string, links []domain.LadoEvidenceLink) error
-	SettleLadoExecution(ctx context.Context, session domain.SessionID, at time.Time, audit *domain.LadoAuditEvent) error
+	SettleLadoExecution(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error
 	ListLadoIntegrationStatusRetries(ctx context.Context, limit int) ([]domain.LadoIntegrationApproval, error)
 	SetLadoIntegrationStatus(ctx context.Context, id string, state domain.LadoIntegrationStatusState, attempts int, postedAt time.Time, errorMessage string) error
 	// The integration approval and the merge gate.
@@ -169,6 +174,11 @@ type Service struct {
 	// statusTried holds, by approval, when this daemon last tried to post
 	// its status.
 	statusTried map[string]time.Time
+	// headFetched holds, by execution and head, when the loop last fetched
+	// a head the repository lacked; failedAt, by execution, when a pass last
+	// could not verify it.
+	headFetched map[string]time.Time
+	failedAt    map[domain.SessionID]time.Time
 	// runCtx is the context of the loop Start began, while it runs; the
 	// background reads RefreshProtection starts run under it.
 	runCtx context.Context
@@ -208,6 +218,8 @@ func New(deps Deps) *Service {
 		protection:  NewProtection(deps.Clients, deps.Clock, protectionTTL),
 		kick:        make(chan struct{}, 1),
 		statusTried: map[string]time.Time{},
+		headFetched: map[string]time.Time{},
+		failedAt:    map[domain.SessionID]time.Time{},
 	}
 }
 
@@ -376,7 +388,9 @@ func (s *Service) baseBranchOf(ctx context.Context, place repoPlace) (string, er
 // Tick runs one pass. The first pass cancels the check runs a stopped daemon
 // left running, so that they run again; a pass that cannot does nothing
 // else. Each execution is verified or settled on its own: what fails for one
-// is returned, joined with the others, after the rest ran.
+// is returned, joined with the others, after the rest ran, and the loop
+// leaves that execution for failedRetryAfter. A pass verifies up to
+// verifyBatch executions in the store's order.
 func (s *Service) Tick(ctx context.Context) error {
 	s.passMu.Lock()
 	defer s.passMu.Unlock()
@@ -384,15 +398,32 @@ func (s *Service) Tick(ctx context.Context) error {
 		return err
 	}
 	var problems []error
-	executions, err := s.deps.Store.ListLadoExecutionsToVerify(ctx, verifyBatch)
+	resting := s.resting()
+	executions, err := s.deps.Store.ListLadoExecutionsToVerify(ctx, verifyBatch+len(resting))
 	if err != nil {
 		problems = append(problems, fmt.Errorf("list the executions to verify: %w", err))
 	}
+	verified := 0
 	for _, exec := range executions {
+		if ctx.Err() != nil || verified == verifyBatch {
+			break
+		}
+		if resting[exec.SessionID] {
+			continue
+		}
+		verified++
+		err := s.verifyExecution(ctx, exec)
 		if ctx.Err() != nil {
 			break
 		}
-		if err := s.verifyExecution(ctx, exec); err != nil {
+		s.mu.Lock()
+		if err != nil {
+			s.failedAt[exec.SessionID] = s.now()
+		} else {
+			delete(s.failedAt, exec.SessionID)
+		}
+		s.mu.Unlock()
+		if err != nil {
 			problems = append(problems, fmt.Errorf("execution %s: %w", exec.SessionID, err))
 		}
 	}
@@ -402,6 +433,23 @@ func (s *Service) Tick(ctx context.Context) error {
 		}
 	}
 	return errors.Join(problems...)
+}
+
+// resting returns the executions a pass could not verify less than
+// failedRetryAfter ago, and forgets the others.
+func (s *Service) resting() map[domain.SessionID]bool {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	resting := map[domain.SessionID]bool{}
+	for session, at := range s.failedAt {
+		if now.Sub(at) < failedRetryAfter {
+			resting[session] = true
+		} else {
+			delete(s.failedAt, session)
+		}
+	}
+	return resting
 }
 
 // cancelLeftovers marks the check runs a stopped daemon left running as
@@ -427,7 +475,8 @@ func (s *Service) cancelLeftovers(ctx context.Context) error {
 }
 
 // verifyExecution settles a merged or closed PR and computes the record of
-// an open PR's head. A head AO has not observed yet waits for AO.
+// an open PR's head. A head AO has not observed yet waits for AO (the store
+// does not list it).
 func (s *Service) verifyExecution(ctx context.Context, exec domain.LadoExecution) error {
 	switch {
 	case exec.PR.Merged || exec.PR.Closed:

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -99,7 +101,7 @@ func TestProtectionItem(t *testing.T) {
 				if !slices.Equal(details.Missing, tc.want) {
 					t.Fatalf("missing = %q, want %q", details.Missing, tc.want)
 				}
-				if !slices.Equal(details.RequiredChecks, protectionOrEmpty(tc.checks)) || details.Error != "" {
+				if !slices.Equal(details.RequiredChecks, protectionOrEmpty(tc.checks)) || details.ErrorClass != "" {
 					t.Fatalf("details = %+v, want required checks %q and no error", details, tc.checks)
 				}
 				if got := MissingProtection(tc.rules); !slices.Equal(got, tc.want) {
@@ -121,11 +123,15 @@ func TestProtectionItem(t *testing.T) {
 			t.Fatalf("item = %s %q, want confirm protection_unknown", item.Outcome, item.Code)
 		}
 		details := protectionDetails(t, item)
-		if strings.ContainsAny(details.Error, "\r\n") || strings.Contains(details.Error, token) || strings.Contains(details.Error, "tkn-plain") {
-			t.Fatalf("error = %q, want one line without the token", details.Error)
+		if details.ErrorClass != "http_403" {
+			t.Fatalf("error class = %q, want http_403", details.ErrorClass)
 		}
-		if !strings.Contains(details.Error, "the host answered 403: Bad credentials for [redacted]") {
-			t.Fatalf("error = %q, want the host's answer", details.Error)
+		message := r.ErrorMessage()
+		if strings.ContainsAny(message, "\r\n") || strings.Contains(message, token) || strings.Contains(message, "tkn-plain") {
+			t.Fatalf("error = %q, want one line without the token", message)
+		}
+		if !strings.Contains(message, "the host answered 403: Bad credentials for [redacted]") {
+			t.Fatalf("error = %q, want the host's answer", message)
 		}
 		// The last good read still names the required checks.
 		if !slices.Equal(details.RequiredChecks, []string{"build"}) || len(details.Missing) != 0 {
@@ -133,12 +139,51 @@ func TestProtectionItem(t *testing.T) {
 		}
 		long := r
 		long.Err = errors.New(strings.Repeat("x", 2000))
-		item, err = EvaluateProtection(long)
+		if got := long.ErrorMessage(); len([]rune(got)) > redactedErrorMax+1 {
+			t.Fatalf("error has %d characters, want at most %d", len([]rune(got)), redactedErrorMax+1)
+		}
+	})
+
+	// V8 of #15: a host's message can change from one request to the next
+	// (a request id, a local port). The item, and so the record's hash that
+	// a dry run shows and the approval signs, holds only the error's class.
+	t.Run("the hash holds the error's class, not its message", func(t *testing.T) {
+		first, second := read(ports.LadoBranchRules{}), read(ports.LadoBranchRules{})
+		first.Err = fmt.Errorf("github tracker: %w", &ports.LadoHTTPError{Status: 502, Message: "Server Error (request 1A2B:3C4D)"})
+		second.Err = fmt.Errorf("github tracker: %w", &ports.LadoHTTPError{Status: 502, Message: "Server Error (request 9F8E:7D6C)"})
+		a, err := EvaluateProtection(first)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := protectionDetails(t, item).Error; len([]rune(got)) > redactedErrorMax+1 {
-			t.Fatalf("error has %d characters, want at most %d", len([]rune(got)), redactedErrorMax+1)
+		b, err := EvaluateProtection(second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(a, b) {
+			t.Fatalf("items of two reads that failed alike differ:\n%s\n%s", a.Details, b.Details)
+		}
+		if first.ErrorMessage() == second.ErrorMessage() {
+			t.Fatal("the messages kept beside the record are the same")
+		}
+	})
+
+	t.Run("error classes", func(t *testing.T) {
+		for _, tc := range []struct {
+			err  error
+			want string
+		}{
+			{&ports.LadoHTTPError{Status: 404, Message: "Not Found"}, "http_404"},
+			{fmt.Errorf("wrapped: %w", &ports.LadoHTTPError{Status: 401}), "http_401"},
+			{&ports.LadoHTTPError{Status: 429}, "rate_limited"},
+			{&ports.LadoHTTPError{Status: 403, Message: "API rate limit exceeded for user ID 1."}, "rate_limited"},
+			{&ports.LadoHTTPError{Status: 403, Message: "Resource not accessible by integration"}, "http_403"},
+			{fmt.Errorf("get: %w", context.DeadlineExceeded), "transport"},
+			{&net.OpError{Op: "read", Net: "tcp", Err: errors.New("connection reset by peer")}, "transport"},
+			{errors.New("no token for github.com"), "other"},
+		} {
+			if got := ProtectionErrorClass(tc.err); got != tc.want {
+				t.Errorf("ProtectionErrorClass(%v) = %q, want %q", tc.err, got, tc.want)
+			}
 		}
 	})
 
@@ -154,7 +199,7 @@ func TestProtectionItem(t *testing.T) {
 			t.Fatalf("item = %s %q, want confirm unprotected_gitlab", item.Outcome, item.Code)
 		}
 		details := protectionDetails(t, item)
-		if details.Provider != "gitlab" || details.Repo != "group/project" || details.Error != "" || len(details.Missing) != 0 {
+		if details.Provider != "gitlab" || details.Repo != "group/project" || details.ErrorClass != "" || len(details.Missing) != 0 {
 			t.Fatalf("details = %+v", details)
 		}
 	})
@@ -188,7 +233,7 @@ func protectionOrEmpty(values []string) []string {
 }
 
 func protectionDetailsEqual(a, b domain.LadoProtectionDetails) bool {
-	return a.Provider == b.Provider && a.Repo == b.Repo && a.Branch == b.Branch && a.Error == b.Error &&
+	return a.Provider == b.Provider && a.Repo == b.Repo && a.Branch == b.Branch && a.ErrorClass == b.ErrorClass &&
 		slices.Equal(a.Missing, b.Missing) && slices.Equal(a.RequiredChecks, b.RequiredChecks)
 }
 

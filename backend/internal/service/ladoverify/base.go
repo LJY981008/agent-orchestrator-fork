@@ -18,11 +18,13 @@ import (
 
 // BaseInput is what the base_branch item reads: the repository that holds
 // the issue (in a workspace project, its child repository), the base branch
-// and remote the dispatcher resolved, the pull request's head and when the
-// execution started.
+// and remote the dispatcher resolved, the pull request's head, when the
+// execution started and the local branch's commit the dispatcher recorded
+// (empty when the branch did not exist or LADO did not record it).
 type BaseInput struct {
 	Dir, Branch, Remote, HeadSHA string
 	StartedAt                    time.Time
+	DispatchLocalSHA             string
 }
 
 // EvaluateBase computes the base_branch item. It does not fetch: it compares
@@ -30,18 +32,21 @@ type BaseInput struct {
 // fetches first.
 //
 // Each reflog entry of the local branch since the execution started, and the
-// branch's tip, must be a commit the remote-tracking branch holds; the
-// others are confirmed as base_moved. A local branch without a reflog is
-// confirmed as reflog_off, a head the remote branch already holds as
-// already_on_base, and a repository without the local branch passes as
-// no_local_branch. Without the remote-tracking branch there is nothing to
-// compare with, and the item passes. Codes rank already_on_base, then
-// base_moved, then reflog_off.
+// branch's tip when it moved since dispatch, must be a commit the
+// remote-tracking branch holds; the others are confirmed as base_moved, so
+// unpushed commits the developer had before the dispatch do not count. A
+// local branch without a reflog is confirmed as reflog_off, a head the
+// remote branch already holds as already_on_base, and a local branch that
+// existed at dispatch and is gone, with its reflog, as base_deleted. A
+// repository without the local branch otherwise passes as no_local_branch.
+// Without the remote-tracking branch there is nothing to compare with, and
+// the item passes unless the branch was deleted. Codes rank
+// already_on_base, base_deleted, base_moved, then reflog_off.
 func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerifyItem, error) {
 	if in.Dir == "" || in.Branch == "" {
 		return domain.LadoVerifyItem{}, errors.New("evaluate the base branch: no repository or branch")
 	}
-	details := domain.LadoBaseBranchDetails{Branch: in.Branch, Remote: in.Remote}
+	details := domain.LadoBaseBranchDetails{Branch: in.Branch, Remote: in.Remote, DispatchCommit: in.DispatchLocalSHA}
 	local, err := commitOf(ctx, git, in.Dir, "refs/heads/"+in.Branch)
 	if err != nil {
 		return domain.LadoVerifyItem{}, fmt.Errorf("evaluate the base branch: %w", err)
@@ -52,6 +57,7 @@ func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerify
 			return domain.LadoVerifyItem{}, fmt.Errorf("evaluate the base branch: %w", err)
 		}
 	}
+	details.Deleted = local == "" && in.DispatchLocalSHA != ""
 	reflogOff := false
 	if remote != "" {
 		onRemote := reachability(ctx, git, in.Dir, remote)
@@ -68,6 +74,8 @@ func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerify
 	switch {
 	case details.AlreadyOnBase:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeAlreadyOnBase
+	case details.Deleted:
+		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseDeleted
 	case len(details.Moved) > 0:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseMoved
 	case reflogOff:
@@ -120,8 +128,10 @@ func headOnRemote(ctx context.Context, git Git, in BaseInput, onRemote func(stri
 
 // movedSince lists the reflog entries of the local branch since the
 // execution started whose commit the remote base does not hold, newest
-// first, and then the branch's tip, local, when it is such a commit and no
-// listed entry names it. It reports whether the branch has no reflog.
+// first, and then the branch's tip, local, when it is such a commit, no
+// listed entry names it and it is not the commit the dispatcher recorded:
+// a tip the branch had at dispatch was the developer's, not the run's. It
+// reports whether the branch has no reflog.
 // Reflog times are whole seconds, so the entries of the second the
 // execution started in count too.
 func movedSince(ctx context.Context, git Git, in BaseInput, local string, onRemote func(string) (bool, error)) ([]domain.LadoReflogEntry, bool, error) {
@@ -148,7 +158,7 @@ func movedSince(ctx context.Context, git Git, in BaseInput, local string, onRemo
 		return nil, false, err
 	}
 	named := slices.ContainsFunc(moved, func(e domain.LadoReflogEntry) bool { return e.Commit == local })
-	if !held && !named {
+	if !held && !named && local != in.DispatchLocalSHA {
 		tip := domain.LadoReflogEntry{Selector: in.Branch, Commit: local}
 		if len(entries) > 0 && entries[0].Commit == local {
 			tip.Selector, tip.Subject = entries[0].Selector, redact(entries[0].Subject)

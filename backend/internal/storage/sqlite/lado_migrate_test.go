@@ -10,8 +10,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pressly/goose/v3"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // ladoChangeTriggerFixture is a LADO table whose trigger writes change_log, the
@@ -622,8 +625,8 @@ var ladoVerifyTables = []struct {
 	name    string
 	columns []string
 }{
-	{"lado_check_runs", []string{"id", "execution_session_id", "head_sha", "name", "command", "status", "exit_code", "log_sha256", "error_message", "started_at", "finished_at"}},
-	{"lado_verifications", []string{"execution_session_id", "head_sha", "pr_url", "outcome", "reason", "content_json", "sha256", "notified_json", "computed_at"}},
+	{"lado_check_runs", []string{"id", "execution_session_id", "head_sha", "name", "command", "status", "exit_code", "log_sha256", "error_message", "worktree_sha256", "started_at", "finished_at"}},
+	{"lado_verifications", []string{"execution_session_id", "head_sha", "pr_url", "outcome", "reason", "content_json", "sha256", "notified_json", "protection_error", "computed_at"}},
 	{"lado_execution_reviews", []string{"review_run_id", "execution_session_id", "head_sha", "round", "created_at", "cancelled_at"}},
 	{"lado_evidence_links", []string{"id", "execution_session_id", "head_sha", "criterion", "state", "ref_kind", "ref_key", "sha", "created_at"}},
 	{"lado_integration_approvals", []string{"id", "execution_session_id", "pr_url", "head_sha", "verification_sha256", "acknowledged_json", "proof_nonce", "actor", "approved_at", "status_state", "status_attempts", "status_posted_at", "status_error"}},
@@ -634,7 +637,7 @@ var ladoVerifyColumns = []struct {
 	table   string
 	columns []string
 }{
-	{"lado_executions", []string{"base_branch", "base_remote", "dispatch_local_base_sha", "settled_at"}},
+	{"lado_executions", []string{"base_branch", "base_remote", "dispatch_local_base_sha", "integration_gated", "settled_at", "settled_pr_url", "settled_pr_state"}},
 	{"lado_project_settings", []string{"check_commands", "check_timeout_minutes"}},
 }
 
@@ -986,5 +989,91 @@ func TestLadoMigrate0008DownRemovesWhatItAdded(t *testing.T) {
 	}
 	if commands != "[]" || timeout != 30 || branch != "" || settledAt.Valid {
 		t.Fatalf("kept rows = commands %s, %d minutes, base %q, settled %v; want the defaults", commands, timeout, branch, settledAt)
+	}
+}
+
+// Executions dispatched before 0008 had no integration gate (V4 of #15). 0008
+// settles those whose newest PR already merged or closed, at the PR's last
+// update, so the verification loop never lists them to audit a merge
+// without approval, and their tasks stay Completed without that reason. An
+// execution whose newest PR is open stays to verify. None of them counts as
+// gated; the dispatcher gates every execution it links from now on.
+func TestLadoMigrate0008SettlesEarlierExecutions(t *testing.T) {
+	ctx := context.Background()
+	upstream, err := expectedMigrationVersion()
+	if err != nil {
+		t.Fatalf("expected migration version: %v", err)
+	}
+	for _, tc := range []struct {
+		newest, older string
+		settled       bool
+	}{
+		{newest: "merged", settled: true},
+		{newest: "closed", settled: true},
+		{newest: "open"},
+		{newest: "merged", older: "open", settled: true},
+		{newest: "open", older: "merged"},
+	} {
+		t.Run(tc.newest+"_after_"+tc.older, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "ao.db"), migratedDatabaseSnapshot(t, upstream), 0o600); err != nil {
+				t.Fatalf("seed upstream database: %v", err)
+			}
+			openAndClose(t, dir)
+			db := openLadoInspection(t, dir)
+			if _, err := ladoMigrationProvider(t, db).DownTo(ctx, 7); err != nil {
+				t.Fatalf("down to 0007: %v", err)
+			}
+			insertLadoExecutionFixture(t, db)
+			mustExec(t, db, `INSERT INTO projects (id, path, registered_at) VALUES ('p', '/p', CURRENT_TIMESTAMP)`)
+			mustExec(t, db, `INSERT INTO sessions (id, project_id, num, created_at, updated_at, activity_last_at)
+				VALUES ('session', 'p', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`)
+			if tc.older != "" {
+				mustExec(t, db, `INSERT INTO pr (url, session_id, number, pr_state, head_sha, updated_at) VALUES ('https://github.com/o/r/pull/1', 'session', 1, ?, ?, '2026-10-20 10:00:00+00:00')`, tc.older, ladoVerifyHead)
+			}
+			mustExec(t, db, `INSERT INTO pr (url, session_id, number, pr_state, head_sha, updated_at) VALUES ('https://github.com/o/r/pull/2', 'session', 2, ?, ?, '2026-10-21 10:00:00+00:00')`, tc.newest, ladoVerifyHead)
+			if _, err := ladoMigrationProvider(t, db).Up(ctx); err != nil {
+				t.Fatalf("up to 0008: %v", err)
+			}
+			var gated int
+			var settledURL, settledState string
+			var settledAt sql.NullTime
+			if err := db.QueryRow(`SELECT integration_gated, settled_at, settled_pr_url, settled_pr_state FROM lado_executions WHERE session_id = 'session'`).
+				Scan(&gated, &settledAt, &settledURL, &settledState); err != nil {
+				t.Fatalf("read the execution: %v", err)
+			}
+			if gated != 0 {
+				t.Errorf("integration_gated = %d, want 0 for an execution dispatched before 0008", gated)
+			}
+			switch {
+			case tc.settled && (!settledAt.Valid || settledURL != "https://github.com/o/r/pull/2" || settledState != tc.newest):
+				t.Errorf("settled = %v at %v as %q %q, want PR 2 %s at its last update", settledAt.Valid, settledAt.Time, settledURL, settledState, tc.newest)
+			case tc.settled && !settledAt.Time.Equal(time.Date(2026, 10, 21, 10, 0, 0, 0, time.UTC)):
+				t.Errorf("settled at %s, want the PR's last update", settledAt.Time)
+			case !tc.settled && (settledAt.Valid || settledURL != "" || settledState != ""):
+				t.Errorf("an execution whose newest PR is open settled at %v as %q %q", settledAt.Time, settledURL, settledState)
+			}
+			_ = db.Close()
+
+			st, err := Open(dir)
+			if err != nil {
+				t.Fatalf("open the store: %v", err)
+			}
+			defer func() { _ = st.Close() }()
+			listed, err := st.ListLadoExecutionsToVerify(ctx, 50)
+			if err != nil {
+				t.Fatalf("ListLadoExecutionsToVerify: %v", err)
+			}
+			if got := len(listed) > 0; got == tc.settled {
+				t.Errorf("listed to verify = %v, want %v", got, !tc.settled)
+			}
+			task, ok, err := st.LadoTask(ctx, "task")
+			if err != nil || !ok {
+				t.Fatalf("read the task = (%v, %v)", ok, err)
+			}
+			if tc.newest == "merged" && (task.State() != domain.LadoTaskCompleted || task.StateReason() != "") {
+				t.Errorf("task = %s %q, want completed without a reason", task.State(), task.StateReason())
+			}
+		})
 	}
 }

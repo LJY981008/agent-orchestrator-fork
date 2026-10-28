@@ -437,6 +437,7 @@ type LadoCheckRun struct {
 	ExitCode           sql.NullInt64
 	LogSha256          string
 	ErrorMessage       string
+	WorktreeSha256     string
 	StartedAt          time.Time
 	FinishedAt         sql.NullTime
 }
@@ -491,7 +492,10 @@ type LadoExecution struct {
 	BaseBranch           string
 	BaseRemote           string
 	DispatchLocalBaseSha string
+	IntegrationGated     int64
 	SettledAt            sql.NullTime
+	SettledPRURL         string
+	SettledPRState       string
 }
 
 type LadoExecutionReview struct {
@@ -722,6 +726,7 @@ type LadoVerification struct {
 	ContentJson        string
 	Sha256             string
 	NotifiedJson       string
+	ProtectionError    string
 	ComputedAt         time.Time
 }
 

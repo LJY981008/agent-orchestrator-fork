@@ -14,6 +14,7 @@ SET status = sqlc.arg(status),
     exit_code = sqlc.narg(exit_code),
     log_sha256 = sqlc.arg(log_sha256),
     error_message = sqlc.arg(error_message),
+    worktree_sha256 = sqlc.arg(worktree_sha256),
     finished_at = sqlc.arg(finished_at)
 WHERE lado_check_runs.id = sqlc.arg(id) AND lado_check_runs.status = 'running';
 
@@ -24,19 +25,20 @@ WHERE lado_check_runs.status = 'running';
 
 -- name: GetLadoCheckRun :one
 SELECT id, execution_session_id, head_sha, name, command, status, exit_code, log_sha256, error_message,
-    started_at, finished_at
+    worktree_sha256, started_at, finished_at
 FROM lado_check_runs
 WHERE id = ?;
 
 -- name: ListLadoCheckRunsForHead :many
 SELECT id, execution_session_id, head_sha, name, command, status, exit_code, log_sha256, error_message,
-    started_at, finished_at
+    worktree_sha256, started_at, finished_at
 FROM lado_check_runs
 WHERE execution_session_id = ? AND head_sha = ?
 ORDER BY started_at, id;
 
 -- name: GetLadoVerification :one
-SELECT execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, computed_at
+SELECT execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, protection_error,
+    computed_at
 FROM lado_verifications
 WHERE execution_session_id = ? AND head_sha = ?;
 
@@ -44,8 +46,9 @@ WHERE execution_session_id = ? AND head_sha = ?;
 -- One record per execution and head. Only a change of outcome, reason or
 -- sha256 publishes a change event (the update trigger's condition).
 INSERT INTO lado_verifications (
-    execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, computed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, protection_error,
+    computed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (execution_session_id, head_sha) DO UPDATE SET
     pr_url = excluded.pr_url,
     outcome = excluded.outcome,
@@ -53,6 +56,7 @@ ON CONFLICT (execution_session_id, head_sha) DO UPDATE SET
     content_json = excluded.content_json,
     sha256 = excluded.sha256,
     notified_json = excluded.notified_json,
+    protection_error = excluded.protection_error,
     computed_at = excluded.computed_at;
 
 -- name: ListLadoVerificationOutcomes :many
@@ -121,9 +125,11 @@ WHERE pr.session_id IN (sqlc.slice('session_ids'))
 ORDER BY pr.session_id, pr.updated_at DESC, pr.url DESC;
 
 -- name: ListLadoExecutionsToVerify :many
--- Executions whose session's newest PR is open, or merged or closed and not
--- settled yet, oldest first, with that PR and whether the session ended (as
--- in GetLadoExecution).
+-- Executions whose session's newest PR is open with a head AO observed, or
+-- merged or closed and not settled in that state yet, with that PR and
+-- whether the session ended (as in GetLadoExecution). The heads without a
+-- record come first, then the records computed longest ago, so every
+-- execution takes its turn however many there are.
 SELECT sqlc.embed(e),
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
     p.target_branch AS pr_target_branch, p.title AS pr_title,
@@ -132,19 +138,28 @@ SELECT sqlc.embed(e),
     ) AS session_terminated
 FROM lado_executions e
 JOIN pr p ON p.session_id = e.session_id
+LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
 WHERE NOT EXISTS (
         SELECT 1 FROM pr newer
         WHERE newer.session_id = p.session_id
           AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
     )
-  AND (p.pr_state NOT IN ('merged', 'closed') OR e.settled_at IS NULL)
-ORDER BY e.started_at, e.session_id
+  AND (
+        (p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> '')
+        OR (p.pr_state IN ('merged', 'closed') AND NOT (e.settled_pr_url = p.url AND e.settled_pr_state = p.pr_state))
+    )
+ORDER BY v.computed_at IS NOT NULL, v.computed_at, e.started_at, e.session_id
 LIMIT sqlc.arg(max_executions);
 
 -- name: SettleLadoExecution :execrows
+-- Settles the execution's newest PR in its merged or closed state, unless
+-- it was settled in that state already.
 UPDATE lado_executions
-SET settled_at = sqlc.arg(settled_at)
-WHERE lado_executions.session_id = sqlc.arg(session_id) AND lado_executions.settled_at IS NULL;
+SET settled_at = sqlc.arg(settled_at),
+    settled_pr_url = sqlc.arg(pr_url),
+    settled_pr_state = sqlc.arg(pr_state)
+WHERE lado_executions.session_id = sqlc.arg(session_id)
+  AND NOT (lado_executions.settled_pr_url = sqlc.arg(pr_url) AND lado_executions.settled_pr_state = sqlc.arg(pr_state));
 
 -- name: InsertLadoIntegrationApproval :exec
 INSERT INTO lado_integration_approvals (

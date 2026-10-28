@@ -439,7 +439,7 @@ func TestLadoAPI_RunChecksAgain(t *testing.T) {
 	// unit passed, lint still runs, e2e never ran.
 	exit := 0
 	startLadoCheckRun(t, store, "lado-check-unit", worker, "unit", now.Add(-10*time.Minute))
-	if err := store.FinishLadoCheckRun(ctx, "lado-check-unit", domain.LadoCheckRunPassed, &exit, "", "", now.Add(-9*time.Minute)); err != nil {
+	if err := store.FinishLadoCheckRun(ctx, "lado-check-unit", domain.LadoCheckRunPassed, &exit, "", "", "", now.Add(-9*time.Minute)); err != nil {
 		t.Fatalf("finish unit: %v", err)
 	}
 	startLadoCheckRun(t, store, "lado-check-lint", worker, "lint", now.Add(-5*time.Minute))
@@ -505,7 +505,7 @@ func TestLadoAPI_CheckLog(t *testing.T) {
 	sum, _ := blobs.Put([]byte(output))
 	exit := 1
 	startLadoCheckRun(t, store, "lado-check-1", worker, "unit", now.Add(-10*time.Minute))
-	if err := store.FinishLadoCheckRun(ctx, "lado-check-1", domain.LadoCheckRunFailed, &exit, sum, "", now.Add(-9*time.Minute)); err != nil {
+	if err := store.FinishLadoCheckRun(ctx, "lado-check-1", domain.LadoCheckRunFailed, &exit, sum, "", "", now.Add(-9*time.Minute)); err != nil {
 		t.Fatalf("finish the run: %v", err)
 	}
 	startLadoCheckRun(t, store, "lado-check-2", worker, "lint", now.Add(-time.Minute))

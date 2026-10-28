@@ -196,18 +196,17 @@ func sameVariable(a, b string) bool {
 	return a == b
 }
 
-// WorktreeAtHead tells whether the check commands can run on head in the
-// worktree at dir, so that they run on exactly the pushed commit: "" when it
-// can, domain.LadoCodeWorktreeMissing when the folder is gone, and
-// domain.LadoCodeWorktreeNotAtHead while its HEAD is another commit, it has
-// changes (untracked files too) or git cannot read it.
-func WorktreeAtHead(ctx context.Context, git Git, dir, head string) string {
-	return worktreeAt(ctx, git, dir, head, true)
-}
-
-// worktreeAt is WorktreeAtHead; with clean false, changes in the worktree do
-// not count.
-func worktreeAt(ctx context.Context, git Git, dir, head string, clean bool) string {
+// WorktreeReady tells whether the next check command can run on head in the
+// worktree at dir, so that the commands test exactly the pushed commit: ""
+// when it can, domain.LadoCodeWorktreeMissing when the folder is gone, and
+// domain.LadoCodeWorktreeNotAtHead while its HEAD is another commit or git
+// cannot read it. Before the head's first run that left a status, the
+// worktree must have no change, untracked files included
+// (worktree_not_at_head otherwise). After one, its status must be the one
+// LADO read when the head's last run ended, which may hold that run's build
+// output: any other change, such as an edit the worker did not commit, waits
+// as domain.LadoCodeWorktreeChanged.
+func WorktreeReady(ctx context.Context, git Git, dir, head string, runs []domain.LadoCheckRun) string {
 	if dir == "" {
 		return domain.LadoCodeWorktreeMissing
 	}
@@ -222,13 +221,35 @@ func worktreeAt(ctx context.Context, git Git, dir, head string, clean bool) stri
 	if err != nil || !strings.EqualFold(current, head) {
 		return domain.LadoCodeWorktreeNotAtHead
 	}
-	if !clean {
-		return ""
-	}
-	if unchanged, err := git.StatusClean(ctx, dir); err != nil || !unchanged {
+	status, err := git.Status(ctx, dir)
+	if err != nil {
 		return domain.LadoCodeWorktreeNotAtHead
 	}
+	after, ran := lastWorktreeStatus(runs)
+	switch {
+	case !ran && strings.TrimSpace(status) != "":
+		return domain.LadoCodeWorktreeNotAtHead
+	case ran && domain.LadoWorktreeStatusSHA256(status) != after:
+		return domain.LadoCodeWorktreeChanged
+	}
 	return ""
+}
+
+// lastWorktreeStatus returns the status hash LADO read after the head's run
+// that ended last among those that left one; false when none did, as before
+// the first run or after runs a stopped daemon left.
+func lastWorktreeStatus(runs []domain.LadoCheckRun) (string, bool) {
+	var last domain.LadoCheckRun
+	found := false
+	for _, run := range runs {
+		if run.WorktreeSHA256 == "" || run.FinishedAt.IsZero() {
+			continue
+		}
+		if !found || !run.FinishedAt.Before(last.FinishedAt) {
+			last, found = run, true
+		}
+	}
+	return last.WorktreeSHA256, found
 }
 
 // outputTail keeps the last bytes written to it in a ring of fixed size, so

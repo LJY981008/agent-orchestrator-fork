@@ -96,9 +96,9 @@ type CommandsInput struct {
 	// RequiredNamed says whether the base branch's rules name required
 	// checks (RequiredContexts).
 	RequiredNamed bool
-	// WorktreeCode is WorktreeAtHead's answer: empty when the execution's
-	// worktree is clean at the head, else worktree_missing or
-	// worktree_not_at_head.
+	// WorktreeCode is WorktreeReady's answer: empty when the next command
+	// can run in the execution's worktree, else worktree_missing,
+	// worktree_not_at_head or worktree_changed.
 	WorktreeCode string
 }
 
@@ -106,18 +106,19 @@ type CommandsInput struct {
 // none_configured when the rules name required checks, and needs confirming
 // as no_tests otherwise: nothing would test the head.
 //
-// Each command is judged by its newest run of the head, matched by name: a
+// Each command is judged by its newest run of the head, matched by name and
+// text, so a run of a command whose text changed since does not count: a
 // passed run passes, a running one waits as commands_running, a timed-out
 // one fails as command_timed_out, and a failed one or one that could not
 // start fails as commands_failed. A command without a run, or whose newest
 // run was cancelled, runs next: it waits as commands_running while the
-// worktree is clean at the head, else as worktree_not_at_head, and fails as
-// worktree_missing without a worktree. A failure wins over a wait; the first
-// command in order names the code. The details list each command with its
-// newest run.
+// worktree is ready, else as worktree_not_at_head or worktree_changed, and
+// fails as worktree_missing without a worktree. A failure wins over a wait;
+// the first command in order names the code. The details list each command
+// with the hash of its text and its newest run.
 func EvaluateCommands(in CommandsInput) (domain.LadoVerifyItem, error) {
 	switch in.WorktreeCode {
-	case "", domain.LadoCodeWorktreeMissing, domain.LadoCodeWorktreeNotAtHead:
+	case "", domain.LadoCodeWorktreeMissing, domain.LadoCodeWorktreeNotAtHead, domain.LadoCodeWorktreeChanged:
 	default:
 		return domain.LadoVerifyItem{}, fmt.Errorf("evaluate the check commands: unknown worktree code %q", in.WorktreeCode)
 	}
@@ -130,8 +131,8 @@ func EvaluateCommands(in CommandsInput) (domain.LadoVerifyItem, error) {
 	var details domain.LadoCommandsDetails
 	failCode, waitCode := "", ""
 	for _, command := range in.Commands {
-		entry := domain.LadoVerifyCommandRun{Name: command.Name}
-		run, ran := newestCheckRun(in.Runs, command.Name)
+		entry := domain.LadoVerifyCommandRun{Name: command.Name, CommandSHA256: domain.LadoCheckCommandSHA256(command.Command)}
+		run, ran := newestCheckRun(in.Runs, command)
 		if ran {
 			entry.CheckRunID, entry.Status, entry.ExitCode = run.ID, string(run.Status), run.ExitCode
 			if !run.FinishedAt.IsZero() {
@@ -161,25 +162,26 @@ func EvaluateCommands(in CommandsInput) (domain.LadoVerifyItem, error) {
 }
 
 // CommandsToRun returns the commands the head still needs a run of, in
-// order: those without a run and those whose newest run was cancelled, as
-// EvaluateCommands counts them.
+// order: those without a run of their name and text and those whose newest
+// such run was cancelled, as EvaluateCommands counts them.
 func CommandsToRun(commands []domain.LadoCheckCommand, runs []domain.LadoCheckRun) []domain.LadoCheckCommand {
 	var due []domain.LadoCheckCommand
 	for _, command := range commands {
-		if run, ran := newestCheckRun(runs, command.Name); !ran || run.Status == domain.LadoCheckRunCancelled {
+		if run, ran := newestCheckRun(runs, command); !ran || run.Status == domain.LadoCheckRunCancelled {
 			due = append(due, command)
 		}
 	}
 	return due
 }
 
-// newestCheckRun returns the run of the named command that started last;
-// of runs that started at the same time, the later one in the list.
-func newestCheckRun(runs []domain.LadoCheckRun, name string) (domain.LadoCheckRun, bool) {
+// newestCheckRun returns the run of command, by its name and text, that
+// started last; of runs that started at the same time, the later one in the
+// list. A run of the same name with other text is another command's.
+func newestCheckRun(runs []domain.LadoCheckRun, command domain.LadoCheckCommand) (domain.LadoCheckRun, bool) {
 	var newest domain.LadoCheckRun
 	found := false
 	for _, run := range runs {
-		if run.Name == name && (!found || !run.StartedAt.Before(newest.StartedAt)) {
+		if run.Name == command.Name && run.Command == command.Command && (!found || !run.StartedAt.Before(newest.StartedAt)) {
 			newest, found = run, true
 		}
 	}
@@ -190,11 +192,11 @@ func newestCheckRun(runs []domain.LadoCheckRun, name string) (domain.LadoCheckRu
 // has none.
 func commandOutcome(run domain.LadoCheckRun, ran bool, worktreeCode string) (domain.LadoVerifyOutcome, string, error) {
 	if !ran || run.Status == domain.LadoCheckRunCancelled {
-		// The command runs next, once the worktree is at the head.
+		// The command runs next, once the worktree is ready.
 		switch worktreeCode {
 		case domain.LadoCodeWorktreeMissing:
 			return domain.LadoVerifyFail, worktreeCode, nil
-		case domain.LadoCodeWorktreeNotAtHead:
+		case domain.LadoCodeWorktreeNotAtHead, domain.LadoCodeWorktreeChanged:
 			return domain.LadoVerifyWait, worktreeCode, nil
 		}
 		return domain.LadoVerifyWait, domain.LadoCodeCommandsRunning, nil

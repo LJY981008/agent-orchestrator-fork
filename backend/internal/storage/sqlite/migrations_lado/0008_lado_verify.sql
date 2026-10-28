@@ -10,13 +10,41 @@
 -- section 4.2). Task states stay derived at read time: a record is evidence
 -- about one head, like a check run. Evidence criterion 0 with state 'file'
 -- records the pinned evidence file itself.
+--
+-- Executions dispatched before this migration had no integration gate: they
+-- keep integration_gated 0, so their merges never count as merges without
+-- approval, and those whose newest PR already merged or closed are settled
+-- here, at the PR's last update.
 
 -- +goose Up
 ALTER TABLE lado_executions ADD COLUMN base_branch TEXT NOT NULL DEFAULT '';
 ALTER TABLE lado_executions ADD COLUMN base_remote TEXT NOT NULL DEFAULT '';
 ALTER TABLE lado_executions ADD COLUMN dispatch_local_base_sha TEXT NOT NULL DEFAULT '';
--- When the loop settled the execution's merged or closed PR; NULL while it still verifies.
+-- 1 for an execution dispatched under integration approval.
+ALTER TABLE lado_executions ADD COLUMN integration_gated INTEGER NOT NULL DEFAULT 0 CHECK (integration_gated IN (0, 1));
+-- When the loop settled the execution's newest PR, and which PR in which
+-- state: a PR that opens again, or a newer PR, is settled again.
 ALTER TABLE lado_executions ADD COLUMN settled_at TIMESTAMP;
+ALTER TABLE lado_executions ADD COLUMN settled_pr_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE lado_executions ADD COLUMN settled_pr_state TEXT NOT NULL DEFAULT '';
+
+UPDATE lado_executions
+SET settled_at = (
+        SELECT pr.updated_at FROM pr WHERE pr.session_id = lado_executions.session_id
+        ORDER BY pr.updated_at DESC, pr.url DESC LIMIT 1
+    ),
+    settled_pr_url = (
+        SELECT pr.url FROM pr WHERE pr.session_id = lado_executions.session_id
+        ORDER BY pr.updated_at DESC, pr.url DESC LIMIT 1
+    ),
+    settled_pr_state = (
+        SELECT pr.pr_state FROM pr WHERE pr.session_id = lado_executions.session_id
+        ORDER BY pr.updated_at DESC, pr.url DESC LIMIT 1
+    )
+WHERE (
+    SELECT pr.pr_state FROM pr WHERE pr.session_id = lado_executions.session_id
+    ORDER BY pr.updated_at DESC, pr.url DESC LIMIT 1
+) IN ('merged', 'closed');
 
 ALTER TABLE lado_project_settings ADD COLUMN check_commands TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(check_commands));
 ALTER TABLE lado_project_settings ADD COLUMN check_timeout_minutes INTEGER NOT NULL DEFAULT 30 CHECK (check_timeout_minutes BETWEEN 5 AND 120);
@@ -31,6 +59,8 @@ CREATE TABLE lado_check_runs (
     exit_code            INTEGER,
     log_sha256           TEXT NOT NULL DEFAULT '',
     error_message        TEXT NOT NULL DEFAULT '',
+    -- sha256 of the worktree's git status after the run; '' when unread.
+    worktree_sha256      TEXT NOT NULL DEFAULT '',
     started_at           TIMESTAMP NOT NULL,
     finished_at          TIMESTAMP
 );
@@ -45,6 +75,8 @@ CREATE TABLE lado_verifications (
     content_json         TEXT NOT NULL CHECK (json_valid(content_json)),
     sha256               TEXT NOT NULL CHECK (length(sha256) = 64),
     notified_json        TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(notified_json)),
+    -- The failed protection read's message, outside the content and its hash.
+    protection_error     TEXT NOT NULL DEFAULT '',
     computed_at          TIMESTAMP NOT NULL,
     PRIMARY KEY (execution_session_id, head_sha)
 );
@@ -96,7 +128,10 @@ DROP TABLE lado_verifications;
 DROP TABLE lado_check_runs;
 ALTER TABLE lado_project_settings DROP COLUMN check_timeout_minutes;
 ALTER TABLE lado_project_settings DROP COLUMN check_commands;
+ALTER TABLE lado_executions DROP COLUMN settled_pr_state;
+ALTER TABLE lado_executions DROP COLUMN settled_pr_url;
 ALTER TABLE lado_executions DROP COLUMN settled_at;
+ALTER TABLE lado_executions DROP COLUMN integration_gated;
 ALTER TABLE lado_executions DROP COLUMN dispatch_local_base_sha;
 ALTER TABLE lado_executions DROP COLUMN base_remote;
 ALTER TABLE lado_executions DROP COLUMN base_branch;

@@ -62,17 +62,19 @@ SET status = ?1,
     exit_code = ?2,
     log_sha256 = ?3,
     error_message = ?4,
-    finished_at = ?5
-WHERE lado_check_runs.id = ?6 AND lado_check_runs.status = 'running'
+    worktree_sha256 = ?5,
+    finished_at = ?6
+WHERE lado_check_runs.id = ?7 AND lado_check_runs.status = 'running'
 `
 
 type FinishLadoCheckRunParams struct {
-	Status       string
-	ExitCode     sql.NullInt64
-	LogSha256    string
-	ErrorMessage string
-	FinishedAt   sql.NullTime
-	ID           string
+	Status         string
+	ExitCode       sql.NullInt64
+	LogSha256      string
+	ErrorMessage   string
+	WorktreeSha256 string
+	FinishedAt     sql.NullTime
+	ID             string
 }
 
 // Only a running run finishes: a final state stays as first recorded.
@@ -82,6 +84,7 @@ func (q *Queries) FinishLadoCheckRun(ctx context.Context, arg FinishLadoCheckRun
 		arg.ExitCode,
 		arg.LogSha256,
 		arg.ErrorMessage,
+		arg.WorktreeSha256,
 		arg.FinishedAt,
 		arg.ID,
 	)
@@ -93,7 +96,7 @@ func (q *Queries) FinishLadoCheckRun(ctx context.Context, arg FinishLadoCheckRun
 
 const getLadoCheckRun = `-- name: GetLadoCheckRun :one
 SELECT id, execution_session_id, head_sha, name, command, status, exit_code, log_sha256, error_message,
-    started_at, finished_at
+    worktree_sha256, started_at, finished_at
 FROM lado_check_runs
 WHERE id = ?
 `
@@ -111,6 +114,7 @@ func (q *Queries) GetLadoCheckRun(ctx context.Context, id string) (LadoCheckRun,
 		&i.ExitCode,
 		&i.LogSha256,
 		&i.ErrorMessage,
+		&i.WorktreeSha256,
 		&i.StartedAt,
 		&i.FinishedAt,
 	)
@@ -171,7 +175,8 @@ func (q *Queries) GetLadoIntegrationApprovalForHead(ctx context.Context, arg Get
 }
 
 const getLadoVerification = `-- name: GetLadoVerification :one
-SELECT execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, computed_at
+SELECT execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, protection_error,
+    computed_at
 FROM lado_verifications
 WHERE execution_session_id = ? AND head_sha = ?
 `
@@ -193,6 +198,7 @@ func (q *Queries) GetLadoVerification(ctx context.Context, arg GetLadoVerificati
 		&i.ContentJson,
 		&i.Sha256,
 		&i.NotifiedJson,
+		&i.ProtectionError,
 		&i.ComputedAt,
 	)
 	return i, err
@@ -331,7 +337,7 @@ func (q *Queries) InsertLadoIntegrationApproval(ctx context.Context, arg InsertL
 
 const listLadoCheckRunsForHead = `-- name: ListLadoCheckRunsForHead :many
 SELECT id, execution_session_id, head_sha, name, command, status, exit_code, log_sha256, error_message,
-    started_at, finished_at
+    worktree_sha256, started_at, finished_at
 FROM lado_check_runs
 WHERE execution_session_id = ? AND head_sha = ?
 ORDER BY started_at, id
@@ -361,6 +367,7 @@ func (q *Queries) ListLadoCheckRunsForHead(ctx context.Context, arg ListLadoChec
 			&i.ExitCode,
 			&i.LogSha256,
 			&i.ErrorMessage,
+			&i.WorktreeSha256,
 			&i.StartedAt,
 			&i.FinishedAt,
 		); err != nil {
@@ -566,7 +573,7 @@ func (q *Queries) ListLadoExecutionReviews(ctx context.Context, executionSession
 }
 
 const listLadoExecutionsToVerify = `-- name: ListLadoExecutionsToVerify :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.settled_at,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state,
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
     p.target_branch AS pr_target_branch, p.title AS pr_title,
     NOT EXISTS (
@@ -574,13 +581,17 @@ SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_app
     ) AS session_terminated
 FROM lado_executions e
 JOIN pr p ON p.session_id = e.session_id
+LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
 WHERE NOT EXISTS (
         SELECT 1 FROM pr newer
         WHERE newer.session_id = p.session_id
           AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
     )
-  AND (p.pr_state NOT IN ('merged', 'closed') OR e.settled_at IS NULL)
-ORDER BY e.started_at, e.session_id
+  AND (
+        (p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> '')
+        OR (p.pr_state IN ('merged', 'closed') AND NOT (e.settled_pr_url = p.url AND e.settled_pr_state = p.pr_state))
+    )
+ORDER BY v.computed_at IS NOT NULL, v.computed_at, e.started_at, e.session_id
 LIMIT ?1
 `
 
@@ -595,9 +606,11 @@ type ListLadoExecutionsToVerifyRow struct {
 	SessionTerminated bool
 }
 
-// Executions whose session's newest PR is open, or merged or closed and not
-// settled yet, oldest first, with that PR and whether the session ended (as
-// in GetLadoExecution).
+// Executions whose session's newest PR is open with a head AO observed, or
+// merged or closed and not settled in that state yet, with that PR and
+// whether the session ended (as in GetLadoExecution). The heads without a
+// record come first, then the records computed longest ago, so every
+// execution takes its turn however many there are.
 func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions int64) ([]ListLadoExecutionsToVerifyRow, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoExecutionsToVerify, maxExecutions)
 	if err != nil {
@@ -624,7 +637,10 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 			&i.LadoExecution.BaseBranch,
 			&i.LadoExecution.BaseRemote,
 			&i.LadoExecution.DispatchLocalBaseSha,
+			&i.LadoExecution.IntegrationGated,
 			&i.LadoExecution.SettledAt,
+			&i.LadoExecution.SettledPRURL,
+			&i.LadoExecution.SettledPRState,
 			&i.PRURL,
 			&i.PRNumber,
 			&i.PRState,
@@ -880,17 +896,29 @@ func (q *Queries) SetLadoIntegrationStatus(ctx context.Context, arg SetLadoInteg
 
 const settleLadoExecution = `-- name: SettleLadoExecution :execrows
 UPDATE lado_executions
-SET settled_at = ?1
-WHERE lado_executions.session_id = ?2 AND lado_executions.settled_at IS NULL
+SET settled_at = ?1,
+    settled_pr_url = ?2,
+    settled_pr_state = ?3
+WHERE lado_executions.session_id = ?4
+  AND NOT (lado_executions.settled_pr_url = ?2 AND lado_executions.settled_pr_state = ?3)
 `
 
 type SettleLadoExecutionParams struct {
 	SettledAt sql.NullTime
+	PRURL     string
+	PRState   string
 	SessionID string
 }
 
+// Settles the execution's newest PR in its merged or closed state, unless
+// it was settled in that state already.
 func (q *Queries) SettleLadoExecution(ctx context.Context, arg SettleLadoExecutionParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, settleLadoExecution, arg.SettledAt, arg.SessionID)
+	result, err := q.db.ExecContext(ctx, settleLadoExecution,
+		arg.SettledAt,
+		arg.PRURL,
+		arg.PRState,
+		arg.SessionID,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -899,8 +927,9 @@ func (q *Queries) SettleLadoExecution(ctx context.Context, arg SettleLadoExecuti
 
 const upsertLadoVerification = `-- name: UpsertLadoVerification :exec
 INSERT INTO lado_verifications (
-    execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, computed_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, protection_error,
+    computed_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (execution_session_id, head_sha) DO UPDATE SET
     pr_url = excluded.pr_url,
     outcome = excluded.outcome,
@@ -908,6 +937,7 @@ ON CONFLICT (execution_session_id, head_sha) DO UPDATE SET
     content_json = excluded.content_json,
     sha256 = excluded.sha256,
     notified_json = excluded.notified_json,
+    protection_error = excluded.protection_error,
     computed_at = excluded.computed_at
 `
 
@@ -920,6 +950,7 @@ type UpsertLadoVerificationParams struct {
 	ContentJson        string
 	Sha256             string
 	NotifiedJson       string
+	ProtectionError    string
 	ComputedAt         time.Time
 }
 
@@ -935,6 +966,7 @@ func (q *Queries) UpsertLadoVerification(ctx context.Context, arg UpsertLadoVeri
 		arg.ContentJson,
 		arg.Sha256,
 		arg.NotifiedJson,
+		arg.ProtectionError,
 		arg.ComputedAt,
 	)
 	return err

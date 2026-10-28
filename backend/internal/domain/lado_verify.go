@@ -73,11 +73,20 @@ const (
 	// commands
 	LadoCodeCommandsRunning   = "commands_running"     // wait
 	LadoCodeWorktreeNotAtHead = "worktree_not_at_head" // wait
-	LadoCodeCommandsFailed    = "commands_failed"      // fail
-	LadoCodeCommandTimedOut   = "command_timed_out"    // fail
-	LadoCodeWorktreeMissing   = "worktree_missing"     // fail
-	LadoCodeNoTests           = "no_tests"             // confirm: no command and no required check
-	LadoCodeNoneConfigured    = "none_configured"      // pass: no command, but required checks
+	// LadoCodeWorktreeChanged means the worktree changed since LADO's last
+	// check command on the head ended, as with an edit the worker did not
+	// commit: the next command waits rather than test it.
+	LadoCodeWorktreeChanged = "worktree_changed"  // wait
+	LadoCodeCommandsFailed  = "commands_failed"   // fail
+	LadoCodeCommandTimedOut = "command_timed_out" // fail
+	LadoCodeWorktreeMissing = "worktree_missing"  // fail
+	LadoCodeNoTests         = "no_tests"          // confirm: no command and no required check
+	LadoCodeNoneConfigured  = "none_configured"   // pass: no command, but required checks
+
+	// commit_messages, paths and evidence: LadoCodeHeadUnavailable means the
+	// head is not in the local repository and LADO could not fetch it from
+	// the PR's host, so the items git reads wait.
+	LadoCodeHeadUnavailable = "head_unavailable" // wait
 
 	// commit_messages
 	LadoCodeCommitMessagesFailed  = "commit_messages_failed"  // fail
@@ -88,7 +97,10 @@ const (
 	LadoCodeOutsidePlan   = "outside_plan"   // confirm
 
 	// base_branch
-	LadoCodeBaseMoved     = "base_moved"      // confirm
+	LadoCodeBaseMoved = "base_moved" // confirm
+	// LadoCodeBaseDeleted means the local base branch, which existed when
+	// the execution was dispatched, is gone, with its reflog.
+	LadoCodeBaseDeleted   = "base_deleted"    // confirm
 	LadoCodeReflogOff     = "reflog_off"      // confirm
 	LadoCodeAlreadyOnBase = "already_on_base" // confirm
 	LadoCodeNoLocalBranch = "no_local_branch" // pass
@@ -229,14 +241,24 @@ type LadoCommandsDetails struct {
 	Runs []LadoVerifyCommandRun `json:"runs"`
 }
 
-// LadoVerifyCommandRun is one check command's run for the head. CheckRunID
-// is empty and ExitCode nil while the command has not run or not exited.
+// LadoVerifyCommandRun is one check command's run for the head. CommandSHA256
+// is the hash of the command's text (LadoCheckCommandSHA256): a run counts
+// for a command only with the same name and text, so a changed command
+// changes the record. CheckRunID is empty and ExitCode nil while the command
+// has not run or not exited.
 type LadoVerifyCommandRun struct {
-	Name       string `json:"name"`
-	CheckRunID string `json:"checkRunId"`
-	Status     string `json:"status"`
-	ExitCode   *int   `json:"exitCode"`
-	DurationMS int64  `json:"durationMs"`
+	Name          string `json:"name"`
+	CommandSHA256 string `json:"commandSha256"`
+	CheckRunID    string `json:"checkRunId"`
+	Status        string `json:"status"`
+	ExitCode      *int   `json:"exitCode"`
+	DurationMS    int64  `json:"durationMs"`
+}
+
+// LadoCheckCommandSHA256 is the hex sha256 of a check command's text.
+func LadoCheckCommandSHA256(command string) string {
+	sum := sha256.Sum256([]byte(command))
+	return hex.EncodeToString(sum[:])
 }
 
 // LadoCommitMessagesDetails are the details of commit_messages: the verdict
@@ -271,13 +293,17 @@ type LadoPathsDetails struct {
 
 // LadoBaseBranchDetails are the details of base_branch: the base branch and
 // remote, the local reflog entries since the execution started that the
-// remote branch does not hold, and whether the head was on the remote base
-// already (docs/LJY-PRD/TDD.md §7.3).
+// remote branch does not hold, whether the head was on the remote base
+// already (docs/LJY-PRD/TDD.md §7.3), the local branch's commit when the
+// execution was dispatched (empty when it had none or LADO did not record
+// it) and whether that branch is gone now.
 type LadoBaseBranchDetails struct {
-	Branch        string            `json:"branch"`
-	Remote        string            `json:"remote"`
-	Moved         []LadoReflogEntry `json:"moved"`
-	AlreadyOnBase bool              `json:"alreadyOnBase"`
+	Branch         string            `json:"branch"`
+	Remote         string            `json:"remote"`
+	Moved          []LadoReflogEntry `json:"moved"`
+	AlreadyOnBase  bool              `json:"alreadyOnBase"`
+	DispatchCommit string            `json:"dispatchCommit"`
+	Deleted        bool              `json:"deleted"`
 }
 
 // LadoReflogEntry is one reflog entry of the local base branch.
@@ -289,15 +315,27 @@ type LadoReflogEntry struct {
 
 // LadoProtectionDetails are the details of protection: what the base
 // branch's remote rules lack (docs/LJY-PRD/TDD.md §7.1), the checks they
-// require, and the redacted error of a read that failed.
+// require, and the class of a read that failed (LadoProtectionError*). The
+// class is stable from one read to the next, so the record's hash is; the
+// failed read's message stays outside it (LadoVerification.ProtectionError).
 type LadoProtectionDetails struct {
 	Provider       string   `json:"provider"`
 	Repo           string   `json:"repo"`
 	Branch         string   `json:"branch"`
 	Missing        []string `json:"missing"`
 	RequiredChecks []string `json:"requiredChecks"`
-	Error          string   `json:"error"`
+	ErrorClass     string   `json:"errorClass"`
 }
+
+// Classes of a failed read of a branch's rules: the host's HTTP status, as
+// "http_404", a rate limit, a request that did not reach the host or got no
+// answer, and anything else.
+const (
+	LadoProtectionErrorHTTPPrefix  = "http_"
+	LadoProtectionErrorRateLimited = "rate_limited"
+	LadoProtectionErrorTransport   = "transport"
+	LadoProtectionErrorOther       = "other"
+)
 
 // LadoReviewDetails are the details of review: the rounds LADO started, the
 // run that decides and its verdict, the reviewer used, and a note such as a
@@ -343,11 +381,20 @@ type LadoVerification struct {
 	HeadSHA            string
 	PRURL              string
 	Items              []LadoVerifyItem
-	// Notified lists the items whose failure the worker was told about once.
-	// It and ComputedAt stay out of the content and its hash.
-	Notified   []string
-	ComputedAt time.Time
+	// Notified lists the items whose failure the worker was told about once,
+	// and LadoNotifiedWorktreeBehind once the worker was asked to pull a
+	// head made on the host. It, ProtectionError and ComputedAt stay out of
+	// the content and its hash.
+	Notified []string
+	// ProtectionError is the message of a failed read of the base branch's
+	// rules, without secrets; the protection item holds only its class.
+	ProtectionError string
+	ComputedAt      time.Time
 }
+
+// LadoNotifiedWorktreeBehind is the Notified entry of the one message that
+// asks a worker whose worktree is behind a head made on the host to pull it.
+const LadoNotifiedWorktreeBehind = "worktree_behind"
 
 // Overall returns the record's outcome: fail if any item fails, else wait if
 // any waits, else confirm if any needs confirming, else pass. The reason is
@@ -436,6 +483,9 @@ const (
 // LadoCheckRun is one run of a project check command on an execution's head
 // in its worktree (docs/LJY-PRD/TDD.md §8.2). ExitCode is nil until the
 // command exited; LogSHA256 names the blob with the end of its output.
+// WorktreeSHA256 is the hash of the worktree's git status after the run
+// ended (LadoWorktreeStatusSHA256), empty when LADO could not read it: the
+// next command on the head runs only while the status is still that.
 type LadoCheckRun struct {
 	ID                 string
 	ExecutionSessionID SessionID
@@ -446,8 +496,16 @@ type LadoCheckRun struct {
 	ExitCode           *int
 	LogSHA256          string
 	ErrorMessage       string
+	WorktreeSHA256     string
 	StartedAt          time.Time
 	FinishedAt         time.Time
+}
+
+// LadoWorktreeStatusSHA256 is the hex sha256 of a worktree's
+// git status --porcelain output, as LADO compares it between check runs.
+func LadoWorktreeStatusSHA256(status string) string {
+	sum := sha256.Sum256([]byte(status))
+	return hex.EncodeToString(sum[:])
 }
 
 // ErrLadoCheckRunFinished means a check run already reached a final state,

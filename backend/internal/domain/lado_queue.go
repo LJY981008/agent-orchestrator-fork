@@ -223,6 +223,11 @@ type LadoExecution struct {
 	// SettledAt is when verification settled the execution's merged or
 	// closed PR, zero while it still verifies.
 	SettledAt time.Time
+	// IntegrationGated says that LADO dispatched the execution while it
+	// gated integrations (build step 8 on): only then does a merge without
+	// an integration approval count as one. Executions dispatched before
+	// had no such gate.
+	IntegrationGated bool
 	// SessionTerminated and PR are read with the execution from AO's session
 	// and PR rows.
 	SessionTerminated bool

@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestGitHelpersReadCommitsPathsAndReflog(t *testing.T) {
@@ -101,12 +104,12 @@ func TestGitHelpersReadCommitsPathsAndReflog(t *testing.T) {
 		t.Fatalf("RevParse in a missing folder = %v, want another error", err)
 	}
 
-	if clean, err := git.StatusClean(ctx, work); err != nil || !clean {
-		t.Fatalf("StatusClean of a committed work tree = (%v, %v), want clean", clean, err)
+	if status, err := git.Status(ctx, work); err != nil || status != "" {
+		t.Fatalf("Status of a committed work tree = (%q, %v), want none", status, err)
 	}
 	r.write(work, "scratch.txt", "draft\n")
-	if clean, err := git.StatusClean(ctx, work); err != nil || clean {
-		t.Fatalf("StatusClean with an untracked file = (%v, %v), want not clean", clean, err)
+	if status, err := git.Status(ctx, work); err != nil || status != "?? scratch.txt\n" {
+		t.Fatalf("Status with an untracked file = (%q, %v), want the file", status, err)
 	}
 
 	// Another developer's commit reaches the remote-tracking branch only
@@ -144,5 +147,69 @@ func TestGitErrorsCarryOneLineWithoutCredentials(t *testing.T) {
 	}
 	if got := failureLine(strings.Repeat("é", 400)); len(got) > maxGitErrorBytes || !strings.HasPrefix(got, "é") || strings.ToValidUTF8(got, "") != got {
 		t.Fatalf("failureLine of a long line = %d bytes, want at most %d whole characters", len(got), maxGitErrorBytes)
+	}
+}
+
+// V5 of #15: a head made on the host is in no branch the developer's clone
+// fetches. FetchPullHead brings it by the ref the host keeps for the pull
+// request, without writing a ref or FETCH_HEAD in the developer's repository.
+func TestFetchPullHeadBringsAHeadMadeOnTheHost(t *testing.T) {
+	ctx := context.Background()
+	git := ExecGit{}
+	r := newTestRepo(t, t0)
+	// The host made a commit on the pull request's branch, as Update branch
+	// does, and keeps it as refs/pull/7/head.
+	r.write(r.upstream, "merge.txt", "merged main into the branch\n")
+	head := r.commit(t0.Add(time.Minute), r.upstream, "Merge main into the branch")
+	r.git(t0.Add(time.Minute), r.upstream, "push", "-q", "origin", "HEAD:refs/pull/7/head")
+
+	if has, err := git.HasCommit(ctx, r.dir, head); err != nil || has {
+		t.Fatalf("HasCommit before the fetch = (%v, %v), want false", has, err)
+	}
+	if err := git.FetchPullHead(ctx, r.dir, "origin", PullHeadRef(domain.TrackerProviderGitHub, 7)); err != nil {
+		t.Fatalf("FetchPullHead = %v", err)
+	}
+	if has, err := git.HasCommit(ctx, r.dir, head); err != nil || !has {
+		t.Fatalf("HasCommit after the fetch = (%v, %v), want true", has, err)
+	}
+	if refs := r.git(t0, r.dir, "for-each-ref", "--format=%(refname)"); strings.Contains(refs, "pull") {
+		t.Fatalf("refs after the fetch = %q, want none written", refs)
+	}
+	if _, err := os.Stat(filepath.Join(r.dir, ".git", "FETCH_HEAD")); err == nil {
+		t.Fatal("the fetch wrote FETCH_HEAD")
+	}
+
+	// A ref the host does not keep fails; only pull request head refs and
+	// remotes git can fetch are asked for.
+	if err := git.FetchPullHead(ctx, r.dir, "origin", "refs/pull/8/head"); err == nil {
+		t.Fatal("fetching a pull request the host does not have worked")
+	}
+	for _, tc := range []struct{ remote, ref string }{
+		{"origin", "refs/heads/main"},
+		{"origin", "refs/pull/0/head"},
+		{"origin", "refs/pull/7/head:refs/heads/main"},
+		{"--upload-pack=touch", "refs/pull/7/head"},
+	} {
+		if err := git.FetchPullHead(ctx, r.dir, tc.remote, tc.ref); err == nil {
+			t.Fatalf("FetchPullHead(%q, %q) was run", tc.remote, tc.ref)
+		}
+	}
+	if _, err := git.HasCommit(ctx, r.dir, "HEAD"); err == nil {
+		t.Fatal("HasCommit of a ref name was run")
+	}
+
+	for _, tc := range []struct {
+		provider domain.TrackerProvider
+		number   int
+		want     string
+	}{
+		{domain.TrackerProviderGitHub, 7, "refs/pull/7/head"},
+		{domain.TrackerProviderGitLab, 12, "refs/merge-requests/12/head"},
+		{domain.TrackerProviderGitHub, 0, ""},
+		{"linear", 3, ""},
+	} {
+		if got := PullHeadRef(tc.provider, tc.number); got != tc.want {
+			t.Errorf("PullHeadRef(%s, %d) = %q, want %q", tc.provider, tc.number, got, tc.want)
+		}
 	}
 }

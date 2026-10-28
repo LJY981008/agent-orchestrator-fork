@@ -244,6 +244,7 @@ func dispatchedLadoTask(startedAt time.Time) domain.LadoTask {
 		Attempt:          1,
 		StartedAt:        startedAt,
 		DeadlineAt:       startedAt.Add(8 * time.Hour),
+		IntegrationGated: true,
 	}
 	return task
 }
@@ -287,9 +288,10 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 		{"PR closed unmerged", func(task *domain.LadoTask) { ended(task); task.Execution.PR = closedPR }, domain.LadoTaskClosedUnmerged},
 		{"timed out", func(task *domain.LadoTask) { task.Execution.TimedOutAt = now }, domain.LadoTaskFailed},
 		{"timed out and ended", func(task *domain.LadoTask) { ended(task); task.Execution.TimedOutAt = now }, domain.LadoTaskFailed},
+		// The PR opened while LADO stopped the run: the PR decides (V9 of #15).
 		{"timed out with its PR open", func(task *domain.LadoTask) {
 			task.Execution.TimedOutAt, task.Execution.PR = now, openPR
-		}, domain.LadoTaskFailed},
+		}, domain.LadoTaskValidating},
 		{"timed out, then the PR merged", func(task *domain.LadoTask) {
 			task.Execution.TimedOutAt, task.Execution.PR = now, mergedPR
 		}, domain.LadoTaskCompleted},
@@ -430,6 +432,11 @@ func TestLadoTaskStateFollowsVerification(t *testing.T) {
 			approved(domain.LadoIntegrationStatusPosted)(task)
 			task.Execution.PR = mergedPR
 		}, domain.LadoTaskCompleted, domain.LadoCompletedWithoutApproval},
+		// V4 of #15: a run dispatched before LADO gated integrations had no
+		// approval to ask for.
+		{"merged, dispatched before integration approval", func(task *domain.LadoTask) {
+			task.Execution.PR, task.Execution.IntegrationGated = mergedPR, false
+		}, domain.LadoTaskCompleted, ""},
 		{"closed", func(task *domain.LadoTask) {
 			approved(domain.LadoIntegrationStatusPosted)(task)
 			task.Execution.PR = closedPR
@@ -438,10 +445,27 @@ func TestLadoTaskStateFollowsVerification(t *testing.T) {
 			task.Execution.Verification = domain.LadoExecutionVerification{HeadSHA: head, Outcome: domain.LadoVerifyPass}
 		}, domain.LadoTaskRunning, ""},
 		{"timed out", func(task *domain.LadoTask) { task.Execution.TimedOutAt = now }, domain.LadoTaskFailed, domain.LadoFailedTimedOut},
+		// V9 of #15: the run time limit stops once a PR is open, so a run
+		// stopped while its PR opened shows its PR, not Failed: a Failed
+		// task could be approved again next to the open PR.
 		{"timed out with a passing record", func(task *domain.LadoTask) {
 			record(head, domain.LadoVerifyPass, "")(task)
 			task.Execution.TimedOutAt = now
-		}, domain.LadoTaskFailed, domain.LadoFailedTimedOut},
+		}, domain.LadoTaskIntegrationPending, ""},
+		{"timed out while its PR opened", func(task *domain.LadoTask) {
+			task.Execution.PR = openPR
+			task.Execution.TimedOutAt, task.Execution.SessionTerminated = now, true
+		}, domain.LadoTaskValidating, domain.LadoValidatingVerifying},
+		{"timed out with its head approved", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.TimedOutAt = now
+		}, domain.LadoTaskIntegrating, ""},
+		{"timed out, PR merged", func(task *domain.LadoTask) {
+			approved(domain.LadoIntegrationStatusPosted)(task)
+			task.Execution.PR = mergedPR
+			task.Execution.Integration.MergedHeadApproved = true
+			task.Execution.TimedOutAt = now
+		}, domain.LadoTaskCompleted, ""},
 		// A run of an older approval still shows while its PR is verified
 		// or integrated.
 		{"newer approval while integration is pending", func(task *domain.LadoTask) {

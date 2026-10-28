@@ -89,16 +89,19 @@ type LadoVerifyItemDetailsResponse struct {
 	OutsidePlan  []string `json:"outsidePlan,omitempty" description:"paths: the first 50 changed paths no affected_paths entry matches."`
 	OutsideCount int      `json:"outsideCount,omitempty" description:"paths: how many changed paths are outside the plan."`
 	// base_branch and protection
-	Branch        string                    `json:"branch,omitempty" description:"base_branch and protection: the base branch."`
-	Remote        string                    `json:"remote,omitempty" description:"base_branch: the base branch's remote."`
-	Moved         []LadoReflogEntryResponse `json:"moved,omitempty" description:"base_branch: local moves of the base branch since the run started that the remote does not hold."`
-	AlreadyOnBase bool                      `json:"alreadyOnBase,omitempty" description:"base_branch: the remote base held the head before any approval."`
+	Branch         string                    `json:"branch,omitempty" description:"base_branch and protection: the base branch."`
+	Remote         string                    `json:"remote,omitempty" description:"base_branch: the base branch's remote."`
+	Moved          []LadoReflogEntryResponse `json:"moved,omitempty" description:"base_branch: local moves of the base branch since the run started that the remote does not hold."`
+	AlreadyOnBase  bool                      `json:"alreadyOnBase,omitempty" description:"base_branch: the remote base held the head before any approval."`
+	DispatchCommit string                    `json:"dispatchCommit,omitempty" description:"base_branch: the local base branch's commit when the run was dispatched; omitted when it had none or LADO did not record it."`
+	Deleted        bool                      `json:"deleted,omitempty" description:"base_branch: the local base branch existed at dispatch and is gone."`
 	// protection
 	Provider       string   `json:"provider,omitempty" enum:"github,gitlab" description:"protection: the repository's host."`
 	Repo           string   `json:"repo,omitempty" description:"protection: the repository, as owner/name."`
 	Missing        []string `json:"missing,omitempty" description:"protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration, non_fast_forward, deletion."`
 	RequiredChecks []string `json:"requiredChecks,omitempty" description:"protection: the checks the rules require."`
-	Error          string   `json:"error,omitempty" description:"protection: why the rules could not be read, without secrets."`
+	ErrorClass     string   `json:"errorClass,omitempty" description:"protection: the class of a failed read of the rules, which the record's hash covers: http_<status>, rate_limited, transport or other."`
+	Error          string   `json:"error,omitempty" description:"protection: why the rules could not be read, without secrets; outside the record's hash."`
 	// review
 	Rounds  int    `json:"rounds,omitempty" description:"review: the review rounds LADO started for the execution, at most 3."`
 	RunID   string `json:"runId,omitempty" description:"review: the review run that decides."`
@@ -117,7 +120,7 @@ type LadoVerifyItemDetailsResponse struct {
 type LadoVerifyItemResponse struct {
 	Kind    string                        `json:"kind" enum:"required_checks,commands,commit_messages,paths,base_branch,protection,review,evidence"`
 	Outcome string                        `json:"outcome" enum:"pass,wait,fail,confirm,info" description:"info never decides; evidence is always info."`
-	Code    string                        `json:"code,omitempty" enum:"not_required,verifying,checks_pending,checks_failed,none_reported,commands_running,worktree_not_at_head,commands_failed,command_timed_out,worktree_missing,no_tests,none_configured,commit_messages_failed,commit_messages_unclear,protected_path,outside_plan,base_moved,reflog_off,already_on_base,no_local_branch,unprotected,protection_unknown,unprotected_gitlab,review_pending,changes_requested,review_inconclusive" description:"Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet."`
+	Code    string                        `json:"code,omitempty" enum:"not_required,verifying,checks_pending,checks_failed,none_reported,commands_running,worktree_not_at_head,worktree_changed,commands_failed,command_timed_out,worktree_missing,no_tests,none_configured,head_unavailable,commit_messages_failed,commit_messages_unclear,protected_path,outside_plan,base_moved,base_deleted,reflog_off,already_on_base,no_local_branch,unprotected,protection_unknown,unprotected_gitlab,review_pending,changes_requested,review_inconclusive" description:"Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone."`
 	Details LadoVerifyItemDetailsResponse `json:"details"`
 }
 
@@ -127,7 +130,7 @@ type LadoVerificationResponse struct {
 	HeadSHA string `json:"headSha"`
 	PRURL   string `json:"prUrl"`
 	Outcome string `json:"outcome" enum:"pass,wait,fail,confirm" description:"fail if any item fails, else wait if any waits, else confirm if any needs confirming, else pass."`
-	Reason  string `json:"reason,omitempty" enum:"verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested" description:"The code of the first item that fails, else of the first that waits; omitted otherwise."`
+	Reason  string `json:"reason,omitempty" enum:"verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested" description:"The code of the first item that fails, else of the first that waits; omitted otherwise."`
 	SHA256  string `json:"sha256" description:"The record's hash, which an integration approval signs as verificationSha256."`
 	// Items follow the record's order: required_checks, commands,
 	// commit_messages, paths, base_branch, protection, review, evidence.

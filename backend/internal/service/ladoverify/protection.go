@@ -10,7 +10,11 @@ package ladoverify
 
 import (
 	"context"
+	"errors"
+	"net"
+	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -36,6 +40,15 @@ type ProtectionRead struct {
 	Err      error
 	// ReadAt is when LADO asked the host.
 	ReadAt time.Time
+}
+
+// ErrorMessage is the read's error on one line without secrets, empty when
+// the read worked or LADO reads no rules on the host (GitLab).
+func (r ProtectionRead) ErrorMessage() string {
+	if r.Err == nil || r.Provider == domain.TrackerProviderGitLab {
+		return ""
+	}
+	return redactedErrorLine(r.Err)
 }
 
 // MissingIntegrationCheck is the missing part when no required_status_checks
@@ -171,9 +184,12 @@ func MissingProtection(rules ports.LadoBranchRules) []string {
 
 // EvaluateProtection is the protection item for a read. LADO does not read
 // GitLab's protection, so a GitLab project is unprotected_gitlab; a failed
-// read is protection_unknown with its error on one line; a branch missing a
-// part is unprotected; else the item passes. The details name the required
-// checks, from the last good read when this one failed.
+// read is protection_unknown with the class of its error
+// (ProtectionErrorClass), which stays the same from one read to the next
+// where the message may not, so a dry run and the approval after it hash
+// alike; a branch missing a part is unprotected; else the item passes. The
+// details name the required checks, from the last good read when this one
+// failed.
 func EvaluateProtection(read ProtectionRead) (domain.LadoVerifyItem, error) {
 	required, _ := RequiredContexts(read.Rules)
 	details := domain.LadoProtectionDetails{
@@ -187,7 +203,7 @@ func EvaluateProtection(read ProtectionRead) (domain.LadoVerifyItem, error) {
 	case read.Provider == domain.TrackerProviderGitLab:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeUnprotectedGitLab
 	case read.Err != nil:
-		details.Error = redactedErrorLine(read.Err)
+		details.ErrorClass = ProtectionErrorClass(read.Err)
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeProtectionUnknown
 	default:
 		if details.Missing = MissingProtection(read.Rules); len(details.Missing) > 0 {
@@ -195,6 +211,26 @@ func EvaluateProtection(read ProtectionRead) (domain.LadoVerifyItem, error) {
 		}
 	}
 	return domain.NewLadoVerifyItem(domain.LadoVerifyProtection, outcome, code, details)
+}
+
+// ProtectionErrorClass is the stable class of a failed read of a branch's
+// rules: the host's HTTP status as http_<status>, rate_limited for a 429 or
+// a 403 about the rate limit, transport for a request that got no answer,
+// and other for the rest, such as a missing token.
+func ProtectionErrorClass(err error) string {
+	var refused *ports.LadoHTTPError
+	var network net.Error
+	switch {
+	case errors.As(err, &refused) && (refused.Status == http.StatusTooManyRequests ||
+		(refused.Status == http.StatusForbidden && strings.Contains(strings.ToLower(refused.Message), "rate limit"))):
+		return domain.LadoProtectionErrorRateLimited
+	case errors.As(err, &refused):
+		return domain.LadoProtectionErrorHTTPPrefix + strconv.Itoa(refused.Status)
+	case errors.Is(err, context.DeadlineExceeded) || errors.As(err, &network):
+		return domain.LadoProtectionErrorTransport
+	default:
+		return domain.LadoProtectionErrorOther
+	}
 }
 
 // redactedErrorMax caps the characters of an error LADO stores or shows.

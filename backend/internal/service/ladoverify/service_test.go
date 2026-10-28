@@ -164,11 +164,11 @@ func TestTickRunsCommandsOncePerHead(t *testing.T) {
 		{CommandResult{Status: domain.LadoCheckRunFailed, ExitCode: verifyExit(1), Output: []byte("--- FAIL: TestLogin")}, two.SessionID, "golangci-lint run"},
 	}
 	for i, next := range order {
-		f.finish(next.ended)
 		if i == 0 {
-			// unit left build output in the worktree: lint still runs.
+			// unit leaves build output in the worktree: lint still runs.
 			f.git.setDirty(f.reads.worktree(one.SessionID), true)
 		}
+		f.finish(next.ended)
 		f.tick()
 		calls := f.runner.waitCalls(t, i+2)
 		if got := calls[i+1]; got.Dir != f.reads.worktree(next.session) || got.Command != next.command {
@@ -723,6 +723,7 @@ func (f *verifyFixture) addExecution(key, head string) domain.LadoExecution {
 		BaseBranch:       "main",
 		BaseRemote:       "origin",
 		StartedAt:        t0,
+		IntegrationGated: true,
 		PR: domain.LadoExecutionPR{
 			URL: "https://github.com/acme/demo/pull/" + key, Number: number,
 			HeadSHA: head, TargetBranch: "main", Title: "로그인 오류를 고친다",
@@ -893,10 +894,12 @@ type verifyStore struct {
 	links      map[string]int
 	reviews    []domain.LadoExecutionReview
 	settled    map[domain.SessionID]time.Time
+	settledPR  map[domain.SessionID]string
 	audits     []domain.LadoAuditEvent
 	approvals  []domain.LadoIntegrationApproval
 	lists      int
 	listed     []domain.SessionID
+	lastLimit  int
 	cancels    int
 	// proofs are the presence proofs integration approvals used, and
 	// ladoModes the projects in LADO mode (approve_test.go).
@@ -949,19 +952,42 @@ func (s *verifyStore) addApproval(a domain.LadoIntegrationApproval) {
 	s.approvals = append(s.approvals, a)
 }
 
+// ListLadoExecutionsToVerify lists the executions in the order they were
+// added (the store's order is its own test's): those whose PR is open, and
+// those whose merged or closed PR is not settled in that state.
 func (s *verifyStore) ListLadoExecutionsToVerify(_ context.Context, limit int) ([]domain.LadoExecution, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lists++
+	s.lastLimit = limit
 	s.listed = nil
 	var out []domain.LadoExecution
 	for _, exec := range s.executions {
-		if _, settled := s.settled[exec.SessionID]; !settled && len(out) < limit {
+		ended := exec.PR.Merged || exec.PR.Closed
+		if (!ended || s.settledPR[exec.SessionID] != settleKey(exec.PR.URL, prState(exec.PR))) && len(out) < limit {
 			out = append(out, exec)
 			s.listed = append(s.listed, exec.SessionID)
 		}
 	}
 	return out, nil
+}
+
+func settleKey(url string, state domain.PRState) string { return url + " " + string(state) }
+
+func prState(pr domain.LadoExecutionPR) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	}
+	return domain.PRStateOpen
+}
+
+func (s *verifyStore) listLimit() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastLimit
 }
 
 func (s *verifyStore) LadoExecution(_ context.Context, session domain.SessionID) (domain.LadoExecution, bool, error) {
@@ -1011,7 +1037,7 @@ func (s *verifyStore) StartLadoCheckRun(_ context.Context, run domain.LadoCheckR
 	return nil
 }
 
-func (s *verifyStore) FinishLadoCheckRun(_ context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage string, at time.Time) error {
+func (s *verifyStore) FinishLadoCheckRun(_ context.Context, id string, status domain.LadoCheckRunStatus, exitCode *int, logSHA256, errorMessage, worktreeSHA256 string, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.runs {
@@ -1021,7 +1047,8 @@ func (s *verifyStore) FinishLadoCheckRun(_ context.Context, id string, status do
 		if s.runs[i].Status != domain.LadoCheckRunRunning {
 			return domain.ErrLadoCheckRunFinished
 		}
-		s.runs[i].Status, s.runs[i].ExitCode, s.runs[i].LogSHA256, s.runs[i].ErrorMessage, s.runs[i].FinishedAt = status, exitCode, logSHA256, errorMessage, at
+		run := &s.runs[i]
+		run.Status, run.ExitCode, run.LogSHA256, run.ErrorMessage, run.WorktreeSHA256, run.FinishedAt = status, exitCode, logSHA256, errorMessage, worktreeSHA256, at
 		return nil
 	}
 	return fmt.Errorf("no check run %s", id)
@@ -1191,16 +1218,16 @@ func (s *verifyStore) linkWritesOf(session domain.SessionID, head string) int {
 	return s.links[verifyKey(session, head)]
 }
 
-func (s *verifyStore) SettleLadoExecution(_ context.Context, session domain.SessionID, at time.Time, audit *domain.LadoAuditEvent) error {
+func (s *verifyStore) SettleLadoExecution(_ context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, done := s.settled[session]; done {
+	if s.settledPR[session] == settleKey(prURL, state) {
 		return nil
 	}
 	if s.settled == nil {
-		s.settled = map[domain.SessionID]time.Time{}
+		s.settled, s.settledPR = map[domain.SessionID]time.Time{}, map[domain.SessionID]string{}
 	}
-	s.settled[session] = at
+	s.settled[session], s.settledPR[session] = at, settleKey(prURL, state)
 	if audit != nil {
 		s.audits = append(s.audits, *audit)
 	}
@@ -1405,9 +1432,17 @@ type verifyGit struct {
 	commits map[string][]Commit
 	changed map[string][]string
 	heads   map[string]string
-	dirty   map[string]bool
+	status  map[string]string
 	broken  map[string]bool
 	dirs    map[string]bool
+	// missing are the commits the repositories lack; hosted are the heads
+	// the host keeps by their pull request ref, which a fetch of the ref
+	// brings unless fetchErr; ancestors are the pairs "a b" where a is an
+	// ancestor of b.
+	missing   map[string]bool
+	hosted    map[string]string
+	fetchErr  error
+	ancestors map[string]bool
 	// ops are the reads and fetches of each repository, in order.
 	ops map[string][]string
 }
@@ -1433,13 +1468,50 @@ func (g *verifyGit) setHead(worktree, head string) {
 	g.heads[worktree] = head
 }
 
+// setDirty gives the worktree an untracked build folder, or no change.
 func (g *verifyGit) setDirty(worktree string, dirty bool) {
+	status := ""
+	if dirty {
+		status = "?? build/\n"
+	}
+	g.setStatus(worktree, status)
+}
+
+// setStatus sets what git status --porcelain prints for the worktree.
+func (g *verifyGit) setStatus(worktree, status string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.dirty == nil {
-		g.dirty = map[string]bool{}
+	if g.status == nil {
+		g.status = map[string]string{}
 	}
-	g.dirty[worktree] = dirty
+	g.status[worktree] = status
+}
+
+// lack makes the repositories lack commit sha; the host keeps it as the
+// head of the pull request ref.
+func (g *verifyGit) lack(sha, ref string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.missing == nil {
+		g.missing, g.hosted = map[string]bool{}, map[string]string{}
+	}
+	g.missing[sha], g.hosted[ref] = true, sha
+}
+
+func (g *verifyGit) setFetchErr(err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.fetchErr = err
+}
+
+// setAncestor makes a an ancestor of b.
+func (g *verifyGit) setAncestor(a, b string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.ancestors == nil {
+		g.ancestors = map[string]bool{}
+	}
+	g.ancestors[a+" "+b] = true
 }
 
 func (g *verifyGit) breakRepo(dir string) {
@@ -1519,10 +1591,38 @@ func (g *verifyGit) Reflog(_ context.Context, dir, _ string) ([]ReflogEntry, err
 	return nil, g.read(dir, "reflog")
 }
 
-func (g *verifyGit) IsAncestor(_ context.Context, dir, _, _ string) (bool, error) {
+func (g *verifyGit) IsAncestor(_ context.Context, dir, a, b string) (bool, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return false, g.read(dir, "merge-base")
+	return g.ancestors[a+" "+b], g.read(dir, "merge-base")
+}
+
+// HasCommit answers without noting a read, so the operations tests compare
+// stay as they were; a broken repository fails.
+func (g *verifyGit) HasCommit(_ context.Context, dir, sha string) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.broken[dir] {
+		return false, fmt.Errorf("git rev-parse: fatal: not a git repository: %s", dir)
+	}
+	return !g.missing[sha], nil
+}
+
+// FetchPullHead notes the fetch as "fetch <remote> <ref>" and brings the
+// head the host keeps by ref.
+func (g *verifyGit) FetchPullHead(_ context.Context, dir, remote, ref string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if err := g.read(dir, "fetch "+remote+" "+ref); err != nil {
+		return err
+	}
+	if g.fetchErr != nil {
+		return g.fetchErr
+	}
+	if sha, ok := g.hosted[ref]; ok {
+		delete(g.missing, sha)
+	}
+	return nil
 }
 
 func (g *verifyGit) RevParse(_ context.Context, dir, ref string) (string, error) {
@@ -1537,10 +1637,10 @@ func (g *verifyGit) RevParse(_ context.Context, dir, ref string) (string, error)
 	return "", fmt.Errorf("%s in %s: %w", ref, dir, ErrRefNotFound)
 }
 
-func (g *verifyGit) StatusClean(_ context.Context, dir string) (bool, error) {
+func (g *verifyGit) Status(_ context.Context, dir string) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return !g.dirty[dir], nil
+	return g.status[dir], nil
 }
 
 // Fetch notes the fetch of remote's branch as "fetch <remote> <branch>".

@@ -124,7 +124,7 @@ func (s *Service) RunChecksAgain(ctx context.Context, session domain.SessionID) 
 	again := RunAgain{HeadSHA: head, Commands: []string{}}
 	now := s.now()
 	for _, command := range commands {
-		run, ran := newestCheckRun(runs, command.Name)
+		run, ran := newestCheckRun(runs, command)
 		if ran && run.Status == domain.LadoCheckRunRunning {
 			continue
 		}
@@ -145,7 +145,7 @@ func (s *Service) RunChecksAgain(ctx context.Context, session domain.SessionID) 
 			s.deps.Log.Error("LADO could not record a check command to run again", "session", session, "command", command.Name, "err", err)
 			return RunAgain{}, verifyFailed()
 		}
-		if err := s.deps.Store.FinishLadoCheckRun(ctx, marker.ID, domain.LadoCheckRunCancelled, nil, "", runAgainNote, now); err != nil {
+		if err := s.deps.Store.FinishLadoCheckRun(ctx, marker.ID, domain.LadoCheckRunCancelled, nil, "", runAgainNote, "", now); err != nil {
 			s.deps.Log.Error("LADO could not record a check command to run again", "session", session, "command", command.Name, "err", err)
 			return RunAgain{}, verifyFailed()
 		}

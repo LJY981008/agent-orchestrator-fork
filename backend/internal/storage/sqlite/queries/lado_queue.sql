@@ -193,11 +193,12 @@ WHERE lease_token IS NOT NULL
 ORDER BY claimed_at, id;
 
 -- name: InsertLadoExecution :exec
+-- Every execution this dispatcher starts runs under integration approval.
 INSERT INTO lado_executions (
     session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
     attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at,
-    base_branch, base_remote, dispatch_local_base_sha
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    base_branch, base_remote, dispatch_local_base_sha, integration_gated
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
 
 -- name: GetLadoExecution :one
 -- With whether the session ended, as in ListLadoExecutionsForTasks.
@@ -223,7 +224,8 @@ ORDER BY e.task_id, e.started_at DESC, e.session_id DESC;
 -- Executions whose session still runs, oldest first.
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
     e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
-    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.settled_at
+    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
+    e.settled_pr_state
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE s.is_terminated = 0
@@ -250,7 +252,8 @@ ORDER BY project_id;
 -- means no limit.
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
     e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
-    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.settled_at
+    e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
+    e.settled_pr_state
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE e.deadline_at <= sqlc.arg(now)
