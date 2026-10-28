@@ -813,6 +813,8 @@ Storage tests seed from `migratedDatabaseSnapshot(t, version)` (`storage/sqlite/
 
 Each item is its own branch and PR in the fork (`AGENTS.md`: one issue per PR). The `upstream` remote was added on 2026-10-19.
 
+Steps 5 to 8 were built with a chain runner harness (`.claude/bin/chain-run.sh`, `.claude/hooks/`, `.claude/gate/`, `docs/chains/`). It was removed on 2026-10-28, once work moved to LADO's own workers. The chain definitions named below remain in git history before that removal.
+
 1. Fork defaults, in two PRs:
    - 1a `chore/lado-fork-defaults`: §11, and keep-daemon on by default (§10).
    - 1b was the global Codex `default` mapping. Dropped on 2026-10-19 after measuring it (§6.6); LADO executions set Codex modes through the snapshot instead.
