@@ -110,7 +110,9 @@ describe("LadoProjectProtectionCard", () => {
 
 		const open = await waitFor(() => rowOf("acme/api · develop"));
 		expect(open).toHaveTextContent("Missing: lado/integration from any source");
-		expect(open).toHaveTextContent("set the check's source to “Any source”");
+		// The guide is a line of its own, not run on after the missing part.
+		expect(within(open).getByText("Missing: lado/integration from any source")).not.toHaveTextContent("Any source");
+		expect(within(open).getByText(/set the check's source to “Any source”/)).not.toHaveTextContent("Missing");
 	});
 
 	it("shows no guide while every branch is protected or on GitLab", async () => {

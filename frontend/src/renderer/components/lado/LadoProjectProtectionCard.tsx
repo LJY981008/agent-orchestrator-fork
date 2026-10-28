@@ -6,6 +6,7 @@
 // daemon keeps its reads for a while; Check again asks the host now.
 import type { TFunction } from "i18next";
 import { RefreshCw } from "lucide-react";
+import type { ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useLadoProtection, useRefreshLadoProtection } from "../../hooks/useLado";
 import type { MessageKey } from "../../i18n/messages";
@@ -32,19 +33,27 @@ function repositoryLabel(repository: string): string {
 	return repository.slice(repository.indexOf(":") + 1).replace(/@.*$/, "");
 }
 
-/** The one muted line under a repository: what is missing, why it could not be read, or that LADO only detects. */
-function protectionDetail(t: TFunction, branch: LadoBranchProtection): string | undefined {
+/**
+ * The muted line under a repository: what is missing, why it could not be
+ * read, or that LADO only detects; a check taken from one app only adds how
+ * to fix it on a line of its own.
+ */
+function protectionDetail(t: TFunction, branch: LadoBranchProtection): ReactNode {
 	switch (branch.state) {
 		case "protected":
 			return undefined;
-		case "unprotected":
-			return branch.missing.length > 0
-				? [
-						t("lado.protection.missing", { parts: branch.missing.map((part) => ladoProtectionPartText(t, part)).join(", ") }),
-						// A check from one app only cannot be LADO's status (Q3 of #15).
-						...(branch.missing.includes(LADO_PROTECTION_ANY_SOURCE) ? [t("lado.protection.anySourceGuide")] : []),
-					].join(" ")
-				: undefined;
+		case "unprotected": {
+			if (branch.missing.length === 0) return undefined;
+			const missing = t("lado.protection.missing", { parts: branch.missing.map((part) => ladoProtectionPartText(t, part)).join(", ") });
+			// A check from one app only cannot be LADO's status (Q3 of #15).
+			if (!branch.missing.includes(LADO_PROTECTION_ANY_SOURCE)) return missing;
+			return (
+				<>
+					<span className="block">{missing}</span>
+					<span className="block">{t("lado.protection.anySourceGuide")}</span>
+				</>
+			);
+		}
 		case "unknown":
 			return branch.error ? t("lado.protection.error", { error: branch.error }) : undefined;
 		case "unsupported":
