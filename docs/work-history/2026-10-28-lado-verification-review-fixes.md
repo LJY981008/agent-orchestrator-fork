@@ -25,18 +25,18 @@
 | V7 | 디스패치 때 로컬 브랜치가 있었는데 없으면 `base_deleted`(confirm), 로컬 tip 은 디스패치 SHA 와 다를 때만 셈 | 고침 | 09b4ad7d6 | `TestBaseUsesTheDispatchCommit`(실제 저장소) |
 | V8 | 보호 읽기 오류는 분류(`http_<n>`, `rate_limited`, `transport`, `other`)만 해시에, 문구는 기록의 `protection_error`(해시 밖) | 고침 | 09b4ad7d6 | `TestProtectionItem`("the hash holds the error's class…", "error classes") |
 | V9·l | `timed_out` 은 PR 이 없을 때만 Failed. 열린 PR 은 PR 상태를 따름 | 고침 | 09b4ad7d6 | 도메인 "timed out while its PR opened" 외 3건, `TestLadoExecutionsPastDeadline` |
-| S1 | Windows 검사 명령을 `cmd /d /s /c "<명령>"`(SysProcAttr.CmdLine)로 실행. 포크 CI `windows-workspace` 에 단계 추가 | 고침 | S22 | `TestRunCommandPassesQuotedArguments`(테스트 바이너리를 프로그램으로 띄워 `"A\|B"`·`"two words"` 가 그대로 도착하는지 봄), 로컬은 `GOOS=windows go vet` |
-| S2 데몬 | 제어 문자(Cc: LF, CR, 탭, NUL, C1)와 방향 제어 문자가 든 명령을 400 `LADO_CHECK_COMMANDS_INVALID`(`control_character`·`bidi_control`, `position`, `character`)로 거부 | 고침 | S22 | `TestValidateLadoCheckCommands`(6건), `TestCheckCommandsChangeNeedsPresence`, `TestLadoAPI_CheckCommandsNeedPresence` |
-| S3·Q1 | 보호 글롭 판정과 "계획이 이름을 댐" 판정을 소문자로 비교. 계획 밖 판정은 그대로 | 고침 | S22 | `TestPathsProtectedIgnoreCase` |
-| Q2 | 경로 하나에 보호 글롭이 여럿 맞으면 전부 이름을 대야 통과(현행 유지) | 고정 | S22 | `TestPathsProtectedNeedThePlanToNameThem/every protected glob that matches needs naming` |
-| Q3 | `integration_id` 가 걸린 `lado/integration` 요구만 있으면 부족분 `required_status_checks:lado/integration:any_source` | 고침 | S22 | `TestProtectionItem`("lado/integration from one app only", "…from any source as well") |
-| S4·Q4 | 검사 명령 env 에서 `AO_*`, `GCM_*`, `GH_*`, `GITHUB_*`, `GITLAB_*`, `*ASKPASS`, `*_TOKEN`, `*_API_KEY`, `SSH_AUTH_SOCK`, `GIT_SSH(_COMMAND)`, `GIT_CONFIG_*` 를 지움. 빈 `credential.helper`·`core.askPass`(GIT_CONFIG_COUNT), `GIT_TERMINAL_PROMPT=0`, SSH 거부 `GIT_SSH_COMMAND`, 실행마다 빈 `GH_CONFIG_DIR`. 프로젝트 env 는 그 뒤에 더해짐 | 고침 | S22 | `TestRunCommandEnvWithholdsCredentials`(실제 `git credential fill` 이 store·URL helper 의 비밀번호를 못 읽음, SSH ls-remote 거부, 빈 GH 폴더가 실행 뒤 사라짐) |
-| S5·S6 | 승인 키를 (세션, PR URL, head, 대상 브랜치)로. 게이트는 지금 대상과 다른 승인만 있으면 409 `LADO_INTEGRATION_TARGET_CHANGED`, 작업은 통합 대기로 | 고침 | S22 | `TestMergeGateNeedsAnApprovalForTheHead/another target branch`, `TestApprovalHoldsForItsPR`, `TestLadoExecutionReadsHoldApprovalsToTheirPRAndTarget`, `TestApproveLadoIntegrationRecordsProofAndAuditTogether` |
-| S7 | PR URL 을 가리키는 LADO 기록(검증·승인)이 있으면 PR 행의 세션과 관계없이 그 head 의 승인 요구 | 고침 | S22 | `TestMergeGateNeedsAnApprovalForTheHead/a PR claimed into another session` |
-| S8 | `POST /lado/executions/{sessionId}/integration-status`(presence 없음): 승인된 현재 head 의 시도 횟수를 0 으로 되돌리고 다시 게시 | 고침 | S22 | `TestRepostIntegrationStatusStartsOver`, `TestLadoAPI_RepostIntegrationStatus` |
-| S10 | gate-6 테스트를 루프 경로로: `ao report --done` 뒤 세션이 끝나고 PR 이 열린 실행 | 고침 | S22 | `TestFailingRequiredCheckKeepsValidatingDespiteReport` |
-| U7 데몬 | 설정 응답에 `checkCommandsSha256`, 변경 PUT 에 `checkCommandsBase` 필수. 다르면 409 `LADO_CHECK_COMMANDS_CHANGED`, 저장소도 트랜잭션 안에서 비교 | 고침 | S22 | `TestLadoCheckCommandsSHA256`, `TestCheckCommandsChangeNeedsPresence`, `TestLadoProjectCheckSettings`, `TestLadoAPI_CheckCommandsNeedPresence` |
-| 데몬 상태 | 실행 응답에 `state`·`stateReason`(`LadoExecution.State`) | 고침 | S22 | 단계 5 의 렌더러 테스트 |
+| S1 | Windows 검사 명령을 `cmd /d /s /c "<명령>"`(SysProcAttr.CmdLine)로 실행. 포크 CI `windows-workspace` 에 단계 추가 | 고침 | 31d1ee0f0 | `TestRunCommandPassesQuotedArguments`(테스트 바이너리를 프로그램으로 띄워 `"A\|B"`·`"two words"` 가 그대로 도착하는지 봄), 로컬은 `GOOS=windows go vet` |
+| S2 데몬 | 제어 문자(Cc: LF, CR, 탭, NUL, C1)와 방향 제어 문자가 든 명령을 400 `LADO_CHECK_COMMANDS_INVALID`(`control_character`·`bidi_control`, `position`, `character`)로 거부 | 고침 | 31d1ee0f0 | `TestValidateLadoCheckCommands`(6건), `TestCheckCommandsChangeNeedsPresence`, `TestLadoAPI_CheckCommandsNeedPresence` |
+| S3·Q1 | 보호 글롭 판정과 "계획이 이름을 댐" 판정을 소문자로 비교. 계획 밖 판정은 그대로 | 고침 | 31d1ee0f0 | `TestPathsProtectedIgnoreCase` |
+| Q2 | 경로 하나에 보호 글롭이 여럿 맞으면 전부 이름을 대야 통과(현행 유지) | 고정 | 31d1ee0f0 | `TestPathsProtectedNeedThePlanToNameThem/every protected glob that matches needs naming` |
+| Q3 | `integration_id` 가 걸린 `lado/integration` 요구만 있으면 부족분 `required_status_checks:lado/integration:any_source` | 고침 | 31d1ee0f0 | `TestProtectionItem`("lado/integration from one app only", "…from any source as well") |
+| S4·Q4 | 검사 명령 env 에서 `AO_*`, `GCM_*`, `GH_*`, `GITHUB_*`, `GITLAB_*`, `*ASKPASS`, `*_TOKEN`, `*_API_KEY`, `SSH_AUTH_SOCK`, `GIT_SSH(_COMMAND)`, `GIT_CONFIG_*` 를 지움. 빈 `credential.helper`·`core.askPass`(GIT_CONFIG_COUNT), `GIT_TERMINAL_PROMPT=0`, SSH 거부 `GIT_SSH_COMMAND`, 실행마다 빈 `GH_CONFIG_DIR`. 프로젝트 env 는 그 뒤에 더해짐 | 고침 | 31d1ee0f0 | `TestRunCommandEnvWithholdsCredentials`(실제 `git credential fill` 이 store·URL helper 의 비밀번호를 못 읽음, SSH ls-remote 거부, 빈 GH 폴더가 실행 뒤 사라짐) |
+| S5·S6 | 승인 키를 (세션, PR URL, head, 대상 브랜치)로. 게이트는 지금 대상과 다른 승인만 있으면 409 `LADO_INTEGRATION_TARGET_CHANGED`, 작업은 통합 대기로 | 고침 | 31d1ee0f0 | `TestMergeGateNeedsAnApprovalForTheHead/another target branch`, `TestApprovalHoldsForItsPR`, `TestLadoExecutionReadsHoldApprovalsToTheirPRAndTarget`, `TestApproveLadoIntegrationRecordsProofAndAuditTogether` |
+| S7 | PR URL 을 가리키는 LADO 기록(검증·승인)이 있으면 PR 행의 세션과 관계없이 그 head 의 승인 요구 | 고침 | 31d1ee0f0 | `TestMergeGateNeedsAnApprovalForTheHead/a PR claimed into another session` |
+| S8 | `POST /lado/executions/{sessionId}/integration-status`(presence 없음): 승인된 현재 head 의 시도 횟수를 0 으로 되돌리고 다시 게시 | 고침 | 31d1ee0f0 | `TestRepostIntegrationStatusStartsOver`, `TestLadoAPI_RepostIntegrationStatus` |
+| S10 | gate-6 테스트를 루프 경로로: `ao report --done` 뒤 세션이 끝나고 PR 이 열린 실행 | 고침 | 31d1ee0f0 | `TestFailingRequiredCheckKeepsValidatingDespiteReport` |
+| U7 데몬 | 설정 응답에 `checkCommandsSha256`, 변경 PUT 에 `checkCommandsBase` 필수. 다르면 409 `LADO_CHECK_COMMANDS_CHANGED`, 저장소도 트랜잭션 안에서 비교 | 고침 | 31d1ee0f0 | `TestLadoCheckCommandsSHA256`, `TestCheckCommandsChangeNeedsPresence`, `TestLadoProjectCheckSettings`, `TestLadoAPI_CheckCommandsNeedPresence` |
+| 데몬 상태 | 실행 응답에 `state`·`stateReason`(`LadoExecution.State`) | 고침 | 31d1ee0f0 | 단계 5 의 렌더러 테스트 |
 
 ## 결정과 이탈
 
@@ -50,3 +50,17 @@
 - S4: 플랜의 테스트 문구 "`git config --get-all credential.helper` 가 비어 있다"는 지킬 수 없다. 목록을 비우는 빈 값도 `--get-all` 에 한 줄로 나온다. 그래서 실제 `git credential fill` 이 저장된 비밀번호를 읽지 못하는지로 확인했다. 더 강한 확인이다.
 - S2: "행 번호"는 목록의 행(`index`)으로 이미 있다. 명령 안의 위치는 `position`(1부터 센 글자 위치)과 `character`(U+XXXX)로 더했다. 줄바꿈 자체가 제어 문자라 명령 안의 줄 번호는 늘 1 이 되어 쓸모가 없다.
 - S8: 다시 게시는 `posted`·`not_applicable` 승인에는 아무것도 하지 않고 그대로 답한다.
+
+## 다음 단계 메모 (진행 중, 끝나면 지운다)
+
+단계 5(S21+S23 프런트) 남은 일. 백엔드 API 는 커밋 31d1ee0f0 에 있다.
+
+- main `frontend/src/main/lado-presence.ts`: `checkCommands` 가 제어 문자(Cc)·방향 제어 문자를 묻기 전에 거부(`control_character`/`bidi_control`, position, character). `checkChangeLines` 는 명령을 자르지 않고 공백을 접지 않음(excerpt 대신 그대로). `changeProjectChecks` 가 읽은 설정의 `checkCommandsSha256` 을 서명 본문 `checkCommandsBase` 로. `integrationDetail` 의 `nextUnprotected` 는 `unprotected`·`unprotected_gitlab` 에만(U4). `confirmLine` 의 부족분을 `lado.protection.part.*` 로 번역(U1, KEYS 에 추가)하고 `any_source` 안내와 `base_deleted` 줄 추가. 테스트 `lado-presence.test.ts:1973,1995` 고침.
+- ko `lado.presence.integration.head` "헤드" → "head"(U10), 8단계 플랜 §0 용어집에 head.
+- 렌더러 `LadoVerificationSection.tsx`: `ladoRunState` 대신 `execution.state`/`stateReason`(데몬 상태). 부족분 번역 공용 함수(카드 `LadoProjectProtectionCard.tsx` 의 `missingKeys` 를 lib 로 옮김, `any_source` 키). Output 은 끝난 실행에만, 로그 query key 에 상태(U2), `lado_execution` 이벤트에도 로그 무효화. 결과 단어 sr-only(U5). 검증 중 토큰 `--color-status-validating`(U8, `lado-task-status.ts`). `base_deleted` 상세 문구. 상태 실패 시 "상태 다시 게시" 버튼(S8, 새 라우트 `POST /lado/executions/{id}/integration-status`, 작업 창 `LadoTaskDialog.tsx` RunStatus 에도).
+- U6 `hooks/useLado.ts` `useMergeLadoPR`: 성공 뒤 PR 이 merged 로 보일 때까지 버튼 끔, AO PR 쿼리 무효화, 거절 뒤에도 다시 읽기(onSettled). `useApproveLadoIntegration` 도 거절 뒤 다시 읽기.
+- U3 `LadoProtectedPathsDialog.tsx`: `useLadoRuleChange` 에 `paths` 종류(dry run → `LadoRuleImpactDialog` → 확인 뒤 `changeLadoProtectedPaths`).
+- 오류 번역 `lib/lado-errors.ts`: `LADO_CHECK_COMMANDS_CHANGED`, `LADO_INTEGRATION_TARGET_CHANGED`, `LADO_INTEGRATION_NOT_APPROVED`, 검사 명령 사유 `control_character`·`bidi_control`(position, character).
+- 렌더러에는 보호 경로를 맞춰 보는 미리보기가 없다(글롭 문법만 검사). Q1 렌더러 쪽 할 일 없음.
+- 8개 로캘 추가는 `/tmp/lrf-add-locales.py <entries.json>`(키를 파일 끝에 덧붙임). main 문자열은 `scripts/sync-tray-catalog.mjs` KEYS 에 넣고 `node scripts/sync-tray-catalog.mjs`.
+- DESIGN.md 결정 기록에 한 행(U9 의 S17 행 고침 포함, 단계 6 에서 해도 됨).
