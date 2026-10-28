@@ -1,7 +1,7 @@
 # LADO 3. Where LADO enforces approval
 
 Date: 2026-10-19
-Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3.
+Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3; items 1, 2, 3 and 7 amended 2026-10-27 while building step 8 (end of this record).
 
 ## Context
 
@@ -38,3 +38,14 @@ Facts at `55b02b848`:
 - **Cost.** LADO makes GitHub API calls for rulesets and statuses with the host token from the repository connection ([0006](0006-issues-as-work-items.md)), which AO's own GitHub calls then use too.
 - **GitLab later.** AO reads GitLab `approvals_required` today (`adapters/scm/gitlab/observer_provider.go:739,762-779`). LADO's GitLab support would use protected branches and external status checks. Until then, GitLab LADO projects get issues and tasks but are "unprotected: detection only" (TDD §7.1).
 - **Upstream PR candidates.** Codex `accept-edits` and `auto` cannot commit (TDD §6.6, §12), and an optional spawn/send policy hook in `Manager` with a nil default.
+
+## Amended 2026-10-27 (step 8)
+
+Built as decided, with these changes (TDD §7, §8; owner's decisions of 2026-10-27 in TDD §15, item 8):
+
+- **Item 1: who posts the status.** LADO reads the branch rules and posts `lado/integration` through its own repository client with the stored host token (`adapters/tracker/github/lado_integration.go`, reached as `ports.LadoRepoClient`), not through AO's SCM adapter, whose GitHub provider double-encodes a branch name with `/`. The status is `success` with the description "Approved in LADO", posted right after the approval and retried by the verification loop at most every 5 minutes, up to 12 attempts in all. LADO never merges; GitHub's own merge works once the status is there.
+- **Item 1: unprotected repositories.** "Each integration needs an explicit acknowledgement" holds per approval, not once per project: a base branch whose rules lack a pull request, `lado/integration` among the required checks, the force push block or the deletion block is the confirm code `unprotected`, an unreadable one `protection_unknown`, and a GitLab one `unprotected_gitlab`. The approval must name every confirm code of the head's record (400 `LADO_INTEGRATION_ACK_MISMATCH` otherwise), and the desktop confirmation says "This repository is not protected: LADO only detects a merge without approval." The rules are read fresh before each approval and its dry run, when LADO mode is turned on and on Check again, and kept 10 minutes otherwise.
+- **Item 2: where the merge gate sits.** `service/pr/action_service.go` `Merge` asks the gate (`SetMergeGate(ports.LadoMergeGate)`, nil keeps upstream) right after it checks the stored head and before it reads the PR from the host. LADO refuses unless an integration approval exists for that head and PR, for a PR of a LADO execution whatever its project's mode and for any session of a project in LADO mode: 409 `LADO_INTEGRATION_APPROVAL_REQUIRED`, and 500 `LADO_MERGE_GATE_FAILED` when it cannot read. The desktop app's Merge, the mobile app and any other caller of the route meet the same gate.
+- **Item 3: detection is a confirmation.** A local base branch move after dispatch that the remote base does not have, a reflog that is off, or work that reached the base without LADO is a confirm code the approval acknowledges (`base_moved`, `reflog_off`, `already_on_base`), not a block of the execution. The approval and its dry run fetch the base first; the loop never fetches.
+- **Item 7: what blocks.** A failing commit message validator and a changed protected path that the approved plan does not name fail the head, and the worker gets one fix request; a changed path outside the plan's `affected_paths` and an unclear commit message are confirm codes. The validators run over merge-base..head in the verification loop, so a commit made with `--no-verify` is judged like any other.
+- **Not built yet:** GitLab's protected branches with external status checks, creating rulesets from the app, and the check against a real GitHub repository with a ruleset, which waits for the lab with the owner's permission because it writes to GitHub.

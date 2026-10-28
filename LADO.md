@@ -7,7 +7,7 @@ LADO is a fork of [Orchestrator.inc's Agent Orchestrator](https://github.com/Orc
 - **Work items are issues.** A task is an issue on the project's GitHub or GitLab repository. You create it from the New Task composer or import open issues; LADO tracks the issue and never edits it behind your back.
 - **A worker starts only from a plan you approved.** The project's orchestrator writes a plan for the issue. You review it, ask for changes, and approve one exact revision in the desktop app. An agent cannot approve its own work.
 - **Rules decide what agents may do**: global, project and task rules with protected gates, fixed into a snapshot with each plan approval. The worker gets that snapshot's rules in its instructions, runs within its permission ceiling, and keeps the agent it was approved with.
-- **Verification before integration** (coming): required checks, LADO's own validators and an integration approval before anything merges.
+- **Verification before integration** (step 8, in progress): LADO checks each head of the worker's pull request (the required CI checks, the project's own check commands, commit messages and changed paths, and AO's code review when the plan asks for it) and matches the worker's evidence against what it found. You approve the integration of that exact head in the desktop app. LADO then marks the head on GitHub (`lado/integration`), and AO's Merge refuses a head you did not approve.
 
 LADO is built as additions to AO, not a rewrite: new code lives in new files inside AO's layers, and upstream files get only small hook lines, so upstream changes keep merging in.
 
@@ -27,7 +27,7 @@ The build order is in [docs/LJY-PRD/TDD.md §15](docs/LJY-PRD/TDD.md#15-build-or
 | 5 | Rules core: global, project and task rules with protected gates, an effective-rules preview, and a rule snapshot fixed with each plan approval | Merged |
 | 6 | The approved-work queue and dispatcher; LADO mode becomes usable end to end | Merged |
 | 7 | Adopting your local agent setup (CLAUDE.md and AGENTS.md, settings, hooks, skills, MCP servers) into one managed place that every session the app starts gets, with restore | Merged |
-| 8 | Verification, evidence and integration approval | Planned |
+| 8 | Verification, evidence and integration approval: each PR head is checked (required checks, the project's check commands, commit messages, changed paths, the base branch, branch protection, review when the plan asks), the worker's evidence is matched against those records, and AO's merge needs your approval of that head | In progress |
 | 9 | Releases of this fork: a workflow that builds the desktop app (Windows first) and publishes it where the app looks for updates, and the checks that need a real Windows install | Planned |
 
 ## Trying it
@@ -40,6 +40,10 @@ Build and run AO from source as the [development guide](docs/development.md) des
 4. Open a task and choose Request a plan. If a comment on the issue already holds the plan, LADO's orchestrator follows it; Use as plan on a comment says so explicitly. Only comments by people who can work on the repository reach an agent.
 5. Review the plan, ask for changes, and approve it. The desktop app asks you to confirm and signs the approval itself; the task moves to the Queued lane.
 6. When a run slot is free, LADO checks the approval again (the plan, the issue, the rules and the base branch) and starts a worker in Chat with the approved plan, the issue as it was pinned and the approved rules. The task leaves the lanes; the worker's session card shows a LADO line, and the session's inspector shows the rules the run was approved with. If the issue changed since the plan was made, or the rules changed since the approval, the task asks for a new approval instead. A worker that does not start after three attempts, that reaches the maximum run time, or whose session ends without a PR leaves the task Failed in the Plan lane, and the plan can be approved again.
+7. Once the worker opens a pull request, the task is Validating while LADO checks the PR's head: the required CI checks, the project's check commands, commit messages (when the Korean commit rule is on), the changed paths against the plan, the base branch and the branch's protection, and AO's review when the plan asks for one. When something fails, the worker gets a message and pushes a fix, and LADO checks the new head. The session's **Verification** section shows each check, the command logs (with Run again) and the evidence per acceptance criterion.
+8. When the head passes, or needs only your confirmation (a path outside the plan, an unclear commit message, an unprotected branch, a moved local base), the task is Integration pending. **Approve integration…**, in the Verification section or the task view, asks in the desktop app with everything to confirm listed. Then **Merge** merges that head through AO, and on a protected GitHub branch GitHub's own merge works too. A new push needs a new approval.
+
+The project's **LADO** page also has **Checks**, the commands LADO runs in each run's worktree at the PR's head (a change asks you to confirm in the desktop app, since they run outside any agent sandbox) with their time limit, and **Branch protection**, whether each base branch's GitHub rules require a pull request and `lado/integration` and block force pushes and deletion, with Check again. **Settings → Rules** lists the protected gates, and its **Protected paths** row edits the paths a worker may change only when the plan names them.
 
 **Settings → Local setup** lists your Claude Code and Codex setup: the user-level files, settings keys, skills, agents, commands, hooks and MCP servers, and each project's setup files. Adopt… moves the items you pick into `~/.ao/lado/harness` after a backup, and from then on every Claude Code and Codex session the app starts gets them, while Claude Code and Codex run outside the app no longer do. Close Claude Code and Codex first: the app refuses while either runs. Adoption works on Linux only for now; Windows and macOS refuse it until step 9 checks them. You can then edit, turn off or delete the managed items there, per project on the project's **Rules** page, and per task on its Rules tab; changes that can run commands ask you to confirm in the desktop app. **Restore** on an adoption puts everything back where it was.
 
@@ -49,7 +53,7 @@ Build and run AO from source as the [development guide](docs/development.md) des
 
 ## Where things live
 
-Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables in AO's database, pinned plans and issue snapshots in `~/.ao/lado/blobs`, GitLab tokens in an owner-only file, and the github.com token in AO's own token store. Adopted local setup lives in `~/.ao/lado/harness`, the originals' backups in `~/.ao/lado/backups`, and each Claude Code session's config home in `~/.ao/lado/homes`. The one exception is the opt-in Start at login entry, which is the operating system's login item. Adopting and restoring change `~/.claude`, `~/.claude.json` and `~/.codex` only when you confirm it, and never touch your logins.
+Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables in AO's database, pinned plans and issue snapshots, check command logs and the workers' evidence files in `~/.ao/lado/blobs`, GitLab tokens in an owner-only file, and the github.com token in AO's own token store. Adopted local setup lives in `~/.ao/lado/harness`, the originals' backups in `~/.ao/lado/backups`, and each Claude Code session's config home in `~/.ao/lado/homes`. The one exception is the opt-in Start at login entry, which is the operating system's login item. Adopting and restoring change `~/.claude`, `~/.claude.json` and `~/.codex` only when you confirm it, and never touch your logins.
 
 ## Documentation
 
@@ -65,5 +69,9 @@ Everything LADO keeps is under `~/.ao` (or `AO_DATA_DIR`), as for AO: its tables
 - A Copilot orchestrator wraps every message in AO's "spawn a worker" directive, so LADO projects should use another agent as their orchestrator.
 - Approvals need the desktop app; there is no approval from the CLI or the mobile app, by design.
 - Only Claude Code and Codex run LADO tasks; a task with another agent shows Blocked. A LADO run stays in Chat with the agent it was approved with, and cannot switch either while it runs.
-- Local setup adoption works on Linux only until step 9 checks Windows and macOS; restore works everywhere. AO's reviewer and the background tasks that write titles get no adopted items yet.
+- Local setup adoption works on Linux only until step 9 checks Windows and macOS; restore works everywhere. AO's reviewer gets only the adopted instructions, and the background tasks that write titles get no adopted items.
 - A plan's base must be the branch workers start from. If that branch moved on after the plan was made, the run records by how many commits, but still starts.
+- GitLab projects have no remote merge control yet: LADO only detects a merge without approval there, and each integration asks you to confirm that. The same goes for a GitHub branch without the rules LADO needs.
+- The integration has not been checked against a real GitHub repository with a ruleset yet. LADO verifies only the newest pull request of a run.
+- Check commands run on your computer outside any agent sandbox. On Windows, stopping the processes they start waits for step 9's checks.
+- Protected paths are case-sensitive, so on Windows and macOS a new `docs/claude.md`, which the agent tools may read as `CLAUDE.md`, does not match `**/CLAUDE.md`.
