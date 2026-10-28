@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -61,6 +63,9 @@ func (s *Service) SubmitPlan(ctx context.Context, in SubmitPlanInput) (domain.La
 			return domain.LadoPlanRequest{}, apierr.Conflict("LADO_PLAN_DRAFT_REFUSED",
 				"LADO already has this request's draft. Wait for its review, then submit the final plan without --draft.", map[string]any{"requestId": string(req.ID)})
 		}
+		if err := s.checkDraft(ctx, req, content); err != nil {
+			return domain.LadoPlanRequest{}, err
+		}
 		if _, err := s.writeRequestFile(req.ID, "draft.md", content); err != nil {
 			s.deps.Log.Warn("LADO could not keep a copy of a draft in the request's folder", "request", req.ID, "err", err)
 		}
@@ -103,6 +108,44 @@ func (s *Service) SubmitPlan(ctx context.Context, in SubmitPlanInput) (domain.La
 		return domain.LadoPlanRequest{}, submitRefused("This plan request no longer takes a plan.", req)
 	}
 	return s.afterSubmit(ctx, req.ID)
+}
+
+// checkDraft refuses a draft LADO cannot read: its front matter does not
+// parse, or a field the review decision and the critic need is missing or
+// wrong. The designer gets the problems at once and submits the draft again;
+// an unreadable draft would otherwise look like a small plan.
+func (s *Service) checkDraft(ctx context.Context, req domain.LadoPlanRequest, content []byte) error {
+	task, err := s.task(ctx, req.TaskID)
+	if err != nil {
+		return err
+	}
+	problems := draftProblems(content, task)
+	if len(problems) == 0 {
+		return nil
+	}
+	lines := make([]string, 0, len(problems))
+	for _, p := range problems {
+		lines = append(lines, strings.TrimSpace(strings.Join([]string{p.Code, p.Field, p.Detail}, " ")))
+	}
+	return apierr.Invalid("LADO_PLAN_DRAFT_INVALID",
+		"LADO cannot read this draft: "+strings.Join(lines, "; ")+". Fix the front matter, quoting any list item that holds a colon followed by a space, and submit the draft again.",
+		map[string]any{"requestId": string(req.ID), "problems": problems})
+}
+
+// draftProblems lists the problems that make a draft unreadable for the
+// review: a front matter that is missing or does not parse, a missing or
+// invalid field, another task or issue. A plan source or a base LADO checks
+// once the plan is pinned.
+func draftProblems(content []byte, task domain.LadoTask) []domain.LadoPlanProblem {
+	_, problems := domain.ParseLadoPlan(content, domain.LadoPlanExpectations{Task: task.ID, Issue: task.IssueRef})
+	return slices.DeleteFunc(problems, func(p domain.LadoPlanProblem) bool {
+		switch p.Code {
+		case domain.LadoPlanMissingFrontMatter, domain.LadoPlanInvalidFrontMatter, domain.LadoPlanMissingField,
+			domain.LadoPlanInvalidField, domain.LadoPlanWrongTask, domain.LadoPlanWrongIssue:
+			return false
+		}
+		return true
+	})
 }
 
 // SubmitCritiqueInput is a critic's submission.

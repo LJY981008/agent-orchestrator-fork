@@ -517,6 +517,10 @@ func TestSubmitPlanAndCritiqueRefuseWhatTheRequestDoesNotTake(t *testing.T) {
 		{"final first", SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte(plan)}, "LADO_PLAN_DRAFT_FIRST"},
 		{"empty", SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte(" \n"), Draft: true}, "LADO_PLAN_EMPTY"},
 		{"not text", SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte{0xff, 0xfe}, Draft: true}, "LADO_PLAN_NOT_TEXT"},
+		// Found in the lab: a step with two colons followed by spaces does not
+		// parse, and an unreadable draft names no paths.
+		{"unreadable draft", SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte(unreadablePlan(plan)), Draft: true}, "LADO_PLAN_DRAFT_INVALID"},
+		{"another task's draft", SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte(strings.Replace(plan, string(pf.task.ID), "lado-task-other", 1)), Draft: true}, "LADO_PLAN_DRAFT_INVALID"},
 	}
 	for _, tc := range cases {
 		if _, err := pf.svc.SubmitPlan(ctx, tc.in); apiCode(err) != tc.code {
@@ -569,6 +573,40 @@ func TestSubmitPlanReportsAPlanFileItCannotWrite(t *testing.T) {
 	}
 	if got := pf.request(t, req.ID); !got.SubmittedAt.IsZero() || got.WorkerPhase() != domain.LadoPlanPhaseRevising {
 		t.Fatalf("request = phase %q, submitted %v; want it still revising", got.WorkerPhase(), got.SubmittedAt)
+	}
+}
+
+// unreadablePlan breaks a plan's front matter the way a designer did in the
+// lab: a list item with two colons followed by spaces.
+func unreadablePlan(plan string) string {
+	return strings.Replace(plan, "  - Add the login route", "  - Split the lanes (Plan: drafts; Queued: approved work)", 1)
+}
+
+// A draft LADO cannot read names no affected paths, so it must never pass
+// for a small plan: one stored without the submission's check is reviewed.
+func TestAnUnreadableDraftIsReviewed(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	req := pf.requestAndStart(t, PlanRequestInput{TaskID: pf.task.ID})
+	designer := pf.designer(t, req.ID)
+	if got, err := pf.svc.SubmitPlan(ctx, SubmitPlanInput{RequestID: req.ID, SessionID: designer, Content: []byte(unreadablePlan(pf.workerPlan("issue", "", "backend/**"))), Draft: true}); apiCode(err) != "LADO_PLAN_DRAFT_INVALID" ||
+		!strings.Contains(err.Error(), "invalid_front_matter") {
+		t.Fatalf("an unreadable draft = %+v, %v; want LADO_PLAN_DRAFT_INVALID naming the problem", got, err)
+	}
+	if got := pf.request(t, req.ID); !got.DraftSubmittedAt.IsZero() {
+		t.Fatalf("the refused draft was recorded: %+v", got)
+	}
+	sum, err := pf.blobs.Put([]byte(unreadablePlan(pf.workerPlan("issue", "", "backend/**"))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := pf.store.RecordLadoPlanDraft(ctx, req.ID, sum, pf.now, nil); err != nil || !ok {
+		t.Fatalf("record a draft = %v, %v", ok, err)
+	}
+	pf.svc.DrivePlanWorkers(ctx)
+	critique, found, err := pf.store.LadoPlanCritique(ctx, req.ID, 1)
+	if err != nil || !found || critique.State != domain.LadoCritiqueRunning || critique.SessionID == "" {
+		t.Fatalf("critique = %+v, %v, %v; want a running critic", critique, found, err)
 	}
 }
 

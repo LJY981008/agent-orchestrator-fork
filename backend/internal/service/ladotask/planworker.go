@@ -423,7 +423,9 @@ func (s *Service) driveCritique(ctx context.Context, task domain.LadoTask, req d
 	if len(critiques) == 0 {
 		plan, _ := domain.ParseLadoPlan(draft, domain.LadoPlanExpectations{Task: task.ID, Issue: task.IssueRef})
 		decision := domain.DecideLadoPlanReview(plan, settings.PlanReview, ladoverify.MatchPath)
-		if decision.Skip {
+		// A draft LADO cannot read names no paths, so it would look small;
+		// the critic reads it as text instead.
+		if decision.Skip && len(draftProblems(draft, task)) == 0 {
 			c := domain.LadoPlanCritique{ID: s.newCritiqueID(), RequestID: req.ID, State: domain.LadoCritiqueSkipped, SkipReason: decision.Reason, StartedAt: now, FinishedAt: now}
 			if err := s.deps.Store.CreateLadoPlanCritique(ctx, c, s.planEvent(now, "plan_worker.critique_skipped", req, map[string]any{"reason": decision.Reason})); err != nil {
 				s.deps.Log.Warn("LADO could not record a skipped review", "request", req.ID, "err", err)
