@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -440,8 +441,9 @@ func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionI
 // ApproveLadoIntegration records the integration approval a, the presence
 // proof it used and its audit event in one transaction (docs/LJY-PRD/TDD.md
 // §7.1); the approval takes the proof's nonce. A proof used before is refused
-// with domain.ErrLadoPresenceReplayed, a head that has an approval already
-// with domain.ErrLadoIntegrationAlreadyApproved, and an approval whose
+// with domain.ErrLadoPresenceReplayed, a PR head that has an approval for
+// a's target branch already with domain.ErrLadoIntegrationAlreadyApproved,
+// and an approval whose
 // verification sha256 is not the one of the head's stored record with
 // domain.ErrLadoVerificationChanged: the caller stores the record it
 // recomputed first. When any part fails, nothing is kept.
@@ -461,13 +463,16 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 		if err := insertLadoPresenceProof(ctx, q, proof); err != nil {
 			return err
 		}
-		head := gen.GetLadoIntegrationApprovalForHeadParams{ExecutionSessionID: string(a.ExecutionSessionID), HeadSha: a.HeadSHA}
-		_, err := q.GetLadoIntegrationApprovalForHead(ctx, head)
-		switch {
-		case err == nil:
-			return domain.ErrLadoIntegrationAlreadyApproved
-		case !errors.Is(err, sql.ErrNoRows):
+		rows, err := q.ListLadoIntegrationApprovalsForHead(ctx, gen.ListLadoIntegrationApprovalsForHeadParams{
+			ExecutionSessionID: string(a.ExecutionSessionID), PRURL: a.PRURL, HeadSha: a.HeadSHA,
+		})
+		if err != nil {
 			return err
+		}
+		for _, row := range rows {
+			if strings.EqualFold(row.TargetBranch, a.TargetBranch) {
+				return domain.ErrLadoIntegrationAlreadyApproved
+			}
 		}
 		record, err := q.GetLadoVerification(ctx, gen.GetLadoVerificationParams{ExecutionSessionID: string(a.ExecutionSessionID), HeadSha: a.HeadSHA})
 		if errors.Is(err, sql.ErrNoRows) || (err == nil && record.Sha256 != a.VerificationSHA256) {
@@ -481,6 +486,7 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 			ExecutionSessionID: string(a.ExecutionSessionID),
 			PRURL:              a.PRURL,
 			HeadSha:            a.HeadSHA,
+			TargetBranch:       a.TargetBranch,
 			VerificationSha256: a.VerificationSHA256,
 			AcknowledgedJson:   string(acknowledged),
 			ProofNonce:         proof.Nonce,
@@ -492,8 +498,8 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 			StatusError:        a.StatusError,
 		})
 		if isSQLiteUnique(err) {
-			// The proof's nonce is new (inserted above), so the head's pair is
-			// what repeats.
+			// The proof's nonce is new (inserted above), so the PR, head and
+			// target are what repeat.
 			return domain.ErrLadoIntegrationAlreadyApproved
 		}
 		if err != nil {
@@ -529,21 +535,71 @@ func (s *Store) SetLadoIntegrationStatus(ctx context.Context, id string, state d
 	return nil
 }
 
-// GetLadoIntegrationApproval returns the integration approval of an
-// execution's head. It reports false while the head has none.
-func (s *Store) GetLadoIntegrationApproval(ctx context.Context, session domain.SessionID, headSHA string) (domain.LadoIntegrationApproval, bool, error) {
-	row, err := s.qr.GetLadoIntegrationApprovalForHead(ctx, gen.GetLadoIntegrationApprovalForHeadParams{ExecutionSessionID: string(session), HeadSha: headSHA})
-	if errors.Is(err, sql.ErrNoRows) {
-		return domain.LadoIntegrationApproval{}, false, nil
-	}
+// ListLadoIntegrationApprovals returns the integration approvals of an
+// execution's PR at one head, one per target branch, oldest first.
+func (s *Store) ListLadoIntegrationApprovals(ctx context.Context, session domain.SessionID, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error) {
+	rows, err := s.qr.ListLadoIntegrationApprovalsForHead(ctx, gen.ListLadoIntegrationApprovalsForHeadParams{
+		ExecutionSessionID: string(session), PRURL: prURL, HeadSha: headSHA,
+	})
 	if err != nil {
-		return domain.LadoIntegrationApproval{}, false, fmt.Errorf("read LADO integration approval: %w", err)
+		return nil, fmt.Errorf("list LADO integration approvals: %w", err)
 	}
-	approval, err := ladoIntegrationApprovalFromGen(row)
+	return ladoIntegrationApprovalsFromGen(rows)
+}
+
+// ListLadoIntegrationApprovalsForPR returns the integration approvals of a PR
+// at one head, whatever execution holds them, oldest first.
+func (s *Store) ListLadoIntegrationApprovalsForPR(ctx context.Context, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error) {
+	rows, err := s.qr.ListLadoIntegrationApprovalsForPRHead(ctx, gen.ListLadoIntegrationApprovalsForPRHeadParams{PRURL: prURL, HeadSha: headSHA})
 	if err != nil {
-		return domain.LadoIntegrationApproval{}, false, err
+		return nil, fmt.Errorf("list LADO integration approvals of a PR: %w", err)
 	}
-	return approval, true, nil
+	return ladoIntegrationApprovalsFromGen(rows)
+}
+
+// LadoSessionsNamingPR returns the executions whose verification records or
+// integration approvals name a PR: LADO verified it for them, whatever
+// session AO now gives the PR.
+func (s *Store) LadoSessionsNamingPR(ctx context.Context, prURL string) ([]domain.SessionID, error) {
+	ids, err := s.qr.ListLadoSessionsNamingPR(ctx, prURL)
+	if err != nil {
+		return nil, fmt.Errorf("list LADO executions naming a PR: %w", err)
+	}
+	sessions := make([]domain.SessionID, 0, len(ids))
+	for _, id := range ids {
+		sessions = append(sessions, domain.SessionID(id))
+	}
+	return sessions, nil
+}
+
+// ResetLadoIntegrationStatus starts posting an approval's commit status over:
+// pending, no attempts and no error, so the loop and its caller post it
+// again after the attempts ran out.
+func (s *Store) ResetLadoIntegrationStatus(ctx context.Context, id string) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	n, err := s.qw.ResetLadoIntegrationStatus(ctx, id)
+	if err != nil {
+		return fmt.Errorf("reset LADO integration status: %w", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("reset LADO integration status: no integration approval %s", id)
+	}
+	return nil
+}
+
+func ladoIntegrationApprovalsFromGen(rows []gen.LadoIntegrationApproval) ([]domain.LadoIntegrationApproval, error) {
+	approvals := make([]domain.LadoIntegrationApproval, 0, len(rows))
+	for _, row := range rows {
+		approval, err := ladoIntegrationApprovalFromGen(row)
+		if err != nil {
+			return nil, err
+		}
+		approvals = append(approvals, approval)
+	}
+	return approvals, nil
 }
 
 // ListLadoIntegrationStatusRetries returns up to limit approvals whose commit
@@ -614,6 +670,7 @@ func ladoIntegrationApprovalFromGen(row gen.LadoIntegrationApproval) (domain.Lad
 		ExecutionSessionID: domain.SessionID(row.ExecutionSessionID),
 		PRURL:              row.PRURL,
 		HeadSHA:            row.HeadSha,
+		TargetBranch:       row.TargetBranch,
 		VerificationSHA256: row.VerificationSha256,
 		Acknowledged:       acknowledged,
 		ProofNonce:         row.ProofNonce,

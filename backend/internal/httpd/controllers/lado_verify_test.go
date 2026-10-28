@@ -41,10 +41,19 @@ type fakeLadoVerifyService struct {
 	calls      int
 	gotProject domain.ProjectID
 	gotRefresh bool
+	// reposted is the approval a status repost answers; gotRepost the
+	// session it was asked for.
+	reposted  domain.LadoIntegrationApproval
+	gotRepost domain.SessionID
 }
 
-func (f *fakeLadoVerifyService) Head(context.Context, domain.SessionID, string) (ladoverify.HeadView, error) {
+func (f *fakeLadoVerifyService) Head(context.Context, domain.SessionID, string, string, string) (ladoverify.HeadView, error) {
 	return ladoverify.HeadView{}, errors.New("not used")
+}
+
+func (f *fakeLadoVerifyService) RepostIntegrationStatus(_ context.Context, session domain.SessionID) (domain.LadoIntegrationApproval, error) {
+	f.gotRepost = session
+	return f.reposted, f.err
 }
 
 func (f *fakeLadoVerifyService) ApproveIntegration(_ context.Context, in ladoverify.ApproveInput) (ladoverify.ApproveResult, error) {
@@ -411,7 +420,7 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 
 func setLadoChecks(t *testing.T, store *sqlite.Store, project domain.ProjectID, at time.Time, commands ...domain.LadoCheckCommand) {
 	t.Helper()
-	if err := store.SetLadoProjectCheckCommands(context.Background(), project, commands, nil, domain.LadoAuditEvent{
+	if err := store.SetLadoProjectCheckCommands(context.Background(), project, domain.LadoCheckCommandsSHA256(nil), commands, nil, domain.LadoAuditEvent{
 		At: at, Actor: "api", Action: "project.check_commands_changed", SubjectKind: "project", SubjectID: string(project), Payload: []byte("{}"),
 	}); err != nil {
 		t.Fatalf("SetLadoProjectCheckCommands: %v", err)
@@ -425,6 +434,28 @@ func startLadoCheckRun(t *testing.T, store *sqlite.Store, id string, session dom
 	}); err != nil {
 		t.Fatalf("StartLadoCheckRun %s: %v", id, err)
 	}
+}
+
+// S8 of #15: posting the approved head's status again needs no presence
+// proof and answers the approval as recorded after the post.
+func TestLadoAPI_RepostIntegrationStatus(t *testing.T) {
+	posted := time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
+	svc := &fakeLadoVerifyService{reposted: domain.LadoIntegrationApproval{
+		ID: "lado-integration-1", HeadSHA: strings.Repeat("a", 40), TargetBranch: "main", VerificationSHA256: strings.Repeat("b", 64),
+		Actor: "human", ApprovedAt: posted.Add(-time.Hour), StatusState: domain.LadoIntegrationStatusPosted, StatusAttempts: 1, StatusPostedAt: posted,
+	}}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoVerify: svc})
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/lado/executions/mer-1/integration-status", "")
+	if status != http.StatusOK || svc.gotRepost != "mer-1" {
+		t.Fatalf("status = %d for %q, body %s", status, svc.gotRepost, body)
+	}
+	got := decodeLadoJSON[controllers.LadoIntegrationApprovalResponse](t, body)
+	if got.ID != "lado-integration-1" || got.TargetBranch != "main" || got.StatusState != "posted" || got.StatusAttempts != 1 || got.StatusPostedAt == nil {
+		t.Fatalf("approval = %+v", got)
+	}
+	svc.err = apierr.Conflict("LADO_INTEGRATION_NOT_APPROVED", "no approval", nil)
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/lado/executions/mer-1/integration-status", "")
+	wantLadoErrorCode(t, body, status, http.StatusConflict, "LADO_INTEGRATION_NOT_APPROVED")
 }
 
 func TestLadoAPI_RunChecksAgain(t *testing.T) {
@@ -627,12 +658,13 @@ func TestLadoAPI_CheckCommandsNeedPresence(t *testing.T) {
 		return commands, timeout
 	}
 	unit := []domain.LadoCheckCommand{{Name: "unit", Command: "go test ./..."}}
-	change := `{"checkCommands":[{"name":"unit","command":"go test ./..."}]}`
+	none := domain.LadoCheckCommandsSHA256(nil)
+	change := `{"checkCommands":[{"name":"unit","command":"go test ./..."}],"checkCommandsBase":"` + none + `"}`
 
 	// Changing the commands needs the app's proof over the exact body.
 	body, status, _ := doRequest(t, srv, "PUT", path, change)
 	wantLadoErrorCode(t, body, status, http.StatusForbidden, "LADO_PRESENCE_REQUIRED")
-	body, status = signedRequest(t, srv, "PUT", path, `{"checkCommands":[{"name":"unit","command":"go test ./... || true"}]}`, change)
+	body, status = signedRequest(t, srv, "PUT", path, `{"checkCommands":[{"name":"unit","command":"go test ./... || true"}],"checkCommandsBase":"`+none+`"}`, change)
 	wantLadoErrorCode(t, body, status, http.StatusForbidden, "LADO_PRESENCE_INVALID")
 	if commands, _ := stored(); len(commands) != 0 {
 		t.Fatalf("commands after refused changes = %+v, want none", commands)
@@ -642,8 +674,17 @@ func TestLadoAPI_CheckCommandsNeedPresence(t *testing.T) {
 		t.Fatalf("signed change: status = %d, body %s", status, body)
 	}
 	got := decodeLadoJSON[controllers.LadoProjectSettingsResponse](t, body)
-	if !reflect.DeepEqual(got.CheckCommands, []controllers.LadoCheckCommandBody{{Name: "unit", Command: "go test ./..."}}) || got.CheckTimeoutMinutes != 30 {
-		t.Fatalf("settings = %+v, want unit with the default time limit", got)
+	if !reflect.DeepEqual(got.CheckCommands, []controllers.LadoCheckCommandBody{{Name: "unit", Command: "go test ./..."}}) || got.CheckTimeoutMinutes != 30 ||
+		got.CheckCommandsSHA256 != domain.LadoCheckCommandsSHA256(unit) {
+		t.Fatalf("settings = %+v, want unit with the default time limit and its hash", got)
+	}
+	// U7 of #15: a signed change that starts from a list that moved on is
+	// refused with the current list's hash.
+	stale := `{"checkCommands":[{"name":"lint","command":"make lint"}],"checkCommandsBase":"` + none + `"}`
+	body, status = signedRequest(t, srv, "PUT", path, stale, stale)
+	wantLadoErrorCode(t, body, status, http.StatusConflict, "LADO_CHECK_COMMANDS_CHANGED")
+	if details := decodeLadoJSON[envelope.APIError](t, body).Details; details["checkCommandsSha256"] != domain.LadoCheckCommandsSHA256(unit) {
+		t.Fatalf("conflict details = %v, want the current hash", details)
 	}
 	if commands, _ := stored(); !reflect.DeepEqual(commands, unit) {
 		t.Fatalf("stored commands = %+v, want %+v", commands, unit)
@@ -672,6 +713,9 @@ func TestLadoAPI_CheckCommandsNeedPresence(t *testing.T) {
 		{`{"checkCommands":[{"name":"unit","command":"a"},{"name":"unit","command":"b"}]}`, map[string]any{"index": float64(1), "field": "name", "reason": "duplicate"}},
 		{`{"checkCommands":[{"name":"-unit","command":"a"}]}`, map[string]any{"index": float64(0), "field": "name", "reason": "invalid"}},
 		{`{"checkCommands":[{"name":"unit","command":""}]}`, map[string]any{"index": float64(0), "field": "command", "reason": "required"}},
+		// S2 of #15: the daemon refuses a command that is more than one line.
+		{`{"checkCommands":[{"name":"unit","command":"go test ./...\nrm -rf ~"}]}`, map[string]any{"index": float64(0), "field": "command", "reason": "control_character", "position": float64(14), "character": "U+000A"}},
+		{`{"checkCommands":[{"name":"unit","command":"go test ./... #\u202e"}]}`, map[string]any{"index": float64(0), "field": "command", "reason": "bidi_control", "position": float64(16), "character": "U+202E"}},
 		{`{"checkTimeoutMinutes":3}`, map[string]any{"index": float64(-1), "field": "checkTimeoutMinutes", "reason": "invalid"}},
 	} {
 		body, status, _ := doRequest(t, srv, "PUT", path, c.body)

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -74,11 +75,13 @@ func (s *Store) LadoProjectChecks(ctx context.Context, projectID domain.ProjectI
 
 // SetLadoProjectCheckCommands stores a project's check commands with their
 // audit event, and the presence proof that allowed the change when one is
-// given, in one transaction; the change takes the event's time. A proof used
-// before is refused with domain.ErrLadoPresenceReplayed. A project without
-// LADO settings gets them with LADO mode off. The caller validates the
-// commands (domain.ValidateLadoCheckCommands).
-func (s *Store) SetLadoProjectCheckCommands(ctx context.Context, projectID domain.ProjectID, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, audit domain.LadoAuditEvent) error {
+// given, in one transaction; the change takes the event's time. The stored
+// commands must still hash to base (domain.LadoCheckCommandsSHA256), else
+// the change is refused with domain.ErrLadoCheckCommandsChanged and nothing
+// is kept. A proof used before is refused with domain.ErrLadoPresenceReplayed.
+// A project without LADO settings gets them with LADO mode off. The caller
+// validates the commands (domain.ValidateLadoCheckCommands).
+func (s *Store) SetLadoProjectCheckCommands(ctx context.Context, projectID domain.ProjectID, base string, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, audit domain.LadoAuditEvent) error {
 	// A nil list stores as none.
 	commands, err := json.Marshal(append([]domain.LadoCheckCommand{}, cmds...))
 	if err != nil {
@@ -89,6 +92,13 @@ func (s *Store) SetLadoProjectCheckCommands(ctx context.Context, projectID domai
 	}
 	defer s.writeMu.Unlock()
 	err = s.inTx(ctx, "set LADO project check commands", func(q *gen.Queries) error {
+		stored, err := ladoStoredCheckCommands(ctx, q, projectID)
+		if err != nil {
+			return err
+		}
+		if !strings.EqualFold(base, domain.LadoCheckCommandsSHA256(stored)) {
+			return domain.ErrLadoCheckCommandsChanged
+		}
 		if proof != nil {
 			if err := insertLadoPresenceProof(ctx, q, *proof); err != nil {
 				return err
@@ -101,7 +111,7 @@ func (s *Store) SetLadoProjectCheckCommands(ctx context.Context, projectID domai
 		}); err != nil {
 			return err
 		}
-		_, err := appendLadoAuditEventTx(ctx, q, audit)
+		_, err = appendLadoAuditEventTx(ctx, q, audit)
 		return err
 	})
 	return unwrapLadoSentinel(err)
@@ -153,4 +163,17 @@ func ladoCheckCommandsFromJSON(raw string) ([]domain.LadoCheckCommand, error) {
 		return nil, fmt.Errorf("decode LADO project check commands: %w", err)
 	}
 	return commands, nil
+}
+
+// ladoStoredCheckCommands reads a project's check commands inside a
+// transaction: none without a settings row.
+func ladoStoredCheckCommands(ctx context.Context, q *gen.Queries, projectID domain.ProjectID) ([]domain.LadoCheckCommand, error) {
+	row, err := q.GetLadoProjectChecks(ctx, string(projectID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return []domain.LadoCheckCommand{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return ladoCheckCommandsFromJSON(row.CheckCommands)
 }

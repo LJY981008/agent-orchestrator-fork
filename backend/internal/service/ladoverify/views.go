@@ -14,17 +14,18 @@ import (
 )
 
 // HeadView is what LADO holds about one head of an execution's PR: the
-// head's verification record with its hash, and its integration approval.
-// Each is nil while there is none.
+// head's verification record with its hash, and its integration approval
+// into the branch the PR merges into now. Each is nil while there is none.
 type HeadView struct {
 	Verification *domain.LadoVerification
 	SHA256       string
 	Approval     *domain.LadoIntegrationApproval
 }
 
-// Head reads the verification record and the integration approval of one
-// head of an execution's PR. An empty head has neither.
-func (s *Service) Head(ctx context.Context, session domain.SessionID, headSHA string) (HeadView, error) {
+// Head reads the verification record of one head of an execution's PR and
+// the PR's integration approval at that head into target. An empty head has
+// neither.
+func (s *Service) Head(ctx context.Context, session domain.SessionID, prURL, headSHA, target string) (HeadView, error) {
 	var view HeadView
 	if headSHA == "" {
 		return view, nil
@@ -42,15 +43,61 @@ func (s *Service) Head(ctx context.Context, session domain.SessionID, headSHA st
 		}
 		view.Verification, view.SHA256 = &record, sum
 	}
-	approval, ok, err := s.deps.Store.GetLadoIntegrationApproval(ctx, session, headSHA)
+	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, session, prURL, headSHA)
 	if err != nil {
 		s.deps.Log.Error("LADO could not read the integration approval of a head", "session", session, "head", headSHA, "err", err)
 		return HeadView{}, verifyFailed()
 	}
-	if ok {
+	if approval, ok := domain.LadoApprovalFor(approvals, target); ok {
 		view.Approval = &approval
 	}
 	return view, nil
+}
+
+// RepostIntegrationStatus posts the lado/integration status of the approved
+// current head of the execution's open PR again, its attempts started over
+// (S8 of #15): after twelve failed posts, as with a token that may not write
+// commit statuses, nothing else would post it once the token is fixed. It
+// needs no presence: the head is approved, and the same status goes up
+// again. It answers the approval as recorded after the post; a post that
+// fails again is in its status. GitLab gets no status: its approval stays
+// not_applicable.
+func (s *Service) RepostIntegrationStatus(ctx context.Context, session domain.SessionID) (domain.LadoIntegrationApproval, error) {
+	exec, ok, err := s.deps.Store.LadoExecution(ctx, session)
+	switch {
+	case err != nil:
+		s.deps.Log.Error("LADO could not read an execution to post its status again", "session", session, "err", err)
+		return domain.LadoIntegrationApproval{}, verifyFailed()
+	case !ok:
+		return domain.LadoIntegrationApproval{}, apierr.NotFound("LADO_EXECUTION_NOT_FOUND", "This session is not a LADO execution")
+	case exec.PR.URL == "" || exec.PR.Merged || exec.PR.Closed || exec.PR.HeadSHA == "":
+		return domain.LadoIntegrationApproval{}, noOpenPR(session)
+	}
+	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, session, exec.PR.URL, exec.PR.HeadSHA)
+	if err != nil {
+		s.deps.Log.Error("LADO could not read the integration approvals of a head", "session", session, "err", err)
+		return domain.LadoIntegrationApproval{}, verifyFailed()
+	}
+	approval, ok := domain.LadoApprovalFor(approvals, approvalTarget(exec))
+	if !ok {
+		return domain.LadoIntegrationApproval{}, apierr.Conflict("LADO_INTEGRATION_NOT_APPROVED",
+			"The pull request's current head has no integration approval to post a status for.",
+			map[string]any{"sessionId": string(session), "headSha": exec.PR.HeadSHA})
+	}
+	if approval.StatusState == domain.LadoIntegrationStatusNotApplicable || approval.StatusState == domain.LadoIntegrationStatusPosted {
+		return approval, nil
+	}
+	if err := s.deps.Store.ResetLadoIntegrationStatus(ctx, approval.ID); err != nil {
+		s.deps.Log.Error("LADO could not start an integration status over", "approval", approval.ID, "err", err)
+		return domain.LadoIntegrationApproval{}, verifyFailed()
+	}
+	approval.StatusState, approval.StatusAttempts, approval.StatusError = domain.LadoIntegrationStatusPending, 0, ""
+	posted, err := s.postIntegrationStatus(ctx, approval)
+	if err != nil {
+		s.deps.Log.Warn("LADO could not post an integration status again; the loop posts it", "approval", approval.ID, "err", err)
+		return approval, nil
+	}
+	return posted, nil
 }
 
 // CheckLog returns the log of one of an execution's check runs: the end of

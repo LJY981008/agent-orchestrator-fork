@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -148,10 +149,12 @@ func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.La
 
 // fillLadoVerification sets what LADO verified and approved about each
 // execution's PR at its current head: the head's record, by its outcome and
-// reason, and its integration approval, by its status state, which once the
-// PR merged is the merged head's. The PRs must be read first. A record or an
-// approval of another head says nothing about the current one, and a PR
-// whose head AO has not observed has neither.
+// reason, and its integration approval of that PR into the branch it merges
+// into now, by its status state, which once the PR merged is the merged
+// head's. The PRs must be read first. A record or an approval of another
+// head says nothing about the current one, an approval of another PR or into
+// another branch neither, and a PR whose head AO has not observed has
+// neither.
 func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.LadoExecution) error {
 	type head struct {
 		session domain.SessionID
@@ -185,9 +188,12 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 	if err != nil {
 		return fmt.Errorf("read LADO integration approvals: %w", err)
 	}
-	approved := make(map[head]domain.LadoIntegrationStatusState, len(approvals))
+	approved := make(map[head][]domain.LadoIntegrationApproval, len(approvals))
 	for _, row := range approvals {
-		approved[head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}] = domain.LadoIntegrationStatusState(row.StatusState)
+		key := head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}
+		approved[key] = append(approved[key], domain.LadoIntegrationApproval{
+			PRURL: row.PRURL, TargetBranch: row.TargetBranch, StatusState: domain.LadoIntegrationStatusState(row.StatusState),
+		})
 	}
 	for i := range executions {
 		execution := &executions[i]
@@ -196,10 +202,12 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 		}
 		key := head{execution.SessionID, execution.PR.HeadSHA}
 		execution.Verification = verified[key]
-		if state, ok := approved[key]; ok {
+		// An approval holds for its PR and the branch it was approved into.
+		ofPR := slices.DeleteFunc(slices.Clone(approved[key]), func(a domain.LadoIntegrationApproval) bool { return a.PRURL != execution.PR.URL })
+		if approval, ok := domain.LadoApprovalFor(ofPR, execution.PR.TargetBranch); ok {
 			execution.Integration = domain.LadoExecutionIntegration{
 				HeadApproved:       true,
-				StatusState:        state,
+				StatusState:        approval.StatusState,
 				MergedHeadApproved: execution.PR.Merged,
 			}
 		}

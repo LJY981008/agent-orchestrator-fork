@@ -512,6 +512,7 @@ type LadoIntegrationApproval struct {
 	ExecutionSessionID string
 	PRURL              string
 	HeadSha            string
+	TargetBranch       string
 	VerificationSha256 string
 	AcknowledgedJson   string
 	ProofNonce         string

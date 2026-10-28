@@ -21,8 +21,9 @@ import (
 
 // LadoVerifyService is the controller-facing verification contract.
 type LadoVerifyService interface {
-	Head(ctx context.Context, session domain.SessionID, headSHA string) (ladoverify.HeadView, error)
+	Head(ctx context.Context, session domain.SessionID, prURL, headSHA, target string) (ladoverify.HeadView, error)
 	ApproveIntegration(ctx context.Context, in ladoverify.ApproveInput) (ladoverify.ApproveResult, error)
+	RepostIntegrationStatus(ctx context.Context, session domain.SessionID) (domain.LadoIntegrationApproval, error)
 	RunChecksAgain(ctx context.Context, session domain.SessionID) (ladoverify.RunAgain, error)
 	CheckLog(ctx context.Context, session domain.SessionID, runID string) ([]byte, error)
 	Protection(ctx context.Context, projectID domain.ProjectID, refresh bool) ([]ladoverify.ProtectionRead, error)
@@ -30,6 +31,7 @@ type LadoVerifyService interface {
 
 const (
 	ladoIntegrationApprovePath = "/api/v1/lado/executions/{sessionId}/integration-approve"
+	ladoIntegrationStatusPath  = "/api/v1/lado/executions/{sessionId}/integration-status"
 	ladoChecksRunPath          = "/api/v1/lado/executions/{sessionId}/checks/run"
 	ladoCheckLogPath           = "/api/v1/lado/executions/{sessionId}/checks/{checkRunId}/log"
 	ladoProjectProtectionPath  = "/api/v1/lado/projects/{projectId}/protection"
@@ -38,6 +40,7 @@ const (
 // registerVerify mounts the verification routes.
 func (c *LadoController) registerVerify(r chi.Router) {
 	r.Post("/lado/executions/{sessionId}/integration-approve", c.approveIntegration)
+	r.Post("/lado/executions/{sessionId}/integration-status", c.repostIntegrationStatus)
 	r.Post("/lado/executions/{sessionId}/checks/run", c.runChecks)
 	r.Get("/lado/executions/{sessionId}/checks/{checkRunId}/log", c.getCheckLog)
 	r.Get("/lado/projects/{projectId}/protection", c.getProjectProtection)
@@ -83,6 +86,22 @@ func (c *LadoController) approveIntegration(w http.ResponseWriter, r *http.Reque
 		Approval:           ladoIntegrationApprovalResponse(result.Approval),
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)
+}
+
+// repostIntegrationStatus posts the approved head's lado/integration status
+// again. The head is approved already and the same status goes up, so it
+// needs no presence proof.
+func (c *LadoController) repostIntegrationStatus(w http.ResponseWriter, r *http.Request) {
+	if c.Verify == nil {
+		apispec.NotImplemented(w, r, "POST", ladoIntegrationStatusPath)
+		return
+	}
+	approval, err := c.Verify.RepostIntegrationStatus(r.Context(), ladoSessionID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ladoIntegrationApprovalResponse(&approval))
 }
 
 func (c *LadoController) runChecks(w http.ResponseWriter, r *http.Request) {
@@ -242,6 +261,7 @@ func ladoIntegrationApprovalResponse(approval *domain.LadoIntegrationApproval) *
 	return &LadoIntegrationApprovalResponse{
 		ID:                 approval.ID,
 		HeadSHA:            approval.HeadSHA,
+		TargetBranch:       approval.TargetBranch,
 		VerificationSHA256: approval.VerificationSHA256,
 		Acknowledged:       ladoOrEmptyStrings(approval.Acknowledged),
 		Actor:              approval.Actor,

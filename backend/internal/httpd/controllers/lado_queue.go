@@ -81,7 +81,11 @@ func (c *LadoController) getExecution(w http.ResponseWriter, r *http.Request) {
 	// What LADO verified about the PR's current head and its integration
 	// approval, when verification is wired.
 	if c.Verify != nil {
-		head, err := c.Verify.Head(r.Context(), view.Execution.SessionID, view.Execution.PR.HeadSHA)
+		target := view.Execution.PR.TargetBranch
+		if target == "" {
+			target = view.Execution.BaseBranch
+		}
+		head, err := c.Verify.Head(r.Context(), view.Execution.SessionID, view.Execution.PR.URL, view.Execution.PR.HeadSHA, target)
 		if err != nil {
 			envelope.WriteError(w, r, err)
 			return
@@ -205,6 +209,7 @@ func ladoExecutionPRResponse(pr domain.LadoExecutionPR) *LadoExecutionPRResponse
 
 func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 	exec, snapshot := view.Execution, view.Snapshot
+	state, reason := exec.State()
 	rules := make([]LadoExecutionRuleResponse, 0, len(snapshot.Rules))
 	for _, rule := range snapshot.Rules {
 		rules = append(rules, LadoExecutionRuleResponse{ID: string(rule.RuleID), Name: rule.Name, Version: rule.Version})
@@ -243,6 +248,8 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 		DeadlineAt:   ladoOptionalTime(exec.DeadlineAt),
 		TimedOutAt:   ladoOptionalTime(exec.TimedOutAt),
 		SessionEnded: exec.SessionTerminated,
+		State:        string(state),
+		StateReason:  reason,
 		PR:           ladoExecutionPRResponse(exec.PR),
 	}
 }

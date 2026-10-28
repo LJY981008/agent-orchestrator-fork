@@ -108,6 +108,9 @@ CREATE TABLE lado_integration_approvals (
     execution_session_id TEXT NOT NULL REFERENCES lado_executions (session_id),
     pr_url               TEXT NOT NULL CHECK (pr_url <> ''),
     head_sha             TEXT NOT NULL CHECK (length(head_sha) IN (40, 64)),
+    -- The branch the PR merged into when the head was verified: an approval
+    -- holds for that PR, head and target only.
+    target_branch        TEXT NOT NULL DEFAULT '',
     verification_sha256  TEXT NOT NULL CHECK (length(verification_sha256) = 64),
     acknowledged_json    TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(acknowledged_json)),
     proof_nonce          TEXT NOT NULL UNIQUE REFERENCES lado_presence_proofs (nonce),
@@ -117,8 +120,9 @@ CREATE TABLE lado_integration_approvals (
     status_attempts      INTEGER NOT NULL DEFAULT 0,
     status_posted_at     TIMESTAMP,
     status_error         TEXT NOT NULL DEFAULT '',
-    UNIQUE (execution_session_id, head_sha)
+    UNIQUE (execution_session_id, pr_url, head_sha, target_branch)
 );
+CREATE INDEX lado_integration_approvals_by_pr ON lado_integration_approvals (pr_url, head_sha);
 
 -- +goose Down
 DROP TABLE lado_integration_approvals;

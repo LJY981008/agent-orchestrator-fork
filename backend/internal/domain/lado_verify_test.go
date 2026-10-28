@@ -322,7 +322,16 @@ func TestValidateLadoCheckCommands(t *testing.T) {
 		{"empty command", with(1, func(c *domain.LadoCheckCommand) { c.Command = "" }), &domain.LadoCheckCommandProblem{Index: 1, Field: "command", Reason: domain.LadoCheckCommandRequired}},
 		{"blank command", with(1, func(c *domain.LadoCheckCommand) { c.Command = " \t\n" }), &domain.LadoCheckCommandProblem{Index: 1, Field: "command", Reason: domain.LadoCheckCommandRequired}},
 		{"2001-character command", with(0, func(c *domain.LadoCheckCommand) { c.Command = strings.Repeat("x", 2001) }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandTooLong}},
-		{"command with NUL", with(2, func(c *domain.LadoCheckCommand) { c.Command = "npm test\x00 --watch" }), &domain.LadoCheckCommandProblem{Index: 2, Field: "command", Reason: domain.LadoCheckCommandInvalid}},
+		{"command with NUL", with(2, func(c *domain.LadoCheckCommand) { c.Command = "npm test\x00 --watch" }), &domain.LadoCheckCommandProblem{Index: 2, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 9, Character: "U+0000"}},
+		// S2 of #15: the desktop app shows a command as one line, so a
+		// line break, a tab or a bidirectional control would let what the
+		// developer confirms differ from what the shell runs.
+		{"command with a line break", with(1, func(c *domain.LadoCheckCommand) { c.Command = "npm run build\nnpm run e2e" }), &domain.LadoCheckCommandProblem{Index: 1, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 14, Character: "U+000A"}},
+		{"command with a carriage return", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make\r" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 5, Character: "U+000D"}},
+		{"command with a tab", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make\tlint" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 5, Character: "U+0009"}},
+		{"command with a C1 control", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make \u0085lint" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 6, Character: "U+0085"}},
+		{"command with a right-to-left override", with(2, func(c *domain.LadoCheckCommand) { c.Command = "go test ./... #\u202e;hs | lruc" }), &domain.LadoCheckCommandProblem{Index: 2, Field: "command", Reason: domain.LadoCheckCommandBidi, Position: 16, Character: "U+202E"}},
+		{"command with an isolate", with(2, func(c *domain.LadoCheckCommand) { c.Command = "go test \u2066./...\u2069" }), &domain.LadoCheckCommandProblem{Index: 2, Field: "command", Reason: domain.LadoCheckCommandBidi, Position: 9, Character: "U+2066"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := domain.ValidateLadoCheckCommands(tc.commands); !reflect.DeepEqual(got, tc.want) {
@@ -340,5 +349,24 @@ func TestValidateLadoCheckCommands(t *testing.T) {
 	}
 	if domain.LadoCheckTimeoutMin != 5 || domain.LadoCheckTimeoutMax != 120 || domain.LadoCheckTimeoutDefault != 30 || domain.LadoCheckCommandsMax != 10 {
 		t.Fatal("check command limits changed")
+	}
+}
+
+// U7 of #15: a change of the check commands names the list it started from
+// by this hash, which follows the commands and their order.
+func TestLadoCheckCommandsSHA256(t *testing.T) {
+	a := []domain.LadoCheckCommand{{Name: "unit", Command: "go test ./..."}, {Name: "lint", Command: "golangci-lint run"}}
+	if domain.LadoCheckCommandsSHA256(nil) != domain.LadoCheckCommandsSHA256([]domain.LadoCheckCommand{}) {
+		t.Fatal("nil and an empty list hash differently")
+	}
+	if got := domain.LadoCheckCommandsSHA256(a); len(got) != 64 || got == domain.LadoCheckCommandsSHA256(nil) {
+		t.Fatalf("hash = %q", got)
+	}
+	swapped := []domain.LadoCheckCommand{a[1], a[0]}
+	edited := []domain.LadoCheckCommand{a[0], {Name: "lint", Command: "golangci-lint run --fix"}}
+	for _, other := range [][]domain.LadoCheckCommand{swapped, edited, a[:1]} {
+		if domain.LadoCheckCommandsSHA256(other) == domain.LadoCheckCommandsSHA256(a) {
+			t.Fatalf("%v hashes like %v", other, a)
+		}
 	}
 }

@@ -196,6 +196,10 @@ jobs:
       - name: Test Windows subprocess commands
         run: go test -race -count=1 -run 'Cloudflared|Tunnel|Command' ./internal/mobilebridge/ ./internal/process/ ./internal/adapters/systemexec/
 
+      # LADO fork: check commands run through cmd /d /s /c with their quotes.
+      - name: Test LADO check commands on Windows
+        run: go test -race -count=1 -v -run '^TestRunCommandPassesQuotedArguments$' ./internal/service/ladoverify/
+
       - name: Test Windows PowerShell installers
         run: go test -race -count=1 -v -run '^TestRunInstallScriptPowerShell' ./internal/adapters/systemexec/
 

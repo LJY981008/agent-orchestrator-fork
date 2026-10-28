@@ -245,6 +245,14 @@ func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
 	}
 }
 
+// State is the state the execution gives its task, and its reason: what the
+// run panel shows for the run itself, as the daemon derives it (decision l;
+// a task shows another state only when it was cancelled, its issue closed
+// or it was approved again after this run failed).
+func (e LadoExecution) State() (LadoTaskState, string) {
+	return e.taskState()
+}
+
 // taskState is the state an execution gives its task. A PR decides once
 // there is one: a run stopped at its deadline while its PR opened still has
 // the PR to review, as the run time limit stops once a PR is open. A merge

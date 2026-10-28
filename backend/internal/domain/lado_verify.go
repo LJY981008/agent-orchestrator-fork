@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -530,23 +531,72 @@ const (
 	LadoCheckTimeoutDefault  = 30
 )
 
-// Reasons a check command list is refused (LadoCheckCommandProblem).
+// Reasons a check command list is refused (LadoCheckCommandProblem). A
+// command with a control character (Unicode Cc, as a line break or a tab)
+// or a bidirectional control character is refused: the desktop app shows a
+// command as one line of text, and either would make what the developer
+// confirms differ from what the shell runs (S2 of #15).
 const (
 	LadoCheckCommandTooMany   = "too_many"
 	LadoCheckCommandRequired  = "required"
 	LadoCheckCommandTooLong   = "too_long"
 	LadoCheckCommandInvalid   = "invalid"
 	LadoCheckCommandDuplicate = "duplicate"
+	LadoCheckCommandControl   = "control_character"
+	LadoCheckCommandBidi      = "bidi_control"
 )
 
 // LadoCheckCommandProblem is the first thing wrong with a check command list:
 // the command's index, the field ("name" or "command", empty for the list)
-// and the reason (LadoCheckCommand*).
+// and the reason (LadoCheckCommand*). For a control character, Position is
+// its 1-based place among the command's characters and Character the
+// character as U+XXXX.
 type LadoCheckCommandProblem struct {
-	Index  int
-	Field  string
-	Reason string
+	Index     int
+	Field     string
+	Reason    string
+	Position  int
+	Character string
 }
+
+// ladoBidiControls are the bidirectional formatting characters: they reorder
+// how text shows without changing what it says.
+var ladoBidiControls = []rune{'\u061c', '\u200e', '\u200f', '\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069'}
+
+// ladoCommandControl finds the first control or bidirectional control
+// character of a command: its reason, its 1-based place among the command's
+// characters and the character.
+func ladoCommandControl(command string) (string, int, rune, bool) {
+	position := 0
+	for _, r := range command {
+		position++
+		switch {
+		case unicode.Is(unicode.Cc, r):
+			return LadoCheckCommandControl, position, r, true
+		case slices.Contains(ladoBidiControls, r):
+			return LadoCheckCommandBidi, position, r, true
+		}
+	}
+	return "", 0, 0, false
+}
+
+// LadoCheckCommandsSHA256 is the hex sha256 of a check command list as its
+// canonical JSON (an empty list for nil): a change of the list sends the hash
+// of the list it started from, and LADO refuses it once the list moved on.
+func LadoCheckCommandsSHA256(commands []LadoCheckCommand) string {
+	data, err := ladoCanonicalJSON(ladoOrEmpty(commands))
+	if err != nil {
+		// Strings cannot fail to encode.
+		panic(err)
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+// ErrLadoCheckCommandsChanged means a project's check commands are no longer
+// the list a change started from. The services report it as
+// LADO_CHECK_COMMANDS_CHANGED.
+var ErrLadoCheckCommandsChanged = errors.New("the project's check commands changed")
 
 var ladoCheckNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
 
@@ -554,8 +604,9 @@ var ladoCheckNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9 ._-]*$`)
 // list, nil when it has none: at most LadoCheckCommandsMax commands, each
 // named with 1 to 40 letters, digits, spaces, dots, underscores or dashes
 // starting with a letter or digit, names unique without case, and each
-// command 1 to 2000 characters without NUL. Too many commands name the first
-// one over the limit.
+// command 1 to 2000 characters without a control character (NUL, a line
+// break, a tab) or a bidirectional control character. Too many commands name
+// the first one over the limit.
 func ValidateLadoCheckCommands(commands []LadoCheckCommand) *LadoCheckCommandProblem {
 	if len(commands) > LadoCheckCommandsMax {
 		return &LadoCheckCommandProblem{Index: LadoCheckCommandsMax, Reason: LadoCheckCommandTooMany}
@@ -577,8 +628,11 @@ func ValidateLadoCheckCommands(commands []LadoCheckCommand) *LadoCheckCommandPro
 			return problem("command", LadoCheckCommandRequired)
 		case utf8.RuneCountInString(command.Command) > LadoCheckCommandMaxChars:
 			return problem("command", LadoCheckCommandTooLong)
-		case strings.ContainsRune(command.Command, 0):
-			return problem("command", LadoCheckCommandInvalid)
+		}
+		if reason, position, r, found := ladoCommandControl(command.Command); found {
+			p := problem("command", reason)
+			p.Position, p.Character = position, fmt.Sprintf("U+%04X", r)
+			return p
 		}
 	}
 	return nil
@@ -604,14 +658,16 @@ const LadoIntegrationStatusContext = "lado/integration"
 const LadoIntegrationStatusMaxAttempts = 12
 
 // LadoIntegrationApproval is the developer's approval, with human presence,
-// to integrate one head of an execution's PR (docs/LJY-PRD/TDD.md §7.1). It
-// signs the verification record's sha256 and acknowledges its confirm codes.
-// Approvals are per head and never deleted.
+// to integrate one head of an execution's PR into one target branch
+// (docs/LJY-PRD/TDD.md §7.1). It signs the verification record's sha256 and
+// acknowledges its confirm codes. Approvals are per PR, head and target
+// branch (S5, S6 of #15) and never deleted.
 type LadoIntegrationApproval struct {
 	ID                 string
 	ExecutionSessionID SessionID
 	PRURL              string
 	HeadSHA            string
+	TargetBranch       string
 	VerificationSHA256 string
 	Acknowledged       []string
 	ProofNonce         string
@@ -624,8 +680,8 @@ type LadoIntegrationApproval struct {
 	StatusError string
 }
 
-// ErrLadoIntegrationAlreadyApproved means the head already has an
-// integration approval. The services report it as
+// ErrLadoIntegrationAlreadyApproved means the PR's head already has an
+// integration approval for the target branch. The services report it as
 // LADO_INTEGRATION_ALREADY_APPROVED.
 var ErrLadoIntegrationAlreadyApproved = errors.New("the head already has an integration approval")
 
@@ -633,6 +689,19 @@ var ErrLadoIntegrationAlreadyApproved = errors.New("the head already has an inte
 // longer has the sha256 an integration approval signs. The services report it
 // as LADO_VERIFICATION_CHANGED.
 var ErrLadoVerificationChanged = errors.New("the head's verification record changed")
+
+// LadoApprovalFor returns the approval of approvals that holds for target,
+// the branch the PR merges into now: the one approved for that branch,
+// compared without case as hosts compare branch names. An approval
+// recorded without a target holds for any.
+func LadoApprovalFor(approvals []LadoIntegrationApproval, target string) (LadoIntegrationApproval, bool) {
+	for _, approval := range approvals {
+		if approval.TargetBranch == "" || strings.EqualFold(approval.TargetBranch, target) {
+			return approval, true
+		}
+	}
+	return LadoIntegrationApproval{}, false
+}
 
 // LadoEvidencePath is where a worker writes its evidence file, relative to
 // its session's artifact directory (docs/LJY-PRD/TDD.md §8.6).

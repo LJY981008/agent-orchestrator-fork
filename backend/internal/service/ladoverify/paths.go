@@ -3,7 +3,10 @@ package ladoverify
 // The paths item (decision g of the step 8 plan; owner decision 2): a change
 // to a protected path blocks the integration unless the approved plan names
 // that path, and a change outside the plan's affected_paths is listed for
-// the developer, who confirms it when approving the integration.
+// the developer, who confirms it when approving the integration. Protected
+// paths compare without case (Q1 of #15): on Windows and, by default, macOS
+// the tools read .Claude/settings.json or Agents.md as the protected file.
+// Paths outside the plan compare as git gives them.
 
 import (
 	"path"
@@ -76,15 +79,18 @@ func EvaluatePaths(in PathsInput) (domain.LadoVerifyItem, error) {
 
 // protectedPathNamed reports whether the changed path p may change: for each
 // protected glob that matches p, an affected_paths entry that matches p names
-// it (see entryNames).
+// it (see entryNames). Every glob that matches needs naming (Q2 of #15). The
+// path, the globs and the entries compare without case.
 func protectedPathNamed(in PathsInput, p string) bool {
+	p = strings.ToLower(p)
 	var entries []string
 	for _, entry := range in.Affected {
-		if MatchPath(entry, p) {
+		if entry = strings.ToLower(entry); MatchPath(entry, p) {
 			entries = append(entries, entry)
 		}
 	}
 	for _, glob := range in.Protected {
+		glob = strings.ToLower(glob)
 		if MatchPath(glob, p) && !slices.ContainsFunc(entries, func(entry string) bool { return entryNames(entry, glob) }) {
 			return false
 		}

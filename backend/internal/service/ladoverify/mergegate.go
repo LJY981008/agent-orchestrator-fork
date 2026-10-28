@@ -4,11 +4,13 @@ package ladoverify
 // docs/LJY-PRD/TDD.md §7.2). AO's merge route, behind the desktop's and the
 // mobile app's Merge buttons, asks it before it reads the PR from its host.
 // The PR of a LADO execution merges only at a head whose integration the
-// developer approved; the PR of another session of a project in LADO mode has
-// no such approval and does not merge through AO. Other PRs merge as before.
+// developer approved, into the branch it was approved into; the PR of
+// another session of a project in LADO mode has no such approval and does
+// not merge through AO. Other PRs merge as before.
 
 import (
 	"context"
+	"slices"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -18,15 +20,25 @@ import (
 
 var _ ports.LadoMergeGate = (*Service)(nil)
 
-// AuthorizeMerge implements ports.LadoMergeGate: the execution's approval
-// must be of this PR at headSHA. A read that fails refuses the merge.
+// AuthorizeMerge implements ports.LadoMergeGate. A PR is LADO's when its
+// session is an execution or when any LADO record, a verification or an
+// integration approval, names its URL: a PR claimed into another session
+// stays LADO's (S7 of #15). Such a PR merges only with an approval of that
+// PR at headSHA into the branch it merges into now: an approval into another
+// branch refuses with LADO_INTEGRATION_TARGET_CHANGED (S5). Without any LADO
+// record, a PR of a session of a project in LADO mode refuses too. A read
+// that fails refuses the merge.
 func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error {
 	head := strings.ToLower(strings.TrimSpace(headSHA))
-	exec, isExecution, err := s.deps.Store.LadoExecution(ctx, pr.SessionID)
+	_, isExecution, err := s.deps.Store.LadoExecution(ctx, pr.SessionID)
 	if err != nil {
 		return s.mergeGateFailed(pr, head, err)
 	}
-	if !isExecution {
+	naming, err := s.deps.Store.LadoSessionsNamingPR(ctx, pr.URL)
+	if err != nil {
+		return s.mergeGateFailed(pr, head, err)
+	}
+	if !isExecution && len(naming) == 0 {
 		inLado, err := s.inLadoProject(ctx, pr.SessionID)
 		switch {
 		case err != nil:
@@ -36,14 +48,21 @@ func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, hea
 		}
 		return nil
 	}
-	approval, approved, err := s.deps.Store.GetLadoIntegrationApproval(ctx, exec.SessionID, head)
-	switch {
-	case err != nil:
+	approvals, err := s.deps.Store.ListLadoIntegrationApprovalsForPR(ctx, pr.URL, head)
+	if err != nil {
 		return s.mergeGateFailed(pr, head, err)
-	case !approved || approval.PRURL != pr.URL:
-		return approvalRequired(pr, head)
 	}
-	return nil
+	// Only the approvals of the executions the PR belongs to count.
+	approvals = slices.DeleteFunc(approvals, func(a domain.LadoIntegrationApproval) bool {
+		return a.ExecutionSessionID != pr.SessionID && !slices.Contains(naming, a.ExecutionSessionID)
+	})
+	if _, ok := domain.LadoApprovalFor(approvals, pr.TargetBranch); ok {
+		return nil
+	}
+	if len(approvals) > 0 {
+		return targetChanged(pr, head, approvals[len(approvals)-1].TargetBranch)
+	}
+	return approvalRequired(pr, head)
 }
 
 // inLadoProject reports whether the session belongs to a project in LADO
@@ -64,6 +83,14 @@ func approvalRequired(pr domain.PullRequest, head string) error {
 	return apierr.Conflict("LADO_INTEGRATION_APPROVAL_REQUIRED",
 		"This pull request is in a LADO project: it merges only at a head whose integration you approved in the AO desktop app.",
 		map[string]any{"prUrl": pr.URL, "headSha": head, "sessionId": string(pr.SessionID)})
+}
+
+// targetChanged refuses a PR whose head was approved into another branch than
+// the one it merges into now, as after its base was changed on the host.
+func targetChanged(pr domain.PullRequest, head, approved string) error {
+	return apierr.Conflict("LADO_INTEGRATION_TARGET_CHANGED",
+		"The pull request now merges into another branch than the one you approved its integration into. Review it again in the AO desktop app.",
+		map[string]any{"prUrl": pr.URL, "headSha": head, "sessionId": string(pr.SessionID), "approvedTarget": approved, "currentTarget": pr.TargetBranch})
 }
 
 func (s *Service) mergeGateFailed(pr domain.PullRequest, head string, err error) error {

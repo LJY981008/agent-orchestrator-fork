@@ -163,15 +163,39 @@ WHERE lado_executions.session_id = sqlc.arg(session_id)
 
 -- name: InsertLadoIntegrationApproval :exec
 INSERT INTO lado_integration_approvals (
-    id, execution_session_id, pr_url, head_sha, verification_sha256, acknowledged_json, proof_nonce, actor,
-    approved_at, status_state, status_attempts, status_posted_at, status_error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
--- name: GetLadoIntegrationApprovalForHead :one
-SELECT id, execution_session_id, pr_url, head_sha, verification_sha256, acknowledged_json, proof_nonce, actor,
-    approved_at, status_state, status_attempts, status_posted_at, status_error
+-- name: ListLadoIntegrationApprovalsForHead :many
+-- The approvals of an execution's PR at one head, one per target branch,
+-- oldest first.
+SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
 FROM lado_integration_approvals
-WHERE execution_session_id = ? AND head_sha = ?;
+WHERE execution_session_id = ? AND pr_url = ? AND head_sha = ?
+ORDER BY approved_at, id;
+
+-- name: ListLadoIntegrationApprovalsForPRHead :many
+-- The approvals of a PR at one head, whatever execution holds them.
+SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+FROM lado_integration_approvals
+WHERE pr_url = ? AND head_sha = ?
+ORDER BY approved_at, id;
+
+-- name: ListLadoSessionsNamingPR :many
+-- The executions whose verification records or integration approvals name a
+-- PR.
+SELECT lado_verifications.execution_session_id FROM lado_verifications WHERE lado_verifications.pr_url = sqlc.arg(pr_url)
+UNION
+SELECT lado_integration_approvals.execution_session_id FROM lado_integration_approvals WHERE lado_integration_approvals.pr_url = sqlc.arg(pr_url);
+
+-- name: ResetLadoIntegrationStatus :execrows
+-- Starts posting an approval's status over, its attempts at 0.
+UPDATE lado_integration_approvals
+SET status_state = 'pending', status_attempts = 0, status_error = ''
+WHERE lado_integration_approvals.id = sqlc.arg(id);
 
 -- name: SetLadoIntegrationStatus :execrows
 UPDATE lado_integration_approvals
@@ -184,17 +208,18 @@ WHERE lado_integration_approvals.id = sqlc.arg(id);
 -- name: ListLadoIntegrationStatusRetries :many
 -- Approvals whose commit status is still to post, with attempts left, oldest
 -- first.
-SELECT id, execution_session_id, pr_url, head_sha, verification_sha256, acknowledged_json, proof_nonce, actor,
-    approved_at, status_state, status_attempts, status_posted_at, status_error
+SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
 FROM lado_integration_approvals
 WHERE status_state IN ('pending', 'failed') AND status_attempts < sqlc.arg(max_attempts)
 ORDER BY approved_at, id
 LIMIT sqlc.arg(max_approvals);
 
 -- name: ListLadoIntegrationApprovalStates :many
--- The status state of the approvals of the given executions and heads. The
--- caller keeps the (execution, head) pairs it asked for.
-SELECT execution_session_id, head_sha, status_state
+-- The PR, target branch and status state of the approvals of the given
+-- executions and heads. The caller keeps the (execution, PR, head, target)
+-- it asked for.
+SELECT execution_session_id, pr_url, head_sha, target_branch, status_state
 FROM lado_integration_approvals
 WHERE execution_session_id IN (sqlc.slice('session_ids'))
   AND head_sha IN (sqlc.slice('head_shas'));

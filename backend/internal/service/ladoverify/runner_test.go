@@ -3,7 +3,9 @@ package ladoverify
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -146,26 +148,51 @@ func TestRunCommandStopsTheWholeTree(t *testing.T) {
 	requireProcessGone(t, dir, "left")
 }
 
-func TestRunCommandEnvDropsTokens(t *testing.T) {
+// S4 of #15: a check command runs code an agent wrote, as the developer. It
+// gets none of the known ways to the developer's access: tokens, the SSH
+// agent, askpass helpers, Git Credential Manager and GitHub CLI settings,
+// git credential helpers at any config level, and git over SSH. The project's
+// variables come after and may set any of them on purpose.
+func TestRunCommandEnvWithholdsCredentials(t *testing.T) {
 	skipCommandsOnWindows(t)
-	for _, name := range tokenVariables {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))
+	for _, name := range []string{
+		"GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "GL_TOKEN", "AO_GITHUB_TOKEN", "AO_GITLAB_HOST_TOKENS",
+		"SSH_AUTH_SOCK", "GIT_ASKPASS", "SSH_ASKPASS", "SUDO_ASKPASS", "GCM_INTERACTIVE", "GH_HOST", "GITHUB_API_URL", "GITLAB_HOST",
+		"ANTHROPIC_API_KEY", "OPENAI_API_KEY", "NPM_TOKEN", "Claude_Code_OAuth_Token", "GIT_SSH", "GIT_CONFIG_PARAMETERS",
+	} {
 		t.Setenv(name, "secret-"+strings.ToLower(name))
 	}
 	t.Setenv("AO_DATA_DIR", "/home/dev/.ao")
 	t.Setenv("LADO_SHARED", "daemon")
 	t.Setenv("LADO_DAEMON_ONLY", "kept")
+	// The developer's git keeps a password for example.com in a store helper,
+	// and an URL-specific helper besides, as gh auth setup-git writes one.
+	gitconfig := "[user]\n\tname = LADO Dev\n\temail = dev@example.com\n[credential]\n\thelper = store\n" +
+		"[credential \"https://example.com\"]\n\thelper = !printf 'username=lado\\npassword=secret-url-helper\\n'\n"
+	if err := os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(gitconfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".git-credentials"), []byte("https://lado:secret-stored@example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	project := map[string]string{"LADO_PROJECT": "project value", "LADO_SHARED": "project", "AO_SESSION": "from the project"}
 
-	envOf := func(env []string) []string {
+	run := func(env []string, command string) string {
 		t.Helper()
-		result := RunCommand(context.Background(), CommandSpec{Dir: t.TempDir(), Command: "env", Env: env, Timeout: time.Minute})
-		requireCommandEnd(t, "env", result, domain.LadoCheckRunPassed, exitedWith(0))
-		return strings.Split(string(result.Output), "\n")
+		result := RunCommand(context.Background(), CommandSpec{Dir: t.TempDir(), Command: command, Env: env, Timeout: time.Minute})
+		requireCommandEnd(t, command, result, domain.LadoCheckRunPassed, exitedWith(0))
+		return string(result.Output)
+	}
+	ours := func(line string) bool {
+		return slices.Contains(gitCredentialBlock, line) || strings.HasPrefix(line, "GH_CONFIG_DIR=")
 	}
 	check := func(name string, lines []string, want ...string) {
 		t.Helper()
 		for _, line := range lines {
-			if withheldVariable(envName(line)) || strings.Contains(line, "secret-") {
+			if (withheldVariable(envName(line)) && !ours(line)) || strings.Contains(line, "secret-") {
 				t.Fatalf("%s: the command saw %q", name, line)
 			}
 		}
@@ -175,17 +202,48 @@ func TestRunCommandEnvDropsTokens(t *testing.T) {
 			}
 		}
 	}
-	lines := envOf(CommandEnv(os.Environ(), project))
-	check("project env", lines, "LADO_PROJECT=project value", "LADO_SHARED=project", "LADO_DAEMON_ONLY=kept")
+	env := CommandEnv(os.Environ(), project)
+	lines := strings.Split(run(env, "env"), "\n")
+	check("project env", lines, append([]string{"LADO_PROJECT=project value", "LADO_SHARED=project", "LADO_DAEMON_ONLY=kept"}, gitCredentialBlock...)...)
 	if slices.Contains(lines, "LADO_SHARED=daemon") {
 		t.Fatal("the daemon's LADO_SHARED stayed beside the project's")
 	}
 	// No Env is the daemon's environment without the withheld variables,
 	// never the daemon's environment as it is.
-	check("no env", envOf(nil), "LADO_SHARED=daemon", "LADO_DAEMON_ONLY=kept")
+	check("no env", strings.Split(run(nil, "env"), "\n"), "LADO_SHARED=daemon", "LADO_DAEMON_ONLY=kept")
 
-	got := CommandEnv([]string{"=C:=C:\\work", "github_token=lower", "Ao_Home=x", "PATH=/bin", "KEEP=1=2"}, map[string]string{"": "empty", "PATH": "/opt/bin"})
-	if want := []string{"=C:=C:\\work", "KEEP=1=2", "PATH=/opt/bin"}; !slices.Equal(got, want) {
+	// git finds no credential: no helper runs, and nothing prompts. The
+	// developer's own settings stay.
+	out := run(env, `printf 'protocol=https\nhost=example.com\n\n' | git credential fill 2>&1; echo "fill=$?"; git config --get user.name`)
+	if strings.Contains(out, "secret-") || !strings.Contains(out, "fill=128") || !strings.Contains(out, "LADO Dev") {
+		t.Fatalf("git credential fill in a check command printed %q, want no password, a failure and the user's name", out)
+	}
+	// git over SSH fails without reaching a host.
+	out = run(env, `git ls-remote git@example.invalid:lado/app.git 2>&1; echo "ls-remote=$?"`)
+	if !strings.Contains(out, "LADO check commands cannot use git over SSH") || strings.Contains(out, "ls-remote=0") {
+		t.Fatalf("git ls-remote over SSH printed %q, want LADO's refusal", out)
+	}
+	// The GitHub CLI's folder is empty and goes with the run.
+	out = run(env, `echo "dir=$GH_CONFIG_DIR"; ls -A "$GH_CONFIG_DIR" | wc -l`)
+	dir := strings.TrimPrefix(strings.SplitN(out, "\n", 2)[0], "dir=")
+	if !strings.Contains(dir, "lado-check-gh-") || strings.TrimSpace(strings.SplitN(out, "\n", 3)[1]) != "0" {
+		t.Fatalf("GH_CONFIG_DIR in a check command: %q, want an empty folder of the run", out)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the GitHub CLI's folder %s outlived the run (%v)", dir, err)
+	}
+
+	// The project may set any of them on purpose.
+	got := CommandEnv([]string{"=C:=C:\\work", "github_token=lower", "Ao_Home=x", "PATH=/bin", "KEEP=1=2", "git_ssh_command=daemon"},
+		map[string]string{"": "empty", "PATH": "/opt/bin", "GIT_SSH_COMMAND": "my-transport"})
+	want := []string{"=C:=C:\\work", "KEEP=1=2"}
+	for _, entry := range gitCredentialBlock {
+		if envName(entry) != "GIT_SSH_COMMAND" {
+			want = append(want, entry)
+		}
+	}
+	want = append(want, "GIT_SSH_COMMAND=my-transport", "PATH=/opt/bin")
+	if !slices.Equal(got, want) {
 		t.Fatalf("CommandEnv = %q, want %q", got, want)
 	}
 }
@@ -304,5 +362,44 @@ func TestWorktreeReady(t *testing.T) {
 	unread := domain.LadoCheckRun{Name: "lint", Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(3 * time.Minute), FinishedAt: t0.Add(4 * time.Minute)}
 	if got := WorktreeReady(ctx, git, wt, head, append(runs, unread)); got != "" {
 		t.Fatalf("after a run without a status: %q, want ready", got)
+	}
+}
+
+// TestRunCommandHelperProcess is no test of its own: the quoted-arguments
+// test runs this test binary as a check command's program, and this prints
+// the arguments after "--", one per line in brackets.
+func TestRunCommandHelperProcess(t *testing.T) {
+	if os.Getenv("LADO_RUNNER_HELPER") != "1" {
+		return
+	}
+	args := os.Args
+	for i, arg := range args {
+		if arg == "--" {
+			args = args[i+1:]
+			break
+		}
+	}
+	for _, arg := range args {
+		fmt.Printf("[%s]\n", arg)
+	}
+	os.Exit(0)
+}
+
+// S1 of #15: quoted arguments, with spaces and pipes in them, reach a check
+// command's program as written: through cmd /d /s /c on Windows, where Go's
+// own quoting gave go test -run "A|B" its quotes and so no test to run, and
+// through sh -c elsewhere. The Windows job of CI runs this test.
+func TestRunCommandPassesQuotedArguments(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := `"` + exe + `" -test.run=TestRunCommandHelperProcess -- "TestLogin|TestLogout" "two words" plain`
+	env := append(CommandEnv(os.Environ(), nil), "LADO_RUNNER_HELPER=1")
+	result := RunCommand(context.Background(), CommandSpec{Dir: t.TempDir(), Command: command, Env: env, Timeout: time.Minute})
+	requireCommandEnd(t, "the helper", result, domain.LadoCheckRunPassed, exitedWith(0))
+	got := strings.ReplaceAll(string(result.Output), "\r\n", "\n")
+	if want := "[TestLogin|TestLogout]\n[two words]\n[plain]\n"; got != want {
+		t.Fatalf("the program got\n%s\nwant\n%s", got, want)
 	}
 }

@@ -374,6 +374,12 @@ func ladoOperations() []operation {
 			resps:      ladoResps(http.StatusOK, controllers.LadoIntegrationApproveResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
 		},
 		{
+			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/integration-status", id: "repostLadoIntegrationStatus", tag: "lado",
+			summary:    "Post the lado/integration status of the PR's approved current head again, its attempts started over; needs no presence proof",
+			pathParams: []any{controllers.LadoSessionIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoIntegrationApprovalResponse{}, http.StatusNotFound, http.StatusConflict),
+		},
+		{
 			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/checks/run", id: "runLadoChecks", tag: "lado",
 			summary:    "Run the project's check commands again on the current head of an execution's PR",
 			pathParams: []any{controllers.LadoSessionIDParam{}},

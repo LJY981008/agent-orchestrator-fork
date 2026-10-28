@@ -78,6 +78,8 @@ func TestPathsProtectedNeedThePlanToNameThem(t *testing.T) {
 		}
 	})
 
+	// Q2 of #15, kept: a path that several protected globs match needs the
+	// plan to name every one of them.
 	t.Run("every protected glob that matches needs naming", func(t *testing.T) {
 		// .claude/CLAUDE.md is under .claude/** and is a CLAUDE.md: the plan
 		// names both, or the file itself.
@@ -97,6 +99,34 @@ func TestPathsProtectedNeedThePlanToNameThem(t *testing.T) {
 				checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{".claude/CLAUDE.md"}})
 			}
 		}
+	})
+}
+
+// Q1 of #15: protected paths compare without case, because Claude Code and
+// Codex on Windows and, by default, macOS read .Claude/settings.json or
+// Agents.md as the protected file. Whether the plan names a protected path
+// compares without case too; whether a path is outside the plan does not.
+func TestPathsProtectedIgnoreCase(t *testing.T) {
+	protected := domain.DefaultLadoProtectedPaths()
+	for _, changed := range []string{".Claude/settings.json", "Agents.md", "docs/claude.md", ".GITHUB/workflows/ci.yml", ".MCP.json", "web/Agents.override.md"} {
+		t.Run(changed, func(t *testing.T) {
+			in := PathsInput{Changed: []string{changed}, Affected: []string{"**"}, Protected: protected, ProtectedOn: true}
+			if changed == "web/Agents.override.md" {
+				// No protected glob names an override file.
+				checkPaths(t, in, domain.LadoVerifyPass, "", domain.LadoPathsDetails{})
+				return
+			}
+			checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{changed}})
+		})
+	}
+	t.Run("the plan names it in another case", func(t *testing.T) {
+		in := PathsInput{Changed: []string{".Claude/settings.json"}, Affected: []string{".claude/settings.json"}, Protected: protected, ProtectedOn: true}
+		checkPaths(t, in, domain.LadoVerifyConfirm, domain.LadoCodeOutsidePlan,
+			domain.LadoPathsDetails{OutsidePlan: []string{".Claude/settings.json"}, OutsideCount: 1})
+	})
+	t.Run("globs in capitals", func(t *testing.T) {
+		in := PathsInput{Changed: []string{"docs/agents.md"}, Affected: []string{"docs/**"}, Protected: []string{"**/AGENTS.MD"}, ProtectedOn: true}
+		checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{"docs/agents.md"}})
 	})
 }
 

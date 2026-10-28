@@ -13,7 +13,6 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
@@ -32,9 +31,38 @@ const (
 	commandWaitDelay = time.Second
 )
 
-// tokenVariables hold tracker tokens. A check command runs the code of the
-// pull request's head, which an agent wrote, so it never sees them.
-var tokenVariables = []string{"GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "GL_TOKEN", "AO_GITHUB_TOKEN", "AO_GITLAB_TOKEN", "AO_GITLAB_HOST_TOKENS"}
+// A check command runs the code of the pull request's head, which an agent
+// wrote, as the developer, outside any sandbox and with the network (S4 of
+// #15). LADO keeps the known ways to the developer's access out of its
+// environment: AO's variables, tracker and LLM tokens, the SSH agent,
+// askpass helpers and the settings of Git Credential Manager and the GitHub
+// CLI. Names compare without case. What the command can still read as the
+// same OS user (LADO's token file, ~/.ssh keys, the GitHub CLI's hosts.yml or
+// keyring, ~/.git-credentials) stays open until OS isolation (T2,
+// docs/LJY-PRD/TDD.md §8.2).
+var (
+	withheldPrefixes = []string{"AO_", "GCM_", "GH_", "GITHUB_", "GITLAB_", "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+	withheldSuffixes = []string{"ASKPASS", "_TOKEN", "_API_KEY"}
+	withheldNames    = []string{"SSH_AUTH_SOCK", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT", "GIT_TERMINAL_PROMPT"}
+)
+
+// gitCredentialBlock turns the developer's git credentials off for a check
+// command: an empty credential.helper, read last as a command-line setting,
+// clears the helpers of every config file, URL-specific ones too; an empty
+// core.askPass leaves no askpass program; terminal prompts are off; and git
+// over SSH fails, since LADO's own SSH connection rides on the repository's
+// core.sshCommand, which GIT_SSH_COMMAND overrides. The developer's other
+// settings, such as user.name and user.email, stay. A project that needs one
+// of these for its checks sets it in its env, which comes after.
+var gitCredentialBlock = []string{
+	"GIT_TERMINAL_PROMPT=0",
+	"GIT_CONFIG_COUNT=2",
+	"GIT_CONFIG_KEY_0=credential.helper",
+	"GIT_CONFIG_VALUE_0=",
+	"GIT_CONFIG_KEY_1=core.askPass",
+	"GIT_CONFIG_VALUE_1=",
+	`GIT_SSH_COMMAND=echo "LADO check commands cannot use git over SSH" >&2; exit 1`,
+}
 
 // CommandSpec is one check command to run: the folder it runs in, the line
 // the shell reads, its environment and its time limit. A nil Env is
@@ -78,17 +106,22 @@ func RunCommand(ctx context.Context, spec CommandSpec) CommandResult {
 	if env == nil {
 		env = CommandEnv(os.Environ(), nil)
 	}
+	// The GitHub CLI reads its logins from an empty folder of the run's own,
+	// unless the project names one.
+	if !slices.ContainsFunc(env, func(entry string) bool { return strings.EqualFold(envName(entry), "GH_CONFIG_DIR") }) {
+		ghConfig, err := os.MkdirTemp("", "lado-check-gh-")
+		if err != nil {
+			return CommandResult{Status: domain.LadoCheckRunError, Err: fmt.Errorf("run a check command: make the GitHub CLI's folder: %w", err)}
+		}
+		defer func() { _ = os.RemoveAll(ghConfig) }()
+		env = append(slices.Clip(env), "GH_CONFIG_DIR="+ghConfig)
+	}
 	// The run's time counts from its time limit's start, so a run that
 	// timed out never reads as shorter than the limit.
 	started := time.Now()
 	runCtx, cancel := context.WithTimeout(ctx, spec.Timeout)
 	defer cancel()
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" {
-		cmd = aoprocess.CommandContext(runCtx, "cmd", "/c", spec.Command)
-	} else {
-		cmd = aoprocess.CommandContext(runCtx, "sh", "-c", spec.Command)
-	}
+	cmd := shellCommand(runCtx, spec.Command)
 	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.Dir, cmd.Env, cmd.WaitDelay = spec.Dir, env, commandWaitDelay
 	// exec gives Stdout and Stderr one pipe when they are the same writer,
@@ -144,21 +177,27 @@ func commandEnd(ctx, runCtx context.Context, state *os.ProcessState, waitErr err
 }
 
 // CommandEnv is a check command's environment: base, usually the daemon's
-// own (os.Environ), without AO's variables (AO_*) and the tracker token
-// variables, with the project's variables over it, each replacing base's of
-// the same name. The project's AO_* variables are left out as well, as for an
-// agent (agentlaunch.MergeEnv). The prefix and the token names compare
-// without case; other names compare without case on Windows only, as the
-// system does.
+// own (os.Environ), without the variables LADO withholds (withheldPrefixes,
+// withheldSuffixes, withheldNames), then gitCredentialBlock, then the
+// project's variables over both, each replacing an entry of the same name.
+// The project's AO_* variables are left out, as for an agent
+// (agentlaunch.MergeEnv). Withheld names compare without case; other names
+// compare without case on Windows only, as the system does.
 func CommandEnv(base []string, project map[string]string) []string {
 	names := slices.Sorted(maps.Keys(project))
-	env := make([]string, 0, len(base)+len(project))
+	overridden := func(name string) bool {
+		return slices.ContainsFunc(names, func(other string) bool { return sameVariable(name, other) })
+	}
+	env := make([]string, 0, len(base)+len(gitCredentialBlock)+len(project))
 	for _, entry := range base {
-		name := envName(entry)
-		if withheldVariable(name) || slices.ContainsFunc(names, func(other string) bool { return sameVariable(name, other) }) {
-			continue
+		if name := envName(entry); !withheldVariable(name) && !overridden(name) {
+			env = append(env, entry)
 		}
-		env = append(env, entry)
+	}
+	for _, entry := range gitCredentialBlock {
+		if !overridden(envName(entry)) {
+			env = append(env, entry)
+		}
 	}
 	for _, name := range names {
 		if name == "" || aoVariable(name) {
@@ -186,7 +225,10 @@ func aoVariable(name string) bool {
 }
 
 func withheldVariable(name string) bool {
-	return aoVariable(name) || slices.ContainsFunc(tokenVariables, func(token string) bool { return strings.EqualFold(token, name) })
+	upper := strings.ToUpper(name)
+	return slices.ContainsFunc(withheldPrefixes, func(prefix string) bool { return strings.HasPrefix(upper, prefix) }) ||
+		slices.ContainsFunc(withheldSuffixes, func(suffix string) bool { return strings.HasSuffix(upper, suffix) }) ||
+		slices.Contains(withheldNames, upper)
 }
 
 func sameVariable(a, b string) bool {

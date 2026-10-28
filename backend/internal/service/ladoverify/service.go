@@ -68,7 +68,10 @@ type Store interface {
 	// The integration approval and the merge gate.
 	LadoPresenceProofUsed(ctx context.Context, nonce string) (bool, error)
 	ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
-	GetLadoIntegrationApproval(ctx context.Context, session domain.SessionID, headSHA string) (domain.LadoIntegrationApproval, bool, error)
+	ListLadoIntegrationApprovals(ctx context.Context, session domain.SessionID, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error)
+	ListLadoIntegrationApprovalsForPR(ctx context.Context, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error)
+	LadoSessionsNamingPR(ctx context.Context, prURL string) ([]domain.SessionID, error)
+	ResetLadoIntegrationStatus(ctx context.Context, id string) error
 	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 }
 

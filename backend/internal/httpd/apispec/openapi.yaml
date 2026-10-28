@@ -3608,6 +3608,52 @@ paths:
         and never merges
       tags:
       - lado
+  /api/v1/lado/executions/{sessionId}/integration-status:
+    post:
+      operationId: repostLadoIntegrationStatus
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoIntegrationApprovalResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Post the lado/integration status of the PR's approved current head
+        again, its attempts started over; needs no presence proof
+      tags:
+      - lado
   /api/v1/lado/plans/{revisionId}:
     get:
       operationId: getLadoPlan
@@ -19199,7 +19245,9 @@ components:
           description: Why the rules could not be read, without secrets.
           type: string
         missing:
-          description: 'What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration,
+          description: 'What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration
+            (or required_status_checks:lado/integration:any_source when the rules
+            take the check from one app only, which LADO''s status cannot satisfy),
             non_fast_forward, deletion.'
           items:
             type: string
@@ -19250,8 +19298,8 @@ components:
     LadoCheckCommandBody:
       properties:
         command:
-          description: Run with sh -c (cmd /c on Windows) in the execution's worktree,
-            outside any agent sandbox.
+          description: One line, run with sh -c (cmd /d /s /c on Windows) in the execution's
+            worktree, outside any agent sandbox.
           maxLength: 2000
           minLength: 1
           type: string
@@ -19694,6 +19742,42 @@ components:
         startedAt:
           format: date-time
           type: string
+        state:
+          description: 'The state the run gives its task, as the daemon derives it:
+            running without a PR, failed when it timed out or ended without one, and
+            once a PR is open that PR''s verification and integration.'
+          enum:
+          - running
+          - validating
+          - integration_pending
+          - integrating
+          - failed
+          - completed
+          - closed_unmerged
+          type: string
+        stateReason:
+          description: Why the run is in its state, as the task's stateReason says
+            it.
+          enum:
+          - timed_out
+          - ended_without_pr
+          - verifying
+          - checks_pending
+          - checks_failed
+          - commands_running
+          - worktree_not_at_head
+          - worktree_changed
+          - head_unavailable
+          - commands_failed
+          - command_timed_out
+          - worktree_missing
+          - commit_messages_failed
+          - protected_path
+          - review_pending
+          - changes_requested
+          - status_not_posted
+          - merged_without_approval
+          type: string
         task:
           $ref: '#/components/schemas/LadoExecutionTaskResponse'
         timedOutAt:
@@ -19715,6 +19799,7 @@ components:
       - attempt
       - startedAt
       - sessionEnded
+      - state
       type: object
     LadoExecutionRuleResponse:
       properties:
@@ -19891,12 +19976,17 @@ components:
           - failed
           - not_applicable
           type: string
+        targetBranch:
+          description: The branch the PR merged into when the head was approved; the
+            approval holds for that branch only.
+          type: string
         verificationSha256:
           description: The record hash the approval signed.
           type: string
       required:
       - id
       - headSha
+      - targetBranch
       - verificationSha256
       - acknowledged
       - actor
@@ -20365,6 +20455,10 @@ components:
           items:
             $ref: '#/components/schemas/LadoCheckCommandBody'
           type: array
+        checkCommandsSha256:
+          description: The hash of the check commands, which a change sends back as
+            checkCommandsBase.
+          type: string
         checkTimeoutMinutes:
           description: Each check command's time limit in minutes, 5 to 120.
           type: integer
@@ -20381,6 +20475,7 @@ components:
       - ladoMode
       - maxConcurrent
       - checkCommands
+      - checkCommandsSha256
       - checkTimeoutMinutes
       type: object
     LadoQueueItemResponse:
@@ -22631,7 +22726,9 @@ components:
           type: string
         missing:
           description: 'protection: what the base branch''s rules lack: pull_request,
-            required_status_checks:lado/integration, non_fast_forward, deletion.'
+            required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source
+            when the rules take the check from one app only, which LADO''s status
+            cannot satisfy), non_fast_forward, deletion.'
           items:
             type: string
           type: array
@@ -26657,15 +26754,22 @@ components:
       properties:
         checkCommands:
           description: Replace the check commands, 0 to 10. A change needs a human-presence
-            proof, because the daemon runs them outside any agent sandbox; an invalid
-            list refuses with LADO_CHECK_COMMANDS_INVALID and its index, field and
-            reason.
+            proof, because the daemon runs them outside any agent sandbox, and checkCommandsBase;
+            an invalid list refuses with LADO_CHECK_COMMANDS_INVALID and its index,
+            field and reason (a command with a control character, such as a line break,
+            or a bidirectional control also with its position and the character as
+            U+XXXX); a list that moved on since checkCommandsBase refuses with 409
+            LADO_CHECK_COMMANDS_CHANGED and the current checkCommandsSha256.
           items:
             $ref: '#/components/schemas/LadoCheckCommandBody'
           maxItems: 10
           type:
           - "null"
           - array
+        checkCommandsBase:
+          description: The checkCommandsSha256 of the list the change starts from;
+            a change of checkCommands needs it.
+          type: string
         checkTimeoutMinutes:
           description: Each check command's time limit in minutes. It changes without
             a presence proof.

@@ -43,6 +43,43 @@ func TestMergeGateNeedsAnApprovalForTheHead(t *testing.T) {
 		refused(t, f.svc.AuthorizeMerge(f.ctx, other, verifyHead1), other, verifyHead1)
 	})
 
+	// S5 of #15: an approval holds for the branch the PR merged into when
+	// the head was approved. A PR whose base was changed on the host since
+	// is refused until its head is approved into the new branch.
+	t.Run("another target branch", func(t *testing.T) {
+		exec := f.addExecution("4", verifyHead4)
+		f.store.addApproval(domain.LadoIntegrationApproval{ID: "approval-main", ExecutionSessionID: exec.SessionID, PRURL: exec.PR.URL, HeadSHA: verifyHead4, TargetBranch: "main"})
+		onMain := domain.PullRequest{URL: exec.PR.URL, SessionID: exec.SessionID, Number: 4, HeadSHA: verifyHead4, TargetBranch: "Main"}
+		if err := f.svc.AuthorizeMerge(f.ctx, onMain, verifyHead4); err != nil {
+			t.Fatalf("AuthorizeMerge into the approved branch = %v", err)
+		}
+		onRelease := onMain
+		onRelease.TargetBranch = "release"
+		requireDetails(t, f.svc.AuthorizeMerge(f.ctx, onRelease, verifyHead4), apierr.KindConflict, "LADO_INTEGRATION_TARGET_CHANGED",
+			map[string]any{"prUrl": exec.PR.URL, "headSha": verifyHead4, "sessionId": string(exec.SessionID), "approvedTarget": "main", "currentTarget": "release"})
+		f.store.addApproval(domain.LadoIntegrationApproval{ID: "approval-release", ExecutionSessionID: exec.SessionID, PRURL: exec.PR.URL, HeadSHA: verifyHead4, TargetBranch: "release"})
+		if err := f.svc.AuthorizeMerge(f.ctx, onRelease, verifyHead4); err != nil {
+			t.Fatalf("AuthorizeMerge once approved into the new branch = %v", err)
+		}
+	})
+
+	// S7 of #15: a PR claimed into another session stays LADO's while any
+	// LADO record names it, so it merges only with an approval.
+	t.Run("a PR claimed into another session", func(t *testing.T) {
+		exec := f.addExecution("5", verifyHead2)
+		f.tick()
+		f.record(exec.SessionID, verifyHead2)
+		f.store.setLadoMode("p1", false)
+		claimed := domain.PullRequest{URL: exec.PR.URL, SessionID: "outside-1", Number: 5, HeadSHA: verifyHead2, TargetBranch: "main"}
+		refused(t, f.svc.AuthorizeMerge(f.ctx, claimed, verifyHead2), claimed, verifyHead2)
+		f.store.addApproval(domain.LadoIntegrationApproval{ID: "approval-claimed", ExecutionSessionID: exec.SessionID, PRURL: exec.PR.URL, HeadSHA: verifyHead2, TargetBranch: "main"})
+		if err := f.svc.AuthorizeMerge(f.ctx, claimed, verifyHead2); err != nil {
+			t.Fatalf("AuthorizeMerge of the claimed PR's approved head = %v", err)
+		}
+		// Another head of it still needs its own approval.
+		refused(t, f.svc.AuthorizeMerge(f.ctx, claimed, verifyHead3), claimed, verifyHead3)
+	})
+
 	t.Run("another session of a project in LADO mode", func(t *testing.T) {
 		f.reads.addSession(domain.SessionRecord{ID: "orchestrator-1", ProjectID: "p1"})
 		other := domain.PullRequest{URL: "https://github.com/acme/demo/pull/8", SessionID: "orchestrator-1", Number: 8, HeadSHA: verifyHead3}
@@ -67,6 +104,7 @@ func TestMergeGateNeedsAnApprovalForTheHead(t *testing.T) {
 			pr   domain.PullRequest
 		}{
 			{"execution", pr},
+			{"naming", pr},
 			{"approval", pr},
 			{"session", other},
 			{"settings", other},
@@ -100,11 +138,18 @@ func (s failingGateStore) LadoExecution(ctx context.Context, id domain.SessionID
 	return s.verifyStore.LadoExecution(ctx, id)
 }
 
-func (s failingGateStore) GetLadoIntegrationApproval(ctx context.Context, session domain.SessionID, head string) (domain.LadoIntegrationApproval, bool, error) {
+func (s failingGateStore) ListLadoIntegrationApprovalsForPR(ctx context.Context, prURL, head string) ([]domain.LadoIntegrationApproval, error) {
 	if s.fail == "approval" {
-		return domain.LadoIntegrationApproval{}, false, errGateRead
+		return nil, errGateRead
 	}
-	return s.verifyStore.GetLadoIntegrationApproval(ctx, session, head)
+	return s.verifyStore.ListLadoIntegrationApprovalsForPR(ctx, prURL, head)
+}
+
+func (s failingGateStore) LadoSessionsNamingPR(ctx context.Context, prURL string) ([]domain.SessionID, error) {
+	if s.fail == "naming" {
+		return nil, errGateRead
+	}
+	return s.verifyStore.LadoSessionsNamingPR(ctx, prURL)
 }
 
 func (s failingGateStore) LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {

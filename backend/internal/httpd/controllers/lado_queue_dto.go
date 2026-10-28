@@ -134,6 +134,8 @@ type LadoExecutionResponse struct {
 	DeadlineAt   *time.Time                    `json:"deadlineAt,omitempty" description:"When LADO stops the run; omitted without a limit."`
 	TimedOutAt   *time.Time                    `json:"timedOutAt,omitempty" description:"When LADO stopped the run at its deadline."`
 	SessionEnded bool                          `json:"sessionEnded"`
+	State        string                        `json:"state" enum:"running,validating,integration_pending,integrating,failed,completed,closed_unmerged" description:"The state the run gives its task, as the daemon derives it: running without a PR, failed when it timed out or ended without one, and once a PR is open that PR's verification and integration."`
+	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested,status_not_posted,merged_without_approval" description:"Why the run is in its state, as the task's stateReason says it."`
 	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
 	// Verification and Integration are those of the PR's current head.
 	Verification *LadoVerificationResponse        `json:"verification,omitempty" description:"What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying."`

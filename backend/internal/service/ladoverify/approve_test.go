@@ -178,7 +178,7 @@ func TestIntegrationApprovalRecordsAndPostsStatus(t *testing.T) {
 		t.Fatalf("approval = %+v, want one", result.Approval)
 	}
 	want := domain.LadoIntegrationApproval{
-		ID: result.Approval.ID, ExecutionSessionID: gh.SessionID, PRURL: gh.PR.URL, HeadSHA: verifyHead1,
+		ID: result.Approval.ID, ExecutionSessionID: gh.SessionID, PRURL: gh.PR.URL, HeadSHA: verifyHead1, TargetBranch: "main",
 		VerificationSHA256: preview.SHA256, Acknowledged: []string{domain.LadoCodeNoTests}, ProofNonce: "nonce-github", Actor: "human",
 		ApprovedAt: now, StatusState: domain.LadoIntegrationStatusPosted, StatusAttempts: 1, StatusPostedAt: now,
 	}
@@ -207,7 +207,7 @@ func TestIntegrationApprovalRecordsAndPostsStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantPayload := map[string]any{
-		"task": "task-1", "session": "lado-1", "pr": gh.PR.URL, "head": verifyHead1, "verification": preview.SHA256,
+		"task": "task-1", "session": "lado-1", "pr": gh.PR.URL, "head": verifyHead1, "target": "main", "verification": preview.SHA256,
 		"acknowledged": []any{domain.LadoCodeNoTests}, "proof": "nonce-github", "dev": false,
 	}
 	if !reflect.DeepEqual(payload, wantPayload) {
@@ -481,7 +481,7 @@ func (s *verifyStore) ApproveLadoIntegration(_ context.Context, a domain.LadoInt
 		return domain.ErrLadoPresenceReplayed
 	}
 	if slices.ContainsFunc(s.approvals, func(x domain.LadoIntegrationApproval) bool {
-		return x.ExecutionSessionID == a.ExecutionSessionID && x.HeadSHA == a.HeadSHA
+		return x.ExecutionSessionID == a.ExecutionSessionID && x.PRURL == a.PRURL && x.HeadSHA == a.HeadSHA && strings.EqualFold(x.TargetBranch, a.TargetBranch)
 	}) {
 		return domain.ErrLadoIntegrationAlreadyApproved
 	}
@@ -499,15 +499,64 @@ func (s *verifyStore) ApproveLadoIntegration(_ context.Context, a domain.LadoInt
 	return nil
 }
 
-func (s *verifyStore) GetLadoIntegrationApproval(_ context.Context, session domain.SessionID, head string) (domain.LadoIntegrationApproval, bool, error) {
+func (s *verifyStore) ListLadoIntegrationApprovals(_ context.Context, session domain.SessionID, prURL, head string) ([]domain.LadoIntegrationApproval, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var out []domain.LadoIntegrationApproval
 	for _, a := range s.approvals {
-		if a.ExecutionSessionID == session && a.HeadSHA == head {
-			return a, true, nil
+		if a.ExecutionSessionID == session && a.PRURL == prURL && a.HeadSHA == head {
+			out = append(out, a)
 		}
 	}
-	return domain.LadoIntegrationApproval{}, false, nil
+	return out, nil
+}
+
+func (s *verifyStore) ListLadoIntegrationApprovalsForPR(_ context.Context, prURL, head string) ([]domain.LadoIntegrationApproval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []domain.LadoIntegrationApproval
+	for _, a := range s.approvals {
+		if a.PRURL == prURL && a.HeadSHA == head {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// LadoSessionsNamingPR answers the executions whose records or approvals
+// name the PR.
+func (s *verifyStore) LadoSessionsNamingPR(_ context.Context, prURL string) ([]domain.SessionID, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []domain.SessionID
+	add := func(session domain.SessionID) {
+		if !slices.Contains(out, session) {
+			out = append(out, session)
+		}
+	}
+	for _, record := range s.records {
+		if record.PRURL == prURL {
+			add(record.ExecutionSessionID)
+		}
+	}
+	for _, a := range s.approvals {
+		if a.PRURL == prURL {
+			add(a.ExecutionSessionID)
+		}
+	}
+	return out, nil
+}
+
+func (s *verifyStore) ResetLadoIntegrationStatus(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.approvals {
+		if s.approvals[i].ID == id {
+			s.approvals[i].StatusState, s.approvals[i].StatusAttempts, s.approvals[i].StatusError = domain.LadoIntegrationStatusPending, 0, ""
+			return nil
+		}
+	}
+	return fmt.Errorf("no integration approval %s", id)
 }
 
 func (s *verifyStore) LadoProjectSettings(_ context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {

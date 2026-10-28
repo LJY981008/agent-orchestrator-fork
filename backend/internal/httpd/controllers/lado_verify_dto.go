@@ -98,7 +98,7 @@ type LadoVerifyItemDetailsResponse struct {
 	// protection
 	Provider       string   `json:"provider,omitempty" enum:"github,gitlab" description:"protection: the repository's host."`
 	Repo           string   `json:"repo,omitempty" description:"protection: the repository, as owner/name."`
-	Missing        []string `json:"missing,omitempty" description:"protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration, non_fast_forward, deletion."`
+	Missing        []string `json:"missing,omitempty" description:"protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion."`
 	RequiredChecks []string `json:"requiredChecks,omitempty" description:"protection: the checks the rules require."`
 	ErrorClass     string   `json:"errorClass,omitempty" description:"protection: the class of a failed read of the rules, which the record's hash covers: http_<status>, rate_limited, transport or other."`
 	Error          string   `json:"error,omitempty" description:"protection: why the rules could not be read, without secrets; outside the record's hash."`
@@ -144,6 +144,7 @@ type LadoVerificationResponse struct {
 type LadoIntegrationApprovalResponse struct {
 	ID                 string     `json:"id"`
 	HeadSHA            string     `json:"headSha"`
+	TargetBranch       string     `json:"targetBranch" description:"The branch the PR merged into when the head was approved; the approval holds for that branch only."`
 	VerificationSHA256 string     `json:"verificationSha256" description:"The record hash the approval signed."`
 	Acknowledged       []string   `json:"acknowledged" description:"The confirm codes the developer acknowledged, sorted."`
 	Actor              string     `json:"actor" description:"human, or human:dev-presence for a proof made without the desktop app's key."`
@@ -189,7 +190,7 @@ type LadoBranchProtectionResponse struct {
 	Repository     string     `json:"repository" description:"Canonical id of the repository, such as github:owner/repo."`
 	Branch         string     `json:"branch" description:"The base branch workers start from; empty when LADO could not tell it."`
 	State          string     `json:"state" enum:"protected,unprotected,unknown,unsupported" description:"protected: the rules require a pull request, the lado/integration status, no force pushes and no deletion; unknown: they could not be read; unsupported: LADO does not read GitLab's protection, it only detects."`
-	Missing        []string   `json:"missing" description:"What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration, non_fast_forward, deletion."`
+	Missing        []string   `json:"missing" description:"What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion."`
 	RequiredChecks []string   `json:"requiredChecks" description:"The checks the rules require, lado/integration left out."`
 	CheckedAt      *time.Time `json:"checkedAt,omitempty" description:"When LADO asked the host."`
 	Error          string     `json:"error,omitempty" description:"Why the rules could not be read, without secrets."`

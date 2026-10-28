@@ -110,6 +110,7 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 		LadoMode:            req.LadoMode,
 		MaxConcurrent:       req.MaxConcurrent,
 		CheckTimeoutMinutes: req.CheckTimeoutMinutes,
+		CheckCommandsBase:   req.CheckCommandsBase,
 		Presence:            c.presenceCheck(r, body),
 	}
 	if req.CheckCommands != nil {
@@ -141,6 +142,7 @@ func ladoProjectSettingsResponse(settings domain.LadoProjectSettings) LadoProjec
 		LadoMode:            settings.LadoMode,
 		MaxConcurrent:       settings.MaxConcurrent,
 		CheckCommands:       commands,
+		CheckCommandsSHA256: domain.LadoCheckCommandsSHA256(settings.CheckCommands),
 		CheckTimeoutMinutes: settings.CheckTimeoutMinutes,
 	}
 }

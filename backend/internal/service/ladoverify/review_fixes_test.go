@@ -270,3 +270,85 @@ func TestTickAsksTheWorkerToPullAHeadMadeOnTheHost(t *testing.T) {
 		t.Fatalf("messages to a worktree that is not behind = %q, want none", got)
 	}
 }
+
+// S8: after its attempts ran out, the approved head's lado/integration
+// status can be posted again, attempts started over, without presence.
+func TestRepostIntegrationStatusStartsOver(t *testing.T) {
+	f := newVerifyFixture(t)
+	exec := f.addExecution("1", verifyHead1)
+	if _, err := f.svc.RepostIntegrationStatus(f.ctx, exec.SessionID); !isAPIError(err, "LADO_INTEGRATION_NOT_APPROVED") {
+		t.Fatalf("repost without an approval = %v, want LADO_INTEGRATION_NOT_APPROVED", err)
+	}
+	f.store.addApproval(domain.LadoIntegrationApproval{
+		ID: "approval-1", ExecutionSessionID: exec.SessionID, PRURL: exec.PR.URL, HeadSHA: verifyHead1, TargetBranch: "main",
+		StatusState: domain.LadoIntegrationStatusFailed, StatusAttempts: domain.LadoIntegrationStatusMaxAttempts, StatusError: "the host answered 403",
+	})
+	// The loop has given up on it.
+	f.tick()
+	if posts := f.host.postsMade(); len(posts) != 0 {
+		t.Fatalf("the loop posted %d statuses after the attempts ran out, want none", len(posts))
+	}
+
+	approval, err := f.svc.RepostIntegrationStatus(f.ctx, exec.SessionID)
+	if err != nil {
+		t.Fatalf("repost = %v", err)
+	}
+	if approval.StatusState != domain.LadoIntegrationStatusPosted || approval.StatusAttempts != 1 || approval.StatusError != "" {
+		t.Fatalf("approval after the repost = %+v, want posted after one attempt", approval)
+	}
+	if stored := f.store.approval("approval-1"); stored.StatusState != domain.LadoIntegrationStatusPosted || stored.StatusAttempts != 1 {
+		t.Fatalf("stored approval = %+v, want posted after one attempt", stored)
+	}
+	if posts := f.host.postsMade(); len(posts) != 1 || posts[0].sha != verifyHead1 || posts[0].status.Context != domain.LadoIntegrationStatusContext {
+		t.Fatalf("posts = %+v, want the lado/integration status on the head", posts)
+	}
+
+	// A post that fails again is the approval's status, and the loop takes
+	// it up from there.
+	f.store.addApproval(domain.LadoIntegrationApproval{
+		ID: "approval-3", ExecutionSessionID: "lado-3", PRURL: "https://github.com/acme/demo/pull/3", HeadSHA: verifyHead3, TargetBranch: "main",
+		StatusState: domain.LadoIntegrationStatusFailed, StatusAttempts: domain.LadoIntegrationStatusMaxAttempts,
+	})
+	f.addExecution("3", verifyHead3)
+	f.host.setPostErr(errors.New("the host answered 403: Resource not accessible by integration"))
+	approval, err = f.svc.RepostIntegrationStatus(f.ctx, "lado-3")
+	if err != nil || approval.StatusState != domain.LadoIntegrationStatusFailed || approval.StatusAttempts != 1 {
+		t.Fatalf("repost that fails = %+v, %v; want failed after one attempt", approval, err)
+	}
+}
+
+// S6: an approval holds for its PR: the same head opened again as a new PR
+// is not approved, and can be approved for that PR.
+func TestApprovalHoldsForItsPR(t *testing.T) {
+	f := newApproveFixture(t)
+	exec := f.add("1", verifyHead1)
+	preview := f.preview(exec)
+	if _, err := f.approve(exec, preview.SHA256, preview.Confirm, "nonce-first"); err != nil {
+		t.Fatalf("first approval = %v", err)
+	}
+	// The PR closed and the worker opened another one at the same head.
+	reopened := exec
+	reopened.PR.URL, reopened.PR.Number = "https://github.com/acme/demo/pull/11", 11
+	f.store.update(exec.SessionID, func(e *domain.LadoExecution) { e.PR = reopened.PR })
+	f.heads.set(reopened.PR.URL, verifyHead1)
+	pr := domain.PullRequest{URL: reopened.PR.URL, SessionID: exec.SessionID, Number: 11, HeadSHA: verifyHead1, TargetBranch: "main"}
+	if err := f.svc.AuthorizeMerge(f.ctx, pr, verifyHead1); !isAPIError(err, "LADO_INTEGRATION_APPROVAL_REQUIRED") {
+		t.Fatalf("merge of the new PR on the old PR's approval = %v, want LADO_INTEGRATION_APPROVAL_REQUIRED", err)
+	}
+	preview = f.preview(reopened)
+	if _, err := f.approve(reopened, preview.SHA256, preview.Confirm, "nonce-second"); err != nil {
+		t.Fatalf("approval of the new PR = %v, want it recorded", err)
+	}
+	if err := f.svc.AuthorizeMerge(f.ctx, pr, verifyHead1); err != nil {
+		t.Fatalf("merge of the new PR once approved = %v", err)
+	}
+	if _, err := f.approve(reopened, preview.SHA256, preview.Confirm, "nonce-third"); !isAPIError(err, "LADO_INTEGRATION_ALREADY_APPROVED") {
+		t.Fatalf("a second approval of the new PR = %v, want LADO_INTEGRATION_ALREADY_APPROVED", err)
+	}
+}
+
+// isAPIError reports whether err is an *apierr.Error with code.
+func isAPIError(err error, code string) bool {
+	var apiErr *apierr.Error
+	return errors.As(err, &apiErr) && apiErr.Code == code
+}

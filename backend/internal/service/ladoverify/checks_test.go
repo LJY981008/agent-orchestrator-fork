@@ -36,32 +36,23 @@ func expectItemOutcome(t *testing.T, item domain.LadoVerifyItem, kind domain.Lad
 	}
 }
 
-// Gate 6: the worker's report is a claim. LADO reads the head's checks, and a
-// failing required check keeps the task Validating.
+// Gate 6: the worker's report is a claim. A worker that reported done (ao
+// report --done) and ended leaves its PR open; LADO reads only the head's
+// records, so a failing required check keeps the task Validating until the
+// check passes on the head (S10 of #15: the test goes through the loop).
 func TestFailingRequiredCheckKeepsValidatingDespiteReport(t *testing.T) {
-	const prURL = "https://github.com/acme/demo/pull/7"
-	head := strings.Repeat("a", 40)
-	// The worker reported done (ao report --done) and said its tests pass.
-	// Nothing LADO verifies takes that report: only the head's records count.
-	report := domain.ReportRecord{SessionID: "lado-1", State: domain.ReportDone, Message: "Done: all tests pass."}
+	f := newVerifyFixture(t)
+	f.host.rules = protectionRules(protectionAllTypes, "build", domain.LadoIntegrationStatusContext)
+	exec := f.addExecution("7", verifyHead1)
+	// The worker said its tests pass, reported done and its session ended.
+	f.reads.endSession(exec.SessionID)
+	f.store.update(exec.SessionID, func(e *domain.LadoExecution) { e.SessionTerminated = true })
+	f.store.setCommitChecks(exec.PR.URL, verifyHead1,
+		domain.PullRequestCheck{Name: "build", CommitHash: verifyHead1, Status: domain.PRCheckFailed},
+		domain.PullRequestCheck{Name: "lint", CommitHash: verifyHead1, Status: domain.PRCheckPassed})
 
-	required, named := RequiredContexts(protectionRules(protectionAllTypes, "build", domain.LadoIntegrationStatusContext))
-	checks, err := EvaluateRequiredChecks(required, named, true, headCheckRows("build", "failed", "lint", "passed"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectItemOutcome(t, checks, domain.LadoVerifyRequiredChecks, domain.LadoVerifyFail, domain.LadoCodeChecksFailed)
-	commands, err := EvaluateCommands(CommandsInput{RequiredNamed: named})
-	if err != nil {
-		t.Fatal(err)
-	}
-	expectItemOutcome(t, commands, domain.LadoVerifyCommands, domain.LadoVerifyPass, domain.LadoCodeNoneConfigured)
-	review, _, err := EvaluateReview(ReviewInput{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	record := domain.LadoVerification{ExecutionSessionID: report.SessionID, HeadSHA: head, PRURL: prURL, Items: []domain.LadoVerifyItem{checks, commands, review}, ComputedAt: t0}
+	f.tick()
+	record := f.record(exec.SessionID, verifyHead1)
 	outcome, reason := record.Overall()
 	if outcome != domain.LadoVerifyFail || reason != domain.LadoCodeChecksFailed {
 		t.Fatalf("Overall() = %s %q, want fail checks_failed", outcome, reason)
@@ -69,18 +60,26 @@ func TestFailingRequiredCheckKeepsValidatingDespiteReport(t *testing.T) {
 	if ReviewReady(record.Items) {
 		t.Fatal("ReviewReady = true with a failing required check")
 	}
-
-	task := domain.LadoTask{Execution: domain.LadoExecution{
-		SessionID:    report.SessionID,
-		StartedAt:    t0,
-		PR:           domain.LadoExecutionPR{URL: prURL, Number: 7, HeadSHA: head},
-		Verification: domain.LadoExecutionVerification{HeadSHA: head, Outcome: outcome, Reason: reason},
-	}}
-	if state := task.StateAt(t0.Add(time.Hour)); state != domain.LadoTaskValidating {
-		t.Fatalf("task state = %s, want validating", state)
+	stateOf := func() (domain.LadoTaskState, string) {
+		t.Helper()
+		listed, _, err := f.store.LadoExecution(f.ctx, exec.SessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		listed.Verification = domain.LadoExecutionVerification{HeadSHA: verifyHead1}
+		listed.Verification.Outcome, listed.Verification.Reason = f.record(exec.SessionID, verifyHead1).Overall()
+		task := domain.LadoTask{Execution: listed}
+		return task.StateAt(t0.Add(time.Hour)), task.StateReason()
 	}
-	if got := task.StateReason(); got != domain.LadoCodeChecksFailed {
-		t.Fatalf("task reason = %q, want checks_failed", got)
+	if state, reason := stateOf(); state != domain.LadoTaskValidating || reason != domain.LadoCodeChecksFailed {
+		t.Fatalf("task = %s %q, want validating checks_failed", state, reason)
+	}
+
+	// Only the check passing on the head moves the task on.
+	f.store.setCommitChecks(exec.PR.URL, verifyHead1, domain.PullRequestCheck{Name: "build", CommitHash: verifyHead1, Status: domain.PRCheckPassed})
+	f.tick()
+	if state, _ := stateOf(); state != domain.LadoTaskIntegrationPending {
+		t.Fatalf("task once build passed = %s, want integration_pending", state)
 	}
 }
 

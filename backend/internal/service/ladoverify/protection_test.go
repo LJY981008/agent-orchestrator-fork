@@ -88,6 +88,9 @@ func TestProtectionItem(t *testing.T) {
 				[]string{"non_fast_forward"}, nil},
 			{"deletion allowed", protectionRules(protectionAllTypes[:3], "lado/integration"), []string{"deletion"}, nil},
 			{"no rules", ports.LadoBranchRules{}, []string{"pull_request", "required_status_checks:lado/integration", "non_fast_forward", "deletion"}, nil},
+			// Q3 of #15: LADO posts lado/integration with its token, which a
+			// rule that takes the check from one app only does not accept.
+			{"lado/integration from one app only", protectionAppRules(appID(15368), false), []string{"required_status_checks:lado/integration:any_source"}, []string{"build"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				item, err := EvaluateProtection(read(tc.rules))
@@ -167,6 +170,19 @@ func TestProtectionItem(t *testing.T) {
 		}
 	})
 
+	t.Run("lado/integration from any source as well", func(t *testing.T) {
+		item, err := EvaluateProtection(read(protectionAppRules(appID(15368), true)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if item.Outcome != domain.LadoVerifyPass || len(MissingProtection(protectionAppRules(appID(15368), true))) != 0 {
+			t.Fatalf("item = %s %q %s, want a pass: one rule takes the check from any source", item.Outcome, item.Code, item.Details)
+		}
+		if missing := MissingProtection(protectionAppRules(nil, false)); len(missing) != 0 {
+			t.Fatalf("MissingProtection of a rule without an app = %q, want nothing", missing)
+		}
+	})
+
 	t.Run("error classes", func(t *testing.T) {
 		for _, tc := range []struct {
 			err  error
@@ -236,6 +252,24 @@ func protectionDetailsEqual(a, b domain.LadoProtectionDetails) bool {
 	return a.Provider == b.Provider && a.Repo == b.Repo && a.Branch == b.Branch && a.ErrorClass == b.ErrorClass &&
 		slices.Equal(a.Missing, b.Missing) && slices.Equal(a.RequiredChecks, b.RequiredChecks)
 }
+
+// protectionAppRules are every rule type, the status checks requiring build
+// and lado/integration from app (nil for any source) and, with anyToo, a
+// second status check rule requiring lado/integration from any source.
+func protectionAppRules(app *int64, anyToo bool) ports.LadoBranchRules {
+	rules := protectionRules(protectionAllTypes)
+	for i := range rules.Rules {
+		if rules.Rules[i].Type == ports.LadoBranchRuleRequiredStatusChecks {
+			rules.Rules[i].RequiredChecks = []ports.LadoRequiredCheck{{Context: "build"}, {Context: "lado/integration", IntegrationID: app}}
+		}
+	}
+	if anyToo {
+		rules.Rules = append(rules.Rules, ports.LadoBranchRule{Type: ports.LadoBranchRuleRequiredStatusChecks, RequiredChecks: []ports.LadoRequiredCheck{{Context: "LADO/integration"}}})
+	}
+	return rules
+}
+
+func appID(id int64) *int64 { return &id }
 
 // protectionClock is a clock the test moves.
 type protectionClock struct {

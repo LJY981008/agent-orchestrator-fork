@@ -378,7 +378,7 @@ func TestLadoAPI_ProjectSettingsMaxConcurrent(t *testing.T) {
 	// sameSettings compares settings without check commands, which keep
 	// their default time limit.
 	sameSettings := func(got controllers.LadoProjectSettingsResponse, want controllers.LadoProjectSettingsResponse) bool {
-		want.CheckCommands, want.CheckTimeoutMinutes = []controllers.LadoCheckCommandBody{}, 30
+		want.CheckCommands, want.CheckCommandsSHA256, want.CheckTimeoutMinutes = []controllers.LadoCheckCommandBody{}, domain.LadoCheckCommandsSHA256(nil), 30
 		return reflect.DeepEqual(got, want)
 	}
 	if got := current(); !sameSettings(got, controllers.LadoProjectSettingsResponse{ProjectID: "mer", MaxConcurrent: 1}) {

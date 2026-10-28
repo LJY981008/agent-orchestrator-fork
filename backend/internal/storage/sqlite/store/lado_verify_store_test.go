@@ -130,10 +130,20 @@ func ladoVerificationSHA256(t *testing.T, v domain.LadoVerification) string {
 func ladoIntegrationApproval(t *testing.T, id string, v domain.LadoVerification, state domain.LadoIntegrationStatusState, at time.Time) domain.LadoIntegrationApproval {
 	t.Helper()
 	return domain.LadoIntegrationApproval{
-		ID: id, ExecutionSessionID: v.ExecutionSessionID, PRURL: v.PRURL, HeadSHA: v.HeadSHA,
+		ID: id, ExecutionSessionID: v.ExecutionSessionID, PRURL: v.PRURL, HeadSHA: v.HeadSHA, TargetBranch: "main",
 		VerificationSHA256: ladoVerificationSHA256(t, v), Acknowledged: v.ConfirmCodes(),
 		Actor: "human", ApprovedAt: at, StatusState: state,
 	}
+}
+
+// ladoApprovalOf reads the approval of an execution's PR at head into main.
+func ladoApprovalOf(t *testing.T, s *sqlite.Store, session domain.SessionID, prURL, head string) (domain.LadoIntegrationApproval, bool) {
+	t.Helper()
+	approvals, err := s.ListLadoIntegrationApprovals(context.Background(), session, prURL, head)
+	if err != nil {
+		t.Fatalf("ListLadoIntegrationApprovals: %v", err)
+	}
+	return domain.LadoApprovalFor(approvals, "main")
 }
 
 // ladoIntegrationProof is an unused presence proof for approving a head.
@@ -470,8 +480,8 @@ func TestApproveLadoIntegrationRecordsProofAndAuditTogether(t *testing.T) {
 	}
 	stored := approval
 	stored.ProofNonce = proof.Nonce
-	if got, ok, err := s.GetLadoIntegrationApproval(ctx, exec.SessionID, record.HeadSHA); err != nil || !ok || !reflect.DeepEqual(got, stored) {
-		t.Fatalf("GetLadoIntegrationApproval = %+v (%v, %v), want %+v", got, ok, err, stored)
+	if got, ok := ladoApprovalOf(t, s, exec.SessionID, prURL, record.HeadSHA); !ok || !reflect.DeepEqual(got, stored) {
+		t.Fatalf("the head's approval = %+v (%v), want %+v", got, ok, stored)
 	}
 	if used, err := s.LadoPresenceProofUsed(ctx, proof.Nonce); err != nil || !used {
 		t.Fatalf("the approval's proof used = (%v, %v), want true", used, err)
@@ -513,18 +523,39 @@ func TestApproveLadoIntegrationRecordsProofAndAuditTogether(t *testing.T) {
 	if after := ladoAuditProbe(t, s); after != before+1 {
 		t.Fatalf("refused approvals appended %d audit events, want none", after-before-1)
 	}
-	if got, _, err := s.GetLadoIntegrationApproval(ctx, exec.SessionID, record.HeadSHA); err != nil || !reflect.DeepEqual(got, stored) {
-		t.Fatalf("after refusals the head's approval = %+v (%v), want the first", got, err)
+	if got, _ := ladoApprovalOf(t, s, exec.SessionID, prURL, record.HeadSHA); !reflect.DeepEqual(got, stored) {
+		t.Fatalf("after refusals the head's approval = %+v, want the first", got)
 	}
 	for _, h := range []string{ladoHead('b'), ladoHead('c')} {
-		if _, ok, err := s.GetLadoIntegrationApproval(ctx, exec.SessionID, h); err != nil || ok {
-			t.Fatalf("refused approvals left one for %s (%v)", h[:1], err)
+		if _, ok := ladoApprovalOf(t, s, exec.SessionID, prURL, h); ok {
+			t.Fatalf("refused approvals left one for %s", h[:1])
 		}
 	}
 
 	// A proof a refused approval carried is still unused.
 	if err := s.ApproveLadoIntegration(ctx, nextApproval, ladoIntegrationProof("nonce-integration-3", nextApproval), ladoIntegrationEvent(nextApproval)); err != nil {
 		t.Fatalf("approving the next head with a proof a refused call carried: %v", err)
+	}
+
+	// S5 and S6 of #15: an approval is of one PR, head and target branch.
+	// The same head approved into another branch is another approval.
+	release := approval
+	release.ID, release.TargetBranch = "lado-integration-5", "release"
+	if err := s.ApproveLadoIntegration(ctx, release, ladoIntegrationProof("nonce-integration-5", release), ladoIntegrationEvent(release)); err != nil {
+		t.Fatalf("approving the head into another branch: %v", err)
+	}
+	approvals, err := s.ListLadoIntegrationApprovals(ctx, exec.SessionID, prURL, record.HeadSHA)
+	if err != nil || len(approvals) != 2 || approvals[0].TargetBranch != "main" || approvals[1].TargetBranch != "release" {
+		t.Fatalf("the head's approvals = %+v (%v), want main then release", approvals, err)
+	}
+	if forPR, err := s.ListLadoIntegrationApprovalsForPR(ctx, prURL, record.HeadSHA); err != nil || len(forPR) != 2 {
+		t.Fatalf("ListLadoIntegrationApprovalsForPR = %+v (%v), want both", forPR, err)
+	}
+	if sessions, err := s.LadoSessionsNamingPR(ctx, prURL); err != nil || !slices.Equal(sessions, []domain.SessionID{exec.SessionID}) {
+		t.Fatalf("LadoSessionsNamingPR = %v (%v), want the execution", sessions, err)
+	}
+	if sessions, err := s.LadoSessionsNamingPR(ctx, "https://github.com/acme/demo/pull/99"); err != nil || len(sessions) != 0 {
+		t.Fatalf("LadoSessionsNamingPR of a PR LADO never saw = %v (%v), want none", sessions, err)
 	}
 }
 
@@ -567,8 +598,8 @@ func TestLadoIntegrationStatusRetries(t *testing.T) {
 		t.Fatalf("SetLadoIntegrationStatus posted: %v", err)
 	}
 	pending.StatusState, pending.StatusAttempts, pending.StatusPostedAt = domain.LadoIntegrationStatusPosted, 1, posted
-	if got, ok, err := s.GetLadoIntegrationApproval(ctx, exec.SessionID, pending.HeadSHA); err != nil || !ok || !reflect.DeepEqual(got, pending) {
-		t.Fatalf("after posting: %+v (%v, %v), want %+v", got, ok, err, pending)
+	if got, ok := ladoApprovalOf(t, s, exec.SessionID, pending.PRURL, pending.HeadSHA); !ok || !reflect.DeepEqual(got, pending) {
+		t.Fatalf("after posting: %+v (%v), want %+v", got, ok, pending)
 	}
 	expect("posted", 10, failed)
 
@@ -613,7 +644,15 @@ func TestLadoProjectCheckSettings(t *testing.T) {
 	commands := []domain.LadoCheckCommand{{Name: "test", Command: "go test ./..."}, {Name: "lint", Command: `npm run lint && echo "<done>"`}}
 	proof := domain.LadoPresenceProof{Nonce: "nonce-checks-1", Action: domain.LadoPresenceCheckCommands, SubjectID: "mer", ExpiresAt: at.Add(time.Minute), UsedAt: at}
 	before := ladoAuditProbe(t, s)
-	if err := s.SetLadoProjectCheckCommands(ctx, "mer", commands, &proof, event("project.check_commands_changed", at)); err != nil {
+	// U7 of #15: a change starts from the stored list's hash; another
+	// list's refuses it and keeps nothing, the proof included.
+	if err := s.SetLadoProjectCheckCommands(ctx, "mer", domain.LadoCheckCommandsSHA256(commands), commands, &proof, event("project.check_commands_changed", at)); !errors.Is(err, domain.ErrLadoCheckCommandsChanged) {
+		t.Fatalf("a change from another list = %v, want ErrLadoCheckCommandsChanged", err)
+	}
+	if used, err := s.LadoPresenceProofUsed(ctx, proof.Nonce); err != nil || used {
+		t.Fatalf("the refused change's proof used = (%v, %v), want false", used, err)
+	}
+	if err := s.SetLadoProjectCheckCommands(ctx, "mer", domain.LadoCheckCommandsSHA256(nil), commands, &proof, event("project.check_commands_changed", at)); err != nil {
 		t.Fatalf("SetLadoProjectCheckCommands: %v", err)
 	}
 	expect("commands", "mer", commands, domain.LadoCheckTimeoutDefault)
@@ -623,7 +662,7 @@ func TestLadoProjectCheckSettings(t *testing.T) {
 	if used, err := s.LadoPresenceProofUsed(ctx, proof.Nonce); err != nil || !used {
 		t.Fatalf("the commands' proof used = (%v, %v), want true", used, err)
 	}
-	if err := s.SetLadoProjectCheckCommands(ctx, "mer", nil, &proof, event("project.check_commands_changed", at.Add(time.Minute))); !errors.Is(err, domain.ErrLadoPresenceReplayed) {
+	if err := s.SetLadoProjectCheckCommands(ctx, "mer", domain.LadoCheckCommandsSHA256(commands), nil, &proof, event("project.check_commands_changed", at.Add(time.Minute))); !errors.Is(err, domain.ErrLadoPresenceReplayed) {
 		t.Fatalf("a replayed proof = %v, want ErrLadoPresenceReplayed", err)
 	}
 	expect("replayed", "mer", commands, domain.LadoCheckTimeoutDefault)
@@ -641,7 +680,7 @@ func TestLadoProjectCheckSettings(t *testing.T) {
 	expect("out of range", "mer", commands, 60)
 
 	// Without a proof the commands store as well; none are an empty list.
-	if err := s.SetLadoProjectCheckCommands(ctx, "mer", nil, nil, event("project.check_commands_changed", at.Add(4*time.Minute))); err != nil {
+	if err := s.SetLadoProjectCheckCommands(ctx, "mer", domain.LadoCheckCommandsSHA256(commands), nil, nil, event("project.check_commands_changed", at.Add(4*time.Minute))); err != nil {
 		t.Fatalf("SetLadoProjectCheckCommands without a proof: %v", err)
 	}
 	expect("cleared", "mer", []domain.LadoCheckCommand{}, 60)
@@ -1061,5 +1100,55 @@ func TestListLadoCommitChecksReadsOneCommit(t *testing.T) {
 	}
 	if got, err := s.ListLadoCommitChecks(ctx, pr.URL, ladoHead('c')); err != nil || len(got) != 0 {
 		t.Fatalf("ListLadoCommitChecks of a commit without checks = %+v (%v), want none", got, err)
+	}
+}
+
+// S5 and S6 of #15: an execution read holds the current head approved only
+// with an approval of its current PR into the branch that PR merges into
+// now: a base changed on the host, or the same head opened again as another
+// PR, takes the task back to integration pending.
+func TestLadoExecutionReadsHoldApprovalsToTheirPRAndTarget(t *testing.T) {
+	s := openLadoVerifyStore(t)
+	ctx := context.Background()
+	at := ladoVerifyAt
+	exec := mustLadoExecution(t, s, "1", at, false)
+	pr := mustWriteLadoHeadPR(t, s, exec.SessionID, 7, domain.PRStateOpen, ladoHead('a'), at.Add(time.Hour))
+	record := ladoVerification(t, exec.SessionID, pr.URL, ladoHead('a'), at.Add(time.Hour),
+		mustLadoVerifyItem(t, domain.LadoVerifyRequiredChecks, domain.LadoVerifyPass, "", nil))
+	mustUpsertLadoVerification(t, s, record)
+	approval := ladoIntegrationApproval(t, "lado-integration-1", record, domain.LadoIntegrationStatusPosted, at.Add(2*time.Hour))
+	mustApproveLadoIntegration(t, s, approval)
+	stateOf := func(step string) domain.LadoTaskState {
+		t.Helper()
+		got, _, err := s.LadoExecution(ctx, exec.SessionID)
+		if err != nil {
+			t.Fatalf("%s: LadoExecution: %v", step, err)
+		}
+		state, _ := got.State()
+		return state
+	}
+	if state := stateOf("approved into main"); state != domain.LadoTaskIntegrating {
+		t.Fatalf("approved into main = %s, want integrating", state)
+	}
+	retarget := func(number int, target string, at time.Time) {
+		t.Helper()
+		url := fmt.Sprintf("https://github.com/acme/demo/pull/%d", number)
+		if err := s.WriteSCMObservation(ctx, domain.PullRequest{
+			URL: url, SessionID: exec.SessionID, Number: number, HeadSHA: ladoHead('a'), TargetBranch: target, Title: "Change", UpdatedAt: at,
+		}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatalf("write PR %d: %v", number, err)
+		}
+	}
+	retarget(7, "release", at.Add(3*time.Hour))
+	if state := stateOf("base changed"); state != domain.LadoTaskIntegrationPending {
+		t.Fatalf("after the base changed = %s, want integration_pending", state)
+	}
+	retarget(7, "main", at.Add(4*time.Hour))
+	if state := stateOf("base back"); state != domain.LadoTaskIntegrating {
+		t.Fatalf("after the base changed back = %s, want integrating", state)
+	}
+	retarget(8, "main", at.Add(5*time.Hour))
+	if state := stateOf("another PR"); state != domain.LadoTaskIntegrationPending {
+		t.Fatalf("with the head opened again as PR 8 = %s, want integration_pending", state)
 	}
 }

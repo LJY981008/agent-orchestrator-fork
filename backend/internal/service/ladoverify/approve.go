@@ -91,7 +91,8 @@ func (s *Service) ApproveIntegration(ctx context.Context, in ApproveInput) (Appr
 	if in.DryRun {
 		return result, nil
 	}
-	if err := s.approvable(ctx, in, record, sum, result.Confirm); err != nil {
+	target := approvalTarget(exec)
+	if err := s.approvable(ctx, in, record, target, sum, result.Confirm); err != nil {
 		return ApproveResult{}, err
 	}
 	approval, err := s.recordApproval(ctx, exec, record, sum, result.Confirm, proof)
@@ -172,10 +173,20 @@ func (s *Service) integrationExecution(ctx context.Context, in ApproveInput, hea
 	return exec, nil
 }
 
+// approvalTarget is the branch an approval of the execution's PR holds for:
+// the PR's target, else the base the dispatcher resolved, as the record
+// verified it.
+func approvalTarget(exec domain.LadoExecution) string {
+	if exec.PR.TargetBranch != "" {
+		return exec.PR.TargetBranch
+	}
+	return exec.BaseBranch
+}
+
 // approvable refuses to approve a record other than the one signed, a record
 // with an item that waits or fails, acknowledgements other than the record's
-// confirm codes, and a head approved already.
-func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain.LadoVerification, sum string, confirm []string) error {
+// confirm codes, and a PR head approved already into target.
+func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain.LadoVerification, target, sum string, confirm []string) error {
 	if !strings.EqualFold(strings.TrimSpace(in.VerificationSHA256), sum) {
 		return verificationChanged()
 	}
@@ -189,12 +200,12 @@ func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain
 			"Confirm exactly the items of this head that need confirming.",
 			map[string]any{"required": confirm, "given": given})
 	}
-	_, approved, err := s.deps.Store.GetLadoIntegrationApproval(ctx, record.ExecutionSessionID, record.HeadSHA)
-	switch {
-	case err != nil:
+	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, record.ExecutionSessionID, record.PRURL, record.HeadSHA)
+	if err != nil {
 		s.deps.Log.Error("LADO could not read the integration approvals of a head", "session", record.ExecutionSessionID, "head", record.HeadSHA, "err", err)
 		return verifyFailed()
-	case approved:
+	}
+	if slices.ContainsFunc(approvals, func(a domain.LadoIntegrationApproval) bool { return strings.EqualFold(a.TargetBranch, target) }) {
 		return alreadyApproved()
 	}
 	return nil
@@ -223,6 +234,7 @@ func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution,
 		ExecutionSessionID: exec.SessionID,
 		PRURL:              record.PRURL,
 		HeadSHA:            record.HeadSHA,
+		TargetBranch:       approvalTarget(exec),
 		VerificationSHA256: sum,
 		Acknowledged:       acknowledged,
 		ProofNonce:         proof.Nonce,
@@ -235,6 +247,7 @@ func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution,
 		"session":      exec.SessionID,
 		"pr":           approval.PRURL,
 		"head":         approval.HeadSHA,
+		"target":       approval.TargetBranch,
 		"verification": sum,
 		"acknowledged": acknowledged,
 		"proof":        proof.Nonce,
@@ -309,7 +322,7 @@ func verificationChanged() error {
 }
 
 func alreadyApproved() error {
-	return apierr.Conflict("LADO_INTEGRATION_ALREADY_APPROVED", "The integration of this head is approved already.", nil)
+	return apierr.Conflict("LADO_INTEGRATION_ALREADY_APPROVED", "The integration of this head into its target branch is approved already.", nil)
 }
 
 func verifyFailed() error {

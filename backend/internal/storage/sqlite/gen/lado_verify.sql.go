@@ -141,39 +141,6 @@ func (q *Queries) GetLadoExecutionReview(ctx context.Context, reviewRunID string
 	return i, err
 }
 
-const getLadoIntegrationApprovalForHead = `-- name: GetLadoIntegrationApprovalForHead :one
-SELECT id, execution_session_id, pr_url, head_sha, verification_sha256, acknowledged_json, proof_nonce, actor,
-    approved_at, status_state, status_attempts, status_posted_at, status_error
-FROM lado_integration_approvals
-WHERE execution_session_id = ? AND head_sha = ?
-`
-
-type GetLadoIntegrationApprovalForHeadParams struct {
-	ExecutionSessionID string
-	HeadSha            string
-}
-
-func (q *Queries) GetLadoIntegrationApprovalForHead(ctx context.Context, arg GetLadoIntegrationApprovalForHeadParams) (LadoIntegrationApproval, error) {
-	row := q.db.QueryRowContext(ctx, getLadoIntegrationApprovalForHead, arg.ExecutionSessionID, arg.HeadSha)
-	var i LadoIntegrationApproval
-	err := row.Scan(
-		&i.ID,
-		&i.ExecutionSessionID,
-		&i.PRURL,
-		&i.HeadSha,
-		&i.VerificationSha256,
-		&i.AcknowledgedJson,
-		&i.ProofNonce,
-		&i.Actor,
-		&i.ApprovedAt,
-		&i.StatusState,
-		&i.StatusAttempts,
-		&i.StatusPostedAt,
-		&i.StatusError,
-	)
-	return i, err
-}
-
 const getLadoVerification = `-- name: GetLadoVerification :one
 SELECT execution_session_id, head_sha, pr_url, outcome, reason, content_json, sha256, notified_json, protection_error,
     computed_at
@@ -295,9 +262,9 @@ func (q *Queries) InsertLadoExecutionReview(ctx context.Context, arg InsertLadoE
 
 const insertLadoIntegrationApproval = `-- name: InsertLadoIntegrationApproval :exec
 INSERT INTO lado_integration_approvals (
-    id, execution_session_id, pr_url, head_sha, verification_sha256, acknowledged_json, proof_nonce, actor,
-    approved_at, status_state, status_attempts, status_posted_at, status_error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertLadoIntegrationApprovalParams struct {
@@ -305,6 +272,7 @@ type InsertLadoIntegrationApprovalParams struct {
 	ExecutionSessionID string
 	PRURL              string
 	HeadSha            string
+	TargetBranch       string
 	VerificationSha256 string
 	AcknowledgedJson   string
 	ProofNonce         string
@@ -322,6 +290,7 @@ func (q *Queries) InsertLadoIntegrationApproval(ctx context.Context, arg InsertL
 		arg.ExecutionSessionID,
 		arg.PRURL,
 		arg.HeadSha,
+		arg.TargetBranch,
 		arg.VerificationSha256,
 		arg.AcknowledgedJson,
 		arg.ProofNonce,
@@ -663,7 +632,7 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 }
 
 const listLadoIntegrationApprovalStates = `-- name: ListLadoIntegrationApprovalStates :many
-SELECT execution_session_id, head_sha, status_state
+SELECT execution_session_id, pr_url, head_sha, target_branch, status_state
 FROM lado_integration_approvals
 WHERE execution_session_id IN (/*SLICE:session_ids*/?)
   AND head_sha IN (/*SLICE:head_shas*/?)
@@ -676,12 +645,15 @@ type ListLadoIntegrationApprovalStatesParams struct {
 
 type ListLadoIntegrationApprovalStatesRow struct {
 	ExecutionSessionID string
+	PRURL              string
 	HeadSha            string
+	TargetBranch       string
 	StatusState        string
 }
 
-// The status state of the approvals of the given executions and heads. The
-// caller keeps the (execution, head) pairs it asked for.
+// The PR, target branch and status state of the approvals of the given
+// executions and heads. The caller keeps the (execution, PR, head, target)
+// it asked for.
 func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg ListLadoIntegrationApprovalStatesParams) ([]ListLadoIntegrationApprovalStatesRow, error) {
 	query := listLadoIntegrationApprovalStates
 	var queryParams []interface{}
@@ -709,7 +681,119 @@ func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg Lis
 	items := []ListLadoIntegrationApprovalStatesRow{}
 	for rows.Next() {
 		var i ListLadoIntegrationApprovalStatesRow
-		if err := rows.Scan(&i.ExecutionSessionID, &i.HeadSha, &i.StatusState); err != nil {
+		if err := rows.Scan(
+			&i.ExecutionSessionID,
+			&i.PRURL,
+			&i.HeadSha,
+			&i.TargetBranch,
+			&i.StatusState,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLadoIntegrationApprovalsForHead = `-- name: ListLadoIntegrationApprovalsForHead :many
+SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+FROM lado_integration_approvals
+WHERE execution_session_id = ? AND pr_url = ? AND head_sha = ?
+ORDER BY approved_at, id
+`
+
+type ListLadoIntegrationApprovalsForHeadParams struct {
+	ExecutionSessionID string
+	PRURL              string
+	HeadSha            string
+}
+
+// The approvals of an execution's PR at one head, one per target branch,
+// oldest first.
+func (q *Queries) ListLadoIntegrationApprovalsForHead(ctx context.Context, arg ListLadoIntegrationApprovalsForHeadParams) ([]LadoIntegrationApproval, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoIntegrationApprovalsForHead, arg.ExecutionSessionID, arg.PRURL, arg.HeadSha)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoIntegrationApproval{}
+	for rows.Next() {
+		var i LadoIntegrationApproval
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExecutionSessionID,
+			&i.PRURL,
+			&i.HeadSha,
+			&i.TargetBranch,
+			&i.VerificationSha256,
+			&i.AcknowledgedJson,
+			&i.ProofNonce,
+			&i.Actor,
+			&i.ApprovedAt,
+			&i.StatusState,
+			&i.StatusAttempts,
+			&i.StatusPostedAt,
+			&i.StatusError,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLadoIntegrationApprovalsForPRHead = `-- name: ListLadoIntegrationApprovalsForPRHead :many
+SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+FROM lado_integration_approvals
+WHERE pr_url = ? AND head_sha = ?
+ORDER BY approved_at, id
+`
+
+type ListLadoIntegrationApprovalsForPRHeadParams struct {
+	PRURL   string
+	HeadSha string
+}
+
+// The approvals of a PR at one head, whatever execution holds them.
+func (q *Queries) ListLadoIntegrationApprovalsForPRHead(ctx context.Context, arg ListLadoIntegrationApprovalsForPRHeadParams) ([]LadoIntegrationApproval, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoIntegrationApprovalsForPRHead, arg.PRURL, arg.HeadSha)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []LadoIntegrationApproval{}
+	for rows.Next() {
+		var i LadoIntegrationApproval
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExecutionSessionID,
+			&i.PRURL,
+			&i.HeadSha,
+			&i.TargetBranch,
+			&i.VerificationSha256,
+			&i.AcknowledgedJson,
+			&i.ProofNonce,
+			&i.Actor,
+			&i.ApprovedAt,
+			&i.StatusState,
+			&i.StatusAttempts,
+			&i.StatusPostedAt,
+			&i.StatusError,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -724,8 +808,8 @@ func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg Lis
 }
 
 const listLadoIntegrationStatusRetries = `-- name: ListLadoIntegrationStatusRetries :many
-SELECT id, execution_session_id, pr_url, head_sha, verification_sha256, acknowledged_json, proof_nonce, actor,
-    approved_at, status_state, status_attempts, status_posted_at, status_error
+SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
 FROM lado_integration_approvals
 WHERE status_state IN ('pending', 'failed') AND status_attempts < ?1
 ORDER BY approved_at, id
@@ -753,6 +837,7 @@ func (q *Queries) ListLadoIntegrationStatusRetries(ctx context.Context, arg List
 			&i.ExecutionSessionID,
 			&i.PRURL,
 			&i.HeadSha,
+			&i.TargetBranch,
 			&i.VerificationSha256,
 			&i.AcknowledgedJson,
 			&i.ProofNonce,
@@ -766,6 +851,37 @@ func (q *Queries) ListLadoIntegrationStatusRetries(ctx context.Context, arg List
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLadoSessionsNamingPR = `-- name: ListLadoSessionsNamingPR :many
+SELECT lado_verifications.execution_session_id FROM lado_verifications WHERE lado_verifications.pr_url = ?1
+UNION
+SELECT lado_integration_approvals.execution_session_id FROM lado_integration_approvals WHERE lado_integration_approvals.pr_url = ?1
+`
+
+// The executions whose verification records or integration approvals name a
+// PR.
+func (q *Queries) ListLadoSessionsNamingPR(ctx context.Context, prUrl string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoSessionsNamingPR, prUrl)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var execution_session_id string
+		if err := rows.Scan(&execution_session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, execution_session_id)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err
@@ -857,6 +973,21 @@ type MarkLadoExecutionReviewCancelledParams struct {
 
 func (q *Queries) MarkLadoExecutionReviewCancelled(ctx context.Context, arg MarkLadoExecutionReviewCancelledParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markLadoExecutionReviewCancelled, arg.CancelledAt, arg.ReviewRunID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const resetLadoIntegrationStatus = `-- name: ResetLadoIntegrationStatus :execrows
+UPDATE lado_integration_approvals
+SET status_state = 'pending', status_attempts = 0, status_error = ''
+WHERE lado_integration_approvals.id = ?1
+`
+
+// Starts posting an approval's status over, its attempts at 0.
+func (q *Queries) ResetLadoIntegrationStatus(ctx context.Context, id string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, resetLadoIntegrationStatus, id)
 	if err != nil {
 		return 0, err
 	}

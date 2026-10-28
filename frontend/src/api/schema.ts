@@ -1409,6 +1409,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/executions/{sessionId}/integration-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post the lado/integration status of the PR's approved current head again, its attempts started over; needs no presence proof */
+        post: operations["repostLadoIntegrationStatus"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/plans/{revisionId}": {
         parameters: {
             query?: never;
@@ -6520,7 +6537,7 @@ export interface components {
             checkedAt?: null | string;
             /** @description Why the rules could not be read, without secrets. */
             error?: string;
-            /** @description What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration, non_fast_forward, deletion. */
+            /** @description What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. */
             missing: string[];
             /** @description Canonical id of the repository, such as github:owner/repo. */
             repository: string;
@@ -6539,7 +6556,7 @@ export interface components {
             status: "supported" | "degraded" | "unsupported" | "unverified";
         };
         LadoCheckCommandBody: {
-            /** @description Run with sh -c (cmd /c on Windows) in the execution's worktree, outside any agent sandbox. */
+            /** @description One line, run with sh -c (cmd /d /s /c on Windows) in the execution's worktree, outside any agent sandbox. */
             command: string;
             /** @description Unique within the project; evidence names a command by it. */
             name: string;
@@ -6729,6 +6746,16 @@ export interface components {
             snapshot: components["schemas"]["LadoExecutionSnapshotResponse"];
             /** Format: date-time */
             startedAt: string;
+            /**
+             * @description The state the run gives its task, as the daemon derives it: running without a PR, failed when it timed out or ended without one, and once a PR is open that PR's verification and integration.
+             * @enum {string}
+             */
+            state: "running" | "validating" | "integration_pending" | "integrating" | "failed" | "completed" | "closed_unmerged";
+            /**
+             * @description Why the run is in its state, as the task's stateReason says it.
+             * @enum {string}
+             */
+            stateReason?: "timed_out" | "ended_without_pr" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
             task: components["schemas"]["LadoExecutionTaskResponse"];
             /**
              * Format: date-time
@@ -6813,6 +6840,8 @@ export interface components {
              * @enum {string}
              */
             statusState: "pending" | "posted" | "failed" | "not_applicable";
+            /** @description The branch the PR merged into when the head was approved; the approval holds for that branch only. */
+            targetBranch: string;
             /** @description The record hash the approval signed. */
             verificationSha256: string;
         };
@@ -7006,6 +7035,8 @@ export interface components {
         LadoProjectSettingsResponse: {
             /** @description The commands LADO runs, in order, on each head of an execution's PR. */
             checkCommands: components["schemas"]["LadoCheckCommandBody"][];
+            /** @description The hash of the check commands, which a change sends back as checkCommandsBase. */
+            checkCommandsSha256: string;
             /** @description Each check command's time limit in minutes, 5 to 120. */
             checkTimeoutMinutes: number;
             /** @description Whether the project's workers are under LADO's worker gate. */
@@ -7898,7 +7929,7 @@ export interface components {
             fileVersion?: number;
             /** @description review: the reviewer harness. */
             harness?: string;
-            /** @description protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration, non_fast_forward, deletion. */
+            /** @description protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. */
             missing?: string[];
             /** @description base_branch: local moves of the base branch since the run started that the remote does not hold. */
             moved?: components["schemas"]["LadoReflogEntryResponse"][];
@@ -9480,8 +9511,10 @@ export interface components {
             maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
         };
         UpdateLadoProjectSettingsRequest: {
-            /** @description Replace the check commands, 0 to 10. A change needs a human-presence proof, because the daemon runs them outside any agent sandbox; an invalid list refuses with LADO_CHECK_COMMANDS_INVALID and its index, field and reason. */
+            /** @description Replace the check commands, 0 to 10. A change needs a human-presence proof, because the daemon runs them outside any agent sandbox, and checkCommandsBase; an invalid list refuses with LADO_CHECK_COMMANDS_INVALID and its index, field and reason (a command with a control character, such as a line break, or a bidirectional control also with its position and the character as U+XXXX); a list that moved on since checkCommandsBase refuses with 409 LADO_CHECK_COMMANDS_CHANGED and the current checkCommandsSha256. */
             checkCommands?: null | components["schemas"]["LadoCheckCommandBody"][];
+            /** @description The checkCommandsSha256 of the list the change starts from; a change of checkCommands needs it. */
+            checkCommandsBase?: string;
             /** @description Each check command's time limit in minutes. It changes without a presence proof. */
             checkTimeoutMinutes?: null | number;
             /** @description Put the project's workers under LADO's worker gate. Turning it on refuses while tracker intake is on; turning it off needs a human-presence proof, and queued work then waits while running workers go on. */
@@ -14474,6 +14507,65 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    repostLadoIntegrationStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO session id of the worker. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoIntegrationApprovalResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

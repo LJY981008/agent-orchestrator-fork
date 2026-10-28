@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,15 @@ type fakeStore struct {
 	// recorded; events are the audit events of every write that has one.
 	proofs map[string]bool
 	events []domain.LadoAuditEvent
+	// beforeWrite runs inside SetLadoProjectCheckCommands, as another write
+	// landing first.
+	beforeWrite func()
+}
+
+// withCommands is settings with commands.
+func withCommands(settings domain.LadoProjectSettings, commands []domain.LadoCheckCommand) domain.LadoProjectSettings {
+	settings.CheckCommands = slices.Clone(commands)
+	return settings
 }
 
 func (f *fakeStore) LadoProjectSettings(_ context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {
@@ -90,7 +100,13 @@ func (f *fakeStore) SetLadoProjectMaxConcurrent(_ context.Context, projectID dom
 	return nil
 }
 
-func (f *fakeStore) SetLadoProjectCheckCommands(_ context.Context, projectID domain.ProjectID, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, event domain.LadoAuditEvent) error {
+func (f *fakeStore) SetLadoProjectCheckCommands(_ context.Context, projectID domain.ProjectID, base string, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, event domain.LadoAuditEvent) error {
+	if f.beforeWrite != nil {
+		f.beforeWrite()
+	}
+	if base != domain.LadoCheckCommandsSHA256(f.stored(projectID).CheckCommands) {
+		return domain.ErrLadoCheckCommandsChanged
+	}
 	if proof != nil && f.proofs[proof.Nonce] {
 		return domain.ErrLadoPresenceReplayed
 	}
@@ -445,7 +461,15 @@ func requireInvalidField(t *testing.T, err error, index int, field, reason strin
 	requireAPIError(t, err, apierr.KindInvalid, "LADO_CHECK_COMMANDS_INVALID")
 	var apiErr *apierr.Error
 	errors.As(err, &apiErr)
-	if want := map[string]any{"index": index, "field": field, "reason": reason}; !reflect.DeepEqual(apiErr.Details, want) {
+	want := map[string]any{"index": index, "field": field, "reason": reason}
+	// A control character also names its place and itself.
+	if reason == domain.LadoCheckCommandControl || reason == domain.LadoCheckCommandBidi {
+		want["position"], want["character"] = apiErr.Details["position"], apiErr.Details["character"]
+		if position, _ := want["position"].(int); position < 1 || !strings.HasPrefix(fmt.Sprint(want["character"]), "U+") {
+			t.Fatalf("details = %v, want the control character's position and code point", apiErr.Details)
+		}
+	}
+	if !reflect.DeepEqual(apiErr.Details, want) {
 		t.Fatalf("details = %v, want %v (%s)", apiErr.Details, want, apiErr.Message)
 	}
 }
@@ -485,7 +509,7 @@ func TestCheckCommandsChangeNeedsPresence(t *testing.T) {
 	// With presence, asked for the project, the list is stored and audited
 	// as the human's with both lists whole.
 	var asked []string
-	got, err := svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &commands, Presence: func(action, subject string) (domain.LadoPresenceProof, error) {
+	got, err := svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &commands, CheckCommandsBase: domain.LadoCheckCommandsSHA256(nil), Presence: func(action, subject string) (domain.LadoPresenceProof, error) {
 		asked = append(asked, action+" "+subject)
 		return presence("nonce-1")(action, subject)
 	}})
@@ -514,8 +538,29 @@ func TestCheckCommandsChangeNeedsPresence(t *testing.T) {
 
 	// A used proof is refused; a dev-presence proof is audited as one.
 	lint := []domain.LadoCheckCommand{{Name: "lint", Command: "golangci-lint run"}}
-	_, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &lint, Presence: presence("nonce-1")})
+	_, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &lint, CheckCommandsBase: domain.LadoCheckCommandsSHA256(commands), Presence: presence("nonce-1")})
 	requireAPIError(t, err, apierr.KindForbidden, "LADO_PRESENCE_REPLAYED")
+	// U7 of #15: a change names the list it started from; without it, or
+	// from a list that moved on, it is refused and nothing is written.
+	writes := store.writes
+	_, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &lint, Presence: presence("nonce-base-1")})
+	requireInvalidField(t, err, -1, "checkCommandsBase", domain.LadoCheckCommandRequired)
+	_, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &lint, CheckCommandsBase: domain.LadoCheckCommandsSHA256(nil), Presence: presence("nonce-base-2")})
+	requireAPIError(t, err, apierr.KindConflict, "LADO_CHECK_COMMANDS_CHANGED")
+	var conflict *apierr.Error
+	if errors.As(err, &conflict); conflict.Details["checkCommandsSha256"] != domain.LadoCheckCommandsSHA256(commands) {
+		t.Fatalf("conflict details = %v, want the current list's hash", conflict.Details)
+	}
+	// Another change that lands between the read and the write is caught
+	// by the store's own comparison.
+	store.beforeWrite = func() { store.save(withCommands(store.stored("mer"), lint)) }
+	_, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &lint, CheckCommandsBase: domain.LadoCheckCommandsSHA256(commands), Presence: presence("nonce-base-3")})
+	requireAPIError(t, err, apierr.KindConflict, "LADO_CHECK_COMMANDS_CHANGED")
+	store.beforeWrite = nil
+	store.save(withCommands(store.stored("mer"), commands))
+	if store.writes != writes || !slices.Equal(store.stored("mer").CheckCommands, commands) {
+		t.Fatalf("after refused changes: %d writes, commands %+v; want none, the commands as they were", store.writes-writes, store.stored("mer").CheckCommands)
+	}
 	if !slices.Equal(store.stored("mer").CheckCommands, commands) {
 		t.Fatalf("commands = %+v after a used proof, want them unchanged", store.stored("mer").CheckCommands)
 	}
@@ -525,7 +570,7 @@ func TestCheckCommandsChangeNeedsPresence(t *testing.T) {
 		proof.Dev = true
 		return proof, err
 	}
-	if got, err := svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &none, Presence: devPresence}); err != nil || len(got.CheckCommands) != 0 {
+	if got, err := svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{CheckCommands: &none, CheckCommandsBase: domain.LadoCheckCommandsSHA256(commands), Presence: devPresence}); err != nil || len(got.CheckCommands) != 0 {
 		t.Fatalf("clear the commands = %+v, %v", got, err)
 	}
 	if event := store.events[len(store.events)-1]; event.Actor != "human:dev-presence" || !reflect.DeepEqual(auditPayload(t, event)["to"], []any{}) {
@@ -538,13 +583,16 @@ func TestCheckCommandsChangeNeedsPresence(t *testing.T) {
 	for i := range long {
 		long[i] = domain.LadoCheckCommand{Name: fmt.Sprintf("check %d", i), Command: "true"}
 	}
-	writes := store.writes
+	writes = store.writes
 	for _, tc := range []struct {
 		commands      []domain.LadoCheckCommand
 		index         int
 		field, reason string
 	}{
 		{[]domain.LadoCheckCommand{{Name: "", Command: "make"}}, 0, "name", domain.LadoCheckCommandRequired},
+		// S2 of #15: one command is one line.
+		{[]domain.LadoCheckCommand{{Name: "build", Command: "make"}, {Name: "e2e", Command: "npm run build\nnpm run e2e"}}, 1, "command", domain.LadoCheckCommandControl},
+		{[]domain.LadoCheckCommand{{Name: "build", Command: "make \u202eall"}}, 0, "command", domain.LadoCheckCommandBidi},
 		{[]domain.LadoCheckCommand{{Name: "build", Command: "make"}, {Name: "-lint", Command: "make lint"}}, 1, "name", domain.LadoCheckCommandInvalid},
 		{[]domain.LadoCheckCommand{{Name: "build", Command: "make"}, {Name: "Build", Command: "make all"}}, 1, "name", domain.LadoCheckCommandDuplicate},
 		{[]domain.LadoCheckCommand{{Name: "build", Command: "  "}}, 0, "command", domain.LadoCheckCommandRequired},
@@ -584,7 +632,7 @@ func TestCheckCommandsChangeNeedsPresence(t *testing.T) {
 	// commands.
 	on := &fakeStore{settings: map[domain.ProjectID]domain.LadoProjectSettings{"mer": {ProjectID: "mer", LadoMode: true, MaxConcurrent: 1, CheckCommands: []domain.LadoCheckCommand{}, CheckTimeoutMinutes: 30}}}
 	svc = newService(on)
-	all := ladoproject.UpdateInput{LadoMode: boolPtr(false), MaxConcurrent: intPtr(2), CheckTimeoutMinutes: intPtr(60), CheckCommands: &commands}
+	all := ladoproject.UpdateInput{LadoMode: boolPtr(false), MaxConcurrent: intPtr(2), CheckTimeoutMinutes: intPtr(60), CheckCommands: &commands, CheckCommandsBase: domain.LadoCheckCommandsSHA256(nil)}
 	all.Presence = func(action, subject string) (domain.LadoPresenceProof, error) {
 		if action == domain.LadoPresenceModeOff {
 			return refused(action, subject)

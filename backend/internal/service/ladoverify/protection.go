@@ -55,6 +55,13 @@ func (r ProtectionRead) ErrorMessage() string {
 // rule names lado/integration.
 const MissingIntegrationCheck = ports.LadoBranchRuleRequiredStatusChecks + ":" + domain.LadoIntegrationStatusContext
 
+// MissingIntegrationCheckSource is the missing part, in place of
+// MissingIntegrationCheck, when the rules require lado/integration only from
+// one app (an integration_id). LADO posts the status with its token, which
+// such a rule does not accept, so only the developer's own merge around
+// LADO could satisfy it: the check's source must be any (Q3 of #15).
+const MissingIntegrationCheckSource = MissingIntegrationCheck + ":any_source"
+
 // Protection reads branch rules through a cache keyed by repository and
 // branch.
 type Protection struct {
@@ -158,24 +165,36 @@ func RequiredContexts(rules ports.LadoBranchRules) (contexts []string, named boo
 }
 
 // MissingProtection lists what the rules lack for LADO to count the branch
-// as protected, in this order: pull_request, MissingIntegrationCheck,
-// non_fast_forward and deletion.
+// as protected, in this order: pull_request, MissingIntegrationCheck (or
+// MissingIntegrationCheckSource when every rule that requires
+// lado/integration takes it from one app only), non_fast_forward and
+// deletion.
 func MissingProtection(rules ports.LadoBranchRules) []string {
 	has := map[string]bool{}
+	appBound := false
 	for _, rule := range rules.Rules {
 		has[rule.Type] = true
 		if rule.Type != ports.LadoBranchRuleRequiredStatusChecks {
 			continue
 		}
 		for _, check := range rule.RequiredChecks {
-			if strings.EqualFold(check.Context, domain.LadoIntegrationStatusContext) {
-				has[MissingIntegrationCheck] = true
+			if !strings.EqualFold(check.Context, domain.LadoIntegrationStatusContext) {
+				continue
 			}
+			if check.IntegrationID != nil {
+				appBound = true
+				continue
+			}
+			has[MissingIntegrationCheck] = true
 		}
 	}
 	var missing []string
 	for _, part := range []string{ports.LadoBranchRulePullRequest, MissingIntegrationCheck, ports.LadoBranchRuleNonFastForward, ports.LadoBranchRuleDeletion} {
-		if !has[part] {
+		switch {
+		case has[part]:
+		case part == MissingIntegrationCheck && appBound:
+			missing = append(missing, MissingIntegrationCheckSource)
+		default:
 			missing = append(missing, part)
 		}
 	}

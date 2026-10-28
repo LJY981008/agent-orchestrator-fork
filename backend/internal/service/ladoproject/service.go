@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -22,7 +23,9 @@ type Store interface {
 	SetLadoMode(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time) (domain.LadoProjectSettings, error)
 	SetLadoModeWithProof(ctx context.Context, projectID domain.ProjectID, on bool, at time.Time, proof domain.LadoPresenceProof, event domain.LadoAuditEvent) (domain.LadoProjectSettings, error)
 	SetLadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID, n int, event domain.LadoAuditEvent) error
-	SetLadoProjectCheckCommands(ctx context.Context, projectID domain.ProjectID, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
+	// SetLadoProjectCheckCommands replaces the commands while they still
+	// hash to base, else fails with domain.ErrLadoCheckCommandsChanged.
+	SetLadoProjectCheckCommands(ctx context.Context, projectID domain.ProjectID, base string, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
 	SetLadoProjectCheckTimeout(ctx context.Context, projectID domain.ProjectID, minutes int, audit domain.LadoAuditEvent) error
 }
 
@@ -75,8 +78,12 @@ type UpdateInput struct {
 	MaxConcurrent *int
 	// CheckCommands replaces the commands LADO runs on each PR head in the
 	// execution's worktree (docs/LJY-PRD/TDD.md §8.2), valid as
-	// domain.ValidateLadoCheckCommands reads them.
-	CheckCommands *[]domain.LadoCheckCommand
+	// domain.ValidateLadoCheckCommands reads them. CheckCommandsBase is the
+	// hash of the list the change started from
+	// (domain.LadoCheckCommandsSHA256); a change of the list needs it and is
+	// refused once the list moved on (U7 of #15).
+	CheckCommands     *[]domain.LadoCheckCommand
+	CheckCommandsBase string
 	// CheckTimeoutMinutes is each check command's time limit,
 	// domain.LadoCheckTimeoutMin to domain.LadoCheckTimeoutMax.
 	CheckTimeoutMinutes *int
@@ -122,6 +129,9 @@ func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID
 		if commandsProof, err = checkCommandsPresence(projectID, in.Presence); err != nil {
 			return domain.LadoProjectSettings{}, err
 		}
+		if err := checkCommandsBase(in.CheckCommandsBase, current.CheckCommands); err != nil {
+			return domain.LadoProjectSettings{}, err
+		}
 	}
 	if in.LadoMode != nil && *in.LadoMode != current.LadoMode {
 		if current, err = s.setMode(ctx, project, *in.LadoMode, in); err != nil {
@@ -142,7 +152,7 @@ func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID
 		wrote = true
 	}
 	if commandsProof != nil {
-		if err := s.setCheckCommands(ctx, projectID, current.CheckCommands, *in.CheckCommands, *commandsProof); err != nil {
+		if err := s.setCheckCommands(ctx, projectID, current.CheckCommands, *in.CheckCommands, in.CheckCommandsBase, *commandsProof); err != nil {
 			return domain.LadoProjectSettings{}, err
 		}
 		wrote = true
@@ -173,12 +183,19 @@ func validate(in UpdateInput) error {
 }
 
 // checkCommandsInvalid is the 400 of a check command list: the command's
-// index, the field and the reason, as the settings screen shows them.
+// index, the field and the reason, as the settings screen shows them, and
+// for a control character its position and the character.
 func checkCommandsInvalid(problem *domain.LadoCheckCommandProblem) error {
 	details := map[string]any{"index": problem.Index, "field": problem.Field, "reason": problem.Reason}
-	if problem.Reason == domain.LadoCheckCommandTooMany {
+	switch problem.Reason {
+	case domain.LadoCheckCommandTooMany:
 		return apierr.Invalid("LADO_CHECK_COMMANDS_INVALID",
 			fmt.Sprintf("A project has at most %d check commands.", domain.LadoCheckCommandsMax), details)
+	case domain.LadoCheckCommandControl, domain.LadoCheckCommandBidi:
+		details["position"], details["character"] = problem.Position, problem.Character
+		return apierr.Invalid("LADO_CHECK_COMMANDS_INVALID",
+			fmt.Sprintf("Check command %d has the control character %s at character %d. Write each command on one line, as the desktop app shows it.",
+				problem.Index+1, problem.Character, problem.Position), details)
 	}
 	what := map[string]string{
 		domain.LadoCheckCommandRequired:  "is missing",
@@ -188,6 +205,26 @@ func checkCommandsInvalid(problem *domain.LadoCheckCommandProblem) error {
 	}[problem.Reason]
 	return apierr.Invalid("LADO_CHECK_COMMANDS_INVALID",
 		fmt.Sprintf("Check command %d: the %s %s.", problem.Index+1, problem.Field, what), details)
+}
+
+// checkCommandsBase refuses a change of the check commands that does not
+// start from the current list: without the hash of the list it started
+// from, or with the hash of another one.
+func checkCommandsBase(base string, current []domain.LadoCheckCommand) error {
+	if base == "" {
+		return apierr.Invalid("LADO_CHECK_COMMANDS_INVALID", "Send checkCommandsBase, the checkCommandsSha256 of the list the change starts from.",
+			map[string]any{"index": -1, "field": "checkCommandsBase", "reason": domain.LadoCheckCommandRequired})
+	}
+	if !strings.EqualFold(base, domain.LadoCheckCommandsSHA256(current)) {
+		return checkCommandsChanged(current)
+	}
+	return nil
+}
+
+func checkCommandsChanged(current []domain.LadoCheckCommand) error {
+	return apierr.Conflict("LADO_CHECK_COMMANDS_CHANGED",
+		"The project's check commands changed since you opened them. Review the current list, then change it again.",
+		map[string]any{"checkCommandsSha256": domain.LadoCheckCommandsSHA256(current)})
 }
 
 // checkCommandsPresence asks for the presence a change of the check
@@ -292,7 +329,7 @@ func (s *Service) apiEvent(projectID domain.ProjectID, action string, from, to i
 // setCheckCommands stores the project's check commands with the presence
 // proof that allowed the change and its audit event, which holds both lists
 // whole.
-func (s *Service) setCheckCommands(ctx context.Context, projectID domain.ProjectID, from, to []domain.LadoCheckCommand, proof domain.LadoPresenceProof) error {
+func (s *Service) setCheckCommands(ctx context.Context, projectID domain.ProjectID, from, to []domain.LadoCheckCommand, base string, proof domain.LadoPresenceProof) error {
 	actor := "human"
 	if proof.Dev {
 		actor = "human:dev-presence"
@@ -303,7 +340,7 @@ func (s *Service) setCheckCommands(ctx context.Context, projectID domain.Project
 		"proof": proof.Nonce,
 		"dev":   proof.Dev,
 	})
-	err := s.deps.Store.SetLadoProjectCheckCommands(ctx, projectID, to, &proof, domain.LadoAuditEvent{
+	err := s.deps.Store.SetLadoProjectCheckCommands(ctx, projectID, base, to, &proof, domain.LadoAuditEvent{
 		At:          s.deps.Clock().UTC(),
 		Actor:       actor,
 		Action:      "project.check_commands_changed",
@@ -311,10 +348,17 @@ func (s *Service) setCheckCommands(ctx context.Context, projectID domain.Project
 		SubjectID:   string(projectID),
 		Payload:     payload,
 	})
-	if errors.Is(err, domain.ErrLadoPresenceReplayed) {
+	switch {
+	case errors.Is(err, domain.ErrLadoPresenceReplayed):
 		return ladopresence.Replayed()
-	}
-	if err != nil {
+	case errors.Is(err, domain.ErrLadoCheckCommandsChanged):
+		// Another change landed between the read and the write.
+		latest, readErr := s.current(ctx, projectID)
+		if readErr != nil {
+			return readErr
+		}
+		return checkCommandsChanged(latest.CheckCommands)
+	case err != nil:
 		return apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
 	}
 	return nil
