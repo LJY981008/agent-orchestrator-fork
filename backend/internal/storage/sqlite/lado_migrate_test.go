@@ -629,7 +629,7 @@ var ladoVerifyTables = []struct {
 	{"lado_verifications", []string{"execution_session_id", "head_sha", "pr_url", "outcome", "reason", "content_json", "sha256", "notified_json", "protection_error", "computed_at"}},
 	{"lado_execution_reviews", []string{"review_run_id", "execution_session_id", "head_sha", "round", "created_at", "cancelled_at"}},
 	{"lado_evidence_links", []string{"id", "execution_session_id", "head_sha", "criterion", "state", "ref_kind", "ref_key", "sha", "created_at"}},
-	{"lado_integration_approvals", []string{"id", "execution_session_id", "pr_url", "head_sha", "verification_sha256", "acknowledged_json", "proof_nonce", "actor", "approved_at", "status_state", "status_attempts", "status_posted_at", "status_error"}},
+	{"lado_integration_approvals", []string{"id", "execution_session_id", "pr_url", "head_sha", "target_branch", "verification_sha256", "acknowledged_json", "proof_nonce", "actor", "approved_at", "status_state", "status_attempts", "status_posted_at", "status_error"}},
 }
 
 // ladoVerifyColumns are the columns 0008 adds to earlier LADO tables, in order.
