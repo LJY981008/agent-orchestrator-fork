@@ -7,7 +7,15 @@
 import { agentLabel } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../i18n/messages";
-import { LadoApiError, type LadoConnectionCheck, type LadoQueueReason, type LadoTaskStateReason } from "./lado";
+import {
+	LadoApiError,
+	type LadoChangeKind,
+	type LadoConnectionCheck,
+	type LadoPlanWorker,
+	type LadoPlanWorkerPhase,
+	type LadoQueueReason,
+	type LadoTaskStateReason,
+} from "./lado";
 
 type LadoErrorKey = Extract<MessageKey, `lado.error.${string}`>;
 type LadoProblemKey = Extract<MessageKey, `lado.problem.${string}`>;
@@ -107,6 +115,8 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_RULE_CHANGED: "lado.error.ruleChanged",
 	LADO_RULE_ARCHIVED: "lado.error.ruleArchived",
 	LADO_RULE_PROTECTED: "lado.error.ruleProtected",
+	LADO_RULE_PLAN_ROLE: "lado.error.rulePlanRole",
+	LADO_PLAN_WORKERS_UNAVAILABLE: "lado.error.planWorkersUnavailable",
 	LADO_RULE_BUILTIN: "lado.error.ruleBuiltin",
 	LADO_RULE_REFERENCED: "lado.error.ruleReferenced",
 	LADO_BINDING_SCOPE_INVALID: "lado.error.bindingScopeInvalid",
@@ -385,6 +395,8 @@ const planProblemKeys: Partial<Record<string, LadoPlanProblemKey>> = {
 	unknown_source_comment: "lado.planProblem.unknown_source_comment",
 	wrong_source: "lado.planProblem.wrong_source",
 	unknown_base_ref: "lado.planProblem.unknown_base_ref",
+	plan_review_missing: "lado.planProblem.plan_review_missing",
+	plan_review_unaddressed: "lado.planProblem.plan_review_unaddressed",
 };
 
 /**
@@ -513,6 +525,70 @@ export function ladoReasonText(t: TFunction, reason: string | undefined): string
 	if (!reason) return "";
 	const key = (reasonKeys as Partial<Record<string, LadoReasonKey>>)[reason];
 	return key ? t(key) : reason;
+}
+
+type LadoPlanWorkerKey = Extract<MessageKey, `lado.planWorker.${string}`>;
+
+// A plan worker request's steps, why it waits and why it failed
+// (backend/internal/domain/lado_plan_worker.go). Keyed by the API's enums,
+// so a value the daemon adds fails the typecheck until it has words here.
+const planWorkerPhaseKeys: Record<LadoPlanWorkerPhase, LadoPlanWorkerKey> = {
+	waiting: "lado.planWorker.phase.waiting",
+	designing: "lado.planWorker.phase.designing",
+	critiquing: "lado.planWorker.phase.critiquing",
+	revising: "lado.planWorker.phase.revising",
+	submitted: "lado.planWorker.phase.submitted",
+	fixing: "lado.planWorker.phase.fixing",
+	done: "lado.planWorker.phase.done",
+	failed: "lado.planWorker.phase.failed",
+	replaced: "lado.planWorker.phase.replaced",
+};
+
+const planWaitingKeys: Record<NonNullable<LadoPlanWorker["waitingReason"]>, LadoPlanWorkerKey> = {
+	plan_worker_capacity: "lado.planWorker.waiting.plan_worker_capacity",
+	memory_tight: "lado.planWorker.waiting.memory_tight",
+};
+
+const planFailureKeys: Record<NonNullable<LadoPlanWorker["failureCode"]>, LadoPlanWorkerKey> = {
+	plan_worker_spawn_failed: "lado.planWorker.failure.plan_worker_spawn_failed",
+	plan_worker_no_plan: "lado.planWorker.failure.plan_worker_no_plan",
+	plan_worker_timed_out: "lado.planWorker.failure.plan_worker_timed_out",
+	plan_worker_agent_unsupported: "lado.planWorker.failure.plan_worker_agent_unsupported",
+	replaced: "lado.planWorker.failure.replaced",
+};
+
+/** What a plan worker request is doing, in the developer's language. */
+export function ladoPlanWorkerPhaseText(t: TFunction, phase: LadoPlanWorkerPhase): string {
+	return t(planWorkerPhaseKeys[phase]);
+}
+
+/** Why a plan worker request waits; a reason from a newer daemon shows as is. */
+export function ladoPlanWaitingText(t: TFunction, reason: string | undefined): string {
+	if (!reason) return "";
+	const key = (planWaitingKeys as Partial<Record<string, LadoPlanWorkerKey>>)[reason];
+	return key ? t(key) : reason;
+}
+
+/** Why a plan worker request failed; a code from a newer daemon shows as is. */
+export function ladoPlanFailureText(t: TFunction, code: string | undefined): string {
+	if (!code) return "";
+	const key = (planFailureKeys as Partial<Record<string, LadoPlanWorkerKey>>)[code];
+	return key ? t(key) : code;
+}
+
+type LadoChangeKindKey = Extract<MessageKey, `lado.changeKind.${string}`>;
+
+const changeKindKeys: Record<LadoChangeKind, LadoChangeKindKey> = {
+	db_schema: "lado.changeKind.db_schema",
+	external_api: "lado.changeKind.external_api",
+	auth: "lado.changeKind.auth",
+	data_deletion: "lado.changeKind.data_deletion",
+};
+
+/** A change kind a plan declares, in the developer's language. */
+export function ladoChangeKindLabel(t: TFunction, kind: string): string {
+	const key = (changeKindKeys as Partial<Record<string, LadoChangeKindKey>>)[kind];
+	return key ? t(key) : kind;
 }
 
 type LadoSetupKindKey = Extract<MessageKey, `lado.setup.kind.${string}`>;

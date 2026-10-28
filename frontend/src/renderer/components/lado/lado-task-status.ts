@@ -1,9 +1,10 @@
 // LADO fork: how a task's card and view name its state (docs/LJY-PRD/TDD.md
 // §3.2): one status line with a dot, and a second line for what a queued task
-// waits for or why a task needs the human again or failed.
+// waits for, why a task needs the human again or failed, or what its plan
+// worker does (§5.1).
 import type { TFunction } from "i18next";
-import { LADO_MAX_ATTEMPTS, type LadoTask } from "../../lib/lado";
-import { ladoReasonText } from "../../lib/lado-errors";
+import { LADO_MAX_ATTEMPTS, type LadoPlanWorker, type LadoTask } from "../../lib/lado";
+import { ladoPlanFailureText, ladoPlanWaitingText, ladoPlanWorkerPhaseText, ladoReasonText } from "../../lib/lado-errors";
 import { formatResetTime } from "../settings/CodexAccountDetails";
 
 export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "validating" | "merged";
@@ -34,15 +35,72 @@ export function ladoRunStatus(state: LadoRunState, reason: string | undefined, t
 }
 
 /**
+ * The task's plan worker while its request is open (docs/LJY-PRD/TDD.md
+ * §5.1): waiting for its turn, or designing, reviewing or fixing the plan,
+ * also after it pinned a revision with problems.
+ */
+export function ladoOpenPlanWorker(task: LadoTask): LadoPlanWorker | undefined {
+	const worker = task.plan.worker;
+	if (!worker) return undefined;
+	switch (worker.phase) {
+		case "done":
+		case "failed":
+		case "replaced":
+			return undefined;
+		default:
+			return worker;
+	}
+}
+
+/**
+ * An open plan worker's status line: waiting for its turn is LADO's to
+ * handle, so it is muted; writing the plan is an agent at work.
+ */
+export function ladoPlanWorkerStatus(worker: LadoPlanWorker, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
+	return worker.phase === "waiting"
+		? { label: t("lado.task.state.planWaiting"), tone: "muted" }
+		: { label: t("lado.task.state.planWriting"), tone: "working" };
+}
+
+/** Why an open plan worker waits, or what it does; null when it waits for no reason it names. */
+export function ladoPlanWorkerReason(worker: LadoPlanWorker, t: TFunction): string | null {
+	if (worker.phase === "waiting") return ladoPlanWaitingText(t, worker.waitingReason) || null;
+	return ladoPlanWorkerPhaseText(t, worker.phase);
+}
+
+/**
+ * The status line while a new plan is on its way: its plan worker's, or for a
+ * request made before plan workers, Plan requested. Undefined when no plan
+ * is on its way.
+ */
+function planComingStatus(task: LadoTask, t: TFunction): { label: string; tone: LadoTaskStatusTone } | undefined {
+	const worker = ladoOpenPlanWorker(task);
+	if (worker) return ladoPlanWorkerStatus(worker, t);
+	return task.plan.requestPending ? { label: t("lado.task.state.planRequested"), tone: "muted" } : undefined;
+}
+
+/** The second line while a new plan is on its way; null for a request made before plan workers. */
+function planComingReason(task: LadoTask, t: TFunction): string | null {
+	const worker = ladoOpenPlanWorker(task);
+	return worker ? ladoPlanWorkerReason(worker, t) : null;
+}
+
+/** Whether a new plan is on its way: an open plan worker, or a pending request. */
+function planComing(task: LadoTask): boolean {
+	return ladoOpenPlanWorker(task) !== undefined || task.plan.requestPending;
+}
+
+/**
  * The card's one status line. A plan waiting for review is the human's next
  * decision, so it takes the needs-you color; an approved plan waiting in the
  * queue reads as ready, and one whose worker LADO is starting as working. An
  * approval that needs review again (its rules or its issue changed, or it was
  * never queued), whose rules block the run (blocked), or whose run failed
- * needs the human again, unless a new plan it waits for is requested. A
+ * needs the human again, unless a new plan it waits for is on its way. A
  * run's pull request reads as ladoRunStatus names it.
  */
 export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
+	const coming = planComingStatus(task, t);
 	switch (task.state) {
 		case "closed_unmerged":
 			// After a run, the work closed without a merge, whichever closed first.
@@ -61,25 +119,23 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
 		case "completed":
 			return ladoRunStatus(task.state, task.stateReason, t);
 		case "review_required":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
+			if (coming) return coming;
 			// Only changed rules make it a rules review; the second line says why otherwise.
 			return task.stateReason && task.stateReason !== "rules_changed"
 				? { label: t("lado.task.state.approveAgain"), tone: "attention" }
 				: { label: t("lado.task.state.reviewRequired"), tone: "attention" };
 		case "blocked":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			return { label: t("lado.task.state.blocked"), tone: "attention" };
+			return coming ?? { label: t("lado.task.state.blocked"), tone: "attention" };
 		case "failed":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			return { label: t("lado.task.state.failed"), tone: "attention" };
+			return coming ?? { label: t("lado.task.state.failed"), tone: "attention" };
 		case "planned":
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
+			if (coming) return coming;
 			return task.plan.latest?.valid
 				? { label: t("lado.task.state.planned"), tone: "attention" }
 				: { label: t("lado.task.state.planInvalid"), tone: "attention" };
 		default:
-			if (task.plan.requestPending) return { label: t("lado.task.state.planRequested"), tone: "muted" };
-			if (task.plan.requestError) return { label: t("lado.task.state.planRequestFailed"), tone: "attention" };
+			if (coming) return coming;
+			if (task.plan.requestError || task.plan.worker?.phase === "failed") return { label: t("lado.task.state.planRequestFailed"), tone: "attention" };
 			return { label: t("lado.task.state.draft"), tone: "muted" };
 	}
 }
@@ -88,8 +144,10 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
  * The card's second line: what a queued task waits for and which attempt
  * starts it, why a task needs the human again or failed, what LADO's
  * verification of its pull request waits for or found, why an approved head
- * has no status yet, or that its work merged without approval. Null when the
- * status line says it all, or when a new plan is on its way.
+ * has no status yet, or that its work merged without approval. While a new
+ * plan is on its way, why its plan worker waits or what it does instead, and
+ * for a task without a plan, why its plan worker failed. Null when the status
+ * line says it all.
  */
 export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): string | null {
 	const reason = task.stateReason;
@@ -108,12 +166,18 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 			return parts.length > 0 ? parts.join(" · ") : null;
 		}
 		case "review_required":
-			if (task.plan.requestPending || reason === "rules_changed") return null;
+			if (planComing(task)) return planComingReason(task, t);
+			if (reason === "rules_changed") return null;
 			return reason ? ladoReasonText(t, reason) : null;
 		case "blocked":
 		case "failed":
-			if (task.plan.requestPending) return null;
+			if (planComing(task)) return planComingReason(task, t);
 			return reason ? ladoReasonText(t, reason) : null;
+		case "planned":
+			return planComing(task) ? planComingReason(task, t) : null;
+		case "draft":
+			if (planComing(task)) return planComingReason(task, t);
+			return task.plan.worker?.phase === "failed" ? ladoPlanFailureText(t, task.plan.worker.failureCode) || null : null;
 		case "validating":
 		case "integrating":
 			return reason ? ladoReasonText(t, reason) : null;

@@ -10,7 +10,7 @@ import { ChevronDown, Plus } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDeleteLadoRule, useLadoRules } from "../../hooks/useLado";
-import { LadoApiError, ladoRulesQueryRoot, type LadoRule } from "../../lib/lado";
+import { LadoApiError, ladoRulesQueryRoot, type LadoRule, type LadoRuleVersion } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import { ladoRuleName, useLadoRuleChange, type LadoRuleChangeRequest } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
@@ -47,6 +47,8 @@ function groupByCategory(t: TFunction, rules: readonly LadoRule[]): RuleGroup[] 
 }
 
 type Opening = { key: number; open: boolean; rule: LadoRule | null };
+// The editor opens on the rule, or on an older version's text to restore it.
+type EditorOpening = Opening & { from?: LadoRuleVersion };
 
 export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
@@ -58,7 +60,7 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const [changing, setChanging] = useState<string | null>(null);
 	const [failure, setFailure] = useState<{ ruleId: string; error: unknown } | null>(null);
 	// Each opening mounts its dialog again, so it starts from the rule as it is then.
-	const [editor, setEditor] = useState<Opening>({ key: 0, open: false, rule: null });
+	const [editor, setEditor] = useState<EditorOpening>({ key: 0, open: false, rule: null });
 	const [history, setHistory] = useState<Opening>({ key: 0, open: false, rule: null });
 	const [deleting, setDeleting] = useState<{ open: boolean; rule: LadoRule | null }>({ open: false, rule: null });
 	// The protected paths as they were when the editor opened.
@@ -232,6 +234,7 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 				key={`editor-${editor.key}`}
 				open={editor.open}
 				rule={editor.rule ?? undefined}
+				from={editor.from}
 				rules={all}
 				onOpenChange={(open) => setEditor((current) => ({ ...current, open }))}
 			/>
@@ -248,6 +251,11 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 				rule={history.rule}
 				rules={all}
 				onOpenChange={(open) => setHistory((current) => ({ ...current, open }))}
+				onRestore={(version) => {
+					const rule = history.rule;
+					setHistory((current) => ({ ...current, open: false }));
+					setEditor((current) => ({ key: current.key + 1, open: true, rule, from: version }));
+				}}
 			/>
 			<ConfirmDialog
 				open={deleting.open}

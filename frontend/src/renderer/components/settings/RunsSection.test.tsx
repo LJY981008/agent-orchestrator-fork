@@ -11,8 +11,24 @@ vi.mock("../../lib/lado", async (original) => ({
 	updateLadoDispatchSettings: vi.fn(),
 }));
 
-// What the daemon answers before anyone saved: 2 at once, 8 hours, hold on.
-const defaults: lado.LadoDispatchSettings = { maxConcurrent: 2, maxRunMinutes: 480, holdOnMemoryTight: true };
+// What the daemon answers before anyone saved: 2 at once, 8 hours, hold on;
+// 2 plan requests at once, and a review skipped for up to 3 paths.
+const defaults: lado.LadoDispatchSettings = {
+	maxConcurrent: 2,
+	maxRunMinutes: 480,
+	holdOnMemoryTight: true,
+	maxPlanWorkers: 2,
+	planReview: {
+		skip: true,
+		maxPaths: 3,
+		patterns: { db_schema: ["**/migrations*/**", "**/*.sql"], external_api: ["**/openapi*"], auth: ["**/auth/**"], data_deletion: [] },
+	},
+};
+
+/** What a save sends: every value, the plan worker ones too. */
+function sent(change: Partial<lado.LadoDispatchSettings>): lado.LadoDispatchSettingsInput {
+	return { ...defaults, ...change };
+}
 
 function renderSection() {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -41,6 +57,8 @@ describe("RunsSection", () => {
 		vi.mocked(lado.fetchLadoDispatchSettings).mockResolvedValue(defaults);
 		vi.mocked(lado.updateLadoDispatchSettings).mockImplementation(async (input) => ({
 			...input,
+			maxPlanWorkers: input.maxPlanWorkers ?? defaults.maxPlanWorkers,
+			planReview: input.planReview ?? defaults.planReview,
 			updatedAt: "2026-10-23T10:00:00Z",
 		}));
 	});
@@ -77,27 +95,29 @@ describe("RunsSection", () => {
 		]);
 	});
 
-	it("saves all three settings together whenever one of them changes", async () => {
+	it("saves all the settings together whenever one of them changes", async () => {
 		const user = userEvent.setup();
 		renderSection();
 
 		await choose(await screen.findByRole("button", { name: "Concurrent runs" }), "4");
 		await waitFor(() => expect(concurrent()).toHaveTextContent("4"));
-		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith({ maxConcurrent: 4, maxRunMinutes: 480, holdOnMemoryTight: true });
+		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxConcurrent: 4 }));
 
 		await waitFor(() => expect(runTime()).toBeEnabled());
 		await choose(runTime(), "Off");
 		await waitFor(() => expect(runTime()).toHaveTextContent("Off"));
-		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith({ maxConcurrent: 4, maxRunMinutes: 0, holdOnMemoryTight: true });
+		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxConcurrent: 4, maxRunMinutes: 0 }));
 
 		await waitFor(() => expect(memory()).toBeEnabled());
 		await user.click(memory());
 		await waitFor(() => expect(memory()).not.toBeChecked());
-		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith({ maxConcurrent: 4, maxRunMinutes: 0, holdOnMemoryTight: false });
+		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxConcurrent: 4, maxRunMinutes: 0, holdOnMemoryTight: false }));
 
 		await waitFor(() => expect(runTime()).toBeEnabled());
 		await choose(runTime(), "24 hours");
-		await waitFor(() => expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith({ maxConcurrent: 4, maxRunMinutes: 1440, holdOnMemoryTight: false }));
+		await waitFor(() =>
+			expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxConcurrent: 4, maxRunMinutes: 1440, holdOnMemoryTight: false })),
+		);
 		expect(lado.updateLadoDispatchSettings).toHaveBeenCalledTimes(4);
 	});
 
@@ -152,6 +172,71 @@ describe("RunsSection", () => {
 		expect(concurrent()).toBeEnabled();
 		expect(runTime()).toBeEnabled();
 		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
+	it("saves the plan workers' cap and when a small plan skips its review with the rest", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		const card = await screen.findByTestId("lado-plan-worker-settings");
+		expect(card).toHaveTextContent("Plan workers");
+		expect(card).toHaveTextContent("A request's designer and critic count as one, apart from runs.");
+		const planWorkers = () => within(card).getByRole("button", { name: "Concurrent plan requests" });
+		const skip = () => within(card).getByRole("switch", { name: "Skip the review of small plans" });
+		const maxPaths = () => within(card).getByRole("button", { name: "Affected paths of a small plan" });
+		expect(planWorkers()).toHaveTextContent("2");
+		expect(skip()).toBeChecked();
+		expect(maxPaths()).toHaveTextContent("Up to 3");
+
+		await choose(planWorkers(), "3");
+		await waitFor(() => expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxPlanWorkers: 3 })));
+
+		await waitFor(() => expect(maxPaths()).toBeEnabled());
+		await choose(maxPaths(), "Up to 5");
+		await waitFor(() =>
+			expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(
+				sent({ maxPlanWorkers: 3, planReview: { ...defaults.planReview, maxPaths: 5 } }),
+			),
+		);
+
+		// Without the skip every draft is reviewed, so its size and paths do not count.
+		await waitFor(() => expect(skip()).toBeEnabled());
+		await user.click(skip());
+		await waitFor(() =>
+			expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(
+				sent({ maxPlanWorkers: 3, planReview: { ...defaults.planReview, maxPaths: 5, skip: false } }),
+			),
+		);
+		await waitFor(() => expect(skip()).not.toBeChecked());
+		expect(maxPaths()).toBeDisabled();
+		expect(within(card).getByRole("button", { name: "Changes by path" })).toBeDisabled();
+	});
+
+	it("edits the patterns of each change kind and names a line LADO would refuse", async () => {
+		const user = userEvent.setup();
+		renderSection();
+
+		await user.click(await screen.findByRole("button", { name: "Changes by path" }));
+		const dialog = await screen.findByTestId("lado-review-patterns");
+		const field = (kind: string) => within(dialog).getByTestId(`lado-review-patterns-${kind}`);
+		expect(field("db_schema")).toHaveValue("**/migrations*/**\n**/*.sql");
+		expect(field("data_deletion")).toHaveValue("");
+		const save = within(dialog).getByRole("button", { name: "Save" });
+		expect(save).toBeDisabled();
+
+		await user.type(field("data_deletion"), "../outside");
+		expect(within(dialog).getByText("Data deletion, line 1: LADO cannot use this pattern.")).toBeInTheDocument();
+		expect(save).toBeDisabled();
+
+		await user.clear(field("data_deletion"));
+		await user.type(field("data_deletion"), "**/purge/**");
+		await user.click(save);
+		await waitFor(() =>
+			expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(
+				sent({ planReview: { ...defaults.planReview, patterns: { ...defaults.planReview.patterns, data_deletion: ["**/purge/**"] } } }),
+			),
+		);
+		await waitFor(() => expect(screen.queryByTestId("lado-review-patterns")).not.toBeInTheDocument());
 	});
 
 	it("explains settings it could not load", async () => {

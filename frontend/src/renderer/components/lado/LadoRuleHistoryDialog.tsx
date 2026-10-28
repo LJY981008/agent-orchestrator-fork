@@ -1,6 +1,8 @@
 // LADO fork: a rule's versions (docs/LJY-PRD/HARNESS.md §4). A version never
 // changes and every edit adds one, so the list is the rule's whole history:
-// who made each version, when, and what it said.
+// who made each version, when, and what it said. An older version of a rule
+// the developer edits can be restored: the editor opens with its text, and
+// saving adds it as the newest version.
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -8,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import { useLadoRule } from "../../hooks/useLado";
 import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
 import type { MessageKey } from "../../i18n/messages";
-import type { LadoRule } from "../../lib/lado";
+import type { LadoRule, LadoRuleVersion } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import { ladoRuleName } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
@@ -21,6 +23,7 @@ import {
 	settingsDialogContentClass,
 	settingsDialogHeaderClass,
 } from "../ui/dialog";
+import { Button } from "../ui/button";
 import { ladoCategoryLabel, ladoCeilingModeLabel } from "./LadoRuleRows";
 
 // Who made a version (backend/internal/service/ladopolicy/service.go).
@@ -38,18 +41,22 @@ function actorLabel(t: TFunction, actor: string): string {
 
 /**
  * Open while rule is set and open is true; rules names the rules a version
- * conflicts with. Mount it again for each opening.
+ * conflicts with. onRestore, when set, offers to restore an older version of
+ * a rule that is neither protected nor archived. Mount it again for each
+ * opening.
  */
 export function LadoRuleHistoryDialog({
 	rule,
 	open,
 	rules,
 	onOpenChange,
+	onRestore,
 }: {
 	rule: LadoRule | null;
 	open: boolean;
 	rules: readonly LadoRule[];
 	onOpenChange: (open: boolean) => void;
+	onRestore?: (version: LadoRuleVersion) => void;
 }) {
 	const { t, i18n } = useTranslation();
 	const detail = useLadoRule(rule?.id ?? null);
@@ -62,6 +69,7 @@ export function LadoRuleHistoryDialog({
 	const names = new Map(rules.map((entry) => [entry.id, ladoRuleName(t, entry.id, entry.name)]));
 	const time = (iso: string) => new Date(iso).toLocaleString(i18n.language, { dateStyle: "medium", timeStyle: "short" });
 	const none = t("lado.rules.none");
+	const restorable = onRestore !== undefined && rule !== null && !rule.protected && !rule.archived && shown !== undefined && shown.number !== current;
 
 	return (
 		<Dialog open={open && rule !== null} onOpenChange={onOpenChange}>
@@ -140,6 +148,19 @@ export function LadoRuleHistoryDialog({
 											: shown.conflictsWith.map((conflict) => names.get(conflict) ?? conflict).join(", ")}
 									</VersionEntry>
 								</dl>
+							) : null}
+							{restorable ? (
+								<div className="flex justify-end">
+									<Button
+										type="button"
+										variant="ghost"
+										size="sm"
+										className="text-settings-muted hover:text-settings-label"
+										onClick={() => onRestore(shown)}
+									>
+										{t("lado.rules.history.restore")}
+									</Button>
+								</div>
 							) : null}
 						</>
 					)}

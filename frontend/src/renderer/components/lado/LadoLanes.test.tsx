@@ -5,6 +5,13 @@ import * as lado from "../../lib/lado";
 import { TooltipProvider } from "../ui/tooltip";
 import { LadoLanes } from "./LadoLanes";
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+
+vi.mock("@tanstack/react-router", async (original) => ({
+	...await original<typeof import("@tanstack/react-router")>(),
+	useNavigate: () => navigate,
+}));
+
 vi.mock("../../lib/lado", async (original) => ({
 	...await original<typeof import("../../lib/lado")>(),
 	fetchLadoTasks: vi.fn(),
@@ -387,6 +394,49 @@ test("the status line follows the task's plans", async () => {
 	}
 });
 
+// LADO fork: plan workers (docs/LJY-PRD/TDD.md §5.1).
+test("a plan worker's card says what it does and links the session that works now", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, plan: { requestPending: true, worker: { requestId: "r1", phase: "designing", designerSessionId: "demo-plan-1" } } },
+		{
+			...task,
+			id: "lado-task-2",
+			createdAt: "2026-10-19T08:00:00Z",
+			issue: { ...task.issue, ref: "github:acme/demo#13", number: 13, title: "Fix the build", url: "https://github.com/acme/demo/issues/13" },
+			plan: {
+				requestPending: true,
+				worker: { requestId: "r2", phase: "critiquing", review: "running", designerSessionId: "demo-plan-2", criticSessionId: "demo-plan-3" },
+			},
+		},
+		{
+			...task,
+			id: "lado-task-3",
+			createdAt: "2026-10-19T07:00:00Z",
+			issue: { ...task.issue, ref: "github:acme/demo#14", number: 14, title: "Tidy the docs", url: "https://github.com/acme/demo/issues/14" },
+			plan: { requestPending: true, worker: { requestId: "r3", phase: "waiting", waitingReason: "plan_worker_capacity" } },
+		},
+	]);
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-plan-lane");
+	await within(lane).findByText("Add login");
+	const [designing, critiquing, waiting] = within(lane).getAllByTestId("lado-task-card");
+	expect(within(designing).getByTestId("lado-task-state")).toHaveTextContent("Plan worker writing");
+	expect(within(designing).getByTestId("lado-task-reason")).toHaveTextContent("Designing the plan");
+	expect(within(critiquing).getByTestId("lado-task-reason")).toHaveTextContent("Reviewing the draft");
+	expect(within(waiting).getByTestId("lado-task-state")).toHaveTextContent("Waiting for a plan worker");
+	expect(within(waiting).getByTestId("lado-task-reason")).toHaveTextContent("Every plan worker slot is in use");
+	// No session before the designer starts.
+	expect(within(waiting).queryByRole("button", { name: /Open (plan worker|critic)/ })).not.toBeInTheDocument();
+
+	// The link opens the session, not the task view.
+	fireEvent.click(within(designing).getByRole("button", { name: "Open plan worker" }));
+	expect(navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-plan-1" } });
+	expect(lado.fetchLadoTaskView).not.toHaveBeenCalled();
+	fireEvent.click(within(critiquing).getByRole("button", { name: "Open critic" }));
+	expect(navigate).toHaveBeenLastCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-plan-3" } });
+});
+
 test("opening a card shows the task view", async () => {
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task]);
 	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue({
@@ -394,7 +444,7 @@ test("opening a card shows the task view", async () => {
 		issue: { title: "Add login", body: "Use the plan below.", state: "open", url: task.issue.url },
 		comments: [],
 		issueChangedSincePlan: false,
-		history: { requests: [], revisions: [], approvals: [] },
+		history: { requests: [], revisions: [], approvals: [], critiques: [] },
 	});
 	renderLane();
 	fireEvent.click(await screen.findByRole("button", { name: "Open task #12" }));

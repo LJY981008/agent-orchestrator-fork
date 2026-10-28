@@ -25,7 +25,7 @@ import {
 	type LadoTask,
 	type LadoTaskView,
 } from "../../lib/lado";
-import { ladoErrorText, ladoPlanProblemText, ladoQueueErrorText, ladoReasonText } from "../../lib/lado-errors";
+import { ladoChangeKindLabel, ladoErrorText, ladoPlanProblemText, ladoQueueErrorText, ladoReasonText } from "../../lib/lado-errors";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import { ChatMarkdown } from "../chat/ChatMarkdown";
@@ -42,7 +42,9 @@ import {
 } from "../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoPlanReview } from "./LadoPlanReview";
+import { LadoPlanWorkerStatus } from "./LadoPlanWorkerStatus";
 import { LadoTaskRules } from "./LadoTaskRules";
 import { LadoIntegrationAction, LadoRepostStatus } from "./LadoVerificationSection";
 
@@ -143,7 +145,11 @@ function TaskViewBody({
 	const listed = useLadoTasks(projectId).data?.find((candidate) => candidate.id === taskId);
 	const task = listed ?? view.task;
 	const open = task.state !== "cancelled" && task.state !== "closed_unmerged";
-	const pending = task.plan.requestPending;
+	// A plan worker stays open while it fixes the problems of the revision it
+	// pinned, so a new plan is still on its way then.
+	const worker = task.plan.worker;
+	const workerShown = ladoOpenPlanWorker(task) ?? (worker?.phase === "failed" ? worker : undefined);
+	const pending = task.plan.requestPending || ladoOpenPlanWorker(task) !== undefined;
 	const shown = plan.data;
 	// An approved plan is approved again when the rules or the issue changed
 	// since, or when its run failed. When the rules it was approved with block
@@ -266,7 +272,9 @@ function TaskViewBody({
 							{view.issueChangedSincePlan ? (
 								<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">{t("lado.view.issueChanged")}</p>
 							) : null}
-							{pending ? (
+							{workerShown ? (
+								<LadoPlanWorkerStatus task={task} worker={workerShown} onClose={onClose} />
+							) : pending ? (
 								<p className="text-control text-settings-muted" role="status">{t("lado.view.waitingForPlan")}</p>
 							) : task.plan.requestError ? (
 								<p className="text-caption leading-4 text-error" role="alert">
@@ -632,6 +640,9 @@ function PlanContent({ plan, approvals }: { plan: LadoPlan; approvals: LadoTaskV
 				{content.baseRef ? <PlanFact label={t("lado.view.baseRef")} value={content.baseRef} mono /> : null}
 				{risk ? <PlanFact label={t("lado.view.risk")} value={risk} /> : null}
 				{content.permissionCeiling ? <PlanFact label={t("lado.view.permission")} value={content.permissionCeiling} mono /> : null}
+				{content.changeKinds.length > 0 ? (
+					<PlanFact label={t("lado.view.changeKinds")} value={content.changeKinds.map((kind) => ladoChangeKindLabel(t, kind)).join(", ")} />
+				) : null}
 				<PlanFact
 					label={t("lado.view.review")}
 					value={
@@ -647,6 +658,7 @@ function PlanContent({ plan, approvals }: { plan: LadoPlan; approvals: LadoTaskV
 			<PlanList title={t("lado.view.acceptance")} items={content.acceptanceCriteria} />
 			<PlanList title={t("lado.view.affectedPaths")} items={content.affectedPaths} mono />
 			<PlanList title={t("lado.view.testCommands")} items={content.testCommands} mono empty={t("lado.view.noTestCommands")} />
+			<LadoPlanReview plan={plan} />
 			{content.body ? <ChatMarkdown text={content.body} safeOrigin /> : null}
 		</div>
 	);

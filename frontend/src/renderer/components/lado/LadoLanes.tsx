@@ -17,7 +17,8 @@ import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoPlanWorkerCardLink } from "./LadoPlanWorkerStatus";
 import { LadoTaskDialog } from "./LadoTaskDialog";
 
 export function LadoLanes({ projectId }: { projectId: string }) {
@@ -178,6 +179,7 @@ function LadoTaskCard({
 	const { t, i18n } = useTranslation();
 	const status = ladoTaskStatus(task, t);
 	const reason = ladoTaskReason(task, t, i18n.language);
+	const worker = ladoOpenPlanWorker(task);
 	const issueLabel = ladoIssueLabel(task.issue.number, task.repository, repositories);
 	return (
 		<div
@@ -186,7 +188,7 @@ function LadoTaskCard({
 			data-testid="lado-task-card"
 			data-task-id={task.id}
 			onClick={(event) => {
-				// The issue link and the cancel action are controls of their own.
+				// The issue link, the session link and the cancel action are controls of their own.
 				if ((event.target as HTMLElement).closest("a,button")) return;
 				onOpen(task);
 			}}
@@ -237,8 +239,17 @@ function LadoTaskCard({
 					</span>
 					<span className="ml-auto shrink-0 tabular-nums text-2xs text-muted-foreground">{formatTimeCompact(task.createdAt)}</span>
 				</div>
-				{/* Under the label, past the dot and its gap. */}
-				{reason ? (
+				{/* Under the label, past the dot and its gap; a plan worker's session at the trailing edge. */}
+				{worker?.designerSessionId ? (
+					<div className="mt-1 flex min-w-0 items-center gap-2 pl-3.5">
+						{reason ? (
+							<p className="min-w-0 truncate text-2xs text-muted-foreground" title={reason} data-testid="lado-task-reason">
+								{reason}
+							</p>
+						) : null}
+						<LadoPlanWorkerCardLink task={task} worker={worker} />
+					</div>
+				) : reason ? (
 					<p className="mt-1 truncate pl-3.5 text-2xs text-muted-foreground" title={reason} data-testid="lado-task-reason">
 						{reason}
 					</p>

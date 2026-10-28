@@ -75,7 +75,7 @@ function validPattern(glob: string): boolean {
  * separators, without a .. segment, a drive letter or a control character,
  * and a valid pattern.
  */
-function validPath(glob: string): boolean {
+export function ladoValidAffectedPath(glob: string): boolean {
 	if (glob.startsWith("/") || glob.includes("\\") || hasControlCharacter(glob)) return false;
 	if (glob.length >= 2 && glob[1] === ":") return false;
 	if (glob.split("/").includes("..")) return false;
@@ -113,7 +113,7 @@ export function LadoProtectedPathsDialog({
 	const dirty = lines.length !== globs.length || lines.some((entry, index) => entry.glob !== globs[index]);
 	const problems = [
 		...lines
-			.filter((entry) => !validPath(entry.glob))
+			.filter((entry) => !ladoValidAffectedPath(entry.glob))
 			.map((entry) => t("lado.protectedPaths.line", { line: entry.line, problem: t("lado.protectedPaths.problem.invalid") })),
 		...(lines.length === 0 ? [t("lado.protectedPaths.problem.required")] : []),
 		...(lines.length > MAX_PROTECTED_PATHS ? [t("lado.protectedPaths.problem.tooMany")] : []),
