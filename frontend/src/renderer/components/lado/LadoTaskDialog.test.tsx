@@ -255,8 +255,9 @@ test("shows a plan worker's review: what it took, the findings and how the plan 
 		notAddressed: 1,
 		changeKinds: ["db_schema"],
 		sessions: [
-			{ sessionId: "demo-plan-1", role: "design", inputTokens: 200_000, outputTokens: 50_000, cacheReadTokens: 900_000, cacheWriteTokens: 50_000, costNanos: 1_500_000_000 },
-			{ sessionId: "demo-plan-2", role: "critique", inputTokens: 100_000, outputTokens: 20_000, cacheReadTokens: 450_000, cacheWriteTokens: 30_000, costNanos: 500_000_000 },
+			// Input holds the cache reads and writes, as AO counts it.
+			{ sessionId: "demo-plan-1", role: "design", inputTokens: 1_150_000, outputTokens: 50_000, cacheReadTokens: 900_000, cacheWriteTokens: 50_000, costNanos: 1_500_000_000 },
+			{ sessionId: "demo-plan-2", role: "critique", inputTokens: 580_000, outputTokens: 20_000, cacheReadTokens: 450_000, cacheWriteTokens: 30_000, costNanos: 500_000_000 },
 		],
 		updatedAt: "2026-10-20T09:30:00Z",
 	};

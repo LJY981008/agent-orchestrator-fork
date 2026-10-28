@@ -53,10 +53,10 @@ type LadoPlanCritiqueResponse struct {
 type LadoPlanSessionUsageResponse struct {
 	SessionID        string `json:"sessionId"`
 	Role             string `json:"role" enum:"design,critique"`
-	InputTokens      int64  `json:"inputTokens"`
+	InputTokens      int64  `json:"inputTokens" description:"All input, as AO counts it: cache reads and writes included."`
 	OutputTokens     int64  `json:"outputTokens"`
-	CacheReadTokens  int64  `json:"cacheReadTokens"`
-	CacheWriteTokens int64  `json:"cacheWriteTokens"`
+	CacheReadTokens  int64  `json:"cacheReadTokens" description:"The part of inputTokens read from the provider's cache."`
+	CacheWriteTokens int64  `json:"cacheWriteTokens" description:"The part of inputTokens written to the provider's cache."`
 	CostNanos        *int64 `json:"costNanos,omitempty" description:"AO's cost estimate in nano dollars; omitted when AO priced none of the session's events."`
 }
 

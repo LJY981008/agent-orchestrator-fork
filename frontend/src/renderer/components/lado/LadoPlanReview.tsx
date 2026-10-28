@@ -16,14 +16,15 @@ const severityOrder: Record<LadoPlanFinding["severity"], number> = { P1: 0, majo
  * The metrics line: "Design 21 min · 1.2M tokens / Review 15 min · 0.6M
  * tokens · P1 2 · major 1 · minor 0 → addressed 2 · not addressed 1", with
  * the cost at the end when AO priced every session. The design's time counts
- * the draft and the turn that answered the review.
+ * the draft and the turn that answered the review. Tokens are input and
+ * output, as AO counts them: input already holds the cache reads and writes.
  */
 export function ladoPlanMetricsLine(metrics: LadoPlanMetrics, t: TFunction, locale: string): string {
 	const duration = (ms: number) => t("lado.review.metrics.minutes", { minutes: Math.max(1, Math.round(ms / 60_000)) });
 	const tokens = (role: LadoPlanMetrics["sessions"][number]["role"]) => {
 		const total = metrics.sessions
 			.filter((session) => session.role === role)
-			.reduce((sum, session) => sum + session.inputTokens + session.outputTokens + session.cacheReadTokens + session.cacheWriteTokens, 0);
+			.reduce((sum, session) => sum + session.inputTokens + session.outputTokens, 0);
 		return total > 0 ? t("lado.review.metrics.tokens", { tokens: formatCompactNumber(total, locale) }) : null;
 	};
 	const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(" · ");

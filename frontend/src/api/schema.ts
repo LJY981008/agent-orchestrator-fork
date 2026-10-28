@@ -7146,13 +7146,22 @@ export interface components {
             valid: boolean;
         };
         LadoPlanSessionUsageResponse: {
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The part of inputTokens read from the provider's cache.
+             */
             cacheReadTokens: number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description The part of inputTokens written to the provider's cache.
+             */
             cacheWriteTokens: number;
             /** @description AO's cost estimate in nano dollars; omitted when AO priced none of the session's events. */
             costNanos?: null | number;
-            /** Format: int64 */
+            /**
+             * Format: int64
+             * @description All input, as AO counts it: cache reads and writes included.
+             */
             inputTokens: number;
             /** Format: int64 */
             outputTokens: number;

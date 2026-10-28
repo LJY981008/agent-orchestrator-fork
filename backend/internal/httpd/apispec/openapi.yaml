@@ -20752,9 +20752,11 @@ components:
     LadoPlanSessionUsageResponse:
       properties:
         cacheReadTokens:
+          description: The part of inputTokens read from the provider's cache.
           format: int64
           type: integer
         cacheWriteTokens:
+          description: The part of inputTokens written to the provider's cache.
           format: int64
           type: integer
         costNanos:
@@ -20764,6 +20766,7 @@ components:
           - "null"
           - integer
         inputTokens:
+          description: 'All input, as AO counts it: cache reads and writes included.'
           format: int64
           type: integer
         outputTokens:
