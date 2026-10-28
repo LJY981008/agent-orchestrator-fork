@@ -122,7 +122,8 @@ func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store
 		deps.sessions.SetLadoChatServers(func(ctx context.Context, rec domain.SessionRecord) ([]ports.ChatMCPServerConfig, error) {
 			return setup.CodexChatServers(ctx, rec.ID, rec.ClientRequestID, rec.ProjectID)
 		})
-		deps.sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Setup: setup}.Section)
+		// This replaces wireLado's source, so it keeps the plan worker roles' rules.
+		deps.sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup}.Section)
 		reviewers := deps.reviewers
 		if reviewers == nil {
 			reviewers = reviewcore.SetLadoSystemSection
