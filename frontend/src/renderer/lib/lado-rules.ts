@@ -9,6 +9,7 @@ import { useState } from "react";
 import type { MessageKey } from "../i18n/messages";
 import {
 	changeLadoCeiling,
+	changeLadoProtectedPaths,
 	createLadoRule,
 	invalidateLadoRuleQueries,
 	LADO_PROTECTED_PATHS_RULE_ID,
@@ -119,14 +120,16 @@ export function ladoProblemText(
 
 /**
  * A rule change. Each runs first as a dry run, which needs no confirmation;
- * the permission ceiling's mode is then changed through the desktop app's
- * confirmation (changeLadoCeiling).
+ * the permission ceiling's mode and the protected paths are then changed
+ * through the desktop app's confirmation (changeLadoCeiling,
+ * changeLadoProtectedPaths).
  */
 export type LadoRuleChangeRequest =
 	| { kind: "create"; input: Omit<LadoCreateRuleInput, "dryRun"> }
 	| { kind: "update"; ruleId: string; input: Omit<LadoUpdateRuleInput, "dryRun" | "ceiling"> }
 	| { kind: "binding"; input: Omit<LadoBindingInput, "dryRun"> }
-	| { kind: "ceiling"; ruleId: string; baseVersion: number; mode: LadoCeilingMode };
+	| { kind: "ceiling"; ruleId: string; baseVersion: number; mode: LadoCeilingMode }
+	| { kind: "paths"; ruleId: string; baseVersion: number; globs: string[] };
 
 export type LadoRuleChangeOutcome =
 	| { status: "applied"; rule?: LadoRule }
@@ -152,6 +155,12 @@ function dryRun(request: LadoRuleChangeRequest): Promise<LadoRuleChangeResult> {
 				ceiling: { mode: request.mode },
 				dryRun: true,
 			});
+		case "paths":
+			return updateLadoRule(request.ruleId, {
+				baseVersion: request.baseVersion,
+				paths: { globs: request.globs },
+				dryRun: true,
+			});
 	}
 }
 
@@ -165,6 +174,10 @@ async function apply(request: LadoRuleChangeRequest): Promise<LadoRuleChangeOutc
 			return { status: "applied", rule: (await setLadoBinding(request.input)).rule };
 		case "ceiling": {
 			const rule = await changeLadoCeiling(request.ruleId, request.mode);
+			return rule ? { status: "applied", rule } : { status: "cancelled" };
+		}
+		case "paths": {
+			const rule = await changeLadoProtectedPaths(request.globs);
 			return rule ? { status: "applied", rule } : { status: "cancelled" };
 		}
 	}

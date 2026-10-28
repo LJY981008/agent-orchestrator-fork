@@ -42,6 +42,7 @@ import {
 	ladoTaskViewQueryKey,
 	ladoTaskViewQueryRoot,
 	mergeLadoPR,
+	repostLadoIntegrationStatus,
 	requestLadoPlan,
 	runLadoChecks,
 	setLadoMode,
@@ -52,6 +53,8 @@ import {
 	type LadoCheckCommand,
 	type LadoDispatchSettingsInput,
 } from "../lib/lado";
+import { sessionScmSummaryQueryKey } from "./useSessionScmSummary";
+import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
 /** A project's LADO settings: its mode and how many of its executions run at once. */
 export function useLadoProjectSettings(projectId: string | undefined) {
@@ -115,7 +118,8 @@ export function useUpdateLadoProjectSettings(projectId: string) {
 export function useUpdateLadoProjectChecks(projectId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
-		mutationFn: (commands: LadoCheckCommand[]) => updateLadoProjectChecks(projectId, commands),
+		// base is the checkCommandsSha256 of the list the edit started from.
+		mutationFn: ({ commands, base }: { commands: LadoCheckCommand[]; base: string }) => updateLadoProjectChecks(projectId, commands, base),
 		onSuccess: (settings) => {
 			if (!settings) return;
 			queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings);
@@ -347,10 +351,14 @@ export function useLadoExecution(sessionId: string | null | undefined, enabled =
 	});
 }
 
-/** A check command run's output, read when its log opens; a finished run's output does not change. */
-export function useLadoCheckLog(sessionId: string, checkRunId: string | null | undefined, enabled = true) {
+/**
+ * A check command run's output, read when its log opens. The run's status is
+ * part of the key: output read while the command ran is never what it ended
+ * with, and a finished run's output does not change.
+ */
+export function useLadoCheckLog(sessionId: string, checkRunId: string | null | undefined, status: string | undefined, enabled = true) {
 	return useQuery({
-		queryKey: ladoCheckLogQueryKey(sessionId, checkRunId ?? ""),
+		queryKey: ladoCheckLogQueryKey(sessionId, checkRunId ?? "", status ?? ""),
 		queryFn: () => fetchLadoCheckLog(sessionId, checkRunId ?? ""),
 		enabled: enabled && Boolean(sessionId && checkRunId),
 		staleTime: Number.POSITIVE_INFINITY,
@@ -359,13 +367,18 @@ export function useLadoCheckLog(sessionId: string, checkRunId: string | null | u
 }
 
 // What an integration approval, a merge or a new check run moves: the run's
-// panel, its task's lanes and the open task view.
+// panel, its task's lanes and the open task view; a merge also moves AO's PR
+// views of the session.
 function useInvalidateLadoRun(projectId: string, sessionId: string) {
 	const queryClient = useQueryClient();
-	return () => {
+	return (merged = false) => {
 		void queryClient.invalidateQueries({ queryKey: ladoExecutionQueryKey(sessionId) });
 		void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
 		void queryClient.invalidateQueries({ queryKey: ladoTaskViewQueryRoot });
+		if (merged) {
+			void queryClient.invalidateQueries({ queryKey: sessionScmSummaryQueryKey(sessionId) });
+			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+		}
 	};
 }
 
@@ -380,6 +393,18 @@ export function useApproveLadoIntegration(projectId: string, sessionId: string) 
 		onSuccess: (result) => {
 			if (result) invalidate();
 		},
+		// A refusal, as for a head approved meanwhile, means the panel is out of date.
+		onError: () => invalidate(),
+		retry: false,
+	});
+}
+
+/** Posts the approved head's lado/integration status again, its attempts started over. */
+export function useRepostLadoIntegrationStatus(projectId: string, sessionId: string) {
+	const invalidate = useInvalidateLadoRun(projectId, sessionId);
+	return useMutation({
+		mutationFn: () => repostLadoIntegrationStatus(sessionId),
+		onSettled: () => invalidate(),
 		retry: false,
 	});
 }
@@ -389,7 +414,7 @@ export function useRunLadoChecks(projectId: string, sessionId: string) {
 	const invalidate = useInvalidateLadoRun(projectId, sessionId);
 	return useMutation({
 		mutationFn: () => runLadoChecks(sessionId),
-		onSuccess: invalidate,
+		onSuccess: () => invalidate(),
 		retry: false,
 	});
 }
@@ -399,7 +424,9 @@ export function useMergeLadoPR(projectId: string, sessionId: string) {
 	const invalidate = useInvalidateLadoRun(projectId, sessionId);
 	return useMutation({
 		mutationFn: (pr: { number: number; url: string; headSha: string }) => mergeLadoPR(pr),
-		onSuccess: invalidate,
+		onSuccess: () => invalidate(true),
+		// AO or LADO's gate refused: what the panel shows is out of date.
+		onError: () => invalidate(),
 		retry: false,
 	});
 }

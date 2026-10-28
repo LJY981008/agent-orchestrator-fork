@@ -9,7 +9,14 @@ import type { TFunction } from "i18next";
 import { ChevronDown } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useApproveLadoIntegration, useLadoCheckLog, useLadoPlan, useMergeLadoPR, useRunLadoChecks } from "../../hooks/useLado";
+import {
+	useApproveLadoIntegration,
+	useLadoCheckLog,
+	useLadoPlan,
+	useMergeLadoPR,
+	useRepostLadoIntegrationStatus,
+	useRunLadoChecks,
+} from "../../hooks/useLado";
 import type { MessageKey } from "../../i18n/messages";
 import type {
 	LadoEvidenceCriterion,
@@ -20,7 +27,7 @@ import type {
 	LadoVerifyKind,
 	LadoVerifyOutcome,
 } from "../../lib/lado";
-import { ladoErrorText, ladoReasonText } from "../../lib/lado-errors";
+import { LADO_PROTECTION_ANY_SOURCE, ladoErrorText, ladoProtectionPartText, ladoReasonText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { formatDuration } from "../SessionMemoryPanel";
 import { Button } from "../ui/button";
@@ -31,22 +38,18 @@ const REVIEW_ROUNDS = 3;
 // A one-line list names this many, then how many more.
 const LISTED = 3;
 
+// The states of a run with a pull request.
+const prRunStates: readonly string[] = ["validating", "integration_pending", "integrating", "completed", "closed_unmerged"];
+
 /**
- * Where the run's pull request stands, from the facts the daemon derives the
- * task's state from (backend/internal/domain/lado_task.go taskState): the
- * PR, the record of its current head and that head's integration approval.
- * Reading them from the one answer keeps the state, the rows and the actions
- * about the same head. Null for a run without a PR.
+ * Where the run's pull request stands, as the daemon derives it and sends it
+ * with the run (backend/internal/domain/lado_task.go taskState): the panel
+ * never works it out again, so it cannot show another state than the task
+ * lists do. Null for a run without a PR.
  */
 function ladoRunState(execution: LadoExecution): { state: LadoRunState; reason?: string } | null {
-	const { pr, verification, integration } = execution;
-	if (!pr) return null;
-	if (pr.merged) return { state: "completed", reason: integration ? undefined : "merged_without_approval" };
-	if (pr.closed) return { state: "closed_unmerged" };
-	if (integration) return { state: "integrating", reason: integration.statusState === "failed" ? "status_not_posted" : undefined };
-	if (!verification) return { state: "validating", reason: "verifying" };
-	if (verification.outcome === "pass" || verification.outcome === "confirm") return { state: "integration_pending" };
-	return { state: "validating", reason: verification.reason || "verifying" };
+	if (!execution.pr || !prRunStates.includes(execution.state)) return null;
+	return { state: execution.state as LadoRunState, reason: execution.stateReason || undefined };
 }
 
 export function LadoVerificationSection({ execution, projectId }: { execution: LadoExecution; projectId: string }) {
@@ -63,7 +66,7 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 				<div className="flex min-w-0 items-start gap-3">
 					{!verification && open && !integration ? (
 						<p className="flex min-w-0 flex-1 items-center gap-2 text-sm" role="status">
-							<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass.working)} aria-hidden="true" />
+							<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass.validating)} aria-hidden="true" />
 							<span className="text-muted-foreground">{t("lado.verify.checking")}</span>
 						</p>
 					) : (
@@ -86,10 +89,15 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 						</span>
 					) : null}
 				</div>
-				{integration?.statusState === "failed" && integration.statusError ? (
-					<p className="truncate pl-3.5 text-xs text-muted-foreground" title={integration.statusError}>
-						{integration.statusError}
-					</p>
+				{integration?.statusState === "failed" ? (
+					<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
+						{integration.statusError ? (
+							<p className="w-full truncate text-xs text-muted-foreground" title={integration.statusError}>
+								{integration.statusError}
+							</p>
+						) : null}
+						{open ? <LadoRepostStatus projectId={projectId} sessionId={execution.sessionId} /> : null}
+					</div>
 				) : null}
 				{verification ? (
 					<ul className="flex flex-col gap-2" data-testid="lado-verify-items">
@@ -119,14 +127,24 @@ const kindKeys: Record<LadoVerifyKind, MessageKey> = {
 	evidence: "lado.verify.item.evidence",
 };
 
-// A pass is ready, a wait is LADO's work in progress, a failure is the
-// worker's to fix (LADO asks it to), and a confirm is the developer's call.
+// A pass is ready, a wait is LADO's verification in progress, a failure is
+// the worker's to fix (LADO asks it to), and a confirm is the developer's
+// call. The dot is not the only sign: each row names its outcome for screen
+// readers too (DESIGN.md §6, U5 of #15).
 const outcomeDotClass: Record<LadoVerifyOutcome, string> = {
 	pass: "bg-[var(--color-status-ready)]",
-	wait: "bg-[var(--color-status-working)]",
+	wait: "bg-[var(--color-status-validating)]",
 	fail: "bg-[var(--color-status-exited)]",
 	confirm: "bg-[var(--color-status-needs-you)]",
 	info: "bg-[var(--color-status-idle)]",
+};
+
+const outcomeKeys: Record<LadoVerifyOutcome, MessageKey> = {
+	pass: "lado.verify.outcome.pass",
+	wait: "lado.verify.outcome.wait",
+	fail: "lado.verify.outcome.fail",
+	confirm: "lado.verify.outcome.confirm",
+	info: "lado.verify.outcome.info",
 };
 
 function VerifyItemRow({
@@ -151,12 +169,21 @@ function VerifyItemRow({
 		<li className="flex min-w-0 flex-col gap-0.5" data-testid="lado-verify-item" data-kind={item.kind} data-outcome={item.outcome}>
 			<div className="flex min-w-0 items-center gap-2">
 				<span className={cn("size-1.5 shrink-0 rounded-full", outcomeDotClass[item.outcome])} aria-hidden="true" />
-				<span className={cn("min-w-0 flex-1 truncate text-sm", quiet ? "text-passive" : "text-foreground")}>{t(kindKeys[item.kind])}</span>
+				<span className={cn("min-w-0 flex-1 truncate text-sm", quiet ? "text-passive" : "text-foreground")}>
+					{t(kindKeys[item.kind])}
+					<span className="sr-only">
+						{", "}
+						{t(outcomeKeys[item.outcome])}
+					</span>
+				</span>
 			</div>
 			{detail ? (
 				<p className={cn("truncate pl-3.5 text-xs", quiet ? "text-passive" : "text-muted-foreground")} title={detail}>
 					{detail}
 				</p>
+			) : null}
+			{item.kind === "protection" && (item.details.missing ?? []).includes(LADO_PROTECTION_ANY_SOURCE) ? (
+				<p className="pl-3.5 text-xs text-muted-foreground">{t("lado.protection.anySourceGuide")}</p>
 			) : null}
 			{runs.length > 0 ? <CommandRuns projectId={projectId} sessionId={execution.sessionId} runs={runs} canRun={canRun} /> : null}
 			{item.kind === "evidence" && verification.evidence.length > 0 ? (
@@ -258,6 +285,8 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 					return t("lado.verify.base.reflogOff", { branch });
 				case "already_on_base":
 					return t("lado.verify.base.alreadyOnBase", { branch });
+				case "base_deleted":
+					return t("lado.verify.base.deleted", { branch });
 				case "no_local_branch":
 					return t("lado.verify.base.noLocalBranch", { branch });
 			}
@@ -266,7 +295,9 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 		case "protection": {
 			switch (code) {
 				case "unprotected":
-					return t("lado.verify.protection.unprotected", { missing: (details.missing ?? []).join(", ") });
+					return t("lado.verify.protection.unprotected", {
+						missing: (details.missing ?? []).map((part) => ladoProtectionPartText(t, part)).join(", "),
+					});
 				case "protection_unknown":
 					return details.error ? t("lado.verify.protection.unknownError", { error: details.error }) : t("lado.verify.protection.unknown");
 				case "unprotected_gitlab":
@@ -296,6 +327,37 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 		}
 	}
 	return fallback;
+}
+
+/**
+ * Posts the approved head's lado/integration status again, as after its token
+ * was fixed: the daemon stops trying after twelve failed posts (S8 of #15).
+ */
+export function LadoRepostStatus({ projectId, sessionId }: { projectId: string; sessionId: string }) {
+	const { t } = useTranslation();
+	const repost = useRepostLadoIntegrationStatus(projectId, sessionId);
+	return (
+		<div className="flex flex-col items-start gap-0.5">
+			{/* Pulled left by its padding, so the label lines up with the line above. */}
+			<Button
+				type="button"
+				variant="ghost"
+				size="sm"
+				className="-ml-2 h-6 px-2 text-muted-foreground hover:text-foreground"
+				disabled={repost.isPending}
+				onClick={() => repost.mutate()}
+				data-testid="lado-repost-status"
+			>
+				{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
+				<span className="text-xs">{repost.isPending ? t("lado.verify.repostingStatus") : t("lado.verify.repostStatus")}</span>
+			</Button>
+			{repost.error ? (
+				<p className="text-caption leading-4 text-error" role="alert">
+					{ladoErrorText(t, repost.error)}
+				</p>
+			) : null}
+		</div>
+	);
 }
 
 /** Runs every check command again on the head; the commands row waits for them. */
@@ -368,7 +430,7 @@ function CommandRuns({
 function CommandRun({ sessionId, run }: { sessionId: string; run: LadoVerifyCommandRun }) {
 	const { t } = useTranslation();
 	const [open, setOpen] = useState(false);
-	const log = useLadoCheckLog(sessionId, run.checkRunId, open);
+	const log = useLadoCheckLog(sessionId, run.checkRunId, run.status, open);
 	return (
 		<li className="flex min-w-0 flex-col gap-1" data-testid="lado-verify-command">
 			<div className="flex min-w-0 items-center gap-1.5 text-xs">
@@ -381,7 +443,8 @@ function CommandRun({ sessionId, run }: { sessionId: string; run: LadoVerifyComm
 						<span className="shrink-0 tabular-nums text-muted-foreground">{formatDuration(run.durationMs)}</span>
 					</>
 				) : null}
-				{run.checkRunId ? (
+				{/* Output shows once the command ended: while it runs there is none to read yet. */}
+				{run.checkRunId && finishedRun(run) ? (
 					<button
 						type="button"
 						aria-expanded={open}
@@ -531,7 +594,11 @@ export function LadoIntegrationAction({
 	const { t } = useTranslation();
 	const approve = useApproveLadoIntegration(projectId, sessionId);
 	const merge = useMergeLadoPR(projectId, sessionId);
-	const busy = approve.isPending || merge.isPending;
+	// A merge that went through leaves the button off until the PR shows it
+	// merged and the action leaves (U6 of #15); AO sees the merge on its next
+	// read of the PR.
+	const merged = action === "merge" && merge.isSuccess;
+	const busy = approve.isPending || merge.isPending || merged;
 	const error = action === "approve" ? approve.error : merge.error;
 	const label =
 		action === "approve"
@@ -540,7 +607,9 @@ export function LadoIntegrationAction({
 				: t("lado.verify.approve")
 			: merge.isPending
 				? t("lado.verify.merging")
-				: t("lado.verify.merge");
+				: merged
+					? t("lado.verify.mergeSent")
+					: t("lado.verify.merge");
 	const footer = variant === "footer-primary";
 	return (
 		<div className={cn("flex min-w-0 flex-col gap-1", footer ? "items-end" : "items-start")}>

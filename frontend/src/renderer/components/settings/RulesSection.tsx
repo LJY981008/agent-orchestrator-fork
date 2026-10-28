@@ -62,7 +62,12 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const [history, setHistory] = useState<Opening>({ key: 0, open: false, rule: null });
 	const [deleting, setDeleting] = useState<{ open: boolean; rule: LadoRule | null }>({ open: false, rule: null });
 	// The protected paths as they were when the editor opened.
-	const [pathsEditor, setPathsEditor] = useState<{ key: number; open: boolean; globs: string[] }>({ key: 0, open: false, globs: [] });
+	const [pathsEditor, setPathsEditor] = useState<{ key: number; open: boolean; globs: string[]; version: number }>({
+		key: 0,
+		open: false,
+		globs: [],
+		version: 0,
+	});
 	const [archivedOpen, setArchivedOpen] = useState(false);
 
 	const all = rules.data ?? [];
@@ -161,7 +166,7 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 												run(rule, { kind: "ceiling", ruleId: rule.id, baseVersion: rule.version, mode })
 											}
 											onEditPaths={() =>
-												setPathsEditor((current) => ({ key: current.key + 1, open: true, globs: rule.paths?.globs ?? [] }))
+												setPathsEditor((current) => ({ key: current.key + 1, open: true, globs: rule.paths?.globs ?? [], version: rule.version }))
 											}
 											onHistory={actionsFor(rule).onHistory}
 										/>
@@ -234,6 +239,7 @@ export function RulesSection({ titleHidden }: { titleHidden?: boolean }) {
 				key={`paths-${pathsEditor.key}`}
 				open={pathsEditor.open}
 				globs={pathsEditor.globs}
+				baseVersion={pathsEditor.version}
 				onOpenChange={(open) => setPathsEditor((current) => ({ ...current, open }))}
 			/>
 			<LadoRuleHistoryDialog

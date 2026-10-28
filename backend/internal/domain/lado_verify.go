@@ -532,7 +532,8 @@ const (
 )
 
 // Reasons a check command list is refused (LadoCheckCommandProblem). A
-// command with a control character (Unicode Cc, as a line break or a tab)
+// command with a control character (Unicode Cc, as a line break or a tab, or
+// a line or paragraph separator)
 // or a bidirectional control character is refused: the desktop app shows a
 // command as one line of text, and either would make what the developer
 // confirms differ from what the shell runs (S2 of #15).
@@ -571,7 +572,8 @@ func ladoCommandControl(command string) (string, int, rune, bool) {
 	for _, r := range command {
 		position++
 		switch {
-		case unicode.Is(unicode.Cc, r):
+		case unicode.Is(unicode.Cc, r) || r == '\u2028' || r == '\u2029':
+			// The line and paragraph separators break a line as well.
 			return LadoCheckCommandControl, position, r, true
 		case slices.Contains(ladoBidiControls, r):
 			return LadoCheckCommandBidi, position, r, true

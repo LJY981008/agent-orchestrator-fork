@@ -654,6 +654,10 @@ const verifyCodes = [
 	"LADO_INTEGRATION_APPROVAL_REQUIRED",
 	"LADO_MERGE_GATE_FAILED",
 	"LADO_SESSION_ID_INVALID",
+	// The review fixes of #15.
+	"LADO_INTEGRATION_TARGET_CHANGED",
+	"LADO_INTEGRATION_NOT_APPROVED",
+	"LADO_CHECK_COMMANDS_CHANGED",
 ];
 
 // LADO fork: verification, check commands, protected paths, the integration
@@ -699,6 +703,13 @@ describe("LADO verification errors", () => {
 			"This run has no open pull request to integrate.",
 		);
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_VERIFY_FAILED"))).toBe(en("lado.error.internal"));
+		// The review fixes of #15: a base changed on the host and a list that moved on.
+		expect(
+			ladoErrorText(en, new LadoApiError(daemon, "LADO_INTEGRATION_TARGET_CHANGED", { approvedTarget: "main", currentTarget: "release" })),
+		).toBe("The pull request now merges into release, not main as approved. Review it again, then approve its integration.");
+		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_CHECK_COMMANDS_CHANGED", { checkCommandsSha256: "a".repeat(64) }))).toBe(
+			"검사 명령을 연 뒤에 목록이 바뀌었습니다. 지금 목록을 확인한 뒤 다시 바꾸세요.",
+		);
 		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_SESSION_ID_INVALID"))).toBe(en("lado.error.executionNotFound"));
 	});
 
@@ -707,6 +718,13 @@ describe("LADO verification errors", () => {
 		expect(ladoErrorText(en, invalid({ index: 1, field: "name", reason: "duplicate" }))).toBe("Check command 2: Another command has this name.");
 		expect(ladoErrorText(ko, invalid({ index: 0, field: "command", reason: "required" }))).toBe("검사 명령 1: 실행할 명령을 입력하세요.");
 		expect(ladoErrorText(en, invalid({ index: 10, field: "", reason: "too_many" }))).toBe("Add at most 10 check commands.");
+		// A command is one line (S2 of #15): the problem names the character and where it stands.
+		expect(ladoErrorText(en, invalid({ index: 1, field: "command", reason: "control_character", position: 14, character: "U+000A" }))).toBe(
+			"Check command 2: The command has a control character (U+000A, character 14). Write it on one line.",
+		);
+		expect(ladoErrorText(ko, invalid({ index: 0, field: "command", reason: "bidi_control", position: 9, character: "U+202E" }))).toBe(
+			"검사 명령 1: 명령에 글자 방향 제어 문자가 있습니다(U+202E, 9번째 글자). 실행할 내용을 숨길 수 있으니 지우세요.",
+		);
 		expect(ladoErrorText(en, invalid({ index: -1, field: "checkTimeoutMinutes", reason: "invalid" }))).toBe(
 			"Choose a time limit between 5 and 120 minutes.",
 		);
@@ -720,6 +738,8 @@ describe("LADO verification errors", () => {
 			["command", "required"],
 			["command", "too_long"],
 			["command", "invalid"],
+			["command", "control_character"],
+			["command", "bidi_control"],
 			["", "too_many"],
 			["checkTimeoutMinutes", "invalid"],
 		];

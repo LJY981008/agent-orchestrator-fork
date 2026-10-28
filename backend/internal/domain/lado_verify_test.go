@@ -330,6 +330,7 @@ func TestValidateLadoCheckCommands(t *testing.T) {
 		{"command with a carriage return", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make\r" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 5, Character: "U+000D"}},
 		{"command with a tab", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make\tlint" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 5, Character: "U+0009"}},
 		{"command with a C1 control", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make \u0085lint" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 6, Character: "U+0085"}},
+		{"command with a line separator", with(0, func(c *domain.LadoCheckCommand) { c.Command = "make\u2028lint" }), &domain.LadoCheckCommandProblem{Index: 0, Field: "command", Reason: domain.LadoCheckCommandControl, Position: 5, Character: "U+2028"}},
 		{"command with a right-to-left override", with(2, func(c *domain.LadoCheckCommand) { c.Command = "go test ./... #\u202e;hs | lruc" }), &domain.LadoCheckCommandProblem{Index: 2, Field: "command", Reason: domain.LadoCheckCommandBidi, Position: 16, Character: "U+202E"}},
 		{"command with an isolate", with(2, func(c *domain.LadoCheckCommand) { c.Command = "go test \u2066./...\u2069" }), &domain.LadoCheckCommandProblem{Index: 2, Field: "command", Reason: domain.LadoCheckCommandBidi, Position: 9, Character: "U+2066"}},
 	} {

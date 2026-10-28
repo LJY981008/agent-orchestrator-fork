@@ -44,7 +44,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoTaskRules } from "./LadoTaskRules";
-import { LadoIntegrationAction } from "./LadoVerificationSection";
+import { LadoIntegrationAction, LadoRepostStatus } from "./LadoVerificationSection";
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
 
@@ -491,9 +491,12 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 				) : null}
 			</div>
 			{notPosted ? (
-				<p className="pl-3.5 text-[var(--color-status-in-review)]" data-testid="lado-run-not-posted">
-					{ladoReasonText(t, "status_not_posted")}
-				</p>
+				<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
+					<p className="text-[var(--color-status-in-review)]" data-testid="lado-run-not-posted">
+						{ladoReasonText(t, "status_not_posted")}
+					</p>
+					{execution && pr ? <LadoRepostStatus projectId={task.projectId} sessionId={execution.sessionId} /> : null}
+				</div>
 			) : null}
 			{/* Under the label, past the dot and its gap; the whole text on hover. */}
 			{error ? (

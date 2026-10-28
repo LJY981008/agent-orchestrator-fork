@@ -38,7 +38,7 @@ describe("ladoTaskStatus", () => {
 	const ko = createFullAppI18n("ko").t;
 
 	it("names the verification states with their tones", () => {
-		expect(ladoTaskStatus(task("validating", "checks_pending"), en)).toEqual({ label: "Validating", tone: "working" });
+		expect(ladoTaskStatus(task("validating", "checks_pending"), en)).toEqual({ label: "Validating", tone: "validating" });
 		expect(ladoTaskStatus(task("integration_pending"), en)).toEqual({ label: "Integration pending", tone: "attention" });
 		expect(ladoTaskStatus(task("integrating"), en)).toEqual({ label: "Integrating", tone: "ready" });
 		expect(ladoTaskStatus(task("integrating", "status_not_posted"), en)).toEqual({ label: "Integrating", tone: "ready" });

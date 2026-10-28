@@ -197,6 +197,7 @@ describe("RulesSection", () => {
 			.mockResolvedValueOnce([planApproval, ceiling, protectedPaths, korean, review])
 			.mockResolvedValue([planApproval, ceiling, changed, korean, review]);
 		const changeRule = vi.spyOn(aoBridge.lado.presence, "changeRule").mockResolvedValue({ status: "changed", rule: changed });
+		vi.mocked(lado.updateLadoRule).mockResolvedValue({ applied: false, impact: noImpact, rule: changed });
 		renderSection();
 
 		await user.click(within(await findRow(protectedPaths.id)).getByRole("button", { name: "Edit protected paths" }));
@@ -210,8 +211,11 @@ describe("RulesSection", () => {
 		await waitFor(() => expect(changeRule).toHaveBeenCalledWith("paths.protected", { globs: [...DEFAULT_PATHS, "deploy/**"] }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(await within(row(protectedPaths.id)!).findByText("10 paths")).toBeInTheDocument();
-		// The desktop app made the change; the renderer sent no rule change of its own.
-		expect(lado.updateLadoRule).not.toHaveBeenCalled();
+		// The desktop app made the change; the renderer sent only its dry run,
+		// from the rule's version shown (U3 of #15).
+		expect(vi.mocked(lado.updateLadoRule).mock.calls).toEqual([
+			[protectedPaths.id, { baseVersion: protectedPaths.version, paths: { globs: [...DEFAULT_PATHS, "deploy/**"] }, dryRun: true }],
+		]);
 	});
 
 	it("changes the permission ceiling through the desktop confirmation", async () => {

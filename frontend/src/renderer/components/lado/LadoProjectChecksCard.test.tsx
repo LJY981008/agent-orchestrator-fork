@@ -17,7 +17,7 @@ const commands: lado.LadoCheckCommand[] = [
 	{ name: "lint", command: "npm run lint" },
 	{ name: "unit tests", command: "npm test" },
 ];
-const settings: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: commands, checkTimeoutMinutes: 30 };
+const settings: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: commands, checkCommandsSha256: "0000000000000000000000000000000000000000000000000000000000000000", checkTimeoutMinutes: 30 };
 
 // The desktop app's confirmation of a change of the check commands (lib/lado.ts updateLadoProjectChecks).
 const confirmChecks = () => vi.mocked(aoBridge.lado.presence.changeProjectChecks);
@@ -199,7 +199,8 @@ describe("LadoProjectChecksCard", () => {
 		);
 		expect(put()).toHaveBeenCalledWith("/api/v1/lado/projects/{projectId}/settings", {
 			params: { path: { projectId: "demo" } },
-			body: { checkCommands: [{ name: "lint", command: "npm run lint" }] },
+			// The change names the list it started from (U7 of #15).
+			body: { checkCommands: [{ name: "lint", command: "npm run lint" }], checkCommandsBase: settings.checkCommandsSha256 },
 		});
 		expect(values()).toEqual([["lint", "npm run lint"]]);
 	});

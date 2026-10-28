@@ -10,7 +10,7 @@ import { Trans, useTranslation } from "react-i18next";
 import { useLadoProtection, useRefreshLadoProtection } from "../../hooks/useLado";
 import type { MessageKey } from "../../i18n/messages";
 import type { LadoBranchProtection } from "../../lib/lado";
-import { ladoErrorText } from "../../lib/lado-errors";
+import { LADO_PROTECTION_ANY_SOURCE, ladoErrorText, ladoProtectionPartText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { formatResetTime } from "../settings/CodexAccountDetails";
 import { SettingsRow } from "../settings/SettingsRow";
@@ -27,20 +27,6 @@ const stateKeys: Record<ProtectionState, MessageKey> = {
 	unsupported: "lado.protection.state.unprotected",
 };
 
-// What the branch rules lack, as the daemon names it (ladoverify MissingProtection).
-const missingKeys: Partial<Record<string, MessageKey>> = {
-	pull_request: "lado.protection.part.pullRequest",
-	"required_status_checks:lado/integration": "lado.protection.part.integrationCheck",
-	non_fast_forward: "lado.protection.part.nonFastForward",
-	deletion: "lado.protection.part.deletion",
-};
-
-/** A missing part by name; one from a newer daemon shows as the daemon names it. */
-function missingPartText(t: TFunction, part: string): string {
-	const key = missingKeys[part];
-	return key ? t(key) : part;
-}
-
 /** "acme/demo" from "github:acme/demo" or "gitlab:group/project@host". */
 function repositoryLabel(repository: string): string {
 	return repository.slice(repository.indexOf(":") + 1).replace(/@.*$/, "");
@@ -53,7 +39,11 @@ function protectionDetail(t: TFunction, branch: LadoBranchProtection): string | 
 			return undefined;
 		case "unprotected":
 			return branch.missing.length > 0
-				? t("lado.protection.missing", { parts: branch.missing.map((part) => missingPartText(t, part)).join(", ") })
+				? [
+						t("lado.protection.missing", { parts: branch.missing.map((part) => ladoProtectionPartText(t, part)).join(", ") }),
+						// A check from one app only cannot be LADO's status (Q3 of #15).
+						...(branch.missing.includes(LADO_PROTECTION_ANY_SOURCE) ? [t("lado.protection.anySourceGuide")] : []),
+					].join(" ")
 				: undefined;
 		case "unknown":
 			return branch.error ? t("lado.protection.error", { error: branch.error }) : undefined;

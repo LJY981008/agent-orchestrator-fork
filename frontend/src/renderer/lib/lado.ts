@@ -121,7 +121,9 @@ export const ladoEffectiveProjectQueryKey = (projectId: string) => ["lado", "eff
 export const ladoEffectiveQueryKey = (projectId: string, taskId: string) => ["lado", "effective", projectId, taskId] as const;
 export const ladoExecutionQueryRoot = ["lado", "execution"] as const;
 export const ladoExecutionQueryKey = (sessionId: string) => ["lado", "execution", sessionId] as const;
-export const ladoCheckLogQueryKey = (sessionId: string, checkRunId: string) => ["lado", "check-log", sessionId, checkRunId] as const;
+/** A run's logs share the session's prefix; the run's state is part of the key, so a run that finished reads its output again. */
+export const ladoCheckLogSessionQueryKey = (sessionId: string) => ["lado", "check-log", sessionId] as const;
+export const ladoCheckLogQueryKey = (sessionId: string, checkRunId: string, status = "") => ["lado", "check-log", sessionId, checkRunId, status] as const;
 export const ladoProtectionQueryKey = (projectId: string) => ["lado", "protection", projectId] as const;
 export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
 
@@ -173,7 +175,11 @@ export async function setLadoMode(projectId: string, on: boolean): Promise<LadoP
  * the developer cancelled. In a browser the call goes to the daemon directly,
  * which accepts it only in development.
  */
-export async function updateLadoProjectChecks(projectId: string, commands: LadoCheckCommand[]): Promise<LadoProjectSettings | null> {
+export async function updateLadoProjectChecks(
+	projectId: string,
+	commands: LadoCheckCommand[],
+	base: string,
+): Promise<LadoProjectSettings | null> {
 	// The bridge answers null when there is no desktop main process to ask.
 	const result = (await aoBridge.lado?.presence?.changeProjectChecks(projectId, commands)) ?? null;
 	if (result) {
@@ -181,7 +187,9 @@ export async function updateLadoProjectChecks(projectId: string, commands: LadoC
 		if (result.status === "error") throw new LadoApiError(result.message, result.code, result.details);
 		return result.settings;
 	}
-	return putLadoProjectSettings(projectId, { checkCommands: commands }, "Could not change the check commands");
+	// The change names the list it starts from, the one the card shows; the
+	// daemon refuses it once the list moved on.
+	return putLadoProjectSettings(projectId, { checkCommands: commands, checkCommandsBase: base }, "Could not change the check commands");
 }
 
 /** Changes how long each check command may run, in minutes; it needs no confirmation. */
@@ -541,6 +549,19 @@ export async function runLadoChecks(sessionId: string): Promise<LadoRunChecksRes
 		params: { path: { sessionId } },
 	});
 	if (error) throw ladoError(error, "Could not run the checks again");
+	return data;
+}
+
+/**
+ * Posts the lado/integration status of the run's approved current head again,
+ * its attempts started over, as after the token was fixed. It needs no
+ * confirmation: the head is approved already.
+ */
+export async function repostLadoIntegrationStatus(sessionId: string): Promise<LadoIntegrationApproval> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/executions/{sessionId}/integration-status", {
+		params: { path: { sessionId } },
+	});
+	if (error) throw ladoError(error, "Could not post the status again");
 	return data;
 }
 

@@ -6,21 +6,22 @@ import { LADO_MAX_ATTEMPTS, type LadoTask } from "../../lib/lado";
 import { ladoReasonText } from "../../lib/lado-errors";
 import { formatResetTime } from "../settings/CodexAccountDetails";
 
-export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "merged";
+export type LadoTaskStatusTone = "muted" | "attention" | "ready" | "working" | "validating" | "merged";
 
 /** The states a run's pull request gives its task. */
 export type LadoRunState = Extract<LadoTask["state"], "validating" | "integration_pending" | "integrating" | "completed" | "closed_unmerged">;
 
 /**
  * How the task's card, its view and the run's panel name a run's pull
- * request state: LADO verifying it reads as working, waiting for the
+ * request state: LADO verifying it takes the validating color (DESIGN.md
+ * §5, U8 of #15), waiting for the
  * integration approval takes the needs-you color, an approved head reads as
  * ready, and work merged without that approval needs the human's attention.
  */
 export function ladoRunStatus(state: LadoRunState, reason: string | undefined, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
 	switch (state) {
 		case "validating":
-			return { label: t("lado.task.state.validating"), tone: "working" };
+			return { label: t("lado.task.state.validating"), tone: "validating" };
 		case "integration_pending":
 			return { label: t("lado.task.state.integrationPending"), tone: "attention" };
 		case "integrating":
@@ -128,5 +129,6 @@ export const ladoTaskToneDotClass: Record<LadoTaskStatusTone, string> = {
 	attention: "bg-[var(--color-status-needs-you)]",
 	ready: "bg-[var(--color-status-ready)]",
 	working: "bg-[var(--color-status-working)]",
+	validating: "bg-[var(--color-status-validating)]",
 	merged: "bg-[var(--color-status-merged)]",
 };

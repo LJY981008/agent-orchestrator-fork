@@ -46,6 +46,8 @@ function execution(fields: Partial<lado.LadoExecution> = {}): lado.LadoExecution
 		startedAt: new Date(Date.now() - 3_600_000).toISOString(),
 		deadlineAt: new Date(Date.now() + 5 * 3_600_000).toISOString(),
 		sessionEnded: false,
+		// As the daemon derives it: a run without a PR runs.
+		state: fields.pr ? "integration_pending" : "running",
 		...fields,
 	};
 }

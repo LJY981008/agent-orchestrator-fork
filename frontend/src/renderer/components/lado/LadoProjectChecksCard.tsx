@@ -96,7 +96,7 @@ export function LadoProjectChecksCard({ projectId, settings }: { projectId: stri
 		if (!dirty || busy) return;
 		setSentKeys(filled.map((row) => row.key));
 		saveChecks.mutate(
-			filled.map(({ name, command }) => ({ name, command })),
+			{ commands: filled.map(({ name, command }) => ({ name, command })), base: settings.checkCommandsSha256 },
 			{
 				// null: the developer cancelled the desktop confirmation, and the edits stay.
 				onSuccess: (result) => {

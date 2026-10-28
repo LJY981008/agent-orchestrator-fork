@@ -4,8 +4,15 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../../lib/bridge";
+import * as lado from "../../lib/lado";
 import type { LadoRule } from "../../lib/lado";
 import { LadoProtectedPathsDialog } from "./LadoProtectedPathsDialog";
+
+// The dry run of a change goes to the daemon; the change itself to the desktop app.
+vi.mock("../../lib/lado", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../lib/lado")>()),
+	updateLadoRule: vi.fn(),
+}));
 
 const GLOBS = [".github/**", "**/CLAUDE.md"];
 
@@ -39,6 +46,7 @@ function Harness({ onOpenChange }: { onOpenChange: (open: boolean) => void }) {
 		<LadoProtectedPathsDialog
 			open={open}
 			globs={GLOBS}
+			baseVersion={2}
 			onOpenChange={(next) => {
 				onOpenChange(next);
 				setOpen(next);
@@ -73,6 +81,8 @@ describe("LadoProtectedPathsDialog", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
 		vi.spyOn(aoBridge.lado.presence, "changeRule").mockResolvedValue({ status: "cancelled" });
+		// No approved task is reached unless a test says so.
+		vi.mocked(lado.updateLadoRule).mockResolvedValue({ applied: false, rule: pathsRule, impact: { tasks: [], projects: [] } });
 	});
 
 	afterEach(() => {
@@ -131,6 +141,8 @@ describe("LadoProtectedPathsDialog", () => {
 		await user.click(saveButton());
 
 		await waitFor(() => expect(confirmChange()).toHaveBeenCalledWith("paths.protected", { globs: [".github/**", "docs/private"] }));
+		// The daemon's dry run of the change came first, from the version shown.
+		expect(lado.updateLadoRule).toHaveBeenCalledWith("paths.protected", { baseVersion: 2, paths: { globs: [".github/**", "docs/private"] }, dryRun: true });
 		await waitFor(() => expect(saveButton()).toBeEnabled());
 		expect(screen.getByRole("dialog", { name: "Edit protected paths" })).toBeInTheDocument();
 		expect(field()).toHaveValue(".github/**\n\n  docs/private \n");
@@ -161,5 +173,30 @@ describe("LadoProtectedPathsDialog", () => {
 			/^Line 3: Use a relative path or pattern, without \.\., a leading \/ or a backslash\.$/,
 		);
 		expect(screen.getByRole("dialog", { name: "Edit protected paths" })).toBeInTheDocument();
+	});
+
+	// U3 of #15: like every rule change, the paths first list the approved
+	// tasks that would need a new approval, before the desktop app asks.
+	it("lists the approved tasks the change reaches before the desktop app asks", async () => {
+		const user = userEvent.setup();
+		vi.mocked(lado.updateLadoRule).mockResolvedValue({
+			applied: false,
+			rule: pathsRule,
+			impact: { projects: [], tasks: [{ id: "lado-task-3", issueRef: "github:acme/demo#3", projectId: "demo", title: "Add login" }] },
+		});
+		confirmChange().mockResolvedValue({ status: "changed", rule: pathsRule });
+		const { onOpenChange } = renderDialog();
+		await screen.findByRole("dialog", { name: "Edit protected paths" });
+
+		await replaceText(user, ".github/**\ndocs/private");
+		await user.click(saveButton());
+
+		const impact = await screen.findByRole("dialog", { name: "Change the rules for approved tasks?" });
+		expect(within(impact).getAllByTestId("lado-impact-task").map((row) => row.textContent)).toEqual([expect.stringContaining("Add login")]);
+		expect(confirmChange()).not.toHaveBeenCalled();
+
+		await user.click(within(impact).getByRole("button", { name: "Change" }));
+		await waitFor(() => expect(confirmChange()).toHaveBeenCalledWith("paths.protected", { globs: [".github/**", "docs/private"] }));
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
 	});
 });

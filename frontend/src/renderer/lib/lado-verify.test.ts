@@ -71,6 +71,7 @@ const approved: LadoIntegrationResult = {
 		approvedAt: "2026-10-27T00:06:00Z",
 		headSha: HEAD,
 		id: "lado-integration-1",
+		targetBranch: "main",
 		statusAttempts: 0,
 		statusState: "pending",
 		verificationSha256: VERIFY_SHA,
@@ -85,6 +86,7 @@ const settings: LadoProjectSettings = {
 	ladoMode: true,
 	maxConcurrent: 1,
 	checkCommands: [{ name: "test", command: "npm test" }],
+	checkCommandsSha256: "0".repeat(64),
 	checkTimeoutMinutes: 30,
 };
 
@@ -152,32 +154,35 @@ describe("approveLadoIntegration", () => {
 });
 
 describe("check commands", () => {
+	const BASE = "1".repeat(64);
+
 	it("changes the commands through the desktop app, and directly in a browser", async () => {
 		const commands = [{ name: "lint", command: "npm run lint" }];
 		changeProjectChecksMock.mockResolvedValue({ status: "changed", settings });
-		await expect(updateLadoProjectChecks("demo", commands)).resolves.toEqual(settings);
+		await expect(updateLadoProjectChecks("demo", commands, BASE)).resolves.toEqual(settings);
 		expect(changeProjectChecksMock).toHaveBeenCalledWith("demo", commands);
 		expect(put).not.toHaveBeenCalled();
 
 		changeProjectChecksMock.mockResolvedValue({ status: "cancelled" });
-		await expect(updateLadoProjectChecks("demo", commands)).resolves.toBeNull();
+		await expect(updateLadoProjectChecks("demo", commands, BASE)).resolves.toBeNull();
 		changeProjectChecksMock.mockResolvedValue({
 			status: "error",
 			code: "LADO_CHECK_COMMANDS_INVALID",
 			message: "Invalid.",
 			details: { index: 0, field: "name", reason: "invalid" },
 		});
-		await expect(updateLadoProjectChecks("demo", commands)).rejects.toMatchObject({
+		await expect(updateLadoProjectChecks("demo", commands, BASE)).rejects.toMatchObject({
 			code: "LADO_CHECK_COMMANDS_INVALID",
 			details: { index: 0, field: "name", reason: "invalid" },
 		});
 
 		changeProjectChecksMock.mockResolvedValue(null);
 		put.mockResolvedValue({ data: settings, error: undefined });
-		await expect(updateLadoProjectChecks("demo", commands)).resolves.toEqual(settings);
+		await expect(updateLadoProjectChecks("demo", commands, BASE)).resolves.toEqual(settings);
 		expect(put).toHaveBeenCalledWith("/api/v1/lado/projects/{projectId}/settings", {
 			params: { path: { projectId: "demo" } },
-			body: { checkCommands: commands },
+			// The change names the list the card started from (U7 of #15).
+			body: { checkCommands: commands, checkCommandsBase: BASE },
 		});
 	});
 

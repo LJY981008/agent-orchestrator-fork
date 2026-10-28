@@ -1,17 +1,20 @@
 // LADO fork: editing the protected paths (docs/LJY-PRD/HARNESS.md §14). One
 // path or pattern per line; blank lines do not count. A line LADO would
-// refuse is named with its problem before anything is sent. Saving goes
-// through the desktop app's confirmation, which names the paths added and
-// removed; a cancelled confirmation keeps the edits.
+// refuse is named with its problem before anything is sent. Saving first
+// asks the daemon which approved tasks the change sends back to review and
+// lists them for the developer, as every rule change does (U3 of #15), then
+// goes through the desktop app's confirmation, which names the paths added
+// and removed; a cancelled confirmation keeps the edits.
 import { X } from "lucide-react";
 import { useId, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { useChangeLadoProtectedPaths } from "../../hooks/useLado";
 import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
-import { LadoApiError } from "../../lib/lado";
+import { LADO_PROTECTED_PATHS_RULE_ID, LadoApiError } from "../../lib/lado";
 import { ladoErrorText, ladoProtectedPathProblemText } from "../../lib/lado-errors";
+import { useLadoRuleChange } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
+import { LadoRuleImpactDialog } from "./LadoRuleImpactDialog";
 import {
 	Dialog,
 	DialogClose,
@@ -86,14 +89,17 @@ function validPath(glob: string): boolean {
 export function LadoProtectedPathsDialog({
 	open,
 	globs,
+	baseVersion,
 	onOpenChange,
 }: {
 	open: boolean;
 	globs: readonly string[];
+	/** The rule's version the paths are from; a newer one refuses the change. */
+	baseVersion: number;
 	onOpenChange: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
-	const change = useChangeLadoProtectedPaths();
+	const change = useLadoRuleChange();
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const fieldRef = useRef<HTMLTextAreaElement>(null);
 	const [text, setText] = useState(() => globs.join("\n"));
@@ -116,7 +122,8 @@ export function LadoProtectedPathsDialog({
 
 	// The answer that refused the save: a refused path names its line, a
 	// browser has no desktop app to confirm the change.
-	const error = change.error;
+	// A refusal of the impact's confirmation shows in its own dialog.
+	const error = change.pending ? null : change.error;
 	const refusedLine =
 		error instanceof LadoApiError && error.code === "LADO_PROTECTED_PATHS_INVALID" && typeof error.details?.index === "number"
 			? sent[error.details.index]
@@ -135,112 +142,127 @@ export function LadoProtectedPathsDialog({
 		event.preventDefault();
 		if (busy || !dirty || problems.length > 0) return;
 		setSent(lines);
-		change.mutate(
-			lines.map((entry) => entry.glob),
-			{
-				// null: the developer cancelled the desktop confirmation, and the edits stay.
-				onSuccess: (rule) => {
-					if (rule) close();
-				},
-			},
-		);
+		// A cancelled confirmation, or approved tasks to review first, leave the edits.
+		void change
+			.change({ kind: "paths", ruleId: LADO_PROTECTED_PATHS_RULE_ID, baseVersion, globs: lines.map((entry) => entry.glob) })
+			.then((outcome) => {
+				if (outcome.status === "applied") close();
+			})
+			.catch(() => undefined);
 	};
 
 	return (
-		<Dialog
-			open={open}
-			onOpenChange={(next) => {
-				if (!next && busy) return;
-				onOpenChange(next);
-			}}
-		>
-			<DialogContent
-				showCloseButton={false}
-				aria-describedby={undefined}
-				className={settingsDialogContentClass}
-				data-testid="lado-protected-paths"
-				onOpenAutoFocus={(event) => {
-					event.preventDefault();
-					fieldRef.current?.focus();
+		<>
+			<Dialog
+				open={open}
+				onOpenChange={(next) => {
+					if (!next && busy) return;
+					onOpenChange(next);
 				}}
-				onCloseAutoFocus={restoreFocusOnClose}
 			>
-				<DialogClose asChild>
-					<button
-						type="button"
-						disabled={busy}
-						className="settings-dialog-close-button settings-close-button"
-						aria-label={t("common.close")}
-					>
-						<X className="size-4" aria-hidden="true" />
-					</button>
-				</DialogClose>
-				<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
-					<DialogTitle className="settings-dialog-title text-base">{t("lado.protectedPaths.title")}</DialogTitle>
-				</div>
-				<form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
-					{/* The div scrolls; a fieldset as the scroll container spills under the footer. */}
-					<div className={cn(settingsDialogBodyClass, "min-w-0 gap-1.5 px-5 pt-0 pb-4")}>
-						<div className="flex items-baseline justify-between gap-3">
-							<label htmlFor={fieldId} className="settings-field-label">
-								{t("lado.protectedPaths.label")}
-							</label>
-							<span className="text-caption leading-4 tabular-nums text-settings-muted" data-testid="lado-protected-path-count">
-								{t("lado.rules.protectedPaths.count", { count: lines.length })}
-							</span>
-						</div>
-						<p id={hintId} className="text-caption leading-4 text-settings-muted">
-							{t("lado.protectedPaths.hint")}
-						</p>
-						{/* The textarea takes its font from here (the app's form reset). */}
-						<div className="font-mono">
-							<textarea
-								ref={fieldRef}
-								id={fieldId}
-								value={text}
-								rows={12}
-								spellCheck={false}
-								autoComplete="off"
-								disabled={busy}
-								aria-invalid={problems.length > 0 ? true : undefined}
-								aria-describedby={problems.length > 0 ? `${hintId} ${problemsId}` : hintId}
-								onChange={(event) => {
-									setText(event.target.value);
-									if (change.error) change.reset();
-								}}
-								className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto rounded-md! py-2.5"
-							/>
-						</div>
-						{problems.length > 0 ? (
-							<ul id={problemsId} className="flex flex-col gap-0.5" data-testid="lado-protected-path-problems">
-								{problems.map((problem) => (
-									<li key={problem} className="text-caption leading-4 text-error">
-										{problem}
-									</li>
-								))}
-							</ul>
-						) : null}
-						{saveError ? (
-							<p role="alert" className="text-caption leading-4 text-error">
-								{saveError}
-							</p>
-						) : null}
-					</div>
-					<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
-						<Button type="button" variant="footer" className={compactButtonClass} disabled={busy} onClick={close}>
-							{t("confirm.cancel")}
-						</Button>
-						<Button
-							type="submit"
-							variant="footer-primary"
-							className={compactButtonClass}
-							disabled={busy || !dirty || problems.length > 0}
+				<DialogContent
+					showCloseButton={false}
+					aria-describedby={undefined}
+					className={settingsDialogContentClass}
+					data-testid="lado-protected-paths"
+					onOpenAutoFocus={(event) => {
+						event.preventDefault();
+						fieldRef.current?.focus();
+					}}
+					onCloseAutoFocus={restoreFocusOnClose}
+				>
+					<DialogClose asChild>
+						<button
+							type="button"
+							disabled={busy}
+							className="settings-dialog-close-button settings-close-button"
+							aria-label={t("common.close")}
 						>
-							{busy ? t("lado.rules.editor.saving") : t("lado.protectedPaths.save")}
-						</Button>
+							<X className="size-4" aria-hidden="true" />
+						</button>
+					</DialogClose>
+					<div className={cn(settingsDialogHeaderClass, "border-b-0 p-5 pr-12")}>
+						<DialogTitle className="settings-dialog-title text-base">{t("lado.protectedPaths.title")}</DialogTitle>
 					</div>
-				</form>
-			</DialogContent>
-		</Dialog>
+					<form className="flex min-h-0 flex-1 flex-col" onSubmit={submit}>
+						{/* The div scrolls; a fieldset as the scroll container spills under the footer. */}
+						<div className={cn(settingsDialogBodyClass, "min-w-0 gap-1.5 px-5 pt-0 pb-4")}>
+							<div className="flex items-baseline justify-between gap-3">
+								<label htmlFor={fieldId} className="settings-field-label">
+									{t("lado.protectedPaths.label")}
+								</label>
+								<span className="text-caption leading-4 tabular-nums text-settings-muted" data-testid="lado-protected-path-count">
+									{t("lado.rules.protectedPaths.count", { count: lines.length })}
+								</span>
+							</div>
+							<p id={hintId} className="text-caption leading-4 text-settings-muted">
+								{t("lado.protectedPaths.hint")}
+							</p>
+							{/* The textarea takes its font from here (the app's form reset). */}
+							<div className="font-mono">
+								<textarea
+									ref={fieldRef}
+									id={fieldId}
+									value={text}
+									rows={12}
+									spellCheck={false}
+									autoComplete="off"
+									disabled={busy}
+									aria-invalid={problems.length > 0 ? true : undefined}
+									aria-describedby={problems.length > 0 ? `${hintId} ${problemsId}` : hintId}
+									onChange={(event) => {
+										setText(event.target.value);
+										if (change.error) change.reset();
+									}}
+									className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto rounded-md! py-2.5"
+								/>
+							</div>
+							{problems.length > 0 ? (
+								<ul id={problemsId} className="flex flex-col gap-0.5" data-testid="lado-protected-path-problems">
+									{problems.map((problem) => (
+										<li key={problem} className="text-caption leading-4 text-error">
+											{problem}
+										</li>
+									))}
+								</ul>
+							) : null}
+							{saveError ? (
+								<p role="alert" className="text-caption leading-4 text-error">
+									{saveError}
+								</p>
+							) : null}
+						</div>
+						<div className={cn(settingsDialogFooterClass, "gap-2 border-t-0 p-4 pt-1")}>
+							<Button type="button" variant="footer" className={compactButtonClass} disabled={busy} onClick={close}>
+								{t("confirm.cancel")}
+							</Button>
+							<Button
+								type="submit"
+								variant="footer-primary"
+								className={compactButtonClass}
+								disabled={busy || !dirty || problems.length > 0}
+							>
+								{busy ? t("lado.rules.editor.saving") : t("lado.protectedPaths.save")}
+							</Button>
+						</div>
+					</form>
+				</DialogContent>
+			</Dialog>
+			{/* The approved tasks the change sends back to review, before the desktop app asks. */}
+			<LadoRuleImpactDialog
+				impact={change.pending?.impact ?? null}
+				busy={change.isPending}
+				error={change.pending ? change.error : null}
+				onConfirm={() =>
+					void change
+						.confirm()
+						.then((outcome) => {
+							if (outcome.status === "applied") close();
+						})
+						.catch(() => undefined)
+				}
+				onCancel={change.cancel}
+			/>
+		</>
 	);
 }

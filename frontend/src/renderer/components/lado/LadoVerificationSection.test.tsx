@@ -11,6 +11,7 @@ vi.mock("../../lib/lado", async (original) => ({
 	runLadoChecks: vi.fn(),
 	approveLadoIntegration: vi.fn(),
 	mergeLadoPR: vi.fn(),
+	repostLadoIntegrationStatus: vi.fn(),
 }));
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
@@ -49,7 +50,7 @@ function items(overrides: Partial<Record<lado.LadoVerifyKind, Partial<Item>>> = 
 		{ kind: "commit_messages", outcome: "info", code: "not_required", details: {} },
 		{ kind: "paths", outcome: "confirm", code: "outside_plan", details: { protected: [], outsidePlan: ["docs/login.md", "README.md"], outsideCount: 2 } },
 		{ kind: "base_branch", outcome: "pass", details: { branch: "main", remote: "origin", moved: [] } },
-		{ kind: "protection", outcome: "confirm", code: "unprotected", details: { provider: "github", repo: "acme/demo", branch: "main", missing: ["lado/integration"] } },
+		{ kind: "protection", outcome: "confirm", code: "unprotected", details: { provider: "github", repo: "acme/demo", branch: "main", missing: ["required_status_checks:lado/integration", "deletion"] } },
 		{ kind: "review", outcome: "pass", details: { rounds: 1, verdict: "approved", runId: "review-1", harness: "claude-code" } },
 		{ kind: "evidence", outcome: "info", details: { fileVersion: 2, fileSha256: "f".repeat(64), fileHead: HEAD } },
 	];
@@ -73,8 +74,29 @@ function verification(fields: Partial<lado.LadoVerification> = {}): lado.LadoVer
 	};
 }
 
+/**
+ * The state the daemon derives from a run's facts (backend/internal/domain
+ * lado_task.go taskState) and sends with it, for fixtures that name none.
+ */
+function daemonState(run: lado.LadoExecution): Pick<lado.LadoExecution, "state" | "stateReason"> {
+	const { pr, verification, integration } = run;
+	if (!pr) return { state: "running" };
+	if (pr.merged) return { state: "completed", stateReason: integration ? undefined : "merged_without_approval" };
+	if (pr.closed) return { state: "closed_unmerged" };
+	if (integration) return { state: "integrating", stateReason: integration.statusState === "failed" ? "status_not_posted" : undefined };
+	if (!verification) return { state: "validating", stateReason: "verifying" };
+	if (verification.outcome === "pass" || verification.outcome === "confirm") return { state: "integration_pending" };
+	return { state: "validating", stateReason: verification.reason || "verifying" };
+}
+
 function execution(fields: Partial<lado.LadoExecution> = {}): lado.LadoExecution {
+	const run = executionFacts(fields);
+	return { ...run, ...daemonState(run), ...(fields.state ? { state: fields.state, stateReason: fields.stateReason } : {}) };
+}
+
+function executionFacts(fields: Partial<lado.LadoExecution>): lado.LadoExecution {
 	return {
+		state: "running",
 		sessionId: "demo-7",
 		attempt: 1,
 		task: { id: "lado-task-1", title: "Add login", issueRef: "github:acme/demo#12", issueUrl: "https://github.com/acme/demo/issues/12" },
@@ -100,6 +122,7 @@ function execution(fields: Partial<lado.LadoExecution> = {}): lado.LadoExecution
 const approval: lado.LadoIntegrationApproval = {
 	id: "approval-1",
 	headSha: HEAD,
+	targetBranch: "main",
 	verificationSha256: "9".repeat(64),
 	acknowledged: ["outside_plan", "unprotected"],
 	actor: "dev",
@@ -175,7 +198,8 @@ test("lists the eight items with a dot each, and the ones that do not apply quie
 	// Where the integration stands, and the head it is about in mono.
 	const state = screen.getByTestId("lado-verify-state");
 	expect(state).toHaveTextContent("Validating · A check command failed");
-	expect(dot(state)).toHaveClass("bg-[var(--color-status-working)]");
+	// Validating has a color of its own (DESIGN.md §5, U8 of #15).
+	expect(dot(state)).toHaveClass("bg-[var(--color-status-validating)]");
 	expect(screen.getByText("1a2b3c4")).toHaveClass("font-mono");
 	expect(screen.getByTitle(HEAD)).toHaveTextContent("Head 1a2b3c4");
 
@@ -190,12 +214,13 @@ test("lists the eight items with a dot each, and the ones that do not apply quie
 		"evidence",
 	]);
 	const expected: [lado.LadoVerifyKind, string, string, string][] = [
-		["required_checks", "Required checks", "Waiting for e2e", "bg-[var(--color-status-working)]"],
+		["required_checks", "Required checks", "Waiting for e2e", "bg-[var(--color-status-validating)]"],
 		["commands", "Check commands", "Failed: lint", "bg-[var(--color-status-exited)]"],
 		["commit_messages", "Commit messages", "Not required for this run", "bg-[var(--color-status-idle)]"],
 		["paths", "Changed paths", "2 paths outside the plan: docs/login.md, README.md", "bg-[var(--color-status-needs-you)]"],
 		["base_branch", "Base branch", "No local writes to main", "bg-[var(--color-status-ready)]"],
-		["protection", "Remote protection", "Not protected: rulesets missing lado/integration", "bg-[var(--color-status-needs-you)]"],
+		// The parts by name, as the project's protection card names them (U1 of #15).
+		["protection", "Remote protection", "Not protected: rulesets missing lado/integration required, Deletion blocked", "bg-[var(--color-status-needs-you)]"],
 		["review", "Review", "The review approved this head", "bg-[var(--color-status-ready)]"],
 		["evidence", "Evidence", "1 of 3 criteria linked to records", "bg-[var(--color-status-idle)]"],
 	];
@@ -205,6 +230,9 @@ test("lists the eight items with a dot each, and the ones that do not apply quie
 		expect(within(item).getByText(detail)).toBeInTheDocument();
 		expect(dot(item)).toHaveClass(dotClass);
 	}
+	// Each row names its outcome in words too, not by its dot alone (U5 of #15).
+	expect(row("commands")).toHaveTextContent("Check commands, failed");
+	expect(row("paths")).toHaveTextContent("Changed paths, needs your confirmation");
 	// An item that does not apply keeps its place, quieter than the rest.
 	expect(within(row("commit_messages")).getByText("Commit messages")).toHaveClass("text-passive");
 	expect(within(row("commit_messages")).getByText("Not required for this run")).toHaveClass("text-passive");
@@ -421,4 +449,94 @@ test("a merged PR reads as completed, and as needing attention without an approv
 test("a run without a PR has no verification section", () => {
 	const { container } = renderSection(execution({ pr: undefined, verification: undefined }));
 	expect(container).toBeEmptyDOMElement();
+});
+
+// Review fixes of #15.
+
+test("shows the state and reason the daemon sends, not one of its own", () => {
+	// A run stopped at its deadline while its PR opened shows its PR (V9);
+	// the daemon says so, and the panel does not work it out again.
+	renderSection(
+		execution({
+			timedOutAt: "2026-10-27T09:30:00Z",
+			state: "validating",
+			stateReason: "head_unavailable",
+			verification: verification({ outcome: "wait", reason: "head_unavailable" }),
+		}),
+	);
+	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent(
+		"Validating · The PR head is not in the local repository, and LADO could not fetch it",
+	);
+	cleanup();
+
+	// A state the daemon gives a run without a PR has no section here.
+	const { container } = renderSection(execution({ state: "failed", stateReason: "timed_out" }));
+	expect(container).toBeEmptyDOMElement();
+});
+
+test("offers a command's output only once it ended, and reads it again for each state", async () => {
+	vi.mocked(lado.fetchLadoCheckLog).mockResolvedValue("ok");
+	const running = verification({
+		items: items({
+			commands: {
+				outcome: "wait",
+				code: "commands_running",
+				details: { runs: [{ name: "unit", checkRunId: "lado-check-1", status: "running", exitCode: null, durationMs: 0 }] },
+			},
+		}),
+	});
+	renderSection(execution({ verification: running }));
+	expect(within(row("commands")).queryByRole("button", { name: "Output of unit" })).not.toBeInTheDocument();
+	cleanup();
+
+	renderSection();
+	fireEvent.click(within(row("commands")).getAllByRole("button", { name: /^Output of / })[0]!);
+	await waitFor(() => expect(lado.fetchLadoCheckLog).toHaveBeenCalled());
+});
+
+test("posts a status that could not be posted again", async () => {
+	vi.mocked(lado.repostLadoIntegrationStatus).mockResolvedValue({ ...approval, statusState: "posted", statusAttempts: 1 });
+	renderSection(execution({ integration: { ...approval, statusState: "failed", statusAttempts: 12, statusError: "403 Resource not accessible" } }));
+
+	fireEvent.click(screen.getByRole("button", { name: "Post status again" }));
+	await waitFor(() => expect(lado.repostLadoIntegrationStatus).toHaveBeenCalledWith("demo-7"));
+	cleanup();
+
+	// A head whose status went up has nothing to post again.
+	renderSection(execution({ integration: approval }));
+	expect(screen.queryByRole("button", { name: "Post status again" })).not.toBeInTheDocument();
+});
+
+test("keeps Merge off once the merge went through, until the PR shows it", async () => {
+	vi.mocked(lado.mergeLadoPR).mockResolvedValue(undefined);
+	renderSection(execution({ integration: approval }));
+
+	fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+	const sent = await screen.findByRole("button", { name: "Merged; waiting for the PR to update" });
+	expect(sent).toBeDisabled();
+	expect(lado.mergeLadoPR).toHaveBeenCalledTimes(1);
+});
+
+test("names a deleted local base branch and a check taken from one app only", () => {
+	renderSection(
+		execution({
+			verification: verification({
+				items: items({
+					base_branch: {
+						outcome: "confirm",
+						code: "base_deleted",
+						details: { branch: "main", remote: "origin", moved: [], alreadyOnBase: false, dispatchCommit: "c".repeat(40), deleted: true },
+					},
+					protection: {
+						outcome: "confirm",
+						code: "unprotected",
+						details: { provider: "github", repo: "acme/demo", branch: "main", missing: ["required_status_checks:lado/integration:any_source"] },
+					},
+				}),
+			}),
+		}),
+	);
+	expect(within(row("base_branch")).getByText("The local main that was there when the run started is gone")).toBeInTheDocument();
+	expect(within(row("protection")).getByText("Not protected: rulesets missing lado/integration from any source")).toBeInTheDocument();
+	expect(within(row("protection")).getByText(/set the check's source to “Any source”/)).toBeInTheDocument();
 });

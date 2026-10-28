@@ -100,6 +100,19 @@ describe("LadoProjectProtectionCard", () => {
 		expect(screen.getByText(/^Last checked /)).toHaveAttribute("title", expect.stringContaining("2026"));
 	});
 
+	// Q3 of #15: LADO's status cannot fill a check taken from one app only.
+	it("says to take lado/integration from any source", async () => {
+		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({
+			projectId: "demo",
+			repositories: [{ ...unprotectedRepo, missing: ["required_status_checks:lado/integration:any_source"] }],
+		});
+		renderCard();
+
+		const open = await waitFor(() => rowOf("acme/api · develop"));
+		expect(open).toHaveTextContent("Missing: lado/integration from any source");
+		expect(open).toHaveTextContent("set the check's source to “Any source”");
+	});
+
 	it("shows no guide while every branch is protected or on GitLab", async () => {
 		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({ projectId: "demo", repositories: [protectedRepo, gitlabRepo] });
 		renderCard();

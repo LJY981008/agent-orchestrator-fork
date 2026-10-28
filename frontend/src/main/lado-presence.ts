@@ -108,7 +108,13 @@ const SETUP_UNMOVABLE: Partial<Record<string, string>> = {
 // have been made.
 const ANSWER_UNREADABLE = "LADO_PRESENCE_ANSWER_UNREADABLE";
 // How much of a change's content its confirmation quotes, in characters.
+// A check command is not cut: the dialog shows all it runs.
 const MAX_CONTENT_EXCERPT = 300;
+// A check command is one line (S2 of #15): a control character, such as a
+// line break or a tab, or a direction control would make the dialog show
+// other text than the shell runs. The daemon refuses them as well.
+const COMMAND_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
+const COMMAND_BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 // How many paths, commits or entries an integration's confirmation names for
 // each thing to confirm, and how much of each.
 const MAX_EXAMPLES = 3;
@@ -129,7 +135,7 @@ const SETUP_KINDS = [
 
 type Failure = LadoPresenceFailure;
 // The dialogs' words, and the setup kinds as the renderer names them.
-type PresenceMessageKey = Extract<TrayMessageKey, `lado.presence.${string}` | `lado.setup.kind.${string}`>;
+type PresenceMessageKey = Extract<TrayMessageKey, `lado.presence.${string}` | `lado.setup.kind.${string}` | `lado.protection.part.${string}`>;
 type Translate = (key: PresenceMessageKey, vars?: Record<string, string | number>) => string;
 type DaemonAnswer = { ok: true; body: unknown } | { ok: false; failure: Failure };
 type PlanSubject = {
@@ -836,8 +842,9 @@ async function changeProjectChecks(
 		return { status: "cancelled" };
 	}
 
-	// The daemon checks the proof against exactly these bytes.
-	const body = JSON.stringify({ checkCommands: commands.commands });
+	// The daemon checks the proof against exactly these bytes, and refuses the
+	// change when the list is no longer the one this dialog compared with.
+	const body = JSON.stringify({ checkCommands: commands.commands, checkCommandsBase: settings.checkCommandsSha256 });
 	const sent = await callDaemon(deps, settingsPath, signed(deps, "PUT", settingsPath, body));
 	if (!sent.ok) return sent.failure;
 	const changed = projectSettings(sent.body, projectId);
@@ -1291,9 +1298,9 @@ function protectedGlobs(value: unknown): { ok: true; globs: string[] } | { ok: f
 // The commands as the daemon takes them (backend/internal/domain
 // ValidateLadoCheckCommands), each with exactly its name and command, or the
 // first problem with the details the daemon would send.
-function checkCommands(
-	value: unknown,
-): { ok: true; commands: LadoPresenceCheckCommand[] } | { ok: false; details: { index: number; field: string; reason: string } } {
+type CheckCommandProblem = { index: number; field: string; reason: string; position?: number; character?: string };
+
+function checkCommands(value: unknown): { ok: true; commands: LadoPresenceCheckCommand[] } | { ok: false; details: CheckCommandProblem } {
 	if (!Array.isArray(value)) return { ok: false, details: { index: 0, field: "", reason: "invalid" } };
 	if (value.length > MAX_CHECK_COMMANDS) return { ok: false, details: { index: MAX_CHECK_COMMANDS, field: "", reason: "too_many" } };
 	const commands: LadoPresenceCheckCommand[] = [];
@@ -1306,16 +1313,24 @@ function checkCommands(
 		if (!CHECK_NAME.test(name)) return problem("name", "invalid");
 		if (commands.some((earlier) => earlier.name.toLowerCase() === name.toLowerCase())) return problem("name", "duplicate");
 		if (typeof command !== "string" || command.trim() === "") return problem("command", "required");
-		if (Array.from(command).length > MAX_CHECK_COMMAND) return problem("command", "too_long");
-		if (command.includes("\0")) return problem("command", "invalid");
+		const characters = Array.from(command);
+		if (characters.length > MAX_CHECK_COMMAND) return problem("command", "too_long");
+		const at = characters.findIndex((character) => COMMAND_CONTROL.test(character) || COMMAND_BIDI.test(character));
+		if (at >= 0) {
+			const character = characters[at] ?? "";
+			const reason = COMMAND_BIDI.test(character) ? "bidi_control" : "control_character";
+			const codePoint = `U+${(character.codePointAt(0) ?? 0).toString(16).toUpperCase().padStart(4, "0")}`;
+			return { ok: false, details: { index, field: "command", reason, position: at + 1, character: codePoint } };
+		}
 		commands.push({ name, command });
 	}
 	return { ok: true, commands };
 }
 
 // What a change of the check commands does: one line for each command added
-// or changed, with the command it runs, one for each removed, and the order
-// they run in when that changes.
+// or changed, with all the command runs as it runs it (checkCommands refused
+// the characters that could fake a line), one for each removed, and the
+// order they run in when that changes.
 function checkChangeLines(
 	t: Translate,
 	from: readonly LadoPresenceCheckCommand[],
@@ -1326,8 +1341,8 @@ function checkChangeLines(
 	const lines: string[] = [];
 	for (const { name, command } of to) {
 		const old = before.get(name);
-		if (old === undefined) lines.push(t("lado.presence.checks.added", { name, command: excerpt(command) }));
-		else if (old !== command) lines.push(t("lado.presence.checks.changed", { name, command: excerpt(command) }));
+		if (old === undefined) lines.push(t("lado.presence.checks.added", { name, command }));
+		else if (old !== command) lines.push(t("lado.presence.checks.changed", { name, command }));
 	}
 	for (const { name } of from) if (!after.has(name)) lines.push(t("lado.presence.checks.removed", { name }));
 	const kept = to.filter((entry) => before.has(entry.name)).map((entry) => entry.name);
@@ -1422,9 +1437,11 @@ function integrationDetail(t: Translate, task: string, verified: VerifiedSubject
 	// GitLab gets no status; a branch whose rules do not require the status
 	// lets a pull request merge without the approval, which LADO only notices.
 	const protection = verified.items.find((item) => item.kind === "protection");
+	// Rules LADO could not read may well protect the branch (U4 of #15).
+	const unprotected = protection?.code === "unprotected" || protection?.code === "unprotected_gitlab";
 	const next = [
 		...(protection?.details.provider === "gitlab" ? [] : [t("lado.presence.integration.nextStatus")]),
-		...(protection && protection.outcome !== "pass" ? [t("lado.presence.integration.nextUnprotected")] : []),
+		...(unprotected ? [t("lado.presence.integration.nextUnprotected")] : []),
 	];
 	return [lines.join("\n"), next.join(" ")].join("\n\n");
 }
@@ -1454,12 +1471,28 @@ function confirmLine(t: Translate, item: VerifyItem): string {
 			return t("lado.presence.integration.reflogOff", { branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS) });
 		case "already_on_base":
 			return t("lado.presence.integration.alreadyOnBase", { branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS) });
+		case "base_deleted":
+			return t("lado.presence.integration.baseDeleted", {
+				branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS),
+				commit: excerpt(String(details.dispatchCommit ?? ""), MAX_EXAMPLE_CHARS).slice(0, 7),
+			});
 		case "unprotected": {
+			// The parts by name, as the run panel names them (U1 of #15).
 			const missing = stringList(details.missing);
-			return t("lado.presence.integration.unprotected", { count: missing.length, examples: examples(missing, missing.length) });
+			const line = t("lado.presence.integration.unprotected", {
+				count: missing.length,
+				examples: examples(
+					missing.map((part) => protectionPart(t, part)),
+					missing.length,
+				),
+			});
+			// A check from one app only cannot be LADO's status (Q3 of #15).
+			return missing.includes(ANY_SOURCE_PART) ? `${line}\n${t("lado.presence.integration.anySource")}` : line;
 		}
 		case "protection_unknown":
-			return t("lado.presence.integration.protectionUnknown", { error: excerpt(String(details.error ?? ""), MAX_EXAMPLE_CHARS) });
+			return t("lado.presence.integration.protectionUnknown", {
+				error: excerpt(String(details.error || details.errorClass || ""), MAX_EXAMPLE_CHARS),
+			});
 		case "unprotected_gitlab":
 			return t("lado.presence.integration.unprotectedGitlab");
 		case "review_inconclusive":
@@ -1470,6 +1503,23 @@ function confirmLine(t: Translate, item: VerifyItem): string {
 			// A code from a newer daemon still names what is acknowledged.
 			return t("lado.presence.integration.otherCode", { code: excerpt(item.code, MAX_EXAMPLE_CHARS) });
 	}
+}
+
+// What a base branch's rules lack, as the daemon names it (ladoverify
+// MissingProtection), by the words the app shows it with.
+const ANY_SOURCE_PART = "required_status_checks:lado/integration:any_source";
+const PROTECTION_PARTS: Partial<Record<string, PresenceMessageKey>> = {
+	pull_request: "lado.protection.part.pullRequest",
+	"required_status_checks:lado/integration": "lado.protection.part.integrationCheck",
+	[ANY_SOURCE_PART]: "lado.protection.part.integrationCheckSource",
+	non_fast_forward: "lado.protection.part.nonFastForward",
+	deletion: "lado.protection.part.deletion",
+};
+
+// A part from a newer daemon reads as the daemon names it.
+function protectionPart(t: Translate, part: string): string {
+	const key = PROTECTION_PARTS[part];
+	return key ? t(key) : part;
 }
 
 // Up to three values as one line, each cleaned on its own; "…" says more exist.

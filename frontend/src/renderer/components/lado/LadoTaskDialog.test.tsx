@@ -556,7 +556,7 @@ test("a task whose PR LADO verifies says what it waits for, and offers no decisi
 
 	const run = await within(dialog).findByTestId("lado-run-status");
 	expect(within(run).getByRole("status")).toHaveTextContent("Validating · Waiting for required checks");
-	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-working)]");
+	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-validating)]");
 	expect(within(run).getByRole("link", { name: "Open PR #45" })).toBeInTheDocument();
 	for (const name of ["Approve integration…", "Merge", "Approve plan"]) expect(within(dialog).queryByRole("button", { name })).not.toBeInTheDocument();
 	expect(within(dialog).getByText("Approved")).toBeInTheDocument();

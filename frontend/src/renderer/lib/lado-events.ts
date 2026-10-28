@@ -4,6 +4,7 @@
 // carries hook lines (TDD §1.2).
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import {
+	ladoCheckLogSessionQueryKey,
 	ladoEffectiveProjectQueryKey,
 	ladoEffectiveQueryKey,
 	ladoExecutionQueryKey,
@@ -147,8 +148,12 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 			// The task's open Rules tab.
 			for (const { projectId, taskId } of tasks.values()) invalidate(ladoEffectiveQueryKey(projectId, taskId));
 			tasks.clear();
-			// The run's panel, and its task's lanes, board card and open view.
-			for (const sessionId of executions) invalidate(ladoExecutionQueryKey(sessionId));
+			// The run's panel with its check output, and its task's lanes, board
+			// card and open view.
+			for (const sessionId of executions) {
+				invalidate(ladoExecutionQueryKey(sessionId));
+				invalidate(ladoCheckLogSessionQueryKey(sessionId));
+			}
 			executions.clear();
 			for (const projectId of executionProjects) invalidate(ladoTasksQueryKey(projectId));
 			executionProjects.clear();

@@ -187,6 +187,10 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_PROTECTED_PATHS_INVALID: "lado.error.protectedPathsInvalid",
 	LADO_INTEGRATION_APPROVAL_REQUIRED: "lado.error.integrationApprovalRequired",
 	LADO_MERGE_GATE_FAILED: "lado.error.mergeGateFailed",
+	// The review fixes of step 8 (#15).
+	LADO_INTEGRATION_TARGET_CHANGED: "lado.error.integrationTargetChanged",
+	LADO_INTEGRATION_NOT_APPROVED: "lado.error.integrationNotApproved",
+	LADO_CHECK_COMMANDS_CHANGED: "lado.error.checkCommandsChanged",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_SESSION_ID_INVALID: "lado.error.executionNotFound",
 };
@@ -287,6 +291,8 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 			? reasons.filter((reason): reason is string => typeof reason === "string").map((reason) => ladoReasonText(t, reason)).join("; ")
 			: "",
 		head: text("currentHeadSha").slice(0, 7),
+		approvedTarget: text("approvedTarget"),
+		currentTarget: text("currentTarget"),
 		reason: setup ? ladoSetupReasonText(t, text("reason"), details) : text("reason"),
 		min: text("min"),
 		max: text("max"),
@@ -485,6 +491,8 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	checks_failed: "lado.reason.checks_failed",
 	commands_running: "lado.reason.commands_running",
 	worktree_not_at_head: "lado.reason.worktree_not_at_head",
+	worktree_changed: "lado.reason.worktree_changed",
+	head_unavailable: "lado.reason.head_unavailable",
 	commands_failed: "lado.reason.commands_failed",
 	command_timed_out: "lado.reason.command_timed_out",
 	worktree_missing: "lado.reason.worktree_missing",
@@ -694,6 +702,9 @@ const checkCommandProblemKeys: Partial<Record<string, LadoCheckProblemKey>> = {
 	"command:required": "lado.checkCommand.problem.commandRequired",
 	"command:too_long": "lado.checkCommand.problem.commandTooLong",
 	"command:invalid": "lado.checkCommand.problem.commandInvalid",
+	// A command is one line, without control or direction characters (S2 of #15).
+	"command:control_character": "lado.checkCommand.problem.commandControl",
+	"command:bidi_control": "lado.checkCommand.problem.commandBidi",
 	":too_many": "lado.checkCommand.problem.tooMany",
 	"checkTimeoutMinutes:invalid": "lado.checkCommand.problem.timeoutInvalid",
 };
@@ -713,7 +724,32 @@ function checkCommandProblemKey(details: Record<string, unknown> | undefined): L
  */
 export function ladoCheckCommandProblemText(t: TFunction, details: Record<string, unknown>): string {
 	const key = checkCommandProblemKey(details);
-	return key ? t(key) : "";
+	// A control character is named by its code point and where it stands.
+	const character = typeof details.character === "string" ? details.character : "";
+	const position = typeof details.position === "number" ? String(details.position) : "";
+	return key ? t(key, { character, position }) : "";
+}
+
+type LadoProtectionPartKey = Extract<MessageKey, `lado.protection.part.${string}`>;
+
+// What a base branch's rules lack, as the daemon names it
+// (backend/internal/service/ladoverify MissingProtection).
+const protectionPartKeys: Partial<Record<string, LadoProtectionPartKey>> = {
+	pull_request: "lado.protection.part.pullRequest",
+	"required_status_checks:lado/integration": "lado.protection.part.integrationCheck",
+	// The rules take lado/integration from one app only (Q3 of #15).
+	"required_status_checks:lado/integration:any_source": "lado.protection.part.integrationCheckSource",
+	non_fast_forward: "lado.protection.part.nonFastForward",
+	deletion: "lado.protection.part.deletion",
+};
+
+/** The part a branch's rules lack that only a check from any source fills. */
+export const LADO_PROTECTION_ANY_SOURCE = "required_status_checks:lado/integration:any_source";
+
+/** A part the base branch's rules lack, in the developer's language; one from a newer daemon shows as the daemon names it. */
+export function ladoProtectionPartText(t: TFunction, part: string): string {
+	const key = protectionPartKeys[part];
+	return key ? t(key) : part;
 }
 
 type LadoProtectedPathProblemKey = Extract<MessageKey, `lado.protectedPaths.problem.${string}`>;

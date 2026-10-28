@@ -66,7 +66,7 @@ function renderWith(children: React.ReactNode) {
 
 beforeEach(() => {
 	vi.resetAllMocks();
-	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 });
+	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 });
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task, { ...task, id: "lado-task-2", state: "queued", execution: undefined }]);
 });
 
@@ -104,7 +104,7 @@ test("leaves out what the task list omits", async () => {
 });
 
 test("a project out of LADO mode shows no line and reads no tasks", async () => {
-	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkTimeoutMinutes: 30 });
+	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 });
 	const { container } = renderWith(<LadoSessionLine session={session("demo-7")} />);
 
 	await waitFor(() => expect(lado.fetchLadoProjectSettings).toHaveBeenCalledWith("demo"));
