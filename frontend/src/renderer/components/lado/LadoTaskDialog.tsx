@@ -285,7 +285,8 @@ function TaskViewBody({
 								<p className="text-caption leading-4 text-settings-muted">{t("lado.error.planSuperseded")}</p>
 							) : null}
 							{!latest ? (
-								<p className="text-control text-settings-muted">{t("lado.view.noPlan")}</p>
+								// While a plan is on its way, the line above says so.
+								pending ? null : <p className="text-control text-settings-muted">{t("lado.view.noPlan")}</p>
 							) : plan.isError ? (
 								<p className="text-caption leading-4 text-error" role="alert">{ladoErrorText(t, plan.error)}</p>
 							) : shown ? (

@@ -200,6 +200,8 @@ test("a plan worker's request shows where it stands and opens its sessions", asy
 	expect(status).toHaveTextContent("Plan worker writing · Reviewing the draft");
 	expect(line.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-working)]");
 	expect(within(dialog).queryByText("Waiting for the orchestrator's plan…")).not.toBeInTheDocument();
+	// The status line says a plan is on its way; nothing asks for one.
+	expect(within(dialog).queryByText("No plan yet. Request one, and a read-only plan worker writes it.")).not.toBeInTheDocument();
 	expect(within(dialog).getByRole("button", { name: "Request a plan" })).toBeDisabled();
 
 	fireEvent.click(within(line).getByRole("button", { name: "Open critic" }));

@@ -22,7 +22,8 @@ import (
 const ladoPlanWorkerDenyMessage = "LADO plan worker: you are read-only and nobody can approve a prompt. " +
 	"Allowed: Read, Grep, Glob; git log, show, diff, status, ls-files and ls-tree; gh issue view, gh pr view and gh pr diff, " +
 	"optionally piped into head, tail, wc or grep; and the ao lado plan submit command in the exact form LADO gave you, " +
-	"as one command with a quoted here-document. Everything else is refused."
+	"as one command with a quoted here-document. Redirections such as 2>&1, command lists, substitutions and globs are refused, " +
+	"and so is everything else."
 
 // ladoPlanWorkerTools are the tools a plan worker uses without a check: they
 // read, or keep its own to-do list.

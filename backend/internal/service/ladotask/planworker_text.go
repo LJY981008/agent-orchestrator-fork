@@ -43,10 +43,11 @@ func critiqueCommand(req domain.LadoPlanRequestID) string {
 }
 
 // readOnlyNote says what a plan worker may do, for both roles.
-const readOnlyNote = "You are read-only. Read and search files, run read-only git commands (log, show, diff, status, ls-files, ls-tree) " +
-	"and gh issue view, gh pr view and gh pr diff. LADO refuses everything else without asking: editing or writing files, commits, pushes, " +
-	"pull requests, installing packages, and starting or messaging sessions. Submitting is the only thing you send, in the exact form shown, " +
-	"as one command with a quoted here-document."
+const readOnlyNote = "You are read-only. Read and search files with the Read, Grep and Glob tools, and run read-only git commands " +
+	"(log, show, diff, status, ls-files, ls-tree) and gh issue view, gh pr view and gh pr diff, each as one command, optionally piped " +
+	"into head, tail, wc or grep. LADO refuses everything else without asking: shell commands such as ls or cat, redirections such as " +
+	"2>&1, command lists, editing or writing files, commits, pushes, pull requests, installing packages, and starting or messaging " +
+	"sessions. Submitting is the only thing you send, in the exact form shown, as one command with a quoted here-document."
 
 // planWorkerSection is a plan worker's standing instructions: what LADO asks
 // of the role, then the role's instructions from LADO's rules. It overrides
