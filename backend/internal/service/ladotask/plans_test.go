@@ -32,12 +32,6 @@ type fakeOrchestrators struct {
 	sent     []string
 }
 
-func (f *fakeOrchestrators) Orchestrator(context.Context, domain.ProjectID) (OrchestratorSession, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.session, nil
-}
-
 func (f *fakeOrchestrators) Session(_ context.Context, id domain.SessionID) (OrchestratorSession, bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

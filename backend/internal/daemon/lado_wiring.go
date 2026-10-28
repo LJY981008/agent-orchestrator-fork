@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoconnect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladogate"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladonotify"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
@@ -37,16 +38,17 @@ type ladoSessionTarget interface {
 
 // wireLado installs one worker gate on the session manager and the chat
 // service, and LADO's section of a session's standing instructions: an
-// orchestrator's in a LADO project, and the rules text of a worker LADO
-// dispatched. It returns LADO's project settings service for the API. The
+// orchestrator's in a LADO project, the rules text of a worker LADO
+// dispatched, and a plan worker's role. It returns LADO's project settings service for the API. The
 // daemon calls it right after the session manager is built, before
 // automations, tracker intake or the API can spawn or send, and before
 // sessions restore.
 func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget) *ladoproject.Service {
 	gate := ladogate.New(store, store, store, store, store)
+	gate.SetPlanWorkers(store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
-	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store}.Section)
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store}.Section)
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 
@@ -62,7 +64,8 @@ type ladoWork struct {
 
 // wireLadoWork builds LADO's repository connections, the local setup it
 // manages with its session hooks, its rules with the built-in ones seeded,
-// issue-backed tasks with their plans, whose approvals fix the rules and the
+// issue-backed tasks with their plans, which plan workers write and whose
+// notices reach the orchestrators, whose approvals fix the rules and the
 // setup and queue the plans, the dispatcher that starts the queued plans'
 // workers and stops the worker of a cancelled task, and the loop that
 // verifies the workers' PRs. The daemon calls it once AO's project service
@@ -91,9 +94,13 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	if err := rules.EnsureBuiltins(ctx); err != nil {
 		log.Error("LADO could not seed its built-in rules", "err", err)
 	}
-	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: blobs, Policy: rules}
-	if work.orchestrators != nil && work.sender != nil {
-		deps.Orchestrators = ladoOrchestrators{spawner: work.orchestrators, sender: work.sender, store: store, dataDir: cfg.DataDir}
+	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: blobs, Policy: rules, DataDir: cfg.DataDir}
+	if work.sender != nil {
+		deps.Orchestrators = ladoOrchestrators{sender: work.sender, store: store, dataDir: cfg.DataDir}
+		deps.Notices = ladonotify.New(ladonotify.Deps{Store: store, Orchestrators: ladoNoticeOrchestrators{store: store, sender: work.sender}, Log: log})
+	}
+	if work.sessions != nil && work.sender != nil {
+		deps.PlanSessions = ladoPlanSessions{sessions: work.sessions, sender: work.sender, store: store}
 	}
 	if work.artifacts != nil {
 		deps.Artifacts = ladoArtifacts{capturer: work.artifacts, store: store}
@@ -112,6 +119,7 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	if work.sessions != nil {
 		tasks.SetKiller(queue)
 	}
+	tasks.SetPlanQueue(queue)
 	verify := wireLadoVerify(store, blobs, clients, work, log)
 	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify}
 }

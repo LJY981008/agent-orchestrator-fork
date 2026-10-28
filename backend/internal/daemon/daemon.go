@@ -683,7 +683,7 @@ func Run() error {
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), Telemetry: telemetrySink, Logger: log, OnModelScopeChanged: agentSvc.InvalidateProjectModelCatalogs})
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
-	lado := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{orchestrators: sessionSvc, sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
+	lado := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
 		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}, reviews: reviewSvc, ladoModes: ladoProjects}, log)
 	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup, ladoVerify := lado.connections, lado.tasks, lado.rules, lado.queue, lado.setup, lado.verify
 	ladoTasksDone := ladoTasks.Start(ctx)

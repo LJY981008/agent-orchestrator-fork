@@ -26,8 +26,15 @@ func (m *Manager) SetLadoChatServers(servers LadoChatServers) {
 // chatMCPServers is the tool servers a Chat session on harness gets: AO's
 // own, then for Codex the ones LADO manages, except one named ao, which the
 // adoption's conflict check blocks too. An error fails the launch rather than
-// start the session without its managed servers.
+// start the session without its managed servers. It marks a LADO plan
+// worker's base environment too.
 func (m *Manager) chatMCPServers(ctx context.Context, rec domain.SessionRecord, harness domain.AgentHarness, env map[string]string) ([]ports.ChatMCPServerConfig, error) {
+	// Chat spawn and resume both build their base environment before this
+	// call, and the Chat driver reads a plan worker's mark from it for its
+	// session options (lado_setup_home.go).
+	if env != nil && domain.IsLadoPlanWorkerClientRequestID(rec.ClientRequestID) {
+		setProtectedEnv(env, domain.LadoPlanWorkerEnv, "1", envKeysCaseInsensitive)
+	}
 	servers := m.aoMCPServers(harness, env)
 	if m.ladoChatMCP == nil || harness != domain.HarnessCodex {
 		return servers, nil

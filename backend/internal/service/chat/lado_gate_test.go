@@ -262,3 +262,44 @@ func TestSetConfigOptionAsksTheLadoGate(t *testing.T) {
 		t.Fatalf("stored approval = %q (%v), want auto", conversation.Settings.ApprovalMode, err)
 	}
 }
+
+// ladoReadOnlyGate marks one session read-only, as LADO's gate marks a plan
+// worker.
+type ladoReadOnlyGate struct {
+	ladoRecordingGate
+	readOnly domain.SessionID
+}
+
+func (g *ladoReadOnlyGate) ReadOnlySession(_ context.Context, id domain.SessionID) bool {
+	return id == g.readOnly
+}
+
+// A session LADO keeps read-only, a plan worker, starts its provider in the
+// read-only sandbox, as a reviewer does; another session does not.
+func TestLadoReadOnlySessionStartsReadOnly(t *testing.T) {
+	for _, readOnly := range []bool{true, false} {
+		st := openStore(t)
+		provider := newFakeConversation()
+		var started ports.ChatStartConfig
+		svc := chatsvc.New(chatsvc.Options{
+			Store: st, Sessions: st,
+			Drivers: fakeRegistry{driver: fakeDriver{conv: provider, startCfg: &started}},
+			Log:     slog.New(slog.DiscardHandler),
+			NewID:   func() string { return "plan-conversation" },
+		})
+		gate := &ladoReadOnlyGate{}
+		if readOnly {
+			gate.readOnly = testSession
+		}
+		svc.SetWorkGate(gate)
+		if _, err := svc.Start(context.Background(), chatsvc.StartConfig{
+			SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if started.ReadOnly != readOnly {
+			t.Fatalf("read-only %v: provider started with ReadOnly %v", readOnly, started.ReadOnly)
+		}
+		svc.StopAll(context.Background())
+	}
+}

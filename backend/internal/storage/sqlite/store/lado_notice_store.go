@@ -81,27 +81,16 @@ func (s *Store) DropLadoOrchestratorNotices(ctx context.Context, ids []int64, at
 	return err
 }
 
-// LadoPlanRequestNoticeFact is a plan request a notice may tell of.
-type LadoPlanRequestNoticeFact struct {
-	ID          domain.LadoPlanRequestID
-	ProjectID   domain.ProjectID
-	IssueRef    domain.IssueID
-	Kind        domain.LadoPlanRequestKind
-	RequestedAt time.Time
-	FailedAt    time.Time
-	FailureCode string
-}
-
 // ListLadoPlanRequestNoticeFacts returns the plan requests made or failed
 // since a time.
-func (s *Store) ListLadoPlanRequestNoticeFacts(ctx context.Context, since time.Time) ([]LadoPlanRequestNoticeFact, error) {
+func (s *Store) ListLadoPlanRequestNoticeFacts(ctx context.Context, since time.Time) ([]domain.LadoPlanRequestNoticeFact, error) {
 	rows, err := s.qr.ListLadoPlanRequestNoticeFacts(ctx, since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("list LADO plan request facts: %w", err)
 	}
-	out := make([]LadoPlanRequestNoticeFact, 0, len(rows))
+	out := make([]domain.LadoPlanRequestNoticeFact, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, LadoPlanRequestNoticeFact{
+		out = append(out, domain.LadoPlanRequestNoticeFact{
 			ID: domain.LadoPlanRequestID(row.ID), ProjectID: domain.ProjectID(row.ProjectID), IssueRef: domain.IssueID(row.IssueRef.String),
 			Kind: domain.LadoPlanRequestKind(row.Kind), RequestedAt: row.RequestedAt.UTC(), FailedAt: ladoTimeFromNull(row.FailedAt), FailureCode: row.FailureCode,
 		})
@@ -109,24 +98,15 @@ func (s *Store) ListLadoPlanRequestNoticeFacts(ctx context.Context, since time.T
 	return out, nil
 }
 
-// LadoPlanRevisionNoticeFact is a pinned revision a notice may tell of.
-type LadoPlanRevisionNoticeFact struct {
-	TaskID    domain.LadoTaskID
-	ProjectID domain.ProjectID
-	IssueRef  domain.IssueID
-	Number    int
-	CreatedAt time.Time
-}
-
 // ListLadoPlanRevisionNoticeFacts returns the revisions pinned since a time.
-func (s *Store) ListLadoPlanRevisionNoticeFacts(ctx context.Context, since time.Time) ([]LadoPlanRevisionNoticeFact, error) {
+func (s *Store) ListLadoPlanRevisionNoticeFacts(ctx context.Context, since time.Time) ([]domain.LadoPlanRevisionNoticeFact, error) {
 	rows, err := s.qr.ListLadoPlanRevisionNoticeFacts(ctx, since.UTC())
 	if err != nil {
 		return nil, fmt.Errorf("list LADO plan revision facts: %w", err)
 	}
-	out := make([]LadoPlanRevisionNoticeFact, 0, len(rows))
+	out := make([]domain.LadoPlanRevisionNoticeFact, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, LadoPlanRevisionNoticeFact{
+		out = append(out, domain.LadoPlanRevisionNoticeFact{
 			TaskID: domain.LadoTaskID(row.TaskID), ProjectID: domain.ProjectID(row.ProjectID), IssueRef: domain.IssueID(row.IssueRef.String),
 			Number: int(row.Number), CreatedAt: row.CreatedAt.UTC(),
 		})

@@ -649,6 +649,26 @@ type LadoOrchestratorNotice struct {
 	DroppedAt time.Time
 }
 
+// LadoPlanRequestNoticeFact is a plan request a notice may tell of.
+type LadoPlanRequestNoticeFact struct {
+	ID          LadoPlanRequestID
+	ProjectID   ProjectID
+	IssueRef    IssueID
+	Kind        LadoPlanRequestKind
+	RequestedAt time.Time
+	FailedAt    time.Time
+	FailureCode string
+}
+
+// LadoPlanRevisionNoticeFact is a pinned revision a notice may tell of.
+type LadoPlanRevisionNoticeFact struct {
+	TaskID    LadoTaskID
+	ProjectID ProjectID
+	IssueRef  IssueID
+	Number    int
+	CreatedAt time.Time
+}
+
 // Notice limits.
 const (
 	// LadoNoticeMaxRunes caps one notice line.

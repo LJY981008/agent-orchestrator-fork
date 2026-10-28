@@ -23,9 +23,9 @@ const (
 
 // Start resolves tasks left without an issue by a stopped daemon, then reads
 // the issue of every task on a timer. A second loop pins plan versions, runs
-// the plan workers and delivers the requests made before them on a shorter
-// timer, and at once when a request or a submission arrives, so a slow
-// tracker never holds up plans. The returned channel closes once ctx is done
+// the plan workers, delivers the requests made before them and tells the
+// orchestrators LADO's notices on a shorter timer, and at once when a request
+// or a submission arrives, so a slow tracker never holds up plans. The returned channel closes once ctx is done
 // and both loops have stopped.
 func (s *Service) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
@@ -57,6 +57,11 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 			for {
 				s.WatchPlans(ctx)
 				s.DrivePlanWorkers(ctx)
+				if s.deps.Notices != nil {
+					if err := s.deps.Notices.Tick(ctx); err != nil && ctx.Err() == nil {
+						s.deps.Log.Warn("LADO notice pass failed", "err", err)
+					}
+				}
 				select {
 				case <-ctx.Done():
 					return

@@ -34,10 +34,11 @@ type Blobs interface {
 	Get(sum string, limit int64) ([]byte, error)
 }
 
-// OrchestratorSession is what LADO needs to know about an orchestrator.
+// OrchestratorSession is what LADO needs to know about the orchestrator of a
+// plan request made before plan workers.
 type OrchestratorSession struct {
 	ID domain.SessionID
-	// ArtifactDir is the session's artifact directory, where LADO puts the
+	// ArtifactDir is the session's artifact directory, where LADO put the
 	// pinned issue and the orchestrator writes the plan.
 	ArtifactDir string
 	Terminated  bool
@@ -47,11 +48,9 @@ type OrchestratorSession struct {
 // was terminated, its agent exited or the session is gone.
 var ErrOrchestratorGone = errors.New("the orchestrator session has ended")
 
-// Orchestrators finds a project's orchestrator and delivers messages to it.
+// Orchestrators reads the orchestrators that plan requests made before plan
+// workers went to, and delivers those requests.
 type Orchestrators interface {
-	// Orchestrator returns the project's active orchestrator, starting one
-	// when there is none.
-	Orchestrator(ctx context.Context, projectID domain.ProjectID) (OrchestratorSession, error)
 	// Session returns an orchestrator by id.
 	Session(ctx context.Context, id domain.SessionID) (OrchestratorSession, bool, error)
 	// Send delivers a message from the daemon. An error wrapping

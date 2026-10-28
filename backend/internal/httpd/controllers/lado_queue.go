@@ -124,11 +124,27 @@ func (c *LadoController) putDispatchSettings(w http.ResponseWriter, r *http.Requ
 		envelope.WriteError(w, r, ladoqueue.InvalidSettings("Send maxConcurrent, maxRunMinutes and holdOnMemoryTight."))
 		return
 	}
-	settings, err := c.Queue.SetSettings(r.Context(), domain.LadoDispatchSettings{
+	change := domain.LadoDispatchSettings{
 		MaxConcurrent:     *req.MaxConcurrent,
 		MaxRunMinutes:     *req.MaxRunMinutes,
 		HoldOnMemoryTight: *req.HoldOnMemoryTight,
-	})
+	}
+	// The service keeps a plan worker field that is zero.
+	if req.MaxPlanWorkers != nil {
+		if *req.MaxPlanWorkers == 0 {
+			envelope.WriteError(w, r, ladoqueue.InvalidSettings("maxPlanWorkers must be 1 to 8."))
+			return
+		}
+		change.MaxPlanWorkers = *req.MaxPlanWorkers
+	}
+	if review := req.PlanReview; review != nil {
+		if review.MaxPaths == 0 {
+			envelope.WriteError(w, r, ladoqueue.InvalidSettings("planReview.maxPaths must be 1 to 20."))
+			return
+		}
+		change.PlanReview = domain.LadoPlanReviewSettings{Skip: review.Skip, MaxPaths: review.MaxPaths, Patterns: review.Patterns}
+	}
+	settings, err := c.Queue.SetSettings(r.Context(), change)
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return
@@ -255,10 +271,18 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 }
 
 func ladoDispatchSettingsResponse(settings domain.LadoDispatchSettings) LadoDispatchSettingsResponse {
+	patterns := settings.PlanReview.Patterns
+	if patterns == nil {
+		patterns = map[string][]string{}
+	}
 	return LadoDispatchSettingsResponse{
 		MaxConcurrent:     settings.MaxConcurrent,
 		MaxRunMinutes:     settings.MaxRunMinutes,
 		HoldOnMemoryTight: settings.HoldOnMemoryTight,
-		UpdatedAt:         ladoOptionalTime(settings.UpdatedAt),
+		MaxPlanWorkers:    settings.MaxPlanWorkers,
+		PlanReview: LadoPlanReviewSettingsDTO{
+			Skip: settings.PlanReview.Skip, MaxPaths: settings.PlanReview.MaxPaths, Patterns: patterns,
+		},
+		UpdatedAt: ladoOptionalTime(settings.UpdatedAt),
 	}
 }

@@ -346,6 +346,39 @@ func TestLadoAPI_DispatchSettings(t *testing.T) {
 	}
 }
 
+// The plan worker settings start at two plan requests and skipping the review
+// of a plan with up to three paths; a change that leaves them out keeps them.
+func TestLadoAPI_DispatchSettingsPlanWorkers(t *testing.T) {
+	store := sqlitetest.MustOpen(t)
+	srv := newLadoQueueServer(t, store)
+	body, _, _ := doRequest(t, srv, "GET", "/api/v1/lado/dispatch-settings", "")
+	defaults := decodeLadoJSON[controllers.LadoDispatchSettingsResponse](t, body)
+	if defaults.MaxPlanWorkers != 2 || !defaults.PlanReview.Skip || defaults.PlanReview.MaxPaths != 3 || len(defaults.PlanReview.Patterns["db_schema"]) == 0 {
+		t.Fatalf("defaults = %+v", defaults)
+	}
+	put := `{"maxConcurrent":2,"maxRunMinutes":480,"holdOnMemoryTight":true,"maxPlanWorkers":1,"planReview":{"skip":false,"maxPaths":5,"patterns":{"auth":["**/login/**"]}}}`
+	body, status, _ := doRequest(t, srv, "PUT", "/api/v1/lado/dispatch-settings", put)
+	got := decodeLadoJSON[controllers.LadoDispatchSettingsResponse](t, body)
+	if status != http.StatusOK || got.MaxPlanWorkers != 1 || got.PlanReview.Skip || got.PlanReview.MaxPaths != 5 || len(got.PlanReview.Patterns) != 1 {
+		t.Fatalf("PUT = %+v (status %d, body %s)", got, status, body)
+	}
+	body, _, _ = doRequest(t, srv, "PUT", "/api/v1/lado/dispatch-settings", `{"maxConcurrent":3,"maxRunMinutes":480,"holdOnMemoryTight":true}`)
+	if kept := decodeLadoJSON[controllers.LadoDispatchSettingsResponse](t, body); kept.MaxConcurrent != 3 || kept.MaxPlanWorkers != 1 || kept.PlanReview.MaxPaths != 5 {
+		t.Fatalf("a change without the plan worker fields = %+v, want them kept", kept)
+	}
+	for _, bad := range []string{
+		`{"maxConcurrent":3,"maxRunMinutes":480,"holdOnMemoryTight":true,"maxPlanWorkers":0}`,
+		`{"maxConcurrent":3,"maxRunMinutes":480,"holdOnMemoryTight":true,"maxPlanWorkers":9}`,
+		`{"maxConcurrent":3,"maxRunMinutes":480,"holdOnMemoryTight":true,"planReview":{"skip":true,"maxPaths":0}}`,
+		`{"maxConcurrent":3,"maxRunMinutes":480,"holdOnMemoryTight":true,"planReview":{"skip":true,"maxPaths":3,"patterns":{"secrets":["**"]}}}`,
+	} {
+		body, status, _ := doRequest(t, srv, "PUT", "/api/v1/lado/dispatch-settings", bad)
+		if status != http.StatusBadRequest || ladoErrorCode(t, body) != "LADO_DISPATCH_SETTINGS_INVALID" {
+			t.Fatalf("PUT %s: status = %d, body %s", bad, status, body)
+		}
+	}
+}
+
 func TestLadoAPI_ProjectSettingsMaxConcurrent(t *testing.T) {
 	ctx := context.Background()
 	store := sqlitetest.MustOpen(t)

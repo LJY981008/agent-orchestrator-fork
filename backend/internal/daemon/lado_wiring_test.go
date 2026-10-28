@@ -307,9 +307,10 @@ func TestWireLadoWorkSeedsBuiltinRules(t *testing.T) {
 	want := map[domain.LadoRuleID]int{
 		domain.LadoRulePlanApproval: 1, domain.LadoRulePermissionCeiling: 1, domain.LadoRuleKoreanCommits: 1, domain.LadoRuleSetupPresence: 1,
 		domain.LadoRuleIntegrationApproval: 1, domain.LadoRuleNoDirectWrite: 1, domain.LadoRuleTestsMustPass: 1, domain.LadoRuleProtectedPaths: 1,
+		domain.LadoRulePlanDesigner: 1, domain.LadoRulePlanCritic: 1,
 	}
 	if got := stored(); !reflect.DeepEqual(got, want) {
-		t.Fatalf("rules after wiring = %v, want the eight built-ins at version 1", got)
+		t.Fatalf("rules after wiring = %v, want the ten built-ins at version 1", got)
 	}
 
 	// A restart seeds nothing again.

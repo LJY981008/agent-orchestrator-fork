@@ -178,6 +178,11 @@ type Deps struct {
 	// (<DataDir>/lado/plan-requests/<request>/), which no artifact capture
 	// reads.
 	DataDir string
+	// Notices tells each project's orchestrator what happened to its tasks,
+	// on the plan loop's timer (service/ladonotify); nil tells nothing.
+	Notices interface {
+		Tick(ctx context.Context) error
+	}
 }
 
 // Service creates, imports and tracks tasks.
