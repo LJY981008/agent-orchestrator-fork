@@ -180,6 +180,35 @@ describe("LadoProjectChecksCard", () => {
 		for (const row of rows()) expect(row).not.toContainElement(listAlert);
 	});
 
+	// U7 of #15: a save names the list it started from. When the list moved on
+	// meanwhile, the card shows the list LADO holds now, to review first.
+	it("shows the current list when the commands changed since the card read them", async () => {
+		const user = userEvent.setup();
+		const current = [{ name: "build", command: "npm run build" }];
+		vi.mocked(lado.fetchLadoProjectSettings)
+			.mockResolvedValueOnce(settings)
+			.mockResolvedValue({ ...settings, checkCommands: current, checkCommandsSha256: "1".repeat(64) });
+		confirmChecks().mockResolvedValue({
+			status: "error",
+			code: "LADO_CHECK_COMMANDS_CHANGED",
+			message: "The check commands changed.",
+			details: { checkCommandsSha256: "1".repeat(64) },
+		});
+		renderCard();
+
+		await user.click(await screen.findByRole("button", { name: "Remove lint" }));
+		await user.click(saveButton());
+
+		expect(await screen.findByRole("alert")).toHaveTextContent(
+			"The check commands changed since you opened them. Review the current list, then change it again.",
+		);
+		await waitFor(() => expect(values()).toEqual([["build", "npm run build"]]));
+		expect(saveButton()).toBeDisabled();
+		// Editing the current list clears the message.
+		await user.click(addButton());
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+
 	// In a browser the daemon answers itself; without the desktop app it has
 	// no way to confirm, and the words must be about the check commands.
 	it("says in a browser that changing the commands needs the desktop app", async () => {

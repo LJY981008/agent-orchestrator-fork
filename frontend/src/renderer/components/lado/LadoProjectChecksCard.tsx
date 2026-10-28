@@ -53,6 +53,9 @@ export function LadoProjectChecksCard({ projectId, settings }: { projectId: stri
 	// names a problem by its index there.
 	const [sentKeys, setSentKeys] = useState<number[]>([]);
 	const [added, setAdded] = useState<number | null>(null);
+	// Set when a save found that the list moved on: the rows then show the
+	// list LADO holds now, for the developer to review before changing it.
+	const [followSaved, setFollowSaved] = useState(false);
 	// Set when a removed row took the focused button with it.
 	const focusAdd = useRef(false);
 
@@ -63,10 +66,12 @@ export function LadoProjectChecksCard({ projectId, settings }: { projectId: stri
 	});
 
 	// The saved commands changed elsewhere (another window, a save that ended):
-	// the rows follow them unless the developer has edits of their own.
+	// the rows follow them unless the developer has edits of their own, or a
+	// save was refused because of that change.
 	if (base !== saved) {
 		setBase(saved);
-		if (sameCommands(filledRows(rows), base)) setRows(rowsOf(saved));
+		if (followSaved || sameCommands(filledRows(rows), base)) setRows(rowsOf(saved));
+		setFollowSaved(false);
 	}
 
 	const filled = filledRows(rows);
@@ -76,6 +81,7 @@ export function LadoProjectChecksCard({ projectId, settings }: { projectId: stri
 
 	const edit = (next: Row[]) => {
 		saveChecks.reset();
+		setFollowSaved(false);
 		setRows(next);
 	};
 	const change = (key: number, field: "name" | "command", value: string) =>
@@ -101,6 +107,9 @@ export function LadoProjectChecksCard({ projectId, settings }: { projectId: stri
 				// null: the developer cancelled the desktop confirmation, and the edits stay.
 				onSuccess: (result) => {
 					if (result) setRows(rowsOf(result.checkCommands));
+				},
+				onError: (failure) => {
+					if (failure instanceof LadoApiError && failure.code === "LADO_CHECK_COMMANDS_CHANGED") setFollowSaved(true);
 				},
 			},
 		);

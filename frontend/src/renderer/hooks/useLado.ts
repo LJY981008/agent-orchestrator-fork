@@ -25,6 +25,7 @@ import {
 	fetchLadoTaskView,
 	importLadoTasks,
 	invalidateLadoRuleQueries,
+	LadoApiError,
 	ladoCheckLogQueryKey,
 	ladoDispatchSettingsQueryKey,
 	ladoEffectiveQueryKey,
@@ -126,6 +127,12 @@ export function useUpdateLadoProjectChecks(projectId: string) {
 			// Runs check their current heads with the new commands.
 			void queryClient.invalidateQueries({ queryKey: ladoExecutionQueryRoot });
 			void queryClient.invalidateQueries({ queryKey: ladoTasksQueryKey(projectId) });
+		},
+		onError: (error) => {
+			// The list moved on since the edit started: read the one LADO holds now.
+			if (error instanceof LadoApiError && error.code === "LADO_CHECK_COMMANDS_CHANGED") {
+				void queryClient.invalidateQueries({ queryKey: ladoProjectSettingsQueryKey(projectId) });
+			}
 		},
 		retry: false,
 	});

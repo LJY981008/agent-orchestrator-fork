@@ -89,14 +89,15 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 						</span>
 					) : null}
 				</div>
-				{integration?.statusState === "failed" ? (
+				{/* A merged or closed PR needs no status any more. */}
+				{integration?.statusState === "failed" && open ? (
 					<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
 						{integration.statusError ? (
 							<p className="w-full truncate text-xs text-muted-foreground" title={integration.statusError}>
 								{integration.statusError}
 							</p>
 						) : null}
-						{open ? <LadoRepostStatus projectId={projectId} sessionId={execution.sessionId} /> : null}
+						<LadoRepostStatus projectId={projectId} sessionId={execution.sessionId} />
 					</div>
 				) : null}
 				{verification ? (

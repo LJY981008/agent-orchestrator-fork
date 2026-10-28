@@ -321,6 +321,10 @@ test("a task whose worker started leaves the lanes; its session card carries it"
 	const execution: lado.LadoTaskExecution = { sessionId: "demo-7", planRevisionId: revision.id, startedAt: "2026-10-19T08:30:00Z", sessionEnded: false, timedOut: false };
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
 		{ ...task, id: "lado-task-running", state: "running", plan: approvedPlan, execution, issue: { ...task.issue, title: "Running" } },
+		// A run whose pull request LADO verifies or integrates is on its session card too.
+		{ ...task, id: "lado-task-validating", state: "validating", plan: approvedPlan, execution: { ...execution, sessionId: "demo-5" }, issue: { ...task.issue, title: "Validating" } },
+		{ ...task, id: "lado-task-pending", state: "integration_pending", plan: approvedPlan, execution: { ...execution, sessionId: "demo-6" }, issue: { ...task.issue, title: "Pending" } },
+		{ ...task, id: "lado-task-integrating", state: "integrating", plan: approvedPlan, execution: { ...execution, sessionId: "demo-4" }, issue: { ...task.issue, title: "Integrating" } },
 		{ ...task, id: "lado-task-merged", state: "completed", plan: approvedPlan, execution: { ...execution, sessionId: "demo-8", sessionEnded: true }, issue: { ...task.issue, title: "Merged" } },
 		{ ...task, id: "lado-task-unmerged", state: "closed_unmerged", plan: approvedPlan, execution: { ...execution, sessionId: "demo-9", sessionEnded: true }, issue: { ...task.issue, title: "Closed PR", state: "done" } },
 		// Closed before any run: still the human's to cancel.
@@ -335,7 +339,7 @@ test("a task whose worker started leaves the lanes; its session card carries it"
 	expect(within(plan).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-closed"]);
 	expect(within(queued).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-queued"]);
 	expect(within(plan).getByText("1")).toBeInTheDocument();
-	for (const title of ["Running", "Merged", "Closed PR"]) expect(screen.queryByText(title), title).not.toBeInTheDocument();
+	for (const title of ["Running", "Validating", "Pending", "Integrating", "Merged", "Closed PR"]) expect(screen.queryByText(title), title).not.toBeInTheDocument();
 });
 
 test("shows plan requested for a task whose rules need review", async () => {

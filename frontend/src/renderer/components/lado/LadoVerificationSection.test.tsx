@@ -505,6 +505,13 @@ test("posts a status that could not be posted again", async () => {
 	// A head whose status went up has nothing to post again.
 	renderSection(execution({ integration: approval }));
 	expect(screen.queryByRole("button", { name: "Post status again" })).not.toBeInTheDocument();
+	cleanup();
+
+	// Nor does a merged PR, whose status no longer matters (lab check of #15).
+	renderSection(execution({ pr: { ...pr, merged: true }, integration: { ...approval, statusState: "failed", statusAttempts: 12, statusError: "403 Resource not accessible" } }));
+	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Completed");
+	expect(screen.queryByText("403 Resource not accessible")).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Post status again" })).not.toBeInTheDocument();
 });
 
 test("keeps Merge off once the merge went through, until the PR shows it", async () => {
