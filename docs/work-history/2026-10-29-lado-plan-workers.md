@@ -27,8 +27,10 @@
 | 저장소 | `0009_lado_plan_workers.sql`(요청의 계획 워커 사실, 검수, 리비전 측정값, 알림 outbox, 실행 설정 열), 쿼리·sqlc·store, CDC 트리거, 테스트 | c995bb1f8 |
 | 계획 요청 경로·설계 절차·실패 처리 | `RequestPlan` 이 계획 워커 요청을 만들고, 계획 루프가 설계자 → 검수 결정 → 검수자 → 피드백 → 최종 → 고정 → 한 번 고치기 → 정리를 몬다. 제출 라우트, 측정값, 시간 제한, 실패 코드 | 98312a6ee |
 | 읽기 전용·알림 | 게이트의 계획 워커 허가와 auto 상한, Chat 읽기 전용, ACP 허용·거부 목록, `ao hooks` 결정, `ao lado` CLI, 알림 outbox 와 보내는 루프, 오케스트레이터 LADO 절 | aa7cae690 |
-| HTTP·화면 | 작업·계획 DTO(계획 워커, 검수, 측정값, change_kinds), 칸반 카드·작업 창 상태와 세션 링크, 계획 화면 검수 결과·측정값, 설정 → 규칙 계획 카드와 버전 되돌리기, 설정 → 실행 계획 워커 카드와 경로 패턴 대화상자, 8개 로캘 | (화면 커밋) |
-| 문서 | TDD §1.1·§1.2·§2·§3.1·§4.2·§4.3·§4.5·§5.1·§5.3·§6.2·§9·§13·§14, PRD(TASK-007, 관문 19, D14), ADR 0007, LADO.md·LADO.ko.md, DESIGN.md 결정 기록, 이 문서 | (문서 커밋) |
+| HTTP·화면 | 작업·계획 DTO(계획 워커, 검수, 측정값, change_kinds), 칸반 카드·작업 창 상태와 세션 링크, 계획 화면 검수 결과·측정값, 설정 → 규칙 계획 카드와 버전 되돌리기, 설정 → 실행 계획 워커 카드와 경로 패턴 대화상자, 8개 로캘 | 44fc76e17 |
+| 로컬 확인 | lint 지적 수정과 그 과정에서 찾은 쓰기 오류 누락 | 86f544611 |
+| 랩 | 랩에서 찾은 결함 세 건과 안내 다듬기(아래 "결정과 이탈") | 02f064c66, af6a53855, 53efadbc3, 5ac873b29 |
+| 문서 | TDD §1.1·§1.2·§2·§3.1·§4.2·§4.3·§4.5·§5.1·§5.3·§6.2·§9·§13·§14, PRD(TASK-007, 관문 19, D14), ADR 0007, LADO.md·LADO.ko.md, DESIGN.md 결정 기록, 이 문서 | 6f9413da4 |
 
 ## 설계 확인 결과 (플랜 2단계)
 
@@ -63,6 +65,24 @@
 - 랩에서 다듬은 것: 설계자가 `ls && cat …` 와 `gh … 2>&1 | head` 를 먼저 시도하다 거절당했다(거절 문구를 읽고 Grep·Read 와 리다이렉트 없는 명령으로 바꿔 계속함). 지시문과 거절 문구에 허용·거절되는 형태를 미리 적었다. 계획이 오는 중에는 작업 창의 "계획이 없습니다. 요청하면…" 안내를 숨겼다.
 - 테스트 환경: 세션 환경의 `AO_*` 변수(특히 `AO_RUN_FILE`, `AO_DATA_DIR`, `AO_SESSION_ID`)가 Go 테스트에 새어 실사용 데몬을 가리켰다. Go 테스트는 `AO_*` 를 모두 지운 환경에서 돌렸다.
 
+## 랩 확인 (2026-10-29)
+
+- 구성: 이 브랜치로 빌드한 격리 데몬(포트 3917, `AO_DATA_DIR=/tmp/pw2/lab/data`, `AO_RUN_FILE=/tmp/pw2/lab/running.json`, tmux 소켓 `ao-lab-pw2`, `AO_LADO_DEV_PRESENCE=1`)과 dev-web(5199). 계획 워커가 실제 Claude 로그인을 쓰도록 HOME 은 실제 HOME 이고 `CLAUDE_CONFIG_DIR` 은 지웠다. GitHub 토큰은 `gh auth token` 값을 데몬 환경 변수로만 줬다. 실사용 데몬(3001)과 `~/.ao/data` 는 쓰지 않았다(`~/.ao/running.json` 은 계속 3001). 스크린숏은 세션 산출물 폴더 `lab/` 에 있다.
+- 랩 프로젝트 `ao-demo`: 포크를 로컬에서 공유 클론한 저장소(7863bfe68, origin 은 포크 https 주소). 오케스트레이터 설정은 claude-code·claude-sonnet-5(비용을 줄이려고), 오케스트레이터 `ao-demo-1` 을 Chat 으로 띄웠다. 이슈 #30·#26 을 실제 가져오기 라우트로 작업으로 만들었다(트래커에 쓰지 않음). 계획 요청은 실제 라우트로 보냈고, 계획을 승인하지는 않았다(실제 워커가 뜨지 않게).
+- 상한 1: #30 설계자(`ao-demo-2`, "계획 #30 …", claude-sonnet-5, Chat)가 뜨고 #26 은 `plan_worker_capacity` 로 기다렸다가 #30 이 끝나자 떴다. #30 수정 요청도 #26 뒤에서 같은 이유로 기다렸다.
+- 오케스트레이터: 두 요청 접수 알림이 한 메시지로 묶여 갔고, 리비전 알림이 하나씩 갔다. 오케스트레이터는 한두 줄로 전했고 대화에 계획 본문은 없다.
+- 읽기 전용: 설계자의 `ls && echo && cat AGENTS.md | head`(목록), `gh issue view … 2>&1 | head`(리다이렉트), `cat > /tmp/lado_plan_draft.md <<'LADO_PLAN_EOF'`(파일 쓰기)가 묻지 않고 거부됐고, 설계자는 거부 문구를 읽고 Read·Grep 과 리다이렉트 없는 명령, `ao lado plan submit` 으로 바꿨다.
+- #30(작은 계획): 초안의 YAML 이 깨져(결함 1) 경로 0개로 검수를 건너뛰었다. 최종 리비전 1 은 `invalid_front_matter`·`plan_review_missing` 문제로 고정되어 한 번 고치기 메시지가 갔고, 리비전 2 가 유효하게 고정된 뒤 설계자 세션이 정리됐다. 측정값: 설계 9.4분, 반영 1.3분, 토큰 입력 3.74M(캐시 읽기 3.58M 포함)·출력 52K, $1.91.
+- 데몬 재시작: #26 설계 중과 반영 중에 데몬을 새 바이너리로 두 번 바꿔 띄웠다. 설계자 세션과 요청은 그대로 이어졌다.
+- #26(검수 경로, 영향 경로 기준을 1 로 낮춤): 초안이 새 초안 검사를 통과하고, 검수자(`ao-demo-4`, "검수 #26 …")가 이슈 없이 초안만 받아 저장소를 읽으며 지적 7건(major 3, minor 4)을 냈다. 설계자는 각 지적을 코드로 확인한 뒤 `## 계획 검수` 절에 C1–C6 반영, C7 미반영과 이유를 적어 최종을 냈고, 리비전 1 이 문제 없이 고정된 뒤 두 세션이 정리됐다. 측정값: 설계 10.3분+반영 4.8분, 검수 10분, 설계자 토큰 4.57M·$2.65, 검수자 3.21M·$1.76, 지적 P1 0·major 3·minor 4, 반영 3·미반영 0, 경로로 찾은 변경 `external_api`.
+- 규칙 편집: 검수자 규칙에 "[LAB] 로 시작" 문구를 넣었지만 #26 검수 결과에 나타나지 않아 결함 3 을 찾았다. 고친 바이너리로 설계자 규칙에 "LAB-DESIGNER 줄로 끝내기" 문구를 넣고 #30 수정 요청으로 확인했다(아래).
+- #30 수정 요청(고친 바이너리): 새 설계자(`ao-demo-5`)가 메모와 이전 리비전 2 의 경로(LADO 요청 폴더의 `previous-plan.md`)를 받았다. 초안이 경로 2개로 정상적으로 검수를 건너뛰었고("the plan names 2 affected path(s), within the limit of 3 …"), 리비전 3 이 유효하게 고정됐다. 이전 리비전 파일이 따로 고정되지 않았다(리비전은 1·2·3 뿐). 본문 끝에 "LAB-DESIGNER" 줄이 있어, 고친 설계자 규칙이 실제로 설계자에게 갔다.
+- 감사 기록: 요청마다 `plan_worker.started`, `draft_submitted`, `critique_skipped` 또는 `critique_started`·`critique_submitted`, `submitted`, `cleaned` 가 순서대로 남았다.
+- 정리: 랩 세션 다섯 개 모두 종료, 데몬·dev-web 은 PID 로 멈췄고 남은 프로세스는 없다. 랩 폴더(워크트리 포함)에 토큰 문자열은 0건이다.
+- 화면: 칸반 카드(대기·이유, 쓰는 중·단계·세션 링크), 작업 창(계획 워커 줄, 고치는 중, 문제 목록, 계획 검수 측정값과 지적별 답), 설정 → 규칙 계획 카드와 기록의 되돌리기, 설정 → 실행 계획 워커 카드와 경로 패턴 대화상자.
+
 ## 확인
 
-(로컬 확인, PR CI, 랩, AO 리뷰 결과는 진행하며 채운다.)
+- 로컬(HEAD 기준, Go 테스트는 `AO_*`·Claude·Codex 설정 변수를 지우고 임시 HOME 으로): sqlc·api drift 없음, `go.work.sum` 변경 없음, 트리 깨끗함; gofmt·build(`GOOS=windows`·`darwin` 포함)·vet; golangci-lint v2.13.2 0건; race(격리 HOME) `ladotask`·`ladoqueue`·`ladonotify`·`ladosetup`·`ladogate`·`ladoproject`·`ladopolicy`·`session_manager`·`domain`·`httpd`·`daemon`·`cli`, `storage/sqlite/store`(226초)·`storage/sqlite`(1495초, 기본 10분 제한에 걸려 `-timeout 60m` 으로); cloud-client generate·typecheck·test; frontend typecheck·typecheck:e2e·vitest(535 파일, 8834 테스트); 렌더러 smoke 91 통과, 채팅 spec 5개(`chat-agent-switch`, `chat-continue`, `chat-interface-refusal`, `chat-message-overflow`, `chat-queued-attachments`)가 race 와 함께 돌 때 실패했고 단독 재실행에서 6개 모두 통과(LADO 와 무관); gitleaks v7 누출 없음.
+- PR CI(#36): 첫 push(53efadbc3)에서 `cloud-build-test` 만 도커 이미지 미러의 429(요청 과다)로 실패했고, 다음 push(1d585b469)에서 통과했다. 나머지는 모두 통과.
+- AO 리뷰: (진행하며 채운다.)
