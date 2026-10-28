@@ -4146,7 +4146,7 @@
 	"lado.verify.repostStatus": "상태 다시 게시",
 	"lado.verify.repostingStatus": "게시하는 중…",
 	"lado.verify.mergeSent": "병합함. PR이 갱신되기를 기다리는 중",
-	"lado.error.integrationTargetChanged": "PR의 대상 브랜치가 승인한 것과 다릅니다(승인: {{approvedTarget}}, 지금: {{currentTarget}}). 다시 검토한 뒤 통합을 승인하세요.",
+	"lado.error.integrationTargetChanged": "PR의 대상 브랜치가 바뀌었습니다({{approvedTarget}} → {{currentTarget}}). 다시 검토한 뒤 통합을 승인하세요.",
 	"lado.error.integrationNotApproved": "PR의 현재 head에 상태를 올릴 통합 승인이 없습니다.",
 	"lado.error.checkCommandsChanged": "검사 명령을 연 뒤에 목록이 바뀌었습니다. 지금 목록을 확인한 뒤 다시 바꾸세요.",
 	"lado.checkCommand.problem.commandControl": "명령에 제어 문자가 있습니다({{character}}, {{position}}번째 글자). 한 줄로 쓰세요.",

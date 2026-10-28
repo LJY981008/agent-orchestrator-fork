@@ -4128,7 +4128,7 @@
 	"lado.verify.repostStatus": "重新发布状态",
 	"lado.verify.repostingStatus": "正在发布…",
 	"lado.verify.mergeSent": "已合并，正在等待 PR 更新",
-	"lado.error.integrationTargetChanged": "拉取请求现在合并到 {{currentTarget}}，而不是批准时的 {{approvedTarget}}。请重新查看后再批准集成。",
+	"lado.error.integrationTargetChanged": "拉取请求现在合并到 {{currentTarget}}，而不是 {{approvedTarget}}。请重新查看后再批准集成。",
 	"lado.error.integrationNotApproved": "拉取请求当前的头提交没有可发布状态的集成批准。",
 	"lado.error.checkCommandsChanged": "你打开后检查命令已被更改。请查看当前列表后再修改。",
 	"lado.checkCommand.problem.commandControl": "命令中有控制字符（{{character}}，第 {{position}} 个字符）。请写成一行。",

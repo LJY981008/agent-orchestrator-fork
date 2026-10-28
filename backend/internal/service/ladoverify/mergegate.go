@@ -85,11 +85,12 @@ func approvalRequired(pr domain.PullRequest, head string) error {
 		map[string]any{"prUrl": pr.URL, "headSha": head, "sessionId": string(pr.SessionID)})
 }
 
-// targetChanged refuses a PR whose head was approved into another branch than
-// the one it merges into now, as after its base was changed on the host.
+// targetChanged refuses a PR that merges into another branch than approved,
+// the branch an approval holds for or, before the approval, the branch the
+// record was verified for, as after its base was changed on the host.
 func targetChanged(pr domain.PullRequest, head, approved string) error {
 	return apierr.Conflict("LADO_INTEGRATION_TARGET_CHANGED",
-		"The pull request now merges into another branch than the one you approved its integration into. Review it again in the AO desktop app.",
+		"The pull request now merges into another branch. Review it again in the AO desktop app, then approve its integration.",
 		map[string]any{"prUrl": pr.URL, "headSha": head, "sessionId": string(pr.SessionID), "approvedTarget": approved, "currentTarget": pr.TargetBranch})
 }
 

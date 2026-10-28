@@ -106,6 +106,30 @@ func TestIntegrationApprovalChecksHeadHashAndAcknowledgements(t *testing.T) {
 		requireDetails(t, err, apierr.KindConflict, "LADO_INTEGRATION_HEAD_CHANGED", map[string]any{"headSha": verifyHead1, "currentHeadSha": verifyHead2})
 	})
 
+	// Review of #31: the host may have retargeted, merged or closed the PR
+	// before AO observed it again; the approval and its dry run read that too.
+	t.Run("the target branch changed on the host", func(t *testing.T) {
+		f.heads.setPR(exec.PR.URL, LivePR{HeadSHA: verifyHead1, TargetBranch: "release"})
+		defer f.heads.forget(exec.PR.URL)
+		want := map[string]any{"prUrl": exec.PR.URL, "headSha": verifyHead1, "sessionId": string(exec.SessionID), "approvedTarget": approvalTarget(exec), "currentTarget": "release"}
+		_, err := f.approve(exec, preview.SHA256, preview.Confirm, "nonce-retargeted")
+		requireDetails(t, err, apierr.KindConflict, "LADO_INTEGRATION_TARGET_CHANGED", want)
+		_, err = f.svc.ApproveIntegration(f.ctx, ApproveInput{SessionID: exec.SessionID, PRURL: exec.PR.URL, HeadSHA: verifyHead1, DryRun: true})
+		requireDetails(t, err, apierr.KindConflict, "LADO_INTEGRATION_TARGET_CHANGED", want)
+		if n := f.store.approvalCount(); n != 0 {
+			t.Errorf("a retargeted PR got %d approvals, want none", n)
+		}
+	})
+
+	t.Run("merged or closed on the host", func(t *testing.T) {
+		defer f.heads.forget(exec.PR.URL)
+		for _, live := range []LivePR{{HeadSHA: verifyHead1, Merged: true}, {HeadSHA: verifyHead1, Closed: true}} {
+			f.heads.setPR(exec.PR.URL, live)
+			_, err := f.approve(exec, preview.SHA256, preview.Confirm, "nonce-ended")
+			requireDetails(t, err, apierr.KindConflict, "LADO_EXECUTION_NO_PR", map[string]any{"sessionId": string(exec.SessionID)})
+		}
+	})
+
 	t.Run("the dry run of a head AO has not observed", func(t *testing.T) {
 		f.heads.set(exec.PR.URL, verifyHead3)
 		defer f.heads.set(exec.PR.URL, verifyHead1)
@@ -425,7 +449,26 @@ func requireDetails(t *testing.T, err error, kind apierr.Kind, code string, deta
 type approveHeads struct {
 	mu    sync.Mutex
 	heads map[string]string
+	// prs override what the host has of a PR beyond its head.
+	prs   map[string]LivePR
 	reads int
+}
+
+// setPR sets what the host has of a PR: its head, target branch and state.
+func (h *approveHeads) setPR(prURL string, live LivePR) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.prs == nil {
+		h.prs = map[string]LivePR{}
+	}
+	h.prs[prURL] = live
+}
+
+// forget drops what setPR set.
+func (h *approveHeads) forget(prURL string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.prs, prURL)
 }
 
 func (h *approveHeads) set(prURL, head string) {
@@ -443,15 +486,18 @@ func (h *approveHeads) readCount() int {
 	return h.reads
 }
 
-func (h *approveHeads) LiveHead(_ context.Context, pr domain.PullRequest) (string, error) {
+func (h *approveHeads) LivePR(_ context.Context, pr domain.PullRequest) (LivePR, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.reads++
+	if live, ok := h.prs[pr.URL]; ok {
+		return live, nil
+	}
 	head, ok := h.heads[pr.URL]
 	if !ok {
-		return "", fmt.Errorf("no pull request %s on the host", pr.URL)
+		return LivePR{}, fmt.Errorf("no pull request %s on the host", pr.URL)
 	}
-	return head, nil
+	return LivePR{HeadSHA: head, TargetBranch: pr.TargetBranch}, nil
 }
 
 // proofBlindStore misses the proofs stored, as when another request stores

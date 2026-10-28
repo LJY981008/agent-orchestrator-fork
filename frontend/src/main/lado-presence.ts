@@ -447,10 +447,12 @@ async function changeProtectedPaths(deps: LadoPresenceDeps, value: unknown): Pro
 	const added = globs.globs.filter((glob) => !current.globs.includes(glob));
 	const removed = current.globs.filter((glob) => !globs.globs.includes(glob));
 	const t = await translator(deps);
+	// One line per glob, each whole: a removal weakens the protection, so
+	// none may hide behind a cut (review of #31).
 	const detail = [
 		[
-			...(added.length > 0 ? [t("lado.presence.paths.added", { globs: excerpt(added.join(", ")) })] : []),
-			...(removed.length > 0 ? [t("lado.presence.paths.removed", { globs: excerpt(removed.join(", ")) })] : []),
+			...added.map((glob) => t("lado.presence.paths.added", { globs: glob })),
+			...removed.map((glob) => t("lado.presence.paths.removed", { globs: glob })),
 		].join("\n"),
 		t("lado.presence.paths.detail"),
 	]

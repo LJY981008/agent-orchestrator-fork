@@ -2,6 +2,8 @@ package ladoverify
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -31,7 +33,10 @@ func TestGitHelpersReadCommitsPathsAndReflog(t *testing.T) {
 	first := r.commit(t0.Add(2*time.Minute), work, message)
 	r.git(t0, work, "switch", "-q", "-c", "lado/side")
 	r.write(work, "notes.txt", "notes\n")
-	side := r.commit(t0.Add(3*time.Minute), work, "Add notes")
+	// Review of #31: a message may hold control characters other than NUL,
+	// those the parsers once split on among them.
+	sideMessage := "Add notes \x1f\x1e with separators"
+	side := r.commit(t0.Add(3*time.Minute), work, sideMessage)
 	r.git(t0, work, "switch", "-q", "lado/work")
 	r.git(t0.Add(4*time.Minute), work, "merge", "-q", "--no-ff", "--no-verify", "-m", "Merge the notes", "lado/side")
 	head := r.git(t0, work, "rev-parse", "HEAD")
@@ -41,7 +46,7 @@ func TestGitHelpersReadCommitsPathsAndReflog(t *testing.T) {
 	}
 	// The merge is left out; the message keeps its lines.
 	commits, err := git.Commits(ctx, r.dir, base, head)
-	if want := []Commit{{SHA: first, Message: message}, {SHA: side, Message: "Add notes"}}; err != nil || !reflect.DeepEqual(commits, want) {
+	if want := []Commit{{SHA: first, Message: message}, {SHA: side, Message: sideMessage}}; err != nil || !reflect.DeepEqual(commits, want) {
 		t.Fatalf("Commits = (%q, %v), want %q", commits, err, want)
 	}
 	if _, err := git.Commits(ctx, r.dir, "refs/remotes/origin/main", head); err == nil {
@@ -59,13 +64,13 @@ func TestGitHelpersReadCommitsPathsAndReflog(t *testing.T) {
 
 	// The reflog of the local main, newest first, each entry's time read
 	// from its selector.
-	local := r.commit(t0.Add(5*time.Minute), r.dir, "Note the release")
+	local := r.commit(t0.Add(5*time.Minute), r.dir, "Note the release \x1e\x1f")
 	reflog, err := git.Reflog(ctx, r.dir, "refs/heads/main")
 	if err != nil || len(reflog) != 2 {
 		t.Fatalf("Reflog = (%+v, %v), want two entries", reflog, err)
 	}
 	at := t0.Add(5 * time.Minute)
-	if want := (ReflogEntry{Commit: local, Selector: fmt.Sprintf("main@{%d}", at.Unix()), Subject: "commit: Note the release", At: at}); reflog[0] != want {
+	if want := (ReflogEntry{Commit: local, Selector: fmt.Sprintf("main@{%d}", at.Unix()), Subject: "commit: Note the release \x1e\x1f", At: at}); reflog[0] != want {
 		t.Fatalf("newest reflog entry = %+v, want %+v", reflog[0], want)
 	}
 	if clone := reflog[1]; clone.Commit != base || !clone.At.Equal(t0.Add(-time.Hour)) || !strings.HasPrefix(clone.Subject, "clone: from ") {
@@ -107,9 +112,11 @@ func TestGitHelpersReadCommitsPathsAndReflog(t *testing.T) {
 	if status, err := git.Status(ctx, work); err != nil || status != "" {
 		t.Fatalf("Status of a committed work tree = (%q, %v), want none", status, err)
 	}
+	// Each line ends with the sha256 of the file's content.
 	r.write(work, "scratch.txt", "draft\n")
-	if status, err := git.Status(ctx, work); err != nil || status != "?? scratch.txt\n" {
-		t.Fatalf("Status with an untracked file = (%q, %v), want the file", status, err)
+	draft := sha256.Sum256([]byte("draft\n"))
+	if status, err := git.Status(ctx, work); err != nil || status != "?? scratch.txt "+hex.EncodeToString(draft[:])+"\n" {
+		t.Fatalf("Status with an untracked file = (%q, %v), want the file and its hash", status, err)
 	}
 
 	// Another developer's commit reaches the remote-tracking branch only

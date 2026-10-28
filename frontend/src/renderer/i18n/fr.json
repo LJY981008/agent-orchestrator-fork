@@ -4214,7 +4214,7 @@
 	"lado.verify.repostStatus": "Republier le statut",
 	"lado.verify.repostingStatus": "Publication…",
 	"lado.verify.mergeSent": "Fusionnée ; en attente de la mise à jour de la PR",
-	"lado.error.integrationTargetChanged": "La pull request fusionne maintenant dans {{currentTarget}}, et non dans {{approvedTarget}} comme approuvé. Vérifiez-la à nouveau, puis approuvez son intégration.",
+	"lado.error.integrationTargetChanged": "La pull request fusionne maintenant dans {{currentTarget}}, et non dans {{approvedTarget}}. Vérifiez-la à nouveau, puis approuvez son intégration.",
 	"lado.error.integrationNotApproved": "Le head actuel de la pull request n'a pas d'approbation d'intégration pour laquelle publier un statut.",
 	"lado.error.checkCommandsChanged": "Les commandes de vérification ont changé depuis leur ouverture. Vérifiez la liste actuelle, puis modifiez-la à nouveau.",
 	"lado.checkCommand.problem.commandControl": "La commande contient un caractère de contrôle ({{character}}, caractère {{position}}). Écrivez-la sur une seule ligne.",

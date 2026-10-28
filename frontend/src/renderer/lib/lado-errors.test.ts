@@ -706,7 +706,7 @@ describe("LADO verification errors", () => {
 		// The review fixes of #15: a base changed on the host and a list that moved on.
 		expect(
 			ladoErrorText(en, new LadoApiError(daemon, "LADO_INTEGRATION_TARGET_CHANGED", { approvedTarget: "main", currentTarget: "release" })),
-		).toBe("The pull request now merges into release, not main as approved. Review it again, then approve its integration.");
+		).toBe("The pull request now merges into release, not main. Review it again, then approve its integration.");
 		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_CHECK_COMMANDS_CHANGED", { checkCommandsSha256: "a".repeat(64) }))).toBe(
 			"검사 명령을 연 뒤에 목록이 바뀌었습니다. 지금 목록을 확인한 뒤 다시 바꾸세요.",
 		);

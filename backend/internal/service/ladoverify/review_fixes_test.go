@@ -352,3 +352,58 @@ func isAPIError(err error, code string) bool {
 	var apiErr *apierr.Error
 	return errors.As(err, &apiErr) && apiErr.Code == code
 }
+
+// Review of #31: the loop never fetches, so the remote-tracking target can be
+// older than the host's. After the host's Update branch merged the target's
+// newer commits into the head, the merge-base with the base tip AO observed
+// keeps those commits, another developer's, out of the worker's.
+func TestMergeBaseTakesTheNewerBase(t *testing.T) {
+	r := newTestRepo(t, t0.Add(-2*time.Hour))
+	wt := r.worktree(t0, "ao/feature")
+	r.write(wt, "src/login.go", "package login\n")
+	r.commit(t0.Add(time.Minute), wt, "feat: 로그인 화면을 더한다")
+
+	// Another developer's change reaches main; the developer's clone does
+	// not fetch it, and the host merges main into the worker's branch.
+	r.write(r.upstream, ".github/workflows/ci.yml", "name: ci\n")
+	newBase := r.commit(t0.Add(2*time.Minute), r.upstream, "Add CI")
+	r.publish(t0.Add(2 * time.Minute))
+	r.git(t0.Add(3*time.Minute), wt, "fetch", "-q", r.origin, "main")
+	r.git(t0.Add(3*time.Minute), wt, "merge", "-q", "--no-edit", "--no-verify", "FETCH_HEAD")
+	head := r.git(t0, wt, "rev-parse", "HEAD")
+	stale := r.git(t0, r.dir, "rev-parse", "refs/remotes/origin/main")
+
+	f := newVerifyFixture(t)
+	exec := f.addExecution("1", head)
+	f.svc.deps.Git = ExecGit{}
+	in := headInputs{exec: exec, head: head, dir: r.dir, target: "main", baseRemote: "origin"}
+
+	// Without a base tip from the host, the stale remote-tracking branch
+	// counts, and with it another developer's commit.
+	if base, err := f.svc.mergeBase(f.ctx, in); err != nil || base != stale {
+		t.Fatalf("mergeBase without an observed base = %s, %v; want the stale %s", base, err, stale)
+	}
+	f.store.mu.Lock()
+	f.store.baseSHAs = map[string]string{exec.PR.URL: newBase}
+	f.store.mu.Unlock()
+	base, err := f.svc.mergeBase(f.ctx, in)
+	if err != nil || base != newBase {
+		t.Fatalf("mergeBase = %s, %v; want the host's base %s", base, err, newBase)
+	}
+	commits, err := ExecGit{}.Commits(f.ctx, r.dir, base, head)
+	if err != nil || len(commits) != 1 || !strings.Contains(commits[0].Message, "로그인") {
+		t.Errorf("commits from the base = %+v, %v; want only the worker's", commits, err)
+	}
+	changed, err := ExecGit{}.ChangedPaths(f.ctx, r.dir, base, head)
+	if err != nil || !slices.Equal(changed, []string{"src/login.go"}) {
+		t.Errorf("changed paths from the base = %v, %v; want only the worker's", changed, err)
+	}
+
+	// A base tip the repository lacks leaves the remote-tracking branch.
+	f.store.mu.Lock()
+	f.store.baseSHAs = map[string]string{exec.PR.URL: strings.Repeat("e", 40)}
+	f.store.mu.Unlock()
+	if base, err := f.svc.mergeBase(f.ctx, in); err != nil || base != stale {
+		t.Errorf("mergeBase with an unknown observed base = %s, %v; want %s", base, err, stale)
+	}
+}

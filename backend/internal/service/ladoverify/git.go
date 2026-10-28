@@ -12,10 +12,15 @@ package ladoverify
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -115,7 +120,7 @@ func (ExecGit) Commits(ctx context.Context, dir, from, to string) ([]Commit, err
 	if !commitID.MatchString(from) || !commitID.MatchString(to) {
 		return nil, fmt.Errorf("list the commits from %q to %q: not commit ids", from, to)
 	}
-	out, err := runGit(ctx, dir, gitTimeout, "rev-list", "--no-merges", "--reverse", "--format=%H%x1f%B%x1e", "--end-of-options", from+".."+to, "--")
+	out, err := runGit(ctx, dir, gitTimeout, "rev-list", "--no-merges", "--reverse", "--format=%H%x00%B%x00", "--end-of-options", from+".."+to, "--")
 	if err != nil {
 		return nil, fmt.Errorf("list the commits from %s to %s in %s: %w", from, to, dir, err)
 	}
@@ -126,21 +131,23 @@ func (ExecGit) Commits(ctx context.Context, dir, from, to string) ([]Commit, err
 	return commits, nil
 }
 
-// parseCommits reads the records of rev-list --format=%H%x1f%B%x1e: each a
-// "commit <sha>" header line, the sha, \x1f, the full message and \x1e.
+// parseCommits reads the records of rev-list --format=%H%x00%B%x00: each a
+// "commit <sha>" header line, the sha, NUL, the full message and NUL. A
+// commit message cannot hold NUL, while it may hold any other control
+// character a worker writes into it (review of #31).
 func parseCommits(out string) ([]Commit, error) {
 	var commits []Commit
-	for record := range strings.SplitSeq(out, "\x1e") {
-		record = strings.TrimLeft(record, "\n")
-		if record == "" {
-			continue
+	fields := strings.Split(out, "\x00")
+	for i := 0; i < len(fields); i += 2 {
+		head := strings.TrimLeft(fields[i], "\n")
+		if head == "" && i == len(fields)-1 {
+			break
 		}
-		head, message, ok := strings.Cut(record, "\x1f")
 		sha := head[strings.LastIndexByte(head, '\n')+1:]
-		if !ok || !commitID.MatchString(sha) {
+		if i+1 >= len(fields) || !commitID.MatchString(sha) {
 			return nil, errors.New("git rev-list printed an unexpected record")
 		}
-		commits = append(commits, Commit{SHA: sha, Message: strings.TrimRight(message, "\n")})
+		commits = append(commits, Commit{SHA: sha, Message: strings.TrimRight(fields[i+1], "\n")})
 	}
 	return commits, nil
 }
@@ -199,25 +206,27 @@ func (ExecGit) Reflog(ctx context.Context, dir, ref string) ([]ReflogEntry, erro
 		return nil, errors.New("read a reflog: the ref is empty")
 	}
 	out, err := runGit(ctx, dir, gitTimeout, "reflog", "show", "--no-show-signature", "--date=unix",
-		"--format=%H%x1f%gd%x1f%gs%x1e", "--end-of-options", ref, "--")
+		"--format=%H%x00%gd%x00%gs%x00", "--end-of-options", ref, "--")
 	if err != nil {
 		return nil, fmt.Errorf("read the reflog of %s in %s: %w", ref, dir, err)
 	}
+	// NUL ends each field: a reflog subject, taken from a commit message,
+	// may hold any other control character (review of #31).
 	var entries []ReflogEntry
-	for record := range strings.SplitSeq(string(out), "\x1e") {
-		record = strings.TrimLeft(record, "\n")
-		if record == "" {
-			continue
+	fields := strings.Split(string(out), "\x00")
+	for i := 0; i < len(fields); i += 3 {
+		commit := strings.TrimLeft(fields[i], "\n")
+		if commit == "" && i == len(fields)-1 {
+			break
 		}
-		fields := strings.SplitN(record, "\x1f", 3)
-		if len(fields) != 3 || !commitID.MatchString(fields[0]) {
+		if i+2 >= len(fields) || !commitID.MatchString(commit) {
 			return nil, fmt.Errorf("read the reflog of %s in %s: git printed an unexpected entry", ref, dir)
 		}
-		at, err := reflogTime(fields[1])
+		at, err := reflogTime(fields[i+1])
 		if err != nil {
 			return nil, fmt.Errorf("read the reflog of %s in %s: %w", ref, dir, err)
 		}
-		entries = append(entries, ReflogEntry{Commit: fields[0], Selector: fields[1], Subject: fields[2], At: at})
+		entries = append(entries, ReflogEntry{Commit: commit, Selector: fields[i+1], Subject: fields[i+2], At: at})
 	}
 	return entries, nil
 }
@@ -287,13 +296,65 @@ func (g ExecGit) HasCommit(ctx context.Context, dir, sha string) (bool, error) {
 }
 
 // Status runs git status --porcelain, which lists the untracked files
-// whatever status.showUntrackedFiles says.
+// whatever status.showUntrackedFiles says, each file of an untracked folder
+// on its own line. Each line ends with the sha256 of the file's content, so
+// an edit of a file changed already, or a new file in a folder untracked
+// already, changes the status too (V2 of #15, review of #31). A clean work
+// tree has an empty status.
 func (ExecGit) Status(ctx context.Context, dir string) (string, error) {
-	out, err := runGit(ctx, dir, gitTimeout, "status", "--porcelain", "--untracked-files=normal")
+	out, err := runGit(ctx, dir, gitTimeout, "status", "--porcelain=v1", "-z", "--untracked-files=all")
 	if err != nil {
 		return "", fmt.Errorf("read the status of %s: %w", dir, err)
 	}
-	return string(out), nil
+	var status strings.Builder
+	entries := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) < 4 {
+			continue
+		}
+		status.WriteString(entry)
+		// A rename or a copy names its source in the next entry.
+		if entry[0] == 'R' || entry[0] == 'C' {
+			i++
+			if i < len(entries) {
+				status.WriteString(" <- " + entries[i])
+			}
+		}
+		status.WriteString(" " + contentDigest(filepath.Join(dir, filepath.FromSlash(entry[3:]))) + "\n")
+	}
+	return status.String(), nil
+}
+
+// contentDigest names what is at file: the sha256 of a regular file's
+// bytes, a symbolic link's target, or that it is a folder (as a nested
+// repository) or gone.
+func contentDigest(file string) string {
+	info, err := os.Lstat(file)
+	switch {
+	case err != nil:
+		return "gone"
+	case info.Mode()&fs.ModeSymlink != 0:
+		target, err := os.Readlink(file)
+		if err != nil {
+			return "link"
+		}
+		return "link:" + target
+	case info.IsDir():
+		return "folder"
+	case !info.Mode().IsRegular():
+		return "special"
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return "unreadable"
+	}
+	defer func() { _ = f.Close() }()
+	sum := sha256.New()
+	if _, err := io.Copy(sum, f); err != nil {
+		return "unreadable"
+	}
+	return hex.EncodeToString(sum.Sum(nil))
 }
 
 // Fetch runs git fetch of the one branch into its remote-tracking ref, with

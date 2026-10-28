@@ -177,8 +177,11 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 		return fmt.Errorf("read LADO verification records: %w", err)
 	}
 	verified := make(map[head]domain.LadoExecutionVerification, len(records))
+	verifiedPR := make(map[head]string, len(records))
 	for _, row := range records {
-		verified[head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}] = domain.LadoExecutionVerification{
+		key := head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}
+		verifiedPR[key] = row.PRURL
+		verified[key] = domain.LadoExecutionVerification{
 			HeadSHA: row.HeadSha,
 			Outcome: domain.LadoVerifyOutcome(row.Outcome),
 			Reason:  row.Reason,
@@ -201,7 +204,11 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 			continue
 		}
 		key := head{execution.SessionID, execution.PR.HeadSHA}
-		execution.Verification = verified[key]
+		// A record verified the PR it names: a new PR at the same head waits
+		// for its own (review of #31).
+		if verifiedPR[key] == execution.PR.URL {
+			execution.Verification = verified[key]
+		}
 		// An approval holds for its PR and the branch it was approved into.
 		ofPR := slices.DeleteFunc(slices.Clone(approved[key]), func(a domain.LadoIntegrationApproval) bool { return a.PRURL != execution.PR.URL })
 		if approval, ok := domain.LadoApprovalFor(ofPR, execution.PR.TargetBranch); ok {

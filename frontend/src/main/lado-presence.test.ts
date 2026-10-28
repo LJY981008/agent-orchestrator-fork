@@ -2158,6 +2158,19 @@ describe("changing protected paths", () => {
 		expectSigned(calls[1]!, "PATCH", JSON.stringify({ baseVersion: 1, paths: { globs: [".github/**", ".ao/**", "infra/**"] } }));
 	});
 
+	// Review of #31: every removed glob shows, whole, however many there are.
+	it("shows each glob added and removed on a line of its own, whole", async () => {
+		const many = Array.from({ length: 30 }, (_, index) => `services/service-${String(index).padStart(2, "0")}/deploy/**`);
+		const { changeRule, dialog } = setup({}, {
+			rule: () => json(200, { rule: pathsRule([...many, ".github/**"]), versions: [] }),
+			patch: () => json(200, { applied: true, impact: { projects: [], tasks: [] }, rule: pathsRule(["infra/**"]) }),
+		});
+		await changeRule({ ruleId: PATHS_RULE, paths: { globs: ["infra/**"] } });
+
+		const lines = dialogOptions(dialog).detail!.split("\n\n")[0]!.split("\n");
+		expect(lines).toEqual(["Protect: infra/**", ...many.map((glob) => `No longer protect: ${glob}`), "No longer protect: .github/**"]);
+	});
+
 	it("sends nothing when the human cancels or nothing would change", async () => {
 		const routes = { rule: () => json(200, { rule: pathsRule(current), versions: [] }) };
 		const cancelled = setup({}, routes);

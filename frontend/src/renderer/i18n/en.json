@@ -4127,7 +4127,7 @@
 	"lado.verify.repostStatus": "Post status again",
 	"lado.verify.repostingStatus": "Posting…",
 	"lado.verify.mergeSent": "Merged; waiting for the PR to update",
-	"lado.error.integrationTargetChanged": "The pull request now merges into {{currentTarget}}, not {{approvedTarget}} as approved. Review it again, then approve its integration.",
+	"lado.error.integrationTargetChanged": "The pull request now merges into {{currentTarget}}, not {{approvedTarget}}. Review it again, then approve its integration.",
 	"lado.error.integrationNotApproved": "The pull request's current head has no integration approval to post a status for.",
 	"lado.error.checkCommandsChanged": "The check commands changed since you opened them. Review the current list, then change it again.",
 	"lado.checkCommand.problem.commandControl": "The command has a control character ({{character}}, character {{position}}). Write it on one line.",

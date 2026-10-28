@@ -1,12 +1,14 @@
 package pr
 
 // LADO fork: AO's merge asks LADO's merge gate before it reads the PR from
-// its host (docs/LJY-PRD/TDD.md §7.2), so the desktop's and the mobile app's
-// Merge buttons merge a LADO execution's PR only at a head the developer
-// approved.
+// its host, and again when the host's target branch differs from the stored
+// one (docs/LJY-PRD/TDD.md §7.2), so the desktop's and the mobile app's Merge
+// buttons merge a LADO execution's PR only at a head the developer approved,
+// into the branch it was approved into.
 
 import (
 	"context"
+	"strings"
 	"sync/atomic"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -36,6 +38,19 @@ func (m *ladoMergeGate) authorize(ctx context.Context, pr domain.PullRequest, he
 		return nil
 	}
 	return (*gate).AuthorizeMerge(ctx, pr, headSHA)
+}
+
+// authorizeFresh asks the gate again once the PR was read from its host,
+// when its target branch there differs from the stored one: an approval
+// holds for the branch it was approved into, and the host's base can change
+// before AO's poller sees it (review of #31).
+func (m *ladoMergeGate) authorizeFresh(ctx context.Context, tracked domain.PullRequest, fresh ports.SCMPRObservation, headSHA string) error {
+	target := strings.TrimSpace(fresh.TargetBranch)
+	if target == "" || target == tracked.TargetBranch {
+		return nil
+	}
+	tracked.TargetBranch = target
+	return m.authorize(ctx, tracked, headSHA)
 }
 
 // LadoSCMRef is the reference AO's merge reads pr through, for LADO's read of

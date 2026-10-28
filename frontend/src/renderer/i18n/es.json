@@ -4214,7 +4214,7 @@
 	"lado.verify.repostStatus": "Publicar el estado de nuevo",
 	"lado.verify.repostingStatus": "Publicando…",
 	"lado.verify.mergeSent": "Fusionado; esperando a que el PR se actualice",
-	"lado.error.integrationTargetChanged": "El pull request ahora se fusiona en {{currentTarget}}, no en {{approvedTarget}} como se aprobó. Revísalo de nuevo y luego aprueba su integración.",
+	"lado.error.integrationTargetChanged": "El pull request ahora se fusiona en {{currentTarget}}, no en {{approvedTarget}}. Revísalo de nuevo y luego aprueba su integración.",
 	"lado.error.integrationNotApproved": "El head actual del pull request no tiene una aprobación de integración para la que publicar un estado.",
 	"lado.error.checkCommandsChanged": "Los comandos de comprobación cambiaron desde que los abriste. Revisa la lista actual y vuelve a cambiarla.",
 	"lado.checkCommand.problem.commandControl": "El comando tiene un carácter de control ({{character}}, carácter {{position}}). Escríbelo en una sola línea.",

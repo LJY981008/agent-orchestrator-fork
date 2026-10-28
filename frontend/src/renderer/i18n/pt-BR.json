@@ -4214,7 +4214,7 @@
 	"lado.verify.repostStatus": "Publicar o status de novo",
 	"lado.verify.repostingStatus": "Publicando…",
 	"lado.verify.mergeSent": "Mesclado; aguardando o PR atualizar",
-	"lado.error.integrationTargetChanged": "O pull request agora é mesclado em {{currentTarget}}, não em {{approvedTarget}} como aprovado. Revise de novo e depois aprove a integração.",
+	"lado.error.integrationTargetChanged": "O pull request agora é mesclado em {{currentTarget}}, não em {{approvedTarget}}. Revise de novo e depois aprove a integração.",
 	"lado.error.integrationNotApproved": "O head atual do pull request não tem aprovação de integração para publicar um status.",
 	"lado.error.checkCommandsChanged": "Os comandos de verificação mudaram desde que você os abriu. Revise a lista atual e altere de novo.",
 	"lado.checkCommand.problem.commandControl": "O comando tem um caractere de controle ({{character}}, caractere {{position}}). Escreva em uma linha só.",

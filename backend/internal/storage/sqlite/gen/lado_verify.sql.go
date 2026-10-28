@@ -893,7 +893,7 @@ func (q *Queries) ListLadoSessionsNamingPR(ctx context.Context, prUrl string) ([
 }
 
 const listLadoVerificationOutcomes = `-- name: ListLadoVerificationOutcomes :many
-SELECT execution_session_id, head_sha, outcome, reason
+SELECT execution_session_id, head_sha, pr_url, outcome, reason
 FROM lado_verifications
 WHERE execution_session_id IN (/*SLICE:session_ids*/?)
   AND head_sha IN (/*SLICE:head_shas*/?)
@@ -907,12 +907,14 @@ type ListLadoVerificationOutcomesParams struct {
 type ListLadoVerificationOutcomesRow struct {
 	ExecutionSessionID string
 	HeadSha            string
+	PRURL              string
 	Outcome            string
 	Reason             string
 }
 
-// The outcome and reason of the records of the given executions and heads.
-// The caller keeps the (execution, head) pairs it asked for.
+// The outcome and reason of the records of the given executions and heads,
+// with the PR each record verified. The caller keeps the (execution, head)
+// pairs it asked for, of the PR it reads.
 func (q *Queries) ListLadoVerificationOutcomes(ctx context.Context, arg ListLadoVerificationOutcomesParams) ([]ListLadoVerificationOutcomesRow, error) {
 	query := listLadoVerificationOutcomes
 	var queryParams []interface{}
@@ -943,6 +945,7 @@ func (q *Queries) ListLadoVerificationOutcomes(ctx context.Context, arg ListLado
 		if err := rows.Scan(
 			&i.ExecutionSessionID,
 			&i.HeadSha,
+			&i.PRURL,
 			&i.Outcome,
 			&i.Reason,
 		); err != nil {

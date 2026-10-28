@@ -4146,7 +4146,7 @@
 	"lado.verify.repostStatus": "Status erneut setzen",
 	"lado.verify.repostingStatus": "Wird gesetzt…",
 	"lado.verify.mergeSent": "Gemergt; wartet auf die Aktualisierung des PR",
-	"lado.error.integrationTargetChanged": "Der Pull Request merged jetzt in {{currentTarget}}, nicht wie genehmigt in {{approvedTarget}}. Prüfe ihn erneut und genehmige dann die Integration.",
+	"lado.error.integrationTargetChanged": "Der Pull Request merged jetzt in {{currentTarget}}, nicht in {{approvedTarget}}. Prüfe ihn erneut und genehmige dann die Integration.",
 	"lado.error.integrationNotApproved": "Der aktuelle Head des Pull Requests hat keine Integrationsgenehmigung, für die ein Status gesetzt werden könnte.",
 	"lado.error.checkCommandsChanged": "Die Prüfbefehle haben sich geändert, seit du sie geöffnet hast. Prüfe die aktuelle Liste und ändere sie dann erneut.",
 	"lado.checkCommand.problem.commandControl": "Der Befehl enthält ein Steuerzeichen ({{character}}, Zeichen {{position}}). Schreibe ihn in eine Zeile.",

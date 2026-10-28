@@ -1147,8 +1147,14 @@ func TestLadoExecutionReadsHoldApprovalsToTheirPRAndTarget(t *testing.T) {
 	if state := stateOf("base back"); state != domain.LadoTaskIntegrating {
 		t.Fatalf("after the base changed back = %s, want integrating", state)
 	}
+	// PR 7's record verified PR 7: the same head opened again as PR 8 waits
+	// for a record of its own (review of #31).
 	retarget(8, "main", at.Add(5*time.Hour))
-	if state := stateOf("another PR"); state != domain.LadoTaskIntegrationPending {
-		t.Fatalf("with the head opened again as PR 8 = %s, want integration_pending", state)
+	got, _, err := s.LadoExecution(ctx, exec.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state, reason := got.State(); state != domain.LadoTaskValidating || reason != domain.LadoValidatingVerifying || got.Verification.HeadSHA != "" {
+		t.Fatalf("with the head opened again as PR 8 = %s %s with record %+v, want validating without PR 7's record", state, reason, got.Verification)
 	}
 }

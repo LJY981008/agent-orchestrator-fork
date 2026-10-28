@@ -43,6 +43,21 @@ var (
 	verifyKoreanCommit = Commit{SHA: strings.Repeat("ab", 20), Message: "fix: 로그인 오류를 고친다"}
 )
 
+// A workspace project's repository keeps its own .github: a change there
+// fails the paths item although the path from the project root starts with
+// the repository's folder (review of #31).
+func TestTickProtectsPathsInAWorkspaceRepository(t *testing.T) {
+	f := newVerifyFixture(t)
+	f.git.setBranch(verifyHead2, nil, []string{".github/workflows/deploy.yml", "src/login.go"})
+	ws, _ := f.addWorkspaceExecution("2", verifyHead2)
+
+	f.tick()
+	paths := verifyItemOf(t, f.record(ws.SessionID, verifyHead2), domain.LadoVerifyPaths)
+	if paths.Code != domain.LadoCodeProtectedPath || !strings.Contains(string(paths.Details), `"protected":["api/.github/workflows/deploy.yml"]`) {
+		t.Errorf("paths item = %s %s %s, want protected_path for api/.github/workflows/deploy.yml", paths.Outcome, paths.Code, paths.Details)
+	}
+}
+
 func TestTickBuildsARecordForTheHead(t *testing.T) {
 	f := newVerifyFixture(t)
 	exec := f.addExecution("1", verifyHead1)
@@ -885,22 +900,24 @@ func waitUntil(t *testing.T, what string, done func() bool) {
 type verifyStore struct {
 	mu         sync.Mutex
 	executions []domain.LadoExecution
-	commands   []domain.LadoCheckCommand
-	timeout    int
-	checks     map[string][]domain.PullRequestCheck
-	runs       []domain.LadoCheckRun
-	records    map[string]domain.LadoVerification
-	changed    map[string][]bool
-	links      map[string]int
-	reviews    []domain.LadoExecutionReview
-	settled    map[domain.SessionID]time.Time
-	settledPR  map[domain.SessionID]string
-	audits     []domain.LadoAuditEvent
-	approvals  []domain.LadoIntegrationApproval
-	lists      int
-	listed     []domain.SessionID
-	lastLimit  int
-	cancels    int
+	// baseSHAs are the base tips AO observed for PRs, by URL.
+	baseSHAs  map[string]string
+	commands  []domain.LadoCheckCommand
+	timeout   int
+	checks    map[string][]domain.PullRequestCheck
+	runs      []domain.LadoCheckRun
+	records   map[string]domain.LadoVerification
+	changed   map[string][]bool
+	links     map[string]int
+	reviews   []domain.LadoExecutionReview
+	settled   map[domain.SessionID]time.Time
+	settledPR map[domain.SessionID]string
+	audits    []domain.LadoAuditEvent
+	approvals []domain.LadoIntegrationApproval
+	lists     int
+	listed    []domain.SessionID
+	lastLimit int
+	cancels   int
 	// proofs are the presence proofs integration approvals used, and
 	// ladoModes the projects in LADO mode (approve_test.go).
 	proofs    []domain.LadoPresenceProof
@@ -1017,6 +1034,7 @@ func (s *verifyStore) GetPR(_ context.Context, url string) (domain.PullRequest, 
 			return domain.PullRequest{
 				URL: url, SessionID: exec.SessionID, Number: exec.PR.Number, HeadSHA: exec.PR.HeadSHA, TargetBranch: exec.PR.TargetBranch,
 				Title: exec.PR.Title, Merged: exec.PR.Merged, Closed: exec.PR.Closed, Provider: "github", Host: "github.com", Repo: "acme/demo",
+				BaseSHA: s.baseSHAs[url],
 			}, true, nil
 		}
 	}

@@ -358,6 +358,36 @@ func TestWorktreeReady(t *testing.T) {
 	if got := WorktreeReady(ctx, git, wt, head, runs); got != "" {
 		t.Fatalf("after the edits were undone: %q, want ready", got)
 	}
+	// Review of #31: a file the run changed already, edited again, and a
+	// new file in a folder the run left untracked change the status too.
+	r.write(wt, "app.txt", "built over\n")
+	r.write(wt, "dist/app.js", "built\n")
+	status, err = git.Status(ctx, wt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt := built
+	rebuilt.FinishedAt, rebuilt.WorktreeSHA256 = t0.Add(5*time.Minute), domain.LadoWorktreeStatusSHA256(status)
+	runs = []domain.LadoCheckRun{rebuilt}
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != "" {
+		t.Fatalf("with the run's own changes: %q, want ready", got)
+	}
+	r.write(wt, "app.txt", "built over, then edited\n")
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != domain.LadoCodeWorktreeChanged {
+		t.Fatalf("with a changed file edited again: %q, want worktree_changed", got)
+	}
+	r.write(wt, "app.txt", "built over\n")
+	r.write(wt, "dist/extra.js", "added\n")
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != domain.LadoCodeWorktreeChanged {
+		t.Fatalf("with a new file in an untracked folder: %q, want worktree_changed", got)
+	}
+	_ = os.Remove(filepath.Join(wt, "dist", "extra.js"))
+	if got := WorktreeReady(ctx, git, wt, head, runs); got != "" {
+		t.Fatalf("after the new edits were undone: %q, want ready", got)
+	}
+	r.write(wt, "app.txt", "one\n")
+	runs = []domain.LadoCheckRun{built, marker}
+
 	// A run whose status LADO could not read leaves the one before it.
 	unread := domain.LadoCheckRun{Name: "lint", Status: domain.LadoCheckRunPassed, StartedAt: t0.Add(3 * time.Minute), FinishedAt: t0.Add(4 * time.Minute)}
 	if got := WorktreeReady(ctx, git, wt, head, append(runs, unread)); got != "" {

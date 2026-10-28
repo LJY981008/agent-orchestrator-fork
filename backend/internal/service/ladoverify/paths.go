@@ -34,6 +34,12 @@ type PathsInput struct {
 	// as in a lado-policy/2 snapshot, only the plan is checked.
 	Protected   []string
 	ProtectedOn bool
+	// Repository is the repository's folder in a workspace project, the
+	// prefix PrefixPaths put before the changed paths; empty in a project of
+	// one repository. A protected glob matches a changed path from the
+	// project root and from the root of its repository as well, since the
+	// defaults (".github/**", ".mcp.json", ...) name places in a repository.
+	Repository string
 }
 
 // PrefixPaths puts the slash-separated folder prefix before each path.
@@ -81,17 +87,49 @@ func EvaluatePaths(in PathsInput) (domain.LadoVerifyItem, error) {
 // protected glob that matches p, an affected_paths entry that matches p names
 // it (see entryNames). Every glob that matches needs naming (Q2 of #15). The
 // path, the globs and the entries compare without case.
+//
+// In a workspace project the globs match the path from its repository's root
+// too, where the plan's entries count without the repository's folder: an
+// entry without that folder counts there only when it matches the path from
+// the project root as well, so the workspace's own ".github/**" does not name
+// a repository's ".github".
 func protectedPathNamed(in PathsInput, p string) bool {
 	p = strings.ToLower(p)
-	var entries []string
-	for _, entry := range in.Affected {
-		if entry = strings.ToLower(entry); MatchPath(entry, p) {
-			entries = append(entries, entry)
+	entries := make([]string, len(in.Affected))
+	for i, entry := range in.Affected {
+		entries[i] = strings.ToLower(entry)
+	}
+	if !globsNamed(in.Protected, entries, p) {
+		return false
+	}
+	folder := strings.ToLower(strings.Trim(in.Repository, "/"))
+	inRepository, ok := strings.CutPrefix(p, folder+"/")
+	if folder == "" || !ok {
+		return true
+	}
+	var fromRepository []string
+	for _, entry := range entries {
+		if rest, ok := strings.CutPrefix(entry, folder+"/"); ok {
+			fromRepository = append(fromRepository, rest)
+		} else if MatchPath(entry, p) {
+			fromRepository = append(fromRepository, entry)
 		}
 	}
-	for _, glob := range in.Protected {
+	return globsNamed(in.Protected, fromRepository, inRepository)
+}
+
+// globsNamed reports whether each protected glob that matches the lowercased
+// path p is named by an entry that matches p.
+func globsNamed(globs, entries []string, p string) bool {
+	var matching []string
+	for _, entry := range entries {
+		if MatchPath(entry, p) {
+			matching = append(matching, entry)
+		}
+	}
+	for _, glob := range globs {
 		glob = strings.ToLower(glob)
-		if MatchPath(glob, p) && !slices.ContainsFunc(entries, func(entry string) bool { return entryNames(entry, glob) }) {
+		if MatchPath(glob, p) && !slices.ContainsFunc(matching, func(entry string) bool { return entryNames(entry, glob) }) {
 			return false
 		}
 	}

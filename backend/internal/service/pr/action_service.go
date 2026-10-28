@@ -139,6 +139,9 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	if !strings.EqualFold(fresh.PR.HeadSHA, expectedHead) {
 		return MergeResult{}, ErrPRHeadChanged
 	}
+	if err := s.ladoMerge.authorizeFresh(ctx, tracked, fresh.PR, expectedHead); err != nil { // LADO fork
+		return MergeResult{}, err
+	}
 	if !readyToMerge(fresh, review) {
 		return MergeResult{}, ErrPRPreconditions
 	}

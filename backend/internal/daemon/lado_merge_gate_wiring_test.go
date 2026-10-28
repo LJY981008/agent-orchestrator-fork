@@ -12,6 +12,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoverify"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
@@ -23,6 +24,9 @@ type ladoSCM struct {
 	err     error
 	fetched bool
 	merges  int
+	// target and state are what the host has of the PR beyond its head.
+	target string
+	state  string
 }
 
 func (s *ladoSCM) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
@@ -33,7 +37,7 @@ func (s *ladoSCM) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef) ([
 	head := strings.Repeat("ab", 20)
 	return []ports.SCMObservation{{
 		Fetched:      s.fetched,
-		PR:           ports.SCMPRObservation{URL: refs[0].URL, Number: refs[0].Number, HeadSHA: head},
+		PR:           ports.SCMPRObservation{URL: refs[0].URL, Number: refs[0].Number, HeadSHA: head, TargetBranch: s.target, State: s.state, Merged: s.state == "merged"},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: head},
 		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeMergeable), Mergeable: true},
 	}}, nil
@@ -112,30 +116,37 @@ func TestInstallLadoMergeGateGuardsAOsMerge(t *testing.T) {
 }
 
 // ladoLiveHeads reads a merge request through AO's SCM reader with the
-// reference AO's merge builds, and returns its head.
+// reference AO's merge builds, and returns its head, target branch and state.
 func TestLadoLiveHeadsReadThePRFromItsHost(t *testing.T) {
 	ctx := context.Background()
 	pr := domain.PullRequest{URL: "https://gitlab.com/acme/tools/demo/-/merge_requests/7", Number: 7, Provider: "gitlab", Host: "gitlab.com", Repo: "acme/tools/demo"}
-	scm := &ladoSCM{fetched: true}
-	head, err := ladoLiveHeads{reader: scm}.LiveHead(ctx, pr)
-	if err != nil || head != strings.Repeat("ab", 20) {
-		t.Fatalf("LiveHead = %q, %v; want the host's head", head, err)
+	scm := &ladoSCM{fetched: true, target: "release"}
+	live, err := ladoLiveHeads{reader: scm}.LivePR(ctx, pr)
+	if want := (ladoverify.LivePR{HeadSHA: strings.Repeat("ab", 20), TargetBranch: "release"}); err != nil || live != want {
+		t.Fatalf("LivePR = %+v, %v; want %+v", live, err, want)
 	}
 	want := ports.SCMPRRef{Repo: ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "acme/tools", Name: "demo", Repo: "acme/tools/demo"}, Number: 7, URL: pr.URL}
 	if len(scm.refs) != 1 || scm.refs[0] != want {
 		t.Fatalf("refs = %+v, want %+v", scm.refs, want)
 	}
 
+	for _, state := range []string{"merged", "closed"} {
+		live, err := (ladoLiveHeads{reader: &ladoSCM{fetched: true, state: state}}).LivePR(ctx, pr)
+		if err != nil || live.Merged != (state == "merged") || live.Closed != (state == "closed") {
+			t.Errorf("LivePR of a %s PR = %+v, %v; want it %s", state, live, err, state)
+		}
+	}
+
 	unknown := pr
 	unknown.Repo = ""
-	if _, err := (ladoLiveHeads{reader: scm}).LiveHead(ctx, unknown); err == nil || len(scm.refs) != 1 {
-		t.Errorf("LiveHead of a PR without a repository = %v after %d reads, want an error without a read", err, len(scm.refs))
+	if _, err := (ladoLiveHeads{reader: scm}).LivePR(ctx, unknown); err == nil || len(scm.refs) != 1 {
+		t.Errorf("LivePR of a PR without a repository = %v after %d reads, want an error without a read", err, len(scm.refs))
 	}
-	if _, err := (ladoLiveHeads{reader: &ladoSCM{}}).LiveHead(ctx, pr); err == nil {
-		t.Error("LiveHead of a PR the host did not return = nil error")
+	if _, err := (ladoLiveHeads{reader: &ladoSCM{}}).LivePR(ctx, pr); err == nil {
+		t.Error("LivePR of a PR the host did not return = nil error")
 	}
 	failing := &ladoSCM{err: errors.New("the host answered 502")}
-	if _, err := (ladoLiveHeads{reader: failing}).LiveHead(ctx, pr); err == nil || !strings.Contains(err.Error(), "502") {
-		t.Errorf("LiveHead when the host fails = %v, want its error", err)
+	if _, err := (ladoLiveHeads{reader: failing}).LivePR(ctx, pr); err == nil || !strings.Contains(err.Error(), "502") {
+		t.Errorf("LivePR when the host fails = %v, want its error", err)
 	}
 }

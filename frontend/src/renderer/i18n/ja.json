@@ -4146,7 +4146,7 @@
 	"lado.verify.repostStatus": "ステータスを再送信",
 	"lado.verify.repostingStatus": "送信中…",
 	"lado.verify.mergeSent": "マージしました。PR の更新を待機中",
-	"lado.error.integrationTargetChanged": "プルリクエストのマージ先が承認時と異なります(承認時: {{approvedTarget}}、現在: {{currentTarget}})。もう一度確認してから統合を承認してください。",
+	"lado.error.integrationTargetChanged": "プルリクエストのマージ先が変わりました({{approvedTarget}} → {{currentTarget}})。もう一度確認してから統合を承認してください。",
 	"lado.error.integrationNotApproved": "プルリクエストの現在のヘッドには、ステータスを送る統合承認がありません。",
 	"lado.error.checkCommandsChanged": "開いた後にチェックコマンドが変更されました。現在の一覧を確認してから、もう一度変更してください。",
 	"lado.checkCommand.problem.commandControl": "コマンドに制御文字があります({{character}}、{{position}} 文字目)。1 行で書いてください。",

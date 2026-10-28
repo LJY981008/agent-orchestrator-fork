@@ -338,6 +338,7 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 				Affected:    in.plan.AffectedPaths,
 				Protected:   in.validators.protected,
 				ProtectedOn: in.validators.protectedOn,
+				Repository:  in.prefix,
 			})
 		}},
 		{domain.LadoVerifyBaseBranch, func() (domain.LadoVerifyItem, error) {
@@ -452,23 +453,64 @@ func (s *Service) branch(ctx context.Context, in headInputs) branchFacts {
 	return branchFacts{base: base, commits: commits}
 }
 
-// mergeBase returns the merge-base of the head and the remote-tracking
-// target branch or, when git cannot find it, of the head and the base tip AO
-// recorded for the PR.
+// mergeBase returns where the head's branch left its target: the merge-base
+// of the head and the remote-tracking target branch, or of the head and the
+// base tip AO last observed on the host, whichever is newer. The loop never
+// fetches, so the remote-tracking branch can be older than the host's, as
+// after the host's Update branch merged the target into the head; its
+// merge-base would count the target's newer commits as the worker's (review
+// of #31).
 func (s *Service) mergeBase(ctx context.Context, in headInputs) (string, error) {
-	base, err := s.deps.Git.MergeBase(ctx, in.dir, "refs/remotes/"+in.baseRemote+"/"+in.target, in.head)
-	if err == nil {
-		return base, nil
+	tracking, trackingErr := s.deps.Git.MergeBase(ctx, in.dir, "refs/remotes/"+in.baseRemote+"/"+in.target, in.head)
+	observed, observedErr := s.observedMergeBase(ctx, in)
+	// Either alone counts when the other cannot be computed.
+	haveTracking, haveObserved := trackingErr == nil, observedErr == nil && observed != ""
+	switch {
+	case haveTracking && haveObserved && observed != tracking:
+		return s.newerBase(ctx, in.dir, in.head, tracking, observed)
+	case haveTracking:
+		return tracking, nil
+	case haveObserved:
+		return observed, nil
 	}
-	pr, ok, prErr := s.deps.Store.GetPR(ctx, in.exec.PR.URL)
-	if prErr != nil || !ok || pr.BaseSHA == "" {
+	return "", errors.Join(trackingErr, observedErr)
+}
+
+// observedMergeBase returns the merge-base of the head and the base tip AO
+// last observed for the PR; nothing when AO has none.
+func (s *Service) observedMergeBase(ctx context.Context, in headInputs) (string, error) {
+	pr, ok, err := s.deps.Store.GetPR(ctx, in.exec.PR.URL)
+	if err != nil || !ok || pr.BaseSHA == "" {
 		return "", err
 	}
-	base, baseErr := s.deps.Git.MergeBase(ctx, in.dir, pr.BaseSHA, in.head)
-	if baseErr != nil {
-		return "", errors.Join(err, baseErr)
+	return s.deps.Git.MergeBase(ctx, in.dir, pr.BaseSHA, in.head)
+}
+
+// newerBase returns the one of two merge-bases of head that descends from
+// the other or, when neither does, as after a force push of the target, the
+// one fewer commits from head.
+func (s *Service) newerBase(ctx context.Context, dir, head, a, b string) (string, error) {
+	for _, pair := range [][2]string{{a, b}, {b, a}} {
+		older, err := s.deps.Git.IsAncestor(ctx, dir, pair[0], pair[1])
+		if err != nil {
+			return "", err
+		}
+		if older {
+			return pair[1], nil
+		}
 	}
-	return base, nil
+	fromA, err := s.deps.Git.Commits(ctx, dir, a, head)
+	if err != nil {
+		return "", err
+	}
+	fromB, err := s.deps.Git.Commits(ctx, dir, b, head)
+	if err != nil {
+		return "", err
+	}
+	if len(fromB) < len(fromA) {
+		return b, nil
+	}
+	return a, nil
 }
 
 // commandsItem computes the commands item from the head's runs, and first

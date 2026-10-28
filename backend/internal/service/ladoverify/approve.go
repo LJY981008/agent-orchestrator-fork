@@ -161,14 +161,23 @@ func (s *Service) integrationExecution(ctx context.Context, in ApproveInput, hea
 		return domain.LadoExecution{}, apierr.Unavailable("LADO_VERIFY_UNAVAILABLE",
 			"LADO cannot read pull requests from their host, so it cannot approve an integration now. Check AO's GitHub or GitLab connection.")
 	}
-	live, err := reader.LiveHead(ctx, pr)
+	live, err := reader.LivePR(ctx, pr)
 	if err != nil {
-		s.deps.Log.Warn("LADO could not read a PR's head from its host", "session", exec.SessionID, "pr", exec.PR.URL, "err", redactedErrorLine(err))
+		s.deps.Log.Warn("LADO could not read a PR from its host", "session", exec.SessionID, "pr", exec.PR.URL, "err", redactedErrorLine(err))
 		return domain.LadoExecution{}, apierr.Unavailable("LADO_VERIFY_UNAVAILABLE",
 			"LADO could not read the pull request's head from its host. Try again.")
 	}
-	if live = strings.ToLower(strings.TrimSpace(live)); live != head {
-		return domain.LadoExecution{}, headChanged(head, live)
+	// The host may have merged, closed or retargeted the PR before AO saw
+	// it: the record verified the stored target, and the status LADO posts
+	// on the head would count for any branch that requires it.
+	liveHead := strings.ToLower(strings.TrimSpace(live.HeadSHA))
+	switch target := strings.TrimSpace(live.TargetBranch); {
+	case live.Merged || live.Closed:
+		return domain.LadoExecution{}, noOpenPR(in.SessionID)
+	case liveHead != head:
+		return domain.LadoExecution{}, headChanged(head, liveHead)
+	case target != "" && target != approvalTarget(exec):
+		return domain.LadoExecution{}, targetChanged(domain.PullRequest{URL: exec.PR.URL, SessionID: exec.SessionID, TargetBranch: target}, head, approvalTarget(exec))
 	}
 	return exec, nil
 }

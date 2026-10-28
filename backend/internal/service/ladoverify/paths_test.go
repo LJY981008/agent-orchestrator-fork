@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -128,6 +129,57 @@ func TestPathsProtectedIgnoreCase(t *testing.T) {
 		in := PathsInput{Changed: []string{"docs/agents.md"}, Affected: []string{"docs/**"}, Protected: []string{"**/AGENTS.MD"}, ProtectedOn: true}
 		checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{"docs/agents.md"}})
 	})
+}
+
+// A workspace project's repository keeps its own .github, .mcp.json and the
+// rest: the default globs match there, and only an entry with the
+// repository's folder names such a path (review of #31).
+func TestPathsProtectedInAWorkspaceRepository(t *testing.T) {
+	base := PathsInput{
+		Changed:     PrefixPaths("api", []string{".github/workflows/deploy.yml", "src/login.go"}),
+		Affected:    []string{"api/src/**"},
+		Protected:   domain.DefaultLadoProtectedPaths(),
+		ProtectedOn: true,
+		Repository:  "api",
+	}
+	blocked := domain.LadoPathsDetails{
+		Protected:    []string{"api/.github/workflows/deploy.yml"},
+		OutsidePlan:  []string{"api/.github/workflows/deploy.yml"},
+		OutsideCount: 1,
+	}
+	checkPaths(t, base, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, blocked)
+
+	for _, tc := range []struct {
+		name    string
+		entries []string
+		named   bool
+	}{
+		{"the path with the folder", []string{"api/.github/workflows/deploy.yml"}, true},
+		{"a glob with the folder", []string{"api/.GitHub/workflows/*"}, true},
+		{"the workspace's own .github", []string{".github/**"}, false},
+		{"the whole repository", []string{"api/**"}, false},
+		{"the repository folder alone", []string{"api"}, false},
+		{"any deploy.yml", []string{"**/deploy.yml"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := base
+			in.Affected = append(slices.Clone(base.Affected), tc.entries...)
+			item, err := EvaluatePaths(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if named := item.Code != domain.LadoCodeProtectedPath; named != tc.named {
+				t.Errorf("entries %q: item %s %s %s, named %v, want %v", tc.entries, item.Outcome, item.Code, item.Details, named, tc.named)
+			}
+		})
+	}
+
+	// A glob written for the project root still matches from there.
+	in := base
+	in.Changed = PrefixPaths("api", []string{"secrets/key.pem"})
+	in.Affected = []string{"api/**"}
+	in.Protected = []string{"api/secrets/**"}
+	checkPaths(t, in, domain.LadoVerifyFail, domain.LadoCodeProtectedPath, domain.LadoPathsDetails{Protected: []string{"api/secrets/key.pem"}})
 }
 
 // Owner decision 2: a change outside the plan's affected_paths does not

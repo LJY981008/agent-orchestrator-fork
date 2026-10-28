@@ -60,9 +60,10 @@ ON CONFLICT (execution_session_id, head_sha) DO UPDATE SET
     computed_at = excluded.computed_at;
 
 -- name: ListLadoVerificationOutcomes :many
--- The outcome and reason of the records of the given executions and heads.
--- The caller keeps the (execution, head) pairs it asked for.
-SELECT execution_session_id, head_sha, outcome, reason
+-- The outcome and reason of the records of the given executions and heads,
+-- with the PR each record verified. The caller keeps the (execution, head)
+-- pairs it asked for, of the PR it reads.
+SELECT execution_session_id, head_sha, pr_url, outcome, reason
 FROM lado_verifications
 WHERE execution_session_id IN (sqlc.slice('session_ids'))
   AND head_sha IN (sqlc.slice('head_shas'));

@@ -181,22 +181,29 @@ type ladoPRReader interface {
 	FetchPullRequests(ctx context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error)
 }
 
-// ladoLiveHeads reads a PR's head from its host as AO's merge reads it.
+// ladoLiveHeads reads a PR from its host as AO's merge reads it: its head,
+// target branch and state.
 type ladoLiveHeads struct {
 	reader ladoPRReader
 }
 
-func (h ladoLiveHeads) LiveHead(ctx context.Context, pr domain.PullRequest) (string, error) {
+func (h ladoLiveHeads) LivePR(ctx context.Context, pr domain.PullRequest) (ladoverify.LivePR, error) {
 	ref, ok := prsvc.LadoSCMRef(pr)
 	if !ok {
-		return "", fmt.Errorf("read pull request %s: its repository or number is unknown", pr.URL)
+		return ladoverify.LivePR{}, fmt.Errorf("read pull request %s: its repository or number is unknown", pr.URL)
 	}
 	observations, err := h.reader.FetchPullRequests(ctx, []ports.SCMPRRef{ref})
 	if err != nil {
-		return "", fmt.Errorf("read pull request %s: %w", pr.URL, err)
+		return ladoverify.LivePR{}, fmt.Errorf("read pull request %s: %w", pr.URL, err)
 	}
 	if len(observations) != 1 || !observations[0].Fetched || observations[0].PR.Number != pr.Number || observations[0].PR.HeadSHA == "" {
-		return "", fmt.Errorf("read pull request %s: the host did not return its head", pr.URL)
+		return ladoverify.LivePR{}, fmt.Errorf("read pull request %s: the host did not return its head", pr.URL)
 	}
-	return observations[0].PR.HeadSHA, nil
+	live := observations[0].PR
+	return ladoverify.LivePR{
+		HeadSHA:      live.HeadSHA,
+		TargetBranch: live.TargetBranch,
+		Merged:       live.Merged || live.State == string(domain.PRStateMerged),
+		Closed:       live.Closed || live.State == string(domain.PRStateClosed),
+	}, nil
 }
