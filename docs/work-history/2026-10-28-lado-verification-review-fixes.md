@@ -57,6 +57,14 @@
 | 랩: 레인 | PR 이 열린(검증 중·통합 대기·통합 중) 작업이 계획 레인에도 남아 세션 카드와 겹침 → 워커가 시작한 작업은 이 상태들에서도 레인에서 뺌 | 고침 | 21c7d42a6 | `LadoLanes.test.tsx`("a task whose worker started leaves the lanes…") |
 | 랩: 명령 충돌 | `LADO_CHECK_COMMANDS_CHANGED` 뒤에도 옛 기준으로 같은 거절이 되풀이되고 "지금 목록"을 볼 수 없음 → 설정을 다시 읽고 카드가 지금 목록을 보임 | 고침 | 21c7d42a6 | `LadoProjectChecksCard.test.tsx`("shows the current list when the commands changed…") |
 | 랩: 병합 뒤 오류 | 병합되거나 닫힌 PR 에도 상태 게시 오류가 남음 → 열린 PR 에만 | 고침 | 21c7d42a6 | "posts a status that could not be posted again"(병합 PR 사례) |
+| AO 리뷰 1: 워크스페이스 보호 경로 | 워크스페이스 하위 저장소의 `.github/**` 등 기본 보호 글롭이 걸리지 않음 → 저장소 루트 기준으로도 맞추고, 그 기준에서는 폴더 접두사를 뗀 계획 항목만 이름으로 셈 | 고침 | 376aeb71b | `TestPathsProtectedInAWorkspaceRepository`, `TestTickProtectsPathsInAWorkspaceRepository` |
+| AO 리뷰 1: 병합 게이트 대상 | 호스트에서 대상이 바뀐 PR 을 저장된 대상으로 승인 확인 → 실시간 읽기 뒤 대상이 다르면 게이트를 새 대상으로 다시 물음 | 고침 | 376aeb71b | `TestMergeAsksTheGate/a target branch changed on the host` |
+| AO 리뷰 1: 승인의 실시간 읽기 | 승인이 head 만 호스트에서 읽음 → 대상 브랜치·병합·닫힘도 읽고, 병합·닫힘은 409 `LADO_EXECUTION_NO_PR`, 대상이 다르면 409 `LADO_INTEGRATION_TARGET_CHANGED` | 고침 | 376aeb71b | `TestIntegrationApprovalChecksHeadHashAndAcknowledgements`(두 사례), `TestLadoLiveHeadsReadThePRFromItsHost` |
+| AO 리뷰 1: merge-base | 오래된 원격 추적 ref 의 merge-base 가 남의 커밋을 작업자 것으로 셈 → AO 가 본 base tip 의 merge-base 와 비교해 더 새 것 | 고침 | 376aeb71b | `TestMergeBaseTakesTheNewerBase`(실제 저장소) |
+| AO 리뷰 1: 워크트리 내용 | 상태 텍스트만 해시해 이미 바뀐 파일의 재수정을 놓침 → 파일마다 내용 sha256, 추적 안 되는 폴더는 파일 단위 | 고침 | 376aeb71b | `TestWorktreeReady`(재수정·새 파일) |
+| AO 리뷰 1: 보호 경로 확인 창 | 제거 목록을 300자에서 자름 → 글롭마다 한 줄, 전체 | 고침 | 376aeb71b | "shows each glob added and removed on a line of its own, whole" |
+| AO 리뷰 1 선택: 기록의 PR | 같은 head 의 새 PR 이 옛 PR 의 기록을 씀 → 작업 읽기가 기록의 PR URL 을 비교 | 고침 | 376aeb71b | `TestLadoExecutionReadsHoldApprovalsToTheirPRAndTarget` |
+| AO 리뷰 1 선택: 구분자 | 커밋·reflog 목록의 `\x1e`/`\x1f` 구분자 → NUL | 고침 | 376aeb71b | `TestGitHelpersReadCommitsPathsAndReflog`(구분자가 든 메시지) |
 | 랩: any source 줄 | 보호 카드에서 "빠진 것: …"과 Q3 안내가 마침표 없이 한 줄로 이어짐 → 안내를 따로 한 줄로 | 고침 | 4c6d61f88 | `LadoProjectProtectionCard.test.tsx`("says to take lado/integration from any source") |
 
 ## 결정과 이탈
@@ -64,7 +72,7 @@
 - V3: 플랜은 정렬만 말했다. 검증 자체가 실패하는 실행(작업·프로젝트가 사라진 경우)은 기록이 생기지 않아 늘 맨 앞에 서므로, 그런 실행이 50개를 넘으면 다시 기아가 생긴다. 그래서 실패한 실행은 5분 쉬게 하고, 한 번에 읽는 수를 쉬는 수만큼 늘렸다.
 - V4: 게이트는 전용 열 `integration_gated` 로 갈랐다(디스패치 base 사실보다 뜻이 분명하다). 백필 시각은 PR 행의 `updated_at` 이다.
 - V5: 가져온 객체는 ref 없이 둔다(`--no-write-fetch-head`). 개발자 저장소의 ref 와 FETCH_HEAD 를 건드리지 않는다. 객체는 gc 의 prune 기한(기본 2주)까지 남고, 그 안에 검증과 승인이 끝난다.
-- V2: 명령이 이미 바꾼 추적 파일을 워커가 다시 고치면 porcelain 출력이 같아 알아채지 못한다. 드문 경우라 해시를 넓히지 않았다.
+- V2: 처음에는 명령이 이미 바꾼 추적 파일을 워커가 다시 고치는 경우를 드물다고 보고 해시를 넓히지 않았다. AO 리뷰 1회차가 이를 지적해, 파일마다 내용 해시를 더했다.
 - V8: 기록 내용에서 `error` 를 `errorClass` 로 바꿨다. API 의 protection 항목 `details.error` 는 기록 옆 문구로 계속 채운다.
 - 형식 이름 `lado-verify/1` 은 그대로 두고 내용만 바꿨다(0008 이 아직 배포되지 않음, 플랜 결정 6).
 - S5·S6: 플랜은 승인 키를 (세션, PR URL, head)로 적었다. 대상 브랜치까지 키에 넣었다. 대상만 바뀐 PR 을 다시 승인할 수 있어야 하는데, (세션, PR URL, head)만으로는 두 번째 승인이 `ALREADY_APPROVED` 로 막히기 때문이다.
@@ -74,6 +82,11 @@
 
 - 렌더러에는 보호 경로를 실제 경로에 맞춰 보는 미리보기가 없다(글롭 문법만 검사). 그래서 Q1 의 "렌더러 미리보기도 같은 규칙"은 할 일이 없었다.
 - 단계 3·4 를 push 한 5289e3b5c 에서는 프런트 typecheck 가 테스트 fixture 15건(새 필수 필드)으로 실패했다. 백엔드 CI 를 먼저 보려고 그대로 올렸고, 단계 5 에서 고쳤다.
+
+## AO 리뷰
+
+- 1회차(run 9ad21d83, claude-code, head b7eec9030): 변경 요청. 인라인 6건(워크스페이스 보호 경로, 병합 게이트 대상, 승인의 실시간 읽기, merge-base, 워크트리 내용, 보호 경로 확인 창)을 모두 고쳤다. 선택 4건 중 기록의 PR 과 구분자는 고쳤다. 나머지 둘은 고치지 않았다. 데스크톱 경로의 `base` 는 플랜의 U7 결정대로 main 이 직접 읽은 목록으로 서명하고 그 차이를 확인 창에 보이므로 그대로 둔다. 작업 창의 병합 head 는 작업 읽기의 `integrating` 이 곧 현재 head 의 승인이라 같은 값이다.
+- 처음 두 번의 시작은 데몬의 tmux 오류(`system tmux is unavailable`)로 실패했다. 소유자가 시스템 tmux 를 설치하고 데몬을 다시 띄운 뒤 시작됐다.
 
 ## 랩 확인 (2026-10-28)
 
