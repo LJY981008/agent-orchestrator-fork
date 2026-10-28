@@ -108,8 +108,41 @@ func builtinDefs() []builtinDef {
 			Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementValidator, domain.LadoEnforcementPrompt},
 			Config:      configJSON(domain.LadoProtectedPathsConfig{Globs: domain.DefaultLadoProtectedPaths()}),
 		})},
+		// The plan workers' role instructions (docs/LJY-PRD/TDD.md §5.1): they
+		// reach the designer and the critic sessions only and stay out of
+		// resolution, so editing them changes no approval. The developer
+		// edits their text; they take no binding.
+		{rule: builtin(domain.LadoRule{ID: domain.LadoRulePlanDesigner, Global: domain.LadoBindingOn}, domain.LadoRuleContent{
+			Name:        "Plan designer",
+			Category:    domain.LadoRuleCategoryPlanning,
+			Instruction: planDesignerInstruction,
+			Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementPlanRole},
+		})},
+		{rule: builtin(domain.LadoRule{ID: domain.LadoRulePlanCritic, Global: domain.LadoBindingOn}, domain.LadoRuleContent{
+			Name:        "Plan critic",
+			Category:    domain.LadoRuleCategoryPlanning,
+			Instruction: planCriticInstruction,
+			Enforcement: []domain.LadoEnforcement{domain.LadoEnforcementPlanRole},
+		})},
 	}
 }
+
+// planDesignerInstruction is the designer's built-in instruction. LADO adds
+// the plan format, the issue, the rules and how to submit to every request.
+const planDesignerInstruction = "You design the plan for one issue; another agent carries it out after the developer approves it, without asking you anything. " +
+	"Read the issue, the rules and the code before you decide. Cover the scope, the approach, the decisions with their reasons and the questions left open. " +
+	"List the steps in the order they run, and make every acceptance criterion something a test or a command can check. " +
+	"Keep affected_paths as narrow as the work allows, and declare change_kinds for any database schema, external API, authentication or data deletion change. " +
+	"Name the test commands, the risks and how the work handles them. " +
+	"Write the plan's prose in Korean and keep code, paths and commands as they are. " +
+	"End the plan with a \"## 계획 검수\" section that answers the review the way LADO asks."
+
+// planCriticInstruction is the critic's built-in instruction. LADO gives the
+// critic the draft only, with how to submit its findings.
+const planCriticInstruction = "You review a plan adversarially before anyone carries it out. Read it as someone trying to break it, and check its claims against the repository. " +
+	"Raise a finding as P1 or major only when you can describe how the work fails because of it: a missing requirement, a wrong fact about the code, " +
+	"steps in the wrong order or a missing dependency, an acceptance criterion no test or command can check, a security or data loss risk, or scope beyond the issue. " +
+	"Everything else is minor. Give each finding an id, its severity, a title, the failure scenario, where in the plan or the code it is, and a suggestion."
 
 // builtin completes a built-in rule with version 1 of content, normalized as
 // the store keeps it.

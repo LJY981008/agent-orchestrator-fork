@@ -270,6 +270,14 @@ func runnable(agent domain.AgentHarness) bool {
 	return ladopolicy.CapabilityOf(agent, ladopolicy.CapabilityPermissionMode) == ladopolicy.CapabilitySupported
 }
 
+// WorkerBase resolves the branch AO starts the task's worker from, as the
+// dispatch's base check does; a plan worker names it as the plan's base
+// (ladotask.PlanQueue).
+func (s *Service) WorkerBase(ctx context.Context, task domain.LadoTask) (ports.WorkspaceDefaultBranch, error) {
+	_, base, err := s.workerBase(ctx, task)
+	return base, err
+}
+
 // workerBase resolves the branch AO starts the task's worker from, the way
 // AO's spawn resolves it (session_manager refreshDefaultBranchesBestEffort),
 // and the repository it is resolved in: for a single repository, the

@@ -163,6 +163,12 @@ func (s *Service) memoryUnread(err error) {
 	s.deps.Log.Log(context.Background(), level, "LADO cannot read memory pressure, so queued tasks do not wait for memory", "err", err)
 }
 
+// MemoryTight reports whether memory is tight now, as the dispatcher reads
+// it. LADO's plan workers wait on it too (ladotask.PlanQueue).
+func (s *Service) MemoryTight(ctx context.Context) bool {
+	return s.memoryTight(ctx)
+}
+
 // tightPressure reports whether a pressure reading is tight by the thresholds
 // the board's pressure light uses (packages/product-ui/src/resource-presentation.ts
 // pressureStateFromRaw).

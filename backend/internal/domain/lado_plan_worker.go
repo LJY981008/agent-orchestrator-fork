@@ -748,6 +748,21 @@ func ladoTrailingNumber(s string) int {
 	return n
 }
 
+// LadoRuleSummary is what a plan worker learns of the rules a task's worker
+// follows now: the rules that are on, the permission ceiling and the
+// protected paths.
+type LadoRuleSummary struct {
+	Rules          []LadoRuleSummaryItem
+	Ceiling        PermissionMode
+	ProtectedPaths []string
+}
+
+// LadoRuleSummaryItem is one rule that is on, with the text the worker gets.
+type LadoRuleSummaryItem struct {
+	Name        string
+	Instruction string
+}
+
 // LadoPlanWorkerAllowedTools are the tools a Claude Code plan worker runs
 // without asking (docs/LJY-PRD/TDD.md §5.1): reading and searching, and the
 // read-only git and gh commands. Submitting a plan goes through the hook

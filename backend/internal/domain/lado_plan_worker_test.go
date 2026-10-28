@@ -53,7 +53,9 @@ func TestLadoPlanRequestWorkerPhase(t *testing.T) {
 		{"submitted", func(r *domain.LadoPlanRequest) { r.WorkerStartedAt, r.DraftSubmittedAt, r.SubmittedAt = at, at, at }, domain.LadoPlanPhaseSubmitted},
 		{"fixing", func(r *domain.LadoPlanRequest) { r.WorkerStartedAt, r.SubmittedAt, r.FixRequestedAt = at, at, at }, domain.LadoPlanPhaseFixing},
 		{"done", func(r *domain.LadoPlanRequest) { r.WorkerStartedAt, r.SubmittedAt, r.CleanedAt = at, at, at }, domain.LadoPlanPhaseDone},
-		{"failed", func(r *domain.LadoPlanRequest) { r.WorkerStartedAt, r.FailedAt, r.FailureCode = at, at, domain.LadoPlanWorkerNoPlan }, domain.LadoPlanPhaseFailed},
+		{"failed", func(r *domain.LadoPlanRequest) {
+			r.WorkerStartedAt, r.FailedAt, r.FailureCode = at, at, domain.LadoPlanWorkerNoPlan
+		}, domain.LadoPlanPhaseFailed},
 		{"replaced", func(r *domain.LadoPlanRequest) { r.FailedAt, r.FailureCode = at, domain.LadoPlanRequestReplaced }, domain.LadoPlanPhaseReplaced},
 	}
 	for _, tc := range cases {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -63,6 +64,36 @@ type Store interface {
 	ListLadoPlanApprovals(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanApproval, error)
 	ApproveLadoPlan(ctx context.Context, approval domain.LadoPlanApproval, proof domain.LadoPresenceProof, event domain.LadoAuditEvent, snapshot *domain.LadoPolicySnapshot, entry *domain.LadoQueueEntry) (domain.LadoPlanApproval, domain.LadoAuditEvent, error)
 	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
+
+	PlanWorkerStore
+}
+
+// PlanWorkerStore keeps plan worker requests, their reviews and what making
+// each revision took, and reads the Runs settings and the sessions' usage.
+type PlanWorkerStore interface {
+	LadoDispatchSettings(ctx context.Context) (domain.LadoDispatchSettings, error)
+	ListOpenLadoPlanWorkerRequests(ctx context.Context) ([]domain.LadoPlanRequest, error)
+	SetLadoPlanRequestWaiting(ctx context.Context, id domain.LadoPlanRequestID, reason string) error
+	BeginLadoPlanWorkerAttempt(ctx context.Context, id domain.LadoPlanRequestID) (int, bool, error)
+	RecordLadoPlanWorkerProblem(ctx context.Context, id domain.LadoPlanRequestID, problem string) error
+	StartLadoPlanWorker(ctx context.Context, id domain.LadoPlanRequestID, session domain.SessionID, at time.Time, event *domain.LadoAuditEvent) (bool, error)
+	RecordLadoPlanDraft(ctx context.Context, id domain.LadoPlanRequestID, sum string, at time.Time, event *domain.LadoAuditEvent) (bool, error)
+	RecordLadoPlanFeedback(ctx context.Context, id domain.LadoPlanRequestID, at time.Time, event *domain.LadoAuditEvent) (bool, error)
+	RecordLadoPlanFinal(ctx context.Context, id domain.LadoPlanRequestID, sum string, at time.Time, event *domain.LadoAuditEvent) (bool, error)
+	RecordLadoPlanFixRequested(ctx context.Context, id domain.LadoPlanRequestID, at time.Time) (bool, error)
+	RecordLadoPlanReminder(ctx context.Context, id domain.LadoPlanRequestID, at time.Time) error
+	CleanLadoPlanRequest(ctx context.Context, id domain.LadoPlanRequestID, at time.Time, event *domain.LadoAuditEvent) (bool, error)
+	FailLadoPlanWorkerRequest(ctx context.Context, id domain.LadoPlanRequestID, at time.Time, code, detail string, event *domain.LadoAuditEvent) (bool, error)
+	CreateLadoPlanCritique(ctx context.Context, c domain.LadoPlanCritique, event *domain.LadoAuditEvent) error
+	LadoPlanCritique(ctx context.Context, id domain.LadoPlanRequestID, attempt int) (domain.LadoPlanCritique, bool, error)
+	ListLadoPlanCritiques(ctx context.Context, id domain.LadoPlanRequestID) ([]domain.LadoPlanCritique, error)
+	ListLadoPlanCritiquesByTask(ctx context.Context, taskID domain.LadoTaskID) ([]domain.LadoPlanCritique, error)
+	SetLadoPlanCritiqueSession(ctx context.Context, id domain.LadoPlanRequestID, attempt int, session domain.SessionID, event *domain.LadoAuditEvent) (bool, error)
+	FinishLadoPlanCritique(ctx context.Context, id domain.LadoPlanRequestID, attempt int, state domain.LadoPlanCritiqueState, findings []domain.LadoPlanFinding, reason string, at time.Time, event *domain.LadoAuditEvent) (bool, error)
+	SetLadoPlanRevisionMetrics(ctx context.Context, m domain.LadoPlanRevisionMetrics) error
+	LadoPlanRevisionMetrics(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevisionMetrics, bool, error)
+	ListLadoPlanRevisionMetrics(ctx context.Context, taskID domain.LadoTaskID) (map[domain.LadoPlanRevisionID]domain.LadoPlanRevisionMetrics, error)
+	LadoSessionUsage(ctx context.Context, id domain.SessionID) (domain.LadoPlanSessionUsage, error)
 }
 
 // Projects reads AO's project registry.
@@ -81,6 +112,9 @@ type Policy interface {
 	// CurrentSHA256s is CurrentSHA256 for many tasks, reading the rules
 	// once. A task it cannot resolve is left out.
 	CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (map[domain.LadoTaskID]string, error)
+	// Summary is what a plan worker learns of the rules the task's worker
+	// follows now.
+	Summary(ctx context.Context, task domain.LadoTask) (domain.LadoRuleSummary, error)
 }
 
 // Killer stops the session of a running execution. LADO's dispatcher
@@ -133,11 +167,28 @@ type Deps struct {
 	// Killer stops the worker of a task that is cancelled while it runs.
 	// Without it the worker runs on.
 	Killer Killer
+
+	// PlanSessions starts, messages and stops plan worker sessions: AO's
+	// session service. Without it, plan requests wait for it.
+	PlanSessions PlanSessions
+	// Queue resolves a plan's base and reads memory pressure, as the
+	// dispatcher does. The daemon installs it with SetPlanQueue.
+	Queue PlanQueue
+	// DataDir holds LADO's own files of each plan request
+	// (<DataDir>/lado/plan-requests/<request>/), which no artifact capture
+	// reads.
+	DataDir string
 }
 
 // Service creates, imports and tracks tasks.
 type Service struct {
 	deps Deps
+	// kick asks the plan loop for a pass now: a plan request or a submission
+	// arrived.
+	kick chan struct{}
+	// criticReminders are when LADO reminded each running critic.
+	criticMu        sync.Mutex
+	criticReminders map[domain.LadoPlanCritiqueID]time.Time
 }
 
 // New returns a Service.
@@ -163,7 +214,22 @@ func New(deps Deps) *Service {
 	if deps.DeliveryTimeout <= 0 {
 		deps.DeliveryTimeout = defaultDeliveryTimeout
 	}
-	return &Service{deps: deps}
+	return &Service{deps: deps, kick: make(chan struct{}, 1)}
+}
+
+// SetPlanQueue installs the Queue of Deps. The dispatcher that implements it
+// is built from this service, so the daemon installs it afterwards, before
+// the plan loop starts.
+func (s *Service) SetPlanQueue(queue PlanQueue) {
+	s.deps.Queue = queue
+}
+
+// kickPlans asks the plan loop for a pass as soon as the one under way ends.
+func (s *Service) kickPlans() {
+	select {
+	case s.kick <- struct{}{}:
+	default:
+	}
 }
 
 // SetKiller installs the Killer of Deps. The dispatcher that implements it

@@ -35,17 +35,30 @@ const (
 	protectedPathsInstruction      = "Do not change protected paths unless the approved plan names them."
 )
 
+// rules0Instruction is a plan worker role's built-in instruction, which
+// TestPlanRoleInstructionsSayWhatTheRoleDoes checks.
+func rules0Instruction(id domain.LadoRuleID) string {
+	for _, rule := range ladopolicy.Builtins() {
+		if rule.ID == id {
+			return rule.Version.Content.Instruction
+		}
+	}
+	return ""
+}
+
 // TestBuiltinsIncludeTheVerificationGates pins the built-in catalog: the
 // rules of steps 5 and 7, the Korean commit rule at its built-in version 2
-// with the commit message validator, and the four protected gates of a pull
-// request (docs/LJY-PRD/HARNESS.md §14). The English names are the ones the
-// renderer's rule table matches.
+// with the commit message validator, the four protected gates of a pull
+// request (docs/LJY-PRD/HARNESS.md §14) and the plan worker roles'
+// instructions. The English names are the ones the renderer's rule table
+// matches.
 func TestBuiltinsIncludeTheVerificationGates(t *testing.T) {
 	const (
 		gate      = domain.LadoEnforcementWorkflowGate
 		tools     = domain.LadoEnforcementToolPolicy
 		validator = domain.LadoEnforcementValidator
 		prompt    = domain.LadoEnforcementPrompt
+		planRole  = domain.LadoEnforcementPlanRole
 		on        = domain.LadoBindingOn
 		off       = domain.LadoBindingOff
 	)
@@ -68,6 +81,8 @@ func TestBuiltinsIncludeTheVerificationGates(t *testing.T) {
 		{domain.LadoRuleNoDirectWrite, "No direct writes to the base branch", "git", noDirectWriteInstruction, []domain.LadoEnforcement{gate, prompt}, domain.LadoStrengthPrevents, `{}`, true, on},
 		{domain.LadoRuleTestsMustPass, "Tests must pass", "workflow", testsMustPassInstruction, []domain.LadoEnforcement{validator, prompt}, domain.LadoStrengthDetects, `{}`, true, on},
 		{domain.LadoRuleProtectedPaths, "Protected paths", "git", protectedPathsInstruction, []domain.LadoEnforcement{validator, prompt}, domain.LadoStrengthDetects, protectedPathsConfig, true, on},
+		{domain.LadoRulePlanDesigner, "Plan designer", "planning", rules0Instruction(domain.LadoRulePlanDesigner), []domain.LadoEnforcement{planRole}, domain.LadoStrengthAdvisory, `{}`, false, on},
+		{domain.LadoRulePlanCritic, "Plan critic", "planning", rules0Instruction(domain.LadoRulePlanCritic), []domain.LadoEnforcement{planRole}, domain.LadoStrengthAdvisory, `{}`, false, on},
 	}
 
 	rules := ladopolicy.Builtins()

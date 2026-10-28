@@ -80,10 +80,11 @@ type PlanRequestInput struct {
 	Note string
 }
 
-// RequestPlan pins the task's issue with its trusted comments and asks the
-// project's orchestrator for a plan. The request is kept even when the
-// orchestrator cannot take it yet, such as while it starts, and LADO keeps
-// delivering it in the background.
+// RequestPlan pins the task's issue with its trusted comments and asks for a
+// plan, or for changes to the latest one: LADO keeps the request, and the plan
+// loop starts a plan worker for it within the Runs settings' cap
+// (docs/LJY-PRD/TDD.md §5.1). The request replaces the task's older ones, and
+// their plan workers stop. No orchestrator is involved.
 func (s *Service) RequestPlan(ctx context.Context, in PlanRequestInput) (domain.LadoPlanRequest, error) {
 	task, err := s.openTask(ctx, in.TaskID)
 	if err != nil {
@@ -104,11 +105,15 @@ func (s *Service) RequestPlan(ctx context.Context, in PlanRequestInput) (domain.
 		}
 		basedOn = task.Plan.Latest
 	}
+	if s.deps.PlanSessions == nil {
+		s.deps.Log.Warn("LADO cannot take a plan request", "task", task.ID, "err", errLadoPlanWorkersOff)
+		return domain.LadoPlanRequest{}, apierr.Unavailable("LADO_PLAN_WORKERS_UNAVAILABLE", "LADO cannot start plan workers in this daemon.")
+	}
 	issue, comments, err := s.readIssueWithComments(ctx, task)
 	if err != nil {
 		return domain.LadoPlanRequest{}, err
 	}
-	snapshot, selection := domain.NewLadoIssueSnapshot(task.IssueRef, issue.Title, issue.Body, comments)
+	snapshot, _ := domain.NewLadoIssueSnapshot(task.IssueRef, issue.Title, issue.Body, comments)
 	if sourceComment != "" && !snapshot.HasComment(sourceComment) {
 		return domain.LadoPlanRequest{}, apierr.Invalid("LADO_PLAN_SOURCE_COMMENT_UNKNOWN",
 			fmt.Sprintf("Comment %s is not one LADO can use: it is gone, or its author cannot work on the repository.", sourceComment),
@@ -119,34 +124,25 @@ func (s *Service) RequestPlan(ctx context.Context, in PlanRequestInput) (domain.
 		s.deps.Log.Error("LADO could not pin an issue snapshot", "task", task.ID, "err", err)
 		return domain.LadoPlanRequest{}, apierr.Internal("LADO_SNAPSHOT_SAVE_FAILED", "Failed to save the issue snapshot")
 	}
-	orchestrator, err := s.deps.Orchestrators.Orchestrator(ctx, task.ProjectID)
-	if err != nil {
-		s.deps.Log.Warn("LADO could not find or start the orchestrator", "project", task.ProjectID, "err", err)
-		return domain.LadoPlanRequest{}, apierr.New(apierr.KindUnavailable, "LADO_ORCHESTRATOR_UNAVAILABLE",
-			fmt.Sprintf("LADO could not reach the project's orchestrator: %v", err), map[string]any{"reason": err.Error()})
-	}
-	if err := writeIssueFile(orchestrator.ArtifactDir, task, snapshot, sum, selection); err != nil {
-		s.deps.Log.Error("LADO could not write the pinned issue for the orchestrator", "task", task.ID, "err", err)
-		return domain.LadoPlanRequest{}, apierr.Internal("LADO_SNAPSHOT_SAVE_FAILED", "Failed to save the issue snapshot")
-	}
-	now := s.deps.Clock().UTC()
+	id := domain.LadoPlanRequestID("lado-plan-request-" + s.deps.NewID())
 	req, err := s.deps.Store.CreateLadoPlanRequest(ctx, domain.LadoPlanRequest{
-		ID:                  domain.LadoPlanRequestID("lado-plan-request-" + s.deps.NewID()),
+		ID:                  id,
 		TaskID:              task.ID,
-		SessionID:           orchestrator.ID,
+		Kind:                domain.LadoPlanRequestWorker,
+		SessionID:           domain.LadoPlanRequestPlaceholder(id),
 		IssueSnapshotSHA256: sum,
 		SourceCommentID:     sourceComment,
 		Note:                note,
 		BasedOn:             basedOn.ID,
-		RequestedAt:         now,
+		RequestedAt:         s.deps.Clock().UTC(),
 	})
 	if err != nil {
 		return domain.LadoPlanRequest{}, apierr.Internal("LADO_PLAN_REQUEST_SAVE_FAILED", "Failed to save the plan request")
 	}
-	s.deliver(ctx, task, req, snapshot, orchestrator, basedOn)
-	if stored, ok, err := s.deps.Store.LadoPlanRequest(ctx, req.ID); err == nil && ok {
-		req = stored
+	for _, older := range s.openWorkerRequests(ctx, task.ID, req.ID) {
+		s.failWorker(ctx, older, domain.LadoPlanRequestReplaced, "a newer plan request replaced it")
 	}
+	s.kickPlans()
 	return req, nil
 }
 
@@ -191,8 +187,9 @@ func issueReadFailed(ref domain.IssueID, err error) error {
 	return failed
 }
 
-// writeIssueFile puts the pinned snapshot where the orchestrator reads it.
-// The file is a copy for reading; the blob store keeps the original.
+// writeIssueFile puts the pinned snapshot where an orchestrator reads it, for
+// a request made before plan workers. The file is a copy for reading; the
+// blob store keeps the original.
 func writeIssueFile(artifactDir string, task domain.LadoTask, snapshot domain.LadoIssueSnapshot, sum string, selection domain.LadoCommentSelection) error {
 	if artifactDir == "" {
 		return errors.New("the orchestrator has no artifact directory")
@@ -212,8 +209,8 @@ func writeIssueFile(artifactDir string, task domain.LadoTask, snapshot domain.La
 	return nil
 }
 
-// deliver sends a request to its orchestrator once. A failure is recorded;
-// the plan loop retries until the delivery timeout.
+// deliver sends a request made before plan workers to its orchestrator once.
+// A failure is recorded; the plan loop retries until the delivery timeout.
 func (s *Service) deliver(ctx context.Context, task domain.LadoTask, req domain.LadoPlanRequest, snapshot domain.LadoIssueSnapshot, orchestrator OrchestratorSession, basedOn domain.LadoPlanRevision) {
 	message := planRequestMessage(task, req, snapshot, orchestrator.ArtifactDir, basedOn)
 	err := s.deps.Orchestrators.Send(ctx, req.SessionID, message)
@@ -396,6 +393,11 @@ type PlanView struct {
 	// approval covers it.
 	Latest   bool
 	Approved bool
+	// Critique is the newest review of the draft of the revision's request,
+	// zero for a plan without one; Metrics is what making the revision took,
+	// nil when LADO did not record it.
+	Critique domain.LadoPlanCritique
+	Metrics  *domain.LadoPlanRevisionMetrics
 }
 
 // Plan returns one revision with its pinned content.
@@ -414,6 +416,10 @@ func (s *Service) Plan(ctx context.Context, revisionID domain.LadoPlanRevisionID
 		Latest:   task.Plan.Latest.ID == rev.ID,
 		Approved: task.Plan.ApprovalValid() && task.Plan.Latest.ID == rev.ID,
 	}
+	view.Critique, _ = s.lastCritique(ctx, rev.RequestID)
+	if m, ok, err := s.deps.Store.LadoPlanRevisionMetrics(ctx, rev.ID); err == nil && ok {
+		view.Metrics = &m
+	}
 	content, err := s.deps.Blobs.Get(rev.SHA256, domain.LadoPlanMaxBytes)
 	if err != nil {
 		s.deps.Log.Warn("LADO could not read a pinned plan", "revision", rev.ID, "err", err)
@@ -424,11 +430,14 @@ func (s *Service) Plan(ctx context.Context, revisionID domain.LadoPlanRevisionID
 	return view, nil
 }
 
-// PlanHistory is a task's plan requests, revisions and approvals.
+// PlanHistory is a task's plan requests, revisions and approvals, with the
+// reviews of plan workers' drafts and what making each revision took.
 type PlanHistory struct {
 	Requests  []domain.LadoPlanRequest
 	Revisions []domain.LadoPlanRevision
 	Approvals []domain.LadoPlanApproval
+	Critiques []domain.LadoPlanCritique
+	Metrics   map[domain.LadoPlanRevisionID]domain.LadoPlanRevisionMetrics
 }
 
 // Plans returns a task's plan history, oldest first.
@@ -445,6 +454,12 @@ func (s *Service) Plans(ctx context.Context, id domain.LadoTaskID) (PlanHistory,
 		return PlanHistory{}, apierr.Internal("LADO_PLANS_LOAD_FAILED", "Failed to load the task's plans")
 	}
 	if history.Approvals, err = s.deps.Store.ListLadoPlanApprovals(ctx, id); err != nil {
+		return PlanHistory{}, apierr.Internal("LADO_PLANS_LOAD_FAILED", "Failed to load the task's plans")
+	}
+	if history.Critiques, err = s.deps.Store.ListLadoPlanCritiquesByTask(ctx, id); err != nil {
+		return PlanHistory{}, apierr.Internal("LADO_PLANS_LOAD_FAILED", "Failed to load the task's plans")
+	}
+	if history.Metrics, err = s.deps.Store.ListLadoPlanRevisionMetrics(ctx, id); err != nil {
 		return PlanHistory{}, apierr.Internal("LADO_PLANS_LOAD_FAILED", "Failed to load the task's plans")
 	}
 	return history, nil

@@ -79,6 +79,14 @@ func (s *Store) BeginLadoPlanWorkerAttempt(ctx context.Context, id domain.LadoPl
 	return int(n), true, nil
 }
 
+// RecordLadoPlanWorkerProblem keeps why a designer did not start.
+func (s *Store) RecordLadoPlanWorkerProblem(ctx context.Context, id domain.LadoPlanRequestID, problem string) error {
+	_, err := s.ladoPlanWrite(ctx, "record LADO plan worker problem", nil, func(q *gen.Queries) (int64, error) {
+		return q.RecordLadoPlanWorkerProblem(ctx, gen.RecordLadoPlanWorkerProblemParams{DeliveryError: problem, ID: string(id)})
+	})
+	return err
+}
+
 // StartLadoPlanWorker records the designer session of a request.
 func (s *Store) StartLadoPlanWorker(ctx context.Context, id domain.LadoPlanRequestID, session domain.SessionID, at time.Time, event *domain.LadoAuditEvent) (bool, error) {
 	return s.ladoPlanWrite(ctx, "start LADO plan worker", event, func(q *gen.Queries) (int64, error) {

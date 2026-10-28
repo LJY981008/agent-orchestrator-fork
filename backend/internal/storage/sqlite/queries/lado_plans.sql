@@ -304,3 +304,8 @@ SELECT
 FROM model_usage_events mue
 JOIN usage_bindings ub ON ub.id = mue.binding_id
 WHERE ub.session_id = ?;
+
+-- name: RecordLadoPlanWorkerProblem :execrows
+UPDATE lado_plan_requests
+SET delivery_error = ?
+WHERE id = ? AND kind = 'worker' AND failed_at IS NULL AND cleaned_at IS NULL;
