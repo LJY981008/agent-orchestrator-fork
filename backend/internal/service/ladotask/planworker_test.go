@@ -321,6 +321,38 @@ func TestPlanWorkerCritiqueFailsTwiceThenTheDesignerSaysSo(t *testing.T) {
 	}
 }
 
+// A critic's reminder is forgotten once its review moves on, so the
+// reminders do not pile up over many reviews (a note of the AO review).
+func TestCriticRemindersAreForgottenOnceTheReviewEnds(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	req := pf.requestAndStart(t, PlanRequestInput{TaskID: pf.task.ID})
+	designer := pf.designer(t, req.ID)
+	pf.submit(t, req.ID, designer, pf.workerPlan("issue", "", "backend/storage/migrations/**"), true)
+	pf.svc.DrivePlanWorkers(ctx)
+	critique, _, _ := pf.store.LadoPlanCritique(ctx, req.ID, 1)
+	if critique.SessionID == "" {
+		t.Fatal("a migration plan was not reviewed")
+	}
+	// The critic's turn ended without findings: LADO reminds it once.
+	pf.sessions.idle(critique.SessionID, pf.now.Add(time.Minute))
+	pf.now = pf.now.Add(time.Minute + planIdleGrace + time.Second)
+	pf.svc.DrivePlanWorkers(ctx)
+	if sent := pf.sessions.messages(critique.SessionID); len(sent) != 1 {
+		t.Fatalf("critic messages = %q, want one reminder", sent)
+	}
+	if n := len(pf.svc.criticReminders); n != 1 {
+		t.Fatalf("reminders = %d, want 1", n)
+	}
+	if _, err := pf.svc.SubmitCritique(ctx, SubmitCritiqueInput{RequestID: req.ID, SessionID: critique.SessionID}); err != nil {
+		t.Fatalf("SubmitCritique: %v", err)
+	}
+	pf.svc.DrivePlanWorkers(ctx)
+	if n := len(pf.svc.criticReminders); n != 0 {
+		t.Fatalf("reminders kept after the review = %d, want none", n)
+	}
+}
+
 // A change request starts a new plan worker that gets the note and the
 // revision it changes, in LADO's own folder: that file is never pinned, and a
 // plan written there is not either.

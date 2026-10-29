@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -68,6 +69,10 @@ type Deps struct {
 // (service/ladotask).
 type Service struct {
 	deps Deps
+	// queued holds the keys this process queued or found queued, so a fact
+	// read again on the next tick costs no write.
+	mu     sync.Mutex
+	queued map[string]bool
 }
 
 // New returns a Service.
@@ -78,7 +83,7 @@ func New(deps Deps) *Service {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
-	return &Service{deps: deps}
+	return &Service{deps: deps, queued: map[string]bool{}}
 }
 
 // Tick adds a notice for each event since notices started, then sends each
@@ -163,13 +168,24 @@ func (s *Service) collectRun(ctx context.Context, task domain.LadoTask, since, n
 	}
 }
 
-// add queues a notice once per key.
+// add queues a notice once per key. A key this process already queued, or
+// found queued, is not written again.
 func (s *Service) add(ctx context.Context, project domain.ProjectID, key, text string, occurred, now time.Time) {
+	s.mu.Lock()
+	known := s.queued[key]
+	s.mu.Unlock()
+	if known {
+		return
+	}
 	if _, err := s.deps.Store.AddLadoOrchestratorNotice(ctx, domain.LadoOrchestratorNotice{
 		ProjectID: project, Key: key, Text: text, OccurredAt: occurred, CreatedAt: now,
 	}); err != nil {
 		s.deps.Log.Warn("LADO could not queue a notice", "project", project, "key", key, "err", err)
+		return
 	}
+	s.mu.Lock()
+	s.queued[key] = true
+	s.mu.Unlock()
 }
 
 // send drops the notices nobody can take any more, then sends each project's

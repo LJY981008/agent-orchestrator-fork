@@ -443,6 +443,7 @@ func (s *Service) driveCritique(ctx context.Context, task domain.LadoTask, req d
 		s.sendFeedback(ctx, req, skippedMessage(req, latest.SkipReason), now)
 	case domain.LadoCritiqueDone:
 		s.stopSession(ctx, latest.SessionID)
+		s.forgetCriticReminder(latest.ID)
 		s.sendFeedback(ctx, req, findingsMessage(req, latest.Findings), now)
 	case domain.LadoCritiqueFailed:
 		s.stopSession(ctx, latest.SessionID)
@@ -530,6 +531,7 @@ func (s *Service) failCritique(ctx context.Context, req domain.LadoPlanRequest, 
 		s.deps.Log.Warn("LADO could not record a failed review", "request", req.ID, "err", err)
 	}
 	s.stopSession(ctx, c.SessionID)
+	s.forgetCriticReminder(c.ID)
 }
 
 // sendFeedback sends the designer what came of its draft's review and
@@ -595,6 +597,7 @@ func (s *Service) stopRequestSessions(ctx context.Context, req domain.LadoPlanRe
 	}
 	for _, c := range critiques {
 		s.stopSession(ctx, c.SessionID)
+		s.forgetCriticReminder(c.ID)
 	}
 }
 
@@ -640,6 +643,14 @@ func (s *Service) rememberCriticReminder(id domain.LadoPlanCritiqueID, at time.T
 		s.criticReminders = map[domain.LadoPlanCritiqueID]time.Time{}
 	}
 	s.criticReminders[id] = at
+}
+
+// forgetCriticReminder drops a review's reminder once it is no longer
+// running, so the reminders do not pile up.
+func (s *Service) forgetCriticReminder(id domain.LadoPlanCritiqueID) {
+	s.criticMu.Lock()
+	defer s.criticMu.Unlock()
+	delete(s.criticReminders, id)
 }
 
 // requestDir is LADO's own folder for a request's files: the issue and the

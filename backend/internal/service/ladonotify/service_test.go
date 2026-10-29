@@ -18,6 +18,7 @@ var t0 = time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)
 // fakeStore is the outbox and the facts, in memory.
 type fakeStore struct {
 	mu        sync.Mutex
+	adds      int
 	since     time.Time
 	notices   []domain.LadoOrchestratorNotice
 	requests  []domain.LadoPlanRequestNoticeFact
@@ -30,6 +31,7 @@ func (f *fakeStore) LadoNoticeSince(context.Context) (time.Time, error) { return
 func (f *fakeStore) AddLadoOrchestratorNotice(_ context.Context, n domain.LadoOrchestratorNotice) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.adds++
 	for _, have := range f.notices {
 		if have.Key == n.Key {
 			return false, nil
@@ -173,7 +175,12 @@ func TestTickQueuesOneLinePerEvent(t *testing.T) {
 	}
 	f.orch.live = false
 	f.tick(t)
+	adds := f.store.adds
+	// The next tick reads the same facts and writes nothing.
 	f.tick(t)
+	if f.store.adds != adds {
+		t.Fatalf("the second tick wrote %d notices again", f.store.adds-adds)
+	}
 	got := f.store.texts(false)
 	want := []string{
 		"LADO 알림: #27 계획 요청 접수 — 계획 워커가 씁니다",
