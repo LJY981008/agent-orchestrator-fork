@@ -54,7 +54,7 @@ function planResponse(overrides: PlanOverrides = {}): components["schemas"]["Lad
 		approved: false,
 		content: "---\ntask: lado-task-1\n---\n",
 		latest: overrides.latest ?? true,
-		plan: { acceptanceCriteria: [], affectedPaths: [], body: "", changeKinds: [], reviewRequired: false, steps: [], testCommands: [] },
+		plan: { acceptanceCriteria: [], affectedPaths: [], body: "", changeKinds: [], reviewRequired: false, steps: [], testCommands: [], parts: [], integrationSteps: [], warnings: [] },
 		revision: {
 			createdAt: "2026-10-20T00:00:00Z",
 			id: "lado-plan-1",
@@ -159,7 +159,7 @@ const changedCeiling = ceilingRule({ ceiling: { mode: "bypass-permissions" }, ve
 const NO_COMMANDS_SHA = "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945";
 
 function settingsResponse(ladoMode = true): LadoPresenceProjectSettings {
-	return { projectId: "demo", ladoMode, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: NO_COMMANDS_SHA, checkTimeoutMinutes: 30 };
+	return { projectId: "demo", ladoMode, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: NO_COMMANDS_SHA, checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true };
 }
 
 function projectResponse(name = "Demo app"): components["schemas"]["ProjectGetResponse"] {

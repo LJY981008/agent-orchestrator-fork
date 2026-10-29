@@ -125,7 +125,7 @@ type LadoPlanContentResponse struct {
 	ChangeKinds        []string               `json:"changeKinds" description:"The changes the plan declares: db_schema, external_api, auth or data_deletion."`
 	Parts              []LadoPlanPartResponse `json:"parts" description:"The parts LADO runs in parallel workers, in the plan's order; empty when one worker runs the whole plan."`
 	IntegrationSteps   []int                  `json:"integrationSteps" description:"The 1-based numbers of the steps no part takes, which the integration worker does once every part is merged; empty without parts."`
-	Warnings           []string               `json:"warnings" enum:"unsplit_large_plan" description:"What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts."`
+	Warnings           []string               `json:"warnings" description:"What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts."`
 	Body               string                 `json:"body" description:"The Markdown after the front matter."`
 }
 

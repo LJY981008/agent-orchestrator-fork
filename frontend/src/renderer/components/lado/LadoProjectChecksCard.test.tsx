@@ -17,7 +17,7 @@ const commands: lado.LadoCheckCommand[] = [
 	{ name: "lint", command: "npm run lint" },
 	{ name: "unit tests", command: "npm test" },
 ];
-const settings: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: commands, checkCommandsSha256: "0000000000000000000000000000000000000000000000000000000000000000", checkTimeoutMinutes: 30 };
+const settings: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: commands, checkCommandsSha256: "0000000000000000000000000000000000000000000000000000000000000000", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true };
 
 // The desktop app's confirmation of a change of the check commands (lib/lado.ts updateLadoProjectChecks).
 const confirmChecks = () => vi.mocked(aoBridge.lado.presence.changeProjectChecks);

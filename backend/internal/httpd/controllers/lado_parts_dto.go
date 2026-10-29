@@ -19,7 +19,7 @@ type LadoTaskPartResponse struct {
 	AffectedPaths  []string  `json:"affectedPaths"`
 	DependsOn      []string  `json:"dependsOn"`
 	State          string    `json:"state" enum:"waiting,running,done,merging,merged,conflict,failed" description:"waiting until it can start; running in its worker; done once its worker reported done; merging while LADO merges it; merged once its commits are on the integration branch; conflict while a merge worker resolves its merge; failed once its attempts ran out."`
-	WaitingReason  string    `json:"waitingReason,omitempty" enum:"part_dependency,part_overlap,slot_workers,memory_tight,disk_low" description:"Why a waiting part, or a conflict waiting for its merge worker, has not started."`
+	WaitingReason  string    `json:"waitingReason,omitempty" enum:"part_dependency,part_overlap,slot_workers,memory_tight,disk_low,retry" description:"Why a waiting part, or a conflict waiting for its merge worker, has not started; retry after a worker that did not start, until its next start."`
 	WaitingDetail  string    `json:"waitingDetail,omitempty" description:"The parts it waits for (part_dependency) or the running part whose paths overlap (part_overlap)."`
 	Attempts       int       `json:"attempts" description:"Workers started for the part so far; LADO gives up after two."`
 	SessionID      string    `json:"sessionId,omitempty" description:"The part's newest worker session."`

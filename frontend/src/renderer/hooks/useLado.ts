@@ -22,6 +22,7 @@ import {
 	fetchLadoRule,
 	fetchLadoRules,
 	fetchLadoTasks,
+	fetchLadoTaskParts,
 	fetchLadoTaskView,
 	importLadoTasks,
 	invalidateLadoRuleQueries,
@@ -40,6 +41,7 @@ import {
 	ladoRuleQueryKey,
 	ladoRulesQueryKey,
 	ladoTasksQueryKey,
+	ladoTaskPartsQueryKey,
 	ladoTaskViewQueryKey,
 	ladoTaskViewQueryRoot,
 	mergeLadoPR,
@@ -50,9 +52,11 @@ import {
 	updateLadoCheckTimeout,
 	updateLadoDispatchSettings,
 	updateLadoProjectChecks,
+	updateLadoProjectOverlap,
 	updateLadoProjectSettings,
 	type LadoCheckCommand,
 	type LadoDispatchSettingsInput,
+	type LadoProjectOverlapInput,
 } from "../lib/lado";
 import { sessionScmSummaryQueryKey } from "./useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -107,6 +111,16 @@ export function useUpdateLadoProjectSettings(projectId: string) {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: (input: { maxConcurrent: number }) => updateLadoProjectSettings(projectId, input),
+		onSuccess: (settings) => queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings),
+		retry: false,
+	});
+}
+
+/** Changes the project's overlap wait or its globs whose overlap does not count. */
+export function useUpdateLadoProjectOverlap(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (input: LadoProjectOverlapInput) => updateLadoProjectOverlap(projectId, input),
 		onSuccess: (settings) => queryClient.setQueryData(ladoProjectSettingsQueryKey(projectId), settings),
 		retry: false,
 	});
@@ -250,6 +264,16 @@ export function useLadoTaskView(taskId: string | null) {
 		queryFn: () => fetchLadoTaskView(taskId ?? ""),
 		enabled: Boolean(taskId),
 		refetchOnMount: "always",
+		retry: false,
+	});
+}
+
+/** The parts run of a task split into parts; LADO's task events refresh it. */
+export function useLadoTaskParts(taskId: string | null, enabled: boolean) {
+	return useQuery({
+		queryKey: ladoTaskPartsQueryKey(taskId ?? ""),
+		queryFn: () => fetchLadoTaskParts(taskId ?? ""),
+		enabled: Boolean(taskId) && enabled,
 		retry: false,
 	});
 }

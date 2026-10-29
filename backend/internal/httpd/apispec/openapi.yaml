@@ -5516,7 +5516,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ControllersLadoTaskPartsResponse'
+                $ref: '#/components/schemas/LadoTaskPartsResponse'
           description: OK
         "404":
           content:
@@ -17064,164 +17064,6 @@ components:
         deleteArtifacts:
           type: boolean
       type: object
-    ControllersLadoPlanPartResponse:
-      properties:
-        affectedPaths:
-          items:
-            type: string
-          type: array
-        dependsOn:
-          description: The parts merged before this one starts.
-          items:
-            type: string
-          type: array
-        id:
-          type: string
-        phase:
-          description: 'The display phase: 1 for a part without dependencies, one
-            more than the latest of its dependencies otherwise; 0 on a dependency
-            cycle.'
-          type: integer
-        steps:
-          description: 1-based numbers into the plan's steps.
-          items:
-            type: integer
-          type: array
-        title:
-          type: string
-      required:
-      - id
-      - title
-      - steps
-      - affectedPaths
-      - dependsOn
-      - phase
-      type: object
-    ControllersLadoTaskPartResponse:
-      properties:
-        affectedPaths:
-          items:
-            type: string
-          type: array
-        attempts:
-          description: Workers started for the part so far; LADO gives up after two.
-          type: integer
-        branch:
-          type: string
-        dependsOn:
-          items:
-            type: string
-          type: array
-        error:
-          description: Why the part's last worker did not finish it.
-          type: string
-        id:
-          type: string
-        mergeAttempts:
-          type: integer
-        mergeSessionId:
-          description: The merge worker resolving the part's conflict.
-          type: string
-        mergedSha:
-          description: The integration branch's commit once the part was merged.
-          type: string
-        phase:
-          description: The display phase, as the plan view shows it.
-          type: integer
-        sessionId:
-          description: The part's newest worker session.
-          type: string
-        startSha:
-          description: The integration branch's commit the part's branch started from.
-          type: string
-        state:
-          description: waiting until it can start; running in its worker; done once
-            its worker reported done; merging while LADO merges it; merged once its
-            commits are on the integration branch; conflict while a merge worker resolves
-            its merge; failed once its attempts ran out.
-          enum:
-          - waiting
-          - running
-          - done
-          - merging
-          - merged
-          - conflict
-          - failed
-          type: string
-        steps:
-          items:
-            type: integer
-          type: array
-        summary:
-          description: The part worker's done report, with the merge worker's note
-            when it had one.
-          type: string
-        title:
-          type: string
-        updatedAt:
-          format: date-time
-          type: string
-        waitingDetail:
-          description: The parts it waits for (part_dependency) or the running part
-            whose paths overlap (part_overlap).
-          type: string
-        waitingReason:
-          description: Why a waiting part, or a conflict waiting for its merge worker,
-            has not started.
-          enum:
-          - part_dependency
-          - part_overlap
-          - slot_workers
-          - memory_tight
-          - disk_low
-          type: string
-      required:
-      - id
-      - title
-      - phase
-      - steps
-      - affectedPaths
-      - dependsOn
-      - state
-      - attempts
-      - mergeAttempts
-      - updatedAt
-      type: object
-    ControllersLadoTaskPartsResponse:
-      properties:
-        baseSha:
-          description: The approved base commit the integration branch started from.
-          type: string
-        branch:
-          description: The integration branch; omitted while the newest approval runs
-            no parts.
-          type: string
-        headSha:
-          description: Where LADO last moved the integration branch.
-          type: string
-        parts:
-          items:
-            $ref: '#/components/schemas/ControllersLadoTaskPartResponse'
-          type: array
-        startedAt:
-          format: date-time
-          type:
-          - "null"
-          - string
-      required:
-      - parts
-      type: object
-    ControllersLadoTaskPartsSummaryResponse:
-      properties:
-        merged:
-          description: The parts merged into the integration branch so far.
-          type: integer
-        total:
-          type: integer
-      required:
-      - total
-      - merged
-      type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
         hostId:
@@ -20546,7 +20388,7 @@ components:
           description: The parts LADO runs in parallel workers, in the plan's order;
             empty when one worker runs the whole plan.
           items:
-            $ref: '#/components/schemas/ControllersLadoPlanPartResponse'
+            $ref: '#/components/schemas/LadoPlanPartResponse'
           type: array
         permissionCeiling:
           type: string
@@ -20570,8 +20412,6 @@ components:
         warnings:
           description: 'What the plan view warns about without blocking the approval:
             unsplit_large_plan for six or more steps without parts.'
-          enum:
-          - unsplit_large_plan
           items:
             type: string
           type: array
@@ -20764,6 +20604,39 @@ components:
       - sessions
       - changeKinds
       - updatedAt
+      type: object
+    LadoPlanPartResponse:
+      properties:
+        affectedPaths:
+          items:
+            type: string
+          type: array
+        dependsOn:
+          description: The parts merged before this one starts.
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        phase:
+          description: 'The display phase: 1 for a part without dependencies, one
+            more than the latest of its dependencies otherwise; 0 on a dependency
+            cycle.'
+          type: integer
+        steps:
+          description: 1-based numbers into the plan's steps.
+          items:
+            type: integer
+          type: array
+        title:
+          type: string
+      required:
+      - id
+      - title
+      - steps
+      - affectedPaths
+      - dependsOn
+      - phase
       type: object
     LadoPlanProblemResponse:
       properties:
@@ -23046,6 +22919,133 @@ components:
       required:
       - tasks
       type: object
+    LadoTaskPartResponse:
+      properties:
+        affectedPaths:
+          items:
+            type: string
+          type: array
+        attempts:
+          description: Workers started for the part so far; LADO gives up after two.
+          type: integer
+        branch:
+          type: string
+        dependsOn:
+          items:
+            type: string
+          type: array
+        error:
+          description: Why the part's last worker did not finish it.
+          type: string
+        id:
+          type: string
+        mergeAttempts:
+          type: integer
+        mergeSessionId:
+          description: The merge worker resolving the part's conflict.
+          type: string
+        mergedSha:
+          description: The integration branch's commit once the part was merged.
+          type: string
+        phase:
+          description: The display phase, as the plan view shows it.
+          type: integer
+        sessionId:
+          description: The part's newest worker session.
+          type: string
+        startSha:
+          description: The integration branch's commit the part's branch started from.
+          type: string
+        state:
+          description: waiting until it can start; running in its worker; done once
+            its worker reported done; merging while LADO merges it; merged once its
+            commits are on the integration branch; conflict while a merge worker resolves
+            its merge; failed once its attempts ran out.
+          enum:
+          - waiting
+          - running
+          - done
+          - merging
+          - merged
+          - conflict
+          - failed
+          type: string
+        steps:
+          items:
+            type: integer
+          type: array
+        summary:
+          description: The part worker's done report, with the merge worker's note
+            when it had one.
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        waitingDetail:
+          description: The parts it waits for (part_dependency) or the running part
+            whose paths overlap (part_overlap).
+          type: string
+        waitingReason:
+          description: Why a waiting part, or a conflict waiting for its merge worker,
+            has not started; retry after a worker that did not start, until its next
+            start.
+          enum:
+          - part_dependency
+          - part_overlap
+          - slot_workers
+          - memory_tight
+          - disk_low
+          - retry
+          type: string
+      required:
+      - id
+      - title
+      - phase
+      - steps
+      - affectedPaths
+      - dependsOn
+      - state
+      - attempts
+      - mergeAttempts
+      - updatedAt
+      type: object
+    LadoTaskPartsResponse:
+      properties:
+        baseSha:
+          description: The approved base commit the integration branch started from.
+          type: string
+        branch:
+          description: The integration branch; omitted while the newest approval runs
+            no parts.
+          type: string
+        headSha:
+          description: Where LADO last moved the integration branch.
+          type: string
+        parts:
+          items:
+            $ref: '#/components/schemas/LadoTaskPartResponse'
+          type: array
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - parts
+      type: object
+    LadoTaskPartsSummaryResponse:
+      properties:
+        merged:
+          description: The parts merged into the integration branch so far.
+          type: integer
+        total:
+          type: integer
+      required:
+      - total
+      - merged
+      type: object
     LadoTaskPlanResponse:
       properties:
         approvedRevisionId:
@@ -23159,7 +23159,7 @@ components:
           description: Model chosen for the task's execution.
           type: string
         parts:
-          $ref: '#/components/schemas/ControllersLadoTaskPartsSummaryResponse'
+          $ref: '#/components/schemas/LadoTaskPartsSummaryResponse'
           description: How far the parts run of the newest approval got; omitted for
             a task without parts. GET /api/v1/lado/tasks/{taskId}/parts lists the
             parts.

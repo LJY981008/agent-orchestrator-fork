@@ -37,14 +37,10 @@ func TestLadoMigrate0010RebuildsExecutionsAndRoundTrips(t *testing.T) {
 	if err := db.QueryRow(`SELECT role FROM lado_executions WHERE session_id = 'session'`).Scan(&role); err != nil || role != "" {
 		t.Fatalf("earlier execution role = %q, %v; want it kept with role ''", role, err)
 	}
-	rows, err := db.Query(`PRAGMA foreign_key_check`)
-	if err != nil {
-		t.Fatalf("foreign key check: %v", err)
+	var violations int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_foreign_key_check`).Scan(&violations); err != nil || violations != 0 {
+		t.Fatalf("foreign key check = %d, %v; want no violation after the rebuild", violations, err)
 	}
-	if rows.Next() {
-		t.Fatal("the rebuild left a foreign key violation")
-	}
-	_ = rows.Close()
 	mustExec(t, db, `INSERT INTO lado_executions (session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id, attempt, started_at, role, part_id)
 		VALUES ('part-a', 'task', 'entry', 'revision', 'approval', 'snapshot', 1, CURRENT_TIMESTAMP, 'part', 'a')`)
 	if _, err := db.Exec(`INSERT INTO lado_executions (session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id, attempt, started_at, role)

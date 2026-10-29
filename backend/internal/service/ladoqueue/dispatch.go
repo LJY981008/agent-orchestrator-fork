@@ -192,7 +192,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.handBack(ctx, entry)
 	}
 	if len(plan.Parts) > 0 {
-		return s.startParts(ctx, entry, task, in, plan, dir, base, dispatchSHA, ahead, localSHA, now)
+		return s.startParts(ctx, entry, task, in, plan, dir, base, dispatchSHA, ahead, localSHA)
 	}
 	cfg := spawnConfig(task, entry, in, agent, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)

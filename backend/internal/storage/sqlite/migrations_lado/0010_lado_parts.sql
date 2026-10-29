@@ -158,6 +158,8 @@ ALTER TABLE lado_project_settings ADD COLUMN overlap_ignore_json TEXT CHECK (ove
 
 -- +goose Down
 PRAGMA defer_foreign_keys = ON;
+-- The queue trigger reads columns this drops; the next open recreates it.
+DROP TRIGGER IF EXISTS lado_cdc_queue_entries_update;
 ALTER TABLE lado_project_settings DROP COLUMN overlap_ignore_json;
 ALTER TABLE lado_project_settings DROP COLUMN overlap_wait;
 ALTER TABLE lado_dispatch_settings DROP COLUMN min_free_disk_gb;

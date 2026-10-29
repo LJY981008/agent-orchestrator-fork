@@ -1,6 +1,7 @@
-// LADO fork: Settings → Runs (docs/LJY-PRD/TDD.md §5.3). How many approved
-// tasks of LADO projects run at once, how long one may run, and whether queued
-// ones wait while memory is tight; then, in their own card, how many plan
+// LADO fork: Settings → Runs (docs/LJY-PRD/TDD.md §5.3, §5.4). How many
+// approved tasks of LADO projects run at once, how many LADO workers run at
+// once (a task split into parts runs several), how long one may run, and
+// whether queued work waits while memory is tight or the disk is low; then, in their own card, how many plan
 // requests run their plan workers at once and when a small plan skips its
 // review (§5.1). A change saves at once, all values together; each project
 // also has its own cap (Project settings → LADO).
@@ -22,6 +23,15 @@ export const ladoConcurrentRunOptions: SettingsOption<string>[] = Array.from({ l
 	return { value, label: value };
 });
 
+/** The caps on concurrent LADO workers the daemon accepts: 1 to 12. */
+const workerOptions: SettingsOption<string>[] = Array.from({ length: 12 }, (_, index) => {
+	const value = String(index + 1);
+	return { value, label: value };
+});
+
+/** The free disk thresholds on offer, in gigabytes. */
+const diskChoices = [5, 10, 20, 50, 100];
+
 /** The maximum run times on offer, in minutes; 0 means no limit. */
 const runMinuteChoices: readonly LadoRunMinutes[] = [0, 60, 120, 240, 480, 720, 1440];
 
@@ -29,10 +39,22 @@ const runMinuteChoices: readonly LadoRunMinutes[] = [0, 60, 120, 240, 480, 720, 
 const reviewMaxPathChoices = Array.from({ length: 20 }, (_, index) => index + 1);
 
 /** The values a change sends, all of them every time. */
-type RunsValues = Pick<LadoDispatchSettings, "maxConcurrent" | "maxRunMinutes" | "holdOnMemoryTight" | "maxPlanWorkers" | "planReview">;
+type RunsValues = Pick<
+	LadoDispatchSettings,
+	"maxConcurrent" | "maxRunMinutes" | "holdOnMemoryTight" | "maxPlanWorkers" | "planReview" | "maxWorkers" | "holdOnDiskLow" | "minFreeDiskGb"
+>;
 
 /** The row a change comes from, to put a refusal under it. */
-type RunsSetting = "maxConcurrent" | "maxRunMinutes" | "holdOnMemoryTight" | "maxPlanWorkers" | "reviewSkip" | "reviewMaxPaths";
+type RunsSetting =
+	| "maxConcurrent"
+	| "maxWorkers"
+	| "maxRunMinutes"
+	| "holdOnMemoryTight"
+	| "holdOnDiskLow"
+	| "minFreeDiskGb"
+	| "maxPlanWorkers"
+	| "reviewSkip"
+	| "reviewMaxPaths";
 
 export function RunsSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
@@ -56,6 +78,9 @@ export function RunsSection({ titleHidden }: { titleHidden?: boolean }) {
 			holdOnMemoryTight: saved.holdOnMemoryTight,
 			maxPlanWorkers: saved.maxPlanWorkers,
 			planReview: saved.planReview,
+			maxWorkers: saved.maxWorkers,
+			holdOnDiskLow: saved.holdOnDiskLow,
+			minFreeDiskGb: saved.minFreeDiskGb,
 		};
 		const next = { ...current, ...change };
 		if (JSON.stringify(next) === JSON.stringify(current)) return;
@@ -75,6 +100,11 @@ export function RunsSection({ titleHidden }: { titleHidden?: boolean }) {
 		value: String(minutes),
 		label: minutes === 0 ? t("lado.runs.maxRunTimeOff") : t("lado.runs.hours", { count: minutes / 60 }),
 	}));
+
+	// A threshold set outside the menu's choices still shows as itself.
+	const diskOptions: SettingsOption<string>[] = [...new Set([...diskChoices, shown?.minFreeDiskGb ?? 10])]
+		.sort((a, b) => a - b)
+		.map((gb) => ({ value: String(gb), label: t("lado.runs.diskGb", { gb }) }));
 
 	const reviewMaxPathOptions: SettingsOption<string>[] = reviewMaxPathChoices.map((limit) => ({
 		value: String(limit),
@@ -113,6 +143,23 @@ export function RunsSection({ titleHidden }: { titleHidden?: boolean }) {
 								onChange={(value) => save("maxConcurrent", { maxConcurrent: Number(value) })}
 							/>
 						</SettingsRow>
+						<SettingsRow
+							label={t("lado.runs.maxWorkers")}
+							description={
+								<>
+									{t("lado.runs.maxWorkersHint")}
+									{failure("maxWorkers")}
+								</>
+							}
+						>
+							<SettingsOptionMenu
+								aria-label={t("lado.runs.maxWorkers")}
+								value={String(shown.maxWorkers)}
+								options={workerOptions}
+								disabled={update.isPending}
+								onChange={(value) => save("maxWorkers", { maxWorkers: Number(value) })}
+							/>
+						</SettingsRow>
 						<SettingsRow label={t("lado.runs.maxRunTime")} description={failure("maxRunMinutes")}>
 							<SettingsOptionMenu
 								aria-label={t("lado.runs.maxRunTime")}
@@ -139,6 +186,32 @@ export function RunsSection({ titleHidden }: { titleHidden?: boolean }) {
 								checked={shown.holdOnMemoryTight}
 								disabled={update.isPending}
 								onCheckedChange={(on) => save("holdOnMemoryTight", { holdOnMemoryTight: on })}
+							/>
+						</SettingsRow>
+						<SettingsRow
+							label={t("lado.runs.holdOnDiskLow")}
+							description={
+								<>
+									{t("lado.runs.holdOnDiskLowHint")}
+									{failure("holdOnDiskLow")}
+								</>
+							}
+						>
+							<Switch
+								aria-label={t("lado.runs.holdOnDiskLow")}
+								checked={shown.holdOnDiskLow}
+								disabled={update.isPending}
+								onCheckedChange={(on) => save("holdOnDiskLow", { holdOnDiskLow: on })}
+							/>
+						</SettingsRow>
+						<SettingsRow label={t("lado.runs.minFreeDisk")} description={failure("minFreeDiskGb")}>
+							{/* Without the wait the threshold does not count. */}
+							<SettingsOptionMenu
+								aria-label={t("lado.runs.minFreeDisk")}
+								value={String(shown.minFreeDiskGb)}
+								options={diskOptions}
+								disabled={update.isPending || !shown.holdOnDiskLow}
+								onChange={(value) => save("minFreeDiskGb", { minFreeDiskGb: Number(value) })}
 							/>
 						</SettingsRow>
 					</>

@@ -5712,72 +5712,6 @@ export interface components {
         ControllersKillSessionRequest: {
             deleteArtifacts?: boolean;
         };
-        ControllersLadoPlanPartResponse: {
-            affectedPaths: string[];
-            /** @description The parts merged before this one starts. */
-            dependsOn: string[];
-            id: string;
-            /** @description The display phase: 1 for a part without dependencies, one more than the latest of its dependencies otherwise; 0 on a dependency cycle. */
-            phase: number;
-            /** @description 1-based numbers into the plan's steps. */
-            steps: number[];
-            title: string;
-        };
-        ControllersLadoTaskPartResponse: {
-            affectedPaths: string[];
-            /** @description Workers started for the part so far; LADO gives up after two. */
-            attempts: number;
-            branch?: string;
-            dependsOn: string[];
-            /** @description Why the part's last worker did not finish it. */
-            error?: string;
-            id: string;
-            mergeAttempts: number;
-            /** @description The merge worker resolving the part's conflict. */
-            mergeSessionId?: string;
-            /** @description The integration branch's commit once the part was merged. */
-            mergedSha?: string;
-            /** @description The display phase, as the plan view shows it. */
-            phase: number;
-            /** @description The part's newest worker session. */
-            sessionId?: string;
-            /** @description The integration branch's commit the part's branch started from. */
-            startSha?: string;
-            /**
-             * @description waiting until it can start; running in its worker; done once its worker reported done; merging while LADO merges it; merged once its commits are on the integration branch; conflict while a merge worker resolves its merge; failed once its attempts ran out.
-             * @enum {string}
-             */
-            state: "waiting" | "running" | "done" | "merging" | "merged" | "conflict" | "failed";
-            steps: number[];
-            /** @description The part worker's done report, with the merge worker's note when it had one. */
-            summary?: string;
-            title: string;
-            /** Format: date-time */
-            updatedAt: string;
-            /** @description The parts it waits for (part_dependency) or the running part whose paths overlap (part_overlap). */
-            waitingDetail?: string;
-            /**
-             * @description Why a waiting part, or a conflict waiting for its merge worker, has not started.
-             * @enum {string}
-             */
-            waitingReason?: "part_dependency" | "part_overlap" | "slot_workers" | "memory_tight" | "disk_low";
-        };
-        ControllersLadoTaskPartsResponse: {
-            /** @description The approved base commit the integration branch started from. */
-            baseSha?: string;
-            /** @description The integration branch; omitted while the newest approval runs no parts. */
-            branch?: string;
-            /** @description Where LADO last moved the integration branch. */
-            headSha?: string;
-            parts: components["schemas"]["ControllersLadoTaskPartResponse"][];
-            /** Format: date-time */
-            startedAt?: null | string;
-        };
-        ControllersLadoTaskPartsSummaryResponse: {
-            /** @description The parts merged into the integration branch so far. */
-            merged: number;
-            total: number;
-        };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
             token: string;
@@ -7055,7 +6989,7 @@ export interface components {
             /** @description The 1-based numbers of the steps no part takes, which the integration worker does once every part is merged; empty without parts. */
             integrationSteps: number[];
             /** @description The parts LADO runs in parallel workers, in the plan's order; empty when one worker runs the whole plan. */
-            parts: components["schemas"]["ControllersLadoPlanPartResponse"][];
+            parts: components["schemas"]["LadoPlanPartResponse"][];
             permissionCeiling?: string;
             /** @description issue, or comment:<id> for a plan converted from an issue comment. */
             planSource?: string;
@@ -7064,11 +6998,8 @@ export interface components {
             risk?: string;
             steps: string[];
             testCommands: string[];
-            /**
-             * @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts.
-             * @enum {array}
-             */
-            warnings: "unsplit_large_plan";
+            /** @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts. */
+            warnings: string[];
         };
         LadoPlanCritiqueResponse: {
             /** @description 1 and 2 for the critic sessions, 0 for a skipped review. */
@@ -7146,6 +7077,17 @@ export interface components {
             sessions: components["schemas"]["LadoPlanSessionUsageResponse"][];
             /** Format: date-time */
             updatedAt: string;
+        };
+        LadoPlanPartResponse: {
+            affectedPaths: string[];
+            /** @description The parts merged before this one starts. */
+            dependsOn: string[];
+            id: string;
+            /** @description The display phase: 1 for a part without dependencies, one more than the latest of its dependencies otherwise; 0 on a dependency cycle. */
+            phase: number;
+            /** @description 1-based numbers into the plan's steps. */
+            steps: number[];
+            title: string;
         };
         LadoPlanProblemResponse: {
             /**
@@ -8063,6 +8005,61 @@ export interface components {
         LadoTaskListResponse: {
             tasks: components["schemas"]["LadoTaskResponse"][];
         };
+        LadoTaskPartResponse: {
+            affectedPaths: string[];
+            /** @description Workers started for the part so far; LADO gives up after two. */
+            attempts: number;
+            branch?: string;
+            dependsOn: string[];
+            /** @description Why the part's last worker did not finish it. */
+            error?: string;
+            id: string;
+            mergeAttempts: number;
+            /** @description The merge worker resolving the part's conflict. */
+            mergeSessionId?: string;
+            /** @description The integration branch's commit once the part was merged. */
+            mergedSha?: string;
+            /** @description The display phase, as the plan view shows it. */
+            phase: number;
+            /** @description The part's newest worker session. */
+            sessionId?: string;
+            /** @description The integration branch's commit the part's branch started from. */
+            startSha?: string;
+            /**
+             * @description waiting until it can start; running in its worker; done once its worker reported done; merging while LADO merges it; merged once its commits are on the integration branch; conflict while a merge worker resolves its merge; failed once its attempts ran out.
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "done" | "merging" | "merged" | "conflict" | "failed";
+            steps: number[];
+            /** @description The part worker's done report, with the merge worker's note when it had one. */
+            summary?: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description The parts it waits for (part_dependency) or the running part whose paths overlap (part_overlap). */
+            waitingDetail?: string;
+            /**
+             * @description Why a waiting part, or a conflict waiting for its merge worker, has not started; retry after a worker that did not start, until its next start.
+             * @enum {string}
+             */
+            waitingReason?: "part_dependency" | "part_overlap" | "slot_workers" | "memory_tight" | "disk_low" | "retry";
+        };
+        LadoTaskPartsResponse: {
+            /** @description The approved base commit the integration branch started from. */
+            baseSha?: string;
+            /** @description The integration branch; omitted while the newest approval runs no parts. */
+            branch?: string;
+            /** @description Where LADO last moved the integration branch. */
+            headSha?: string;
+            parts: components["schemas"]["LadoTaskPartResponse"][];
+            /** Format: date-time */
+            startedAt?: null | string;
+        };
+        LadoTaskPartsSummaryResponse: {
+            /** @description The parts merged into the integration branch so far. */
+            merged: number;
+            total: number;
+        };
         LadoTaskPlanResponse: {
             /** @description The latest revision's id while a valid approval covers it. */
             approvedRevisionId?: string;
@@ -8117,7 +8114,7 @@ export interface components {
             /** @description Model chosen for the task's execution. */
             model?: string;
             /** @description How far the parts run of the newest approval got; omitted for a task without parts. GET /api/v1/lado/tasks/{taskId}/parts lists the parts. */
-            parts?: components["schemas"]["ControllersLadoTaskPartsSummaryResponse"];
+            parts?: components["schemas"]["LadoTaskPartsSummaryResponse"];
             plan: components["schemas"]["LadoTaskPlanResponse"];
             projectId: string;
             /** @description The queue entry of the newest approval; omitted without one. */
@@ -17257,7 +17254,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ControllersLadoTaskPartsResponse"];
+                    "application/json": components["schemas"]["LadoTaskPartsResponse"];
                 };
             };
             /** @description Not Found */

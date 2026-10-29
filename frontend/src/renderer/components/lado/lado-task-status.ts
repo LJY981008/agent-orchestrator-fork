@@ -160,7 +160,9 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 			// card nobody refreshes, where "in 2 min." would not.
 			const retryAt = reason === "retry" ? formatResetTime(task.queue?.nextAttemptAt, locale) : null;
 			if (retryAt) parts.push(t("lado.lane.retryAt", { time: retryAt.visible }));
-			else if (reason) parts.push(ladoReasonText(t, reason));
+			else if (reason === "paths_overlap" && task.queue?.waitingDetail) {
+				parts.push(t("lado.reason.paths_overlapWith", { issue: ladoIssueLabel(task.queue.waitingDetail) }));
+			} else if (reason) parts.push(ladoReasonText(t, reason));
 			const attempts = task.queue?.attempts ?? 0;
 			if (attempts > 0) parts.push(t("lado.lane.attempt", { attempt: attempts, max: LADO_MAX_ATTEMPTS }));
 			return parts.length > 0 ? parts.join(" · ") : null;
@@ -178,6 +180,9 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 		case "draft":
 			if (planComing(task)) return planComingReason(task, t);
 			return task.plan.worker?.phase === "failed" ? ladoPlanFailureText(t, task.plan.worker.failureCode) || null : null;
+		case "running":
+			// A task split into parts says how many are merged.
+			return task.parts ? t("lado.task.parts", { merged: task.parts.merged, total: task.parts.total }) : null;
 		case "validating":
 		case "integrating":
 			return reason ? ladoReasonText(t, reason) : null;
@@ -186,6 +191,12 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 		default:
 			return null;
 	}
+}
+
+/** An issue ref as people say it: "#7" for "github:acme/app#7". */
+export function ladoIssueLabel(ref: string): string {
+	const hash = ref.lastIndexOf("#");
+	return hash >= 0 ? ref.slice(hash) : ref;
 }
 
 export const ladoTaskToneDotClass: Record<LadoTaskStatusTone, string> = {

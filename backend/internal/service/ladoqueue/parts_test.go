@@ -563,3 +563,78 @@ func TestTheTaskCapCountsTasksNotWorkers(t *testing.T) {
 		t.Fatalf("task-7 entry = %+v, want it waiting for a task slot", task2.Queue)
 	}
 }
+
+// A part worker AO could not start waits 30 seconds, then two minutes,
+// before the part starts again; the third failed start fails the task.
+func TestAPartWhoseWorkerDoesNotStartWaitsBeforeItTriesAgain(t *testing.T) {
+	pf := newPartsFixture(t)
+	ctx := context.Background()
+	spawnErr := errors.New("the chat driver is not ready")
+	pf.sessions.errs = []error{spawnErr}
+	pf.tick(t, t0)
+	a := pf.parts(t, storeEntry)["a"]
+	if a.State != domain.LadoPartWaiting || a.WaitingReason != domain.LadoWaitingRetry || a.Attempts != 1 {
+		t.Fatalf("part a after a failed start = %+v, want it waiting to try again", a)
+	}
+	spawns := len(pf.sessions.spawned())
+	pf.tick(t, t0.Add(15*time.Second))
+	if len(pf.sessions.spawned()) != spawns {
+		t.Fatal("part a started again before its wait was over")
+	}
+	pf.tick(t, t0.Add(31*time.Second))
+	a = pf.parts(t, storeEntry)["a"]
+	if a.State != domain.LadoPartRunning || a.Attempts != 2 || a.Branch != "lado/task-1/a-2" {
+		t.Fatalf("part a after its wait = %+v, want its second worker running", a)
+	}
+	if task, _, _ := pf.db.LadoTask(ctx, "task-1"); task.StateAt(t0.Add(31*time.Second)) != domain.LadoTaskRunning {
+		t.Fatalf("task = %s, want running", task.StateAt(t0))
+	}
+}
+
+// When another part merges while a merge worker resolves a conflict, the
+// worker's branch no longer fast-forwards; LADO merges it onto the moved
+// integration branch instead of spending the merge worker's attempt.
+func TestAMergeWorkersBranchIsMergedOntoAMovedIntegrationBranch(t *testing.T) {
+	pf := newPartsFixture(t)
+	integration := domain.LadoIntegrationBranch("task-1")
+	pf.tick(t, t0)
+	parts := pf.parts(t, storeEntry)
+	commitOn(t, pf.repo, "lado/task-1/a", map[string]string{"svc/a.go": "package svc\n", "shared.txt": "start\na\n"})
+	pf.reportDone(t, parts["a"].SessionID, "a done")
+	pf.tick(t, t0.Add(time.Minute))
+	headA := pf.branch(t, integration)
+	bTip := commitOn(t, pf.repo, "lado/task-1/b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\nb\n"})
+	pf.reportDone(t, parts["b"].SessionID, "b done")
+	pf.tick(t, t0.Add(2*time.Minute))
+	parts = pf.parts(t, storeEntry)
+	if parts["b"].State != domain.LadoPartConflict || parts["b"].MergeSessionID == "" {
+		t.Fatalf("part b = %+v, want a merge worker", parts["b"])
+	}
+	// c merges while the merge worker works.
+	commitOn(t, pf.repo, "lado/task-1/c", map[string]string{"docs/c.md": "c\n"})
+	pf.reportDone(t, parts["c"].SessionID, "c done")
+	pf.tick(t, t0.Add(3*time.Minute))
+	headC := pf.branch(t, integration)
+	if headC == headA || pf.parts(t, storeEntry)["c"].State != domain.LadoPartMerged {
+		t.Fatal("c did not merge while b's merge worker worked")
+	}
+	resolved := commitOn(t, pf.repo, "lado/task-1/merge-b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\na\nb\n"}, headA, bTip)
+	pf.reportDone(t, pf.parts(t, storeEntry)["b"].MergeSessionID, "kept both")
+	spawns := len(pf.sessions.spawned())
+	pf.tick(t, t0.Add(4*time.Minute))
+	b := pf.parts(t, storeEntry)["b"]
+	head := pf.branch(t, integration)
+	if b.State != domain.LadoPartMerged || b.MergedSHA != head || b.MergeAttempts != 1 {
+		t.Fatalf("part b = %+v, want it merged by its first merge worker", b)
+	}
+	if parents := strings.Fields(gitIn(t, pf.repo, nil, "rev-list", "--parents", "-n", "1", head)); !slices.Equal(parents[1:], []string{headC, resolved}) {
+		t.Fatalf("merge parents = %v, want the moved head then the merge worker's commit", parents[1:])
+	}
+	if fileAt(t, pf.repo, head, "shared.txt") != "start\na\nb" || fileAt(t, pf.repo, head, "docs/c.md") != "c" {
+		t.Fatal("the integration branch lost a side")
+	}
+	if last := pf.sessions.spawned()[len(pf.sessions.spawned())-1]; len(pf.sessions.spawned()) != spawns+1 || last.ClientRequestID != "lado:lado-queue-1/integration/1" {
+		t.Fatalf("spawned %v after the merge, want the integration worker only", spawnIDs(pf.sessions.spawned()[spawns:]))
+	}
+	pf.requireUntouched(t)
+}

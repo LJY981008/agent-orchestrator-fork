@@ -30,7 +30,7 @@ import (
 // parts' workers start in the parts pass. It reports whether the run started,
 // which takes the task's slot.
 func (s *Service) startParts(ctx context.Context, entry domain.LadoQueueEntry, task domain.LadoTask, in ladotask.RunInput, plan domain.LadoPlan,
-	dir string, base ports.WorkspaceDefaultBranch, dispatchSHA string, ahead *int, localSHA string, now time.Time) (bool, error) {
+	dir string, base ports.WorkspaceDefaultBranch, dispatchSHA string, ahead *int, localSHA string) (bool, error) {
 	if !commitID.MatchString(dispatchSHA) {
 		// Without the base commit there is nothing to branch from: try again.
 		return false, s.attemptFailed(ctx, entry, "the base commit could not be read")
@@ -123,8 +123,11 @@ type partRun struct {
 
 func (s *Service) advanceRun(ctx context.Context, active domain.LadoActivePartRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad, tight bool, now time.Time) error {
 	task, ok, err := s.deps.Store.LadoTask(ctx, active.Entry.TaskID)
-	if err != nil || !ok {
-		return fmt.Errorf("read task %s: %v", active.Entry.TaskID, err)
+	if err != nil {
+		return fmt.Errorf("read task %s: %w", active.Entry.TaskID, err)
+	}
+	if !ok {
+		return fmt.Errorf("task %s not found", active.Entry.TaskID)
 	}
 	if reason := unwanted(task, active.Entry.PlanApprovalID); reason != "" {
 		// The pass that stops unwanted runs (stopUnwanted) stops its workers.
@@ -306,9 +309,10 @@ func (s *Service) finishMerge(ctx context.Context, r *partRun, i int) error {
 }
 
 // fastForward moves the integration branch to a merge worker's branch, which
-// must hold both the integration head and the part's tip, and keeps the merge
-// worker's note with the part's. Anything else is a merge that is still to be
-// done.
+// must hold the part's tip, and keeps the merge worker's note with the part's.
+// When the integration branch moved on while the merge worker worked, as
+// when another part merged meanwhile, LADO merges the worker's branch onto
+// it as it merges a part; a conflict there is a merge still to be done.
 func (s *Service) fastForward(ctx context.Context, r *partRun, i int, note string) error {
 	part := &r.parts[i]
 	tip, err := s.deps.PartGit.BranchSHA(ctx, r.run.RepoDir, part.MergeBranch)
@@ -319,44 +323,64 @@ func (s *Service) fastForward(ctx context.Context, r *partRun, i int, note strin
 	if err != nil {
 		return err
 	}
-	ok := tip != ""
-	if ok {
-		if ok, err = s.deps.PartGit.IsAncestor(ctx, r.run.RepoDir, current, tip); err != nil {
+	holdsPart := tip != ""
+	if holdsPart {
+		if holdsPart, err = s.deps.PartGit.IsAncestor(ctx, r.run.RepoDir, part.MergeTipSHA, tip); err != nil {
 			return err
 		}
 	}
-	if ok {
-		if ok, err = s.deps.PartGit.IsAncestor(ctx, r.run.RepoDir, part.MergeTipSHA, tip); err != nil {
-			return err
-		}
+	if !holdsPart {
+		return s.mergeAttemptFailed(ctx, r, i, "the merge worker's branch does not hold the part")
 	}
-	if !ok {
-		return s.mergeAttemptFailed(ctx, r, i, "the merge worker's branch does not hold both the integration branch and the part")
+	head := tip
+	ahead, err := s.deps.PartGit.IsAncestor(ctx, r.run.RepoDir, current, tip)
+	if err != nil {
+		return err
 	}
-	if tip != current {
+	switch {
+	case ahead && tip != current:
 		if err := s.deps.PartGit.MoveBranch(ctx, r.run.RepoDir, r.run.Branch, tip, current); err != nil {
 			return err
 		}
+	case !ahead:
+		message := fmt.Sprintf("chore(lado): 파트 %s(%s)의 충돌 해결을 통합 브랜치에 병합", part.PartID, oneLine(part.Title))
+		merged, err := s.deps.PartGit.Merge(ctx, r.run.RepoDir, current, tip, message)
+		if errors.Is(err, errMergeConflict) {
+			return s.mergeAttemptFailed(ctx, r, i, "the merge worker's branch conflicts with what merged meanwhile")
+		}
+		if err != nil {
+			return err
+		}
+		if err := s.deps.PartGit.MoveBranch(ctx, r.run.RepoDir, r.run.Branch, merged, current); err != nil {
+			return err
+		}
+		head = merged
 	}
 	next := *part
-	next.State, next.MergedSHA = domain.LadoPartMerged, tip
+	next.State, next.MergedSHA = domain.LadoPartMerged, head
 	if note = oneLine(note); note != "" {
 		// The integration worker reads how the conflict was resolved.
 		next.Summary = strings.TrimSpace(next.Summary + " Merge worker: " + note)
 	}
-	return s.recordMerged(ctx, r, i, next, domain.LadoPartConflict, map[string]any{"mergeWorker": part.MergeSessionID})
+	return s.recordMergedAt(ctx, r, i, next, domain.LadoPartConflict, current, map[string]any{"mergeWorker": part.MergeSessionID})
 }
 
 // recordMerged stores a part as merged and the integration head it left,
 // with the part.merged audit event.
 func (s *Service) recordMerged(ctx context.Context, r *partRun, i int, next domain.LadoTaskPart, old domain.LadoPartState, extra map[string]any) error {
+	return s.recordMergedAt(ctx, r, i, next, old, r.run.HeadSHA, extra)
+}
+
+// recordMergedAt is recordMerged from the integration head the merge moved,
+// which the record checks against the run's.
+func (s *Service) recordMergedAt(ctx context.Context, r *partRun, i int, next domain.LadoTaskPart, old domain.LadoPartState, oldHead string, extra map[string]any) error {
 	payload := map[string]any{"task": r.task.ID, "part": next.PartID, "head": next.MergedSHA}
 	for k, v := range extra {
 		payload[k] = v
 	}
 	next.UpdatedAt = s.deps.Clock().UTC()
 	next.WaitingReason, next.WaitingDetail = "", ""
-	ok, err := s.deps.Store.MergeLadoTaskPart(context.WithoutCancel(ctx), next, old, r.run.HeadSHA, s.audit("part.merged", r.entry.ID, payload))
+	ok, err := s.deps.Store.MergeLadoTaskPart(context.WithoutCancel(ctx), next, old, oldHead, s.audit("part.merged", r.entry.ID, payload))
 	if err != nil {
 		return err
 	}
@@ -464,6 +488,9 @@ func (s *Service) startReady(ctx context.Context, r *partRun, settings domain.La
 		reason, detail := "", ""
 		switch {
 		case part.State == domain.LadoPartConflict && part.MergeSessionID == "":
+		case part.State == domain.LadoPartWaiting && !retryDue(*part, now):
+			// It waits for its next start after a failed one.
+			continue
 		case part.State == domain.LadoPartWaiting:
 			if missing := r.unmerged(part.DependsOn); len(missing) > 0 {
 				reason, detail = domain.LadoWaitingPartDependency, strings.Join(missing, ", ")
@@ -576,13 +603,36 @@ func (s *Service) startPart(ctx context.Context, r *partRun, i int, settings dom
 		}
 		return err
 	}
-	// The worker did not start: the attempt is spent.
-	failed := *part
-	failed.Attempts = attempt
-	if err := s.writePart(ctx, part, failed); err != nil {
-		return err
+	return s.spawnFailed(ctx, r, i, attempt, "the part's worker could not start")
+}
+
+// spawnFailed records a part worker that did not start: the attempt is spent,
+// and the part waits to start again (retry) 30 seconds after its first failed
+// start and two minutes after its second, as a queue entry does, so that a
+// passing failure of AO's spawn does not fail the task at once. The run fails
+// once the part spent maxAttempts starts.
+func (s *Service) spawnFailed(ctx context.Context, r *partRun, i, attempt int, message string) error {
+	part := &r.parts[i]
+	next := *part
+	next.Attempts, next.Error = attempt, message
+	if attempt >= maxAttempts {
+		if err := s.writePart(ctx, part, next); err != nil {
+			return err
+		}
+		return s.failRun(ctx, r, part.PartID, message)
 	}
-	return s.partAttemptFailed(ctx, r, i, "the part's worker could not start")
+	next.WaitingReason, next.WaitingDetail = domain.LadoWaitingRetry, ""
+	s.deps.Log.Warn("LADO could not start a part's worker and tries again", "task", r.task.ID, "part", part.PartID, "attempt", attempt, "problem", message)
+	return s.writePart(ctx, part, next)
+}
+
+// retryDue reports whether a part waiting after a failed start may start
+// again at now.
+func retryDue(part domain.LadoTaskPart, now time.Time) bool {
+	if part.WaitingReason != domain.LadoWaitingRetry || part.Attempts < 1 {
+		return true
+	}
+	return !now.Before(part.UpdatedAt.Add(retryAfter[min(part.Attempts, len(retryAfter))-1]))
 }
 
 // startMergeWorker starts a new merge worker for a part whose merge
@@ -620,7 +670,7 @@ func (s *Service) startMergeWorker(ctx context.Context, r *partRun, i int, setti
 // part and merge worker worked on its own branch.
 func (s *Service) startIntegration(ctx context.Context, r *partRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad) error {
 	attempt := r.run.IntegrationAttempts + 1
-	if attempt > domain.LadoMaxPartAttempts {
+	if attempt > maxAttempts {
 		return s.failRun(ctx, r, domain.LadoRoleIntegration, "the integration worker could not start")
 	}
 	in, err := s.input(ctx, r)
@@ -798,12 +848,18 @@ func (s *Service) recoverPartSpawn(ctx context.Context, entry domain.LadoQueueEn
 // a stop, with the part's progress as that start would have written it.
 func (s *Service) relinkRunWorker(ctx context.Context, entry domain.LadoQueueEntry, req domain.LadoRunRequest, request string, rec domain.SessionRecord, settings domain.LadoDispatchSettings) error {
 	run, ok, err := s.deps.Store.LadoPartRun(ctx, entry.ID)
-	if err != nil || !ok {
-		return fmt.Errorf("read the parts run: %v", err)
+	if err != nil {
+		return fmt.Errorf("read the parts run: %w", err)
+	}
+	if !ok {
+		return errors.New("the parts run is gone")
 	}
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
-	if err != nil || !ok {
-		return fmt.Errorf("read task %s: %v", entry.TaskID, err)
+	if err != nil {
+		return fmt.Errorf("read task %s: %w", entry.TaskID, err)
+	}
+	if !ok {
+		return fmt.Errorf("task %s not found", entry.TaskID)
 	}
 	r := &partRun{run: run, entry: entry, task: task}
 	branch, startSHA := run.Branch, run.HeadSHA

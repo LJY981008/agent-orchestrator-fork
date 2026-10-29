@@ -43,6 +43,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoPartsProgress, LadoPlanParts } from "./LadoParts";
 import { LadoPlanReview } from "./LadoPlanReview";
 import { LadoPlanWorkerStatus } from "./LadoPlanWorkerStatus";
 import { LadoTaskRules } from "./LadoTaskRules";
@@ -284,6 +285,7 @@ function TaskViewBody({
 							{shown && !shown.latest ? (
 								<p className="text-caption leading-4 text-settings-muted">{t("lado.error.planSuperseded")}</p>
 							) : null}
+							{task.parts ? <LadoPartsProgress task={task} onClose={onClose} /> : null}
 							{!latest ? (
 								// While a plan is on its way, the line above says so.
 								pending ? null : <p className="text-control text-settings-muted">{t("lado.view.noPlan")}</p>
@@ -656,6 +658,7 @@ function PlanContent({ plan, approvals }: { plan: LadoPlan; approvals: LadoTaskV
 				/>
 			</dl>
 			<PlanList title={t("lado.view.steps")} items={content.steps} ordered />
+			<LadoPlanParts content={content} />
 			<PlanList title={t("lado.view.acceptance")} items={content.acceptanceCriteria} />
 			<PlanList title={t("lado.view.affectedPaths")} items={content.affectedPaths} mono />
 			<PlanList title={t("lado.view.testCommands")} items={content.testCommands} mono empty={t("lado.view.noTestCommands")} />

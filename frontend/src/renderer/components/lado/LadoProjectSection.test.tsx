@@ -48,8 +48,8 @@ vi.mock("../../hooks/useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled
 vi.mock("../../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ customCoder: false, selfServeBilling: false }) }));
 vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "unauthenticated", session: null }) }));
 
-const off: lado.LadoProjectSettings = { projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 };
-const on: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 };
+const off: lado.LadoProjectSettings = { projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true };
+const on: lado.LadoProjectSettings = { projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true };
 
 const put = () => vi.mocked(apiClient.PUT);
 // The desktop app's confirmation of turning LADO mode off (lib/lado.ts setLadoMode).
@@ -74,7 +74,7 @@ function renderSettings() {
 }
 
 const modeSwitch = () => screen.getByRole("switch", { name: "LADO mode" });
-const capSelect = () => screen.getByRole("button", { name: "Concurrent runs in this project" });
+const capSelect = () => screen.getByRole("button", { name: "Concurrent tasks in this project" });
 const rowOf = (control: HTMLElement) => control.closest<HTMLElement>(".settings-row-bar")!;
 
 // LADO fork: Project settings → LADO (docs/LJY-PRD/TDD.md §9).
@@ -223,7 +223,7 @@ describe("LadoProjectSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(await screen.findByRole("button", { name: "Concurrent runs in this project" }));
+		await user.click(await screen.findByRole("button", { name: "Concurrent tasks in this project" }));
 		expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
 		await user.click(screen.getByRole("menuitem", { name: "3" }));
 		await waitFor(() => expect(capSelect()).toHaveTextContent("3"));
@@ -243,7 +243,7 @@ describe("LadoProjectSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(await screen.findByRole("button", { name: "Concurrent runs in this project" }));
+		await user.click(await screen.findByRole("button", { name: "Concurrent tasks in this project" }));
 		await user.click(await screen.findByRole("menuitem", { name: "5" }));
 		const alert = await screen.findByRole("alert");
 		// The page has no run time, so the refusal names only the cap's range.
@@ -255,7 +255,7 @@ describe("LadoProjectSection", () => {
 	it("adds a LADO page to every local project, before Rules, and to no remote or cloud one", async () => {
 		const user = userEvent.setup();
 		localWorkspacesState.ids = ["demo", "plain"];
-		vi.mocked(lado.fetchLadoProjectSettings).mockImplementation(async (projectId) => ({ projectId, ladoMode: projectId === "demo", maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 }));
+		vi.mocked(lado.fetchLadoProjectSettings).mockImplementation(async (projectId) => ({ projectId, ladoMode: projectId === "demo", maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true }));
 		const navNames = () => within(screen.getByRole("navigation", { name: "Settings sections" })).getAllByRole("button").map((button) => button.textContent);
 
 		// A local project outside LADO mode turns it on here; Rules follows.
@@ -263,7 +263,7 @@ describe("LadoProjectSection", () => {
 		renderSettings();
 		await user.click(await screen.findByRole("button", { name: "LADO" }));
 		expect(navNames()).not.toContain("Rules");
-		put().mockResolvedValue({ data: { projectId: "plain", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30 }, error: undefined } as never);
+		put().mockResolvedValue({ data: { projectId: "plain", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true }, error: undefined } as never);
 		await user.click(await screen.findByRole("switch", { name: "LADO mode" }));
 		await waitFor(() => expect(navNames().slice(-2)).toEqual(["LADO", "Rules"]));
 		cleanup();
