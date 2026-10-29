@@ -64,6 +64,8 @@
   3. 재시도 브랜치 접미사 `-<n>` 이 유효한 파트 id(`api-2`)와 겹쳤다. 파트 id 에 없는 `.` 을 써 `api.2` 로 했다(`TestLadoPartBranches`).
 - 선택 둘도 반영했다. 통합 워커 띄우기 실패도 30초·2분을 기다린다(`lado_part_runs.integration_retry_at`, `TestAnIntegrationWorkerThatDoesNotStartWaitsBeforeItTriesAgain`). 디스패치에서 front matter 나 parts 를 읽지 못한 승인된 계획은 단일 워커로 돌지 않고 시도를 쓴다.
 
+- 2회차(`4587011f1`, approved). 필수 세 가지와 선택 두 가지가 모두 반영됐다고 확인했다. 참고 한 건(고치지 않음): `partsUnreadable` 은 매번 같은 결과가 나오는 실패인데도 시도 세 번(약 2분 30초)을 거친 뒤에 실패한다. 승인된 계획이 이 상태가 되는 일은 사실상 없어 지금 동작으로 둔다.
+
 ## 통합 검수
 
 이 PR 은 이 워커 하나가 차례로 만들었으므로 파트 사이 검수 대상은 없다. 랩에서 통합 워커가 한 검수는 아래 "랩 확인"에 적는다.
