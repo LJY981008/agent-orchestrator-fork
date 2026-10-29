@@ -1,10 +1,11 @@
 package cli
 
-// LADO fork: `ao lado plan submit` and `ao lado plan critique submit`, which a
-// LADO plan worker runs to hand LADO its plan or its findings
-// (docs/LJY-PRD/TDD.md §5.1). A plan worker writes no files: it pipes the text
-// in, and the daemon checks that the calling session is the request's
-// designer or running critic.
+// LADO fork: `ao lado`, LADO's commands. `ao lado plan submit` and `ao lado
+// plan critique submit` are what a LADO plan worker runs to hand LADO its plan
+// or its findings (docs/LJY-PRD/TDD.md §5.1). A plan worker writes no files:
+// it pipes the text in, and the daemon checks that the calling session is the
+// request's designer or running critic. `ao lado timings` is in
+// lado_timings.go.
 
 import (
 	"encoding/json"
@@ -54,14 +55,14 @@ type ladoPlanSubmitResponse struct {
 func newLadoCommand(ctx *commandContext) *cobra.Command {
 	lado := &cobra.Command{
 		Use:   "lado",
-		Short: "Commands LADO's plan workers run",
+		Short: "LADO commands: hand LADO a plan or a review, and show how long tasks took",
 	}
 	plan := &cobra.Command{
 		Use:   "plan",
 		Short: "Hand LADO a plan or a review of one",
 	}
 	plan.AddCommand(newLadoPlanSubmitCommand(ctx), newLadoCritiqueCommand(ctx))
-	lado.AddCommand(plan)
+	lado.AddCommand(plan, newLadoTimingsCommand(ctx))
 	return lado
 }
 

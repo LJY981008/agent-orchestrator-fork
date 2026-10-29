@@ -1928,6 +1928,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/tasks/{taskId}/timings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get how long a task's stages took, from intake to merge, and what each of its plan and execution sessions spent on investigation */
+        get: operations["getLadoTaskTimings"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/tasks/imports": {
         parameters: {
             query?: never;
@@ -1939,6 +1956,23 @@ export interface paths {
         put?: never;
         /** Import open issues as tasks; writes nothing to the tracker */
         post: operations["importLadoTasks"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/timings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project's timing baseline: its newest tasks' timings, the median and longest time between adjacent stages, and each session role's median investigation */
+        get: operations["getLadoTimings"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6923,6 +6957,15 @@ export interface components {
             verification: components["schemas"]["LadoVerificationResponse"];
             verificationSha256: string;
         };
+        LadoInvestigationSummaryResponse: {
+            medianCalls: number;
+            /** Format: int64 */
+            medianInvestigateMs: number;
+            medianInvestigationCalls: number;
+            /** @enum {string} */
+            role: "designer" | "critic" | "worker" | "part" | "merge" | "integration";
+            sessions: number;
+        };
         LadoIssueCommentResponse: {
             author: string;
             /** @description The author can work on the repository. */
@@ -7475,6 +7518,38 @@ export interface components {
             problemCode?: "key_home_unknown" | "key_path_relative" | "key_missing" | "key_not_a_file" | "host_key_untrusted" | "key_refused" | "ssh_failed";
             /** @description What git or ssh printed, when there is one to show. */
             problemDetail?: string;
+        };
+        LadoSessionMetricsResponse: {
+            /** @description Commands that neither read nor search. */
+            commandCalls: number;
+            editCalls: number;
+            /** Format: date-time */
+            firstActivityAt?: null | string;
+            /** Format: date-time */
+            firstEditAt?: null | string;
+            /**
+             * Format: int64
+             * @description Milliseconds from the first tool call to the first edit, or to the last activity without one.
+             */
+            investigateMs: number;
+            /** @description Read and search calls. */
+            investigationCalls: number;
+            /** Format: date-time */
+            lastActivityAt?: null | string;
+            readCalls: number;
+            /** @enum {string} */
+            role: "designer" | "critic" | "worker" | "part" | "merge" | "integration";
+            searchCalls: number;
+            sessionId: string;
+            /** @description False when the metrics were computed at read time from the session's activities. */
+            stored: boolean;
+            /** @description Commands, file changes and MCP tool calls. */
+            toolCalls: number;
+            /**
+             * Format: date-time
+             * @description When the stored row was written; omitted for computed metrics.
+             */
+            updatedAt?: null | string;
         };
         LadoSetupAcceptanceResponse: {
             actor: string;
@@ -8132,6 +8207,27 @@ export interface components {
              */
             stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
         };
+        LadoTaskTimelineResponse: {
+            approvals: number;
+            planRequests: number;
+            /** @description A stage the task did not reach has no point. */
+            points: components["schemas"]["LadoTimingPointResponse"][];
+            revisions: number;
+            /** @description The executions that open the task's pull request. */
+            runs: number;
+            /**
+             * Format: int64
+             * @description Milliseconds from intake to merge; 0 before the merge.
+             */
+            totalMs: number;
+        };
+        LadoTaskTimingsResponse: {
+            issueRef?: string;
+            sessions: components["schemas"]["LadoSessionMetricsResponse"][];
+            taskId: string;
+            timeline: components["schemas"]["LadoTaskTimelineResponse"];
+            title: string;
+        };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];
             history: components["schemas"]["LadoPlanHistoryResponse"];
@@ -8141,6 +8237,37 @@ export interface components {
             issueChangedSincePlan: boolean;
             issueReadError?: string;
             task: components["schemas"]["LadoTaskResponse"];
+        };
+        LadoTimingGapResponse: {
+            /** @description The tasks that went from one stage straight to the other. */
+            count: number;
+            /** @enum {string} */
+            from: "received" | "plan_requested" | "revision" | "approved" | "run_started" | "pr_opened" | "verified" | "integration_approved" | "merged";
+            /** Format: int64 */
+            maxMs: number;
+            /** Format: int64 */
+            medianMs: number;
+            /** @enum {string} */
+            to: "received" | "plan_requested" | "revision" | "approved" | "run_started" | "pr_opened" | "verified" | "integration_approved" | "merged";
+        };
+        LadoTimingPointResponse: {
+            /** Format: date-time */
+            at: string;
+            /** @description The time was inferred for an execution that ran before LADO recorded it; an estimated verified time is an upper bound. */
+            estimated: boolean;
+            /**
+             * Format: int64
+             * @description Milliseconds since the point before; 0 for the first point.
+             */
+            sincePrevMs: number;
+            /** @enum {string} */
+            stage: "received" | "plan_requested" | "revision" | "approved" | "run_started" | "pr_opened" | "verified" | "integration_approved" | "merged";
+        };
+        LadoTimingsSummaryResponse: {
+            gaps: components["schemas"]["LadoTimingGapResponse"][];
+            investigation: components["schemas"]["LadoInvestigationSummaryResponse"][];
+            projectId: string;
+            tasks: components["schemas"]["LadoTaskTimingsResponse"][];
         };
         LadoTokenCheckResponse: {
             /** @description Whether the check used a newly entered token. */
@@ -17417,6 +17544,56 @@ export interface operations {
             };
         };
     };
+    getLadoTaskTimings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskTimingsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     importLadoTasks: {
         parameters: {
             query?: never;
@@ -17486,6 +17663,67 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoTimings: {
+        parameters: {
+            query: {
+                /** @description Project whose tasks are summed up. */
+                projectId: string;
+                /** @description How many of the newest tasks with an issue to sum up. Defaults to 20. */
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTimingsSummaryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };
