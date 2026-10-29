@@ -385,6 +385,12 @@ func ladoOperations() []operation {
 			resps:      ladoResps(http.StatusOK, controllers.LadoQueueResponse{}),
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/lado/tasks/{taskId}/parts", id: "getLadoTaskParts", tag: "lado",
+			summary:    "Get the parts run of a task's newest approval: its integration branch and each part's progress",
+			pathParams: []any{controllers.LadoTaskIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoTaskPartsResponse{}, http.StatusNotFound),
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/lado/executions/{sessionId}", id: "getLadoExecution", tag: "lado",
 			summary:    "Get the execution a worker session runs: its task, plan, rule snapshot, base and run, and what LADO verified about its PR's current head",
 			pathParams: []any{controllers.LadoSessionIDParam{}},

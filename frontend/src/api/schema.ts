@@ -1877,6 +1877,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/tasks/{taskId}/parts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the parts run of a task's newest approval: its integration branch and each part's progress */
+        get: operations["getLadoTaskParts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/tasks/{taskId}/plan-requests": {
         parameters: {
             query?: never;
@@ -5695,6 +5712,72 @@ export interface components {
         ControllersKillSessionRequest: {
             deleteArtifacts?: boolean;
         };
+        ControllersLadoPlanPartResponse: {
+            affectedPaths: string[];
+            /** @description The parts merged before this one starts. */
+            dependsOn: string[];
+            id: string;
+            /** @description The display phase: 1 for a part without dependencies, one more than the latest of its dependencies otherwise; 0 on a dependency cycle. */
+            phase: number;
+            /** @description 1-based numbers into the plan's steps. */
+            steps: number[];
+            title: string;
+        };
+        ControllersLadoTaskPartResponse: {
+            affectedPaths: string[];
+            /** @description Workers started for the part so far; LADO gives up after two. */
+            attempts: number;
+            branch?: string;
+            dependsOn: string[];
+            /** @description Why the part's last worker did not finish it. */
+            error?: string;
+            id: string;
+            mergeAttempts: number;
+            /** @description The merge worker resolving the part's conflict. */
+            mergeSessionId?: string;
+            /** @description The integration branch's commit once the part was merged. */
+            mergedSha?: string;
+            /** @description The display phase, as the plan view shows it. */
+            phase: number;
+            /** @description The part's newest worker session. */
+            sessionId?: string;
+            /** @description The integration branch's commit the part's branch started from. */
+            startSha?: string;
+            /**
+             * @description waiting until it can start; running in its worker; done once its worker reported done; merging while LADO merges it; merged once its commits are on the integration branch; conflict while a merge worker resolves its merge; failed once its attempts ran out.
+             * @enum {string}
+             */
+            state: "waiting" | "running" | "done" | "merging" | "merged" | "conflict" | "failed";
+            steps: number[];
+            /** @description The part worker's done report, with the merge worker's note when it had one. */
+            summary?: string;
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+            /** @description The parts it waits for (part_dependency) or the running part whose paths overlap (part_overlap). */
+            waitingDetail?: string;
+            /**
+             * @description Why a waiting part, or a conflict waiting for its merge worker, has not started.
+             * @enum {string}
+             */
+            waitingReason?: "part_dependency" | "part_overlap" | "slot_workers" | "memory_tight" | "disk_low";
+        };
+        ControllersLadoTaskPartsResponse: {
+            /** @description The approved base commit the integration branch started from. */
+            baseSha?: string;
+            /** @description The integration branch; omitted while the newest approval runs no parts. */
+            branch?: string;
+            /** @description Where LADO last moved the integration branch. */
+            headSha?: string;
+            parts: components["schemas"]["ControllersLadoTaskPartResponse"][];
+            /** Format: date-time */
+            startedAt?: null | string;
+        };
+        ControllersLadoTaskPartsSummaryResponse: {
+            /** @description The parts merged into the integration branch so far. */
+            merged: number;
+            total: number;
+        };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
             token: string;
@@ -6625,9 +6708,11 @@ export interface components {
             provider: "github" | "gitlab";
         };
         LadoDispatchSettingsResponse: {
+            /** @description Keep new runs and parts waiting while the free disk space is under minFreeDiskGb. */
+            holdOnDiskLow: boolean;
             /** @description Keep queued work and plan requests waiting while memory pressure is tight. */
             holdOnMemoryTight: boolean;
-            /** @description How many executions run at once across projects. Each project has its own cap too. */
+            /** @description How many tasks run at once across projects; a task split into parts counts once. Each project has its own cap too. */
             maxConcurrent: number;
             /** @description How many plan requests run their plan workers at once across projects, apart from the executions' caps; a designer and its critic count as one. */
             maxPlanWorkers: number;
@@ -6636,6 +6721,10 @@ export interface components {
              * @enum {integer}
              */
             maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
+            /** @description How many LADO workers run at once across projects: single, part, merge and integration workers, apart from plan workers. maxConcurrent and the projects' caps count tasks. */
+            maxWorkers: number;
+            /** @description The free disk space, in gigabytes, under which new runs and parts wait. */
+            minFreeDiskGb: number;
             /** @description When LADO skips the review of a plan worker's draft. */
             planReview: components["schemas"]["LadoPlanReviewSettings"];
             /**
@@ -6769,6 +6858,8 @@ export interface components {
             /** @description The attempt that started the worker, from 1. */
             attempt: number;
             base: components["schemas"]["LadoExecutionBaseResponse"];
+            /** @description The branch LADO started the worker on; omitted when AO named it. */
+            branch?: string;
             /**
              * Format: date-time
              * @description When LADO stops the run; omitted without a limit.
@@ -6776,9 +6867,16 @@ export interface components {
             deadlineAt?: null | string;
             /** @description The integration approval of the PR's current head; omitted without one. */
             integration?: components["schemas"]["LadoIntegrationApprovalResponse"];
+            /** @description The part a part or merge worker works on. */
+            partId?: string;
             plan: components["schemas"]["LadoExecutionPlanResponse"];
             /** @description The newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
+            /**
+             * @description What the worker does in a task split into parts: one part, the merge of one part, or the integration that opens the pull request; omitted for a task's one worker.
+             * @enum {string}
+             */
+            role?: "part" | "merge" | "integration";
             sessionEnded: boolean;
             sessionId: string;
             snapshot: components["schemas"]["LadoExecutionSnapshotResponse"];
@@ -6954,6 +7052,10 @@ export interface components {
             body: string;
             /** @description The changes the plan declares: db_schema, external_api, auth or data_deletion. */
             changeKinds: string[];
+            /** @description The 1-based numbers of the steps no part takes, which the integration worker does once every part is merged; empty without parts. */
+            integrationSteps: number[];
+            /** @description The parts LADO runs in parallel workers, in the plan's order; empty when one worker runs the whole plan. */
+            parts: components["schemas"]["ControllersLadoPlanPartResponse"][];
             permissionCeiling?: string;
             /** @description issue, or comment:<id> for a plan converted from an issue comment. */
             planSource?: string;
@@ -6962,6 +7064,11 @@ export interface components {
             risk?: string;
             steps: string[];
             testCommands: string[];
+            /**
+             * @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts.
+             * @enum {array}
+             */
+            warnings: "unsplit_large_plan";
         };
         LadoPlanCritiqueResponse: {
             /** @description 1 and 2 for the critic sessions, 0 for a skipped review. */
@@ -7235,8 +7342,14 @@ export interface components {
             checkTimeoutMinutes: number;
             /** @description Whether the project's workers are under LADO's worker gate. */
             ladoMode: boolean;
-            /** @description How many executions run at once in the project, 1 to 8. */
+            /** @description How many tasks run at once in the project, 1 to 8; a task split into parts counts once. */
             maxConcurrent: number;
+            /** @description The globs whose overlap does not hold work back, between tasks and between a task's parts. */
+            overlapIgnore: string[];
+            /** @description overlapIgnore is LADO's default list. */
+            overlapIgnoreIsDefault: boolean;
+            /** @description Hold a task while a live run of another task of the project may touch the same files. */
+            overlapWait: boolean;
             projectId: string;
         };
         LadoQueueItemResponse: {
@@ -7261,15 +7374,17 @@ export interface components {
              * @description Why the entry waits, needs review or is blocked, for the app to translate.
              * @enum {string}
              */
-            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
             /**
              * @description Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker.
              * @enum {string}
              */
-            state: "queued" | "waiting" | "dispatching" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
+            state: "queued" | "waiting" | "dispatching" | "running_parts" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
             taskId: string;
             /** @description The issue's title as LADO last read it. */
             title: string;
+            /** @description What the entry waits for where its reason names something: the issue of the other task whose live run may touch the same files, for paths_overlap. */
+            waitingDetail?: string;
         };
         LadoQueueResponse: {
             entries: components["schemas"]["LadoQueueItemResponse"][];
@@ -7971,7 +8086,7 @@ export interface components {
              * @description When the plan was approved; the dispatcher takes the oldest first.
              */
             enqueuedAt: string;
-            /** @description Why starting the worker failed, without secrets. */
+            /** @description Why starting the worker failed, without secrets; for a parts run that failed, which part and why. */
             error?: string;
             /**
              * Format: date-time
@@ -7982,9 +8097,11 @@ export interface components {
              * @description Why the entry waits, needs review or is blocked.
              * @enum {string}
              */
-            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
             /** @enum {string} */
-            state: "queued" | "waiting" | "dispatching" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
+            state: "queued" | "waiting" | "dispatching" | "running_parts" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
+            /** @description The issue of the other task whose live run may touch the same files, for paths_overlap. */
+            waitingDetail?: string;
         };
         LadoTaskResponse: {
             /** @description Agent chosen for the task's execution. */
@@ -7993,12 +8110,14 @@ export interface components {
             cancelledAt?: null | string;
             /** Format: date-time */
             createdAt: string;
-            /** @description The newest execution; omitted before the first worker started. */
+            /** @description The newest execution that opens the task's pull request: its one worker, or for a task split into parts its integration worker; omitted before that worker started. */
             execution?: components["schemas"]["LadoTaskExecutionResponse"];
             id: string;
             issue: components["schemas"]["LadoTaskIssueResponse"];
             /** @description Model chosen for the task's execution. */
             model?: string;
+            /** @description How far the parts run of the newest approval got; omitted for a task without parts. GET /api/v1/lado/tasks/{taskId}/parts lists the parts. */
+            parts?: components["schemas"]["ControllersLadoTaskPartsSummaryResponse"];
             plan: components["schemas"]["LadoTaskPlanResponse"];
             projectId: string;
             /** @description The queue entry of the newest approval; omitted without one. */
@@ -8014,7 +8133,7 @@ export interface components {
              * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "memory_tight" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
         };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];
@@ -9713,11 +9832,14 @@ export interface components {
             disabledModels: null | string[];
         };
         UpdateLadoDispatchSettingsRequest: {
+            holdOnDiskLow?: null | boolean;
             holdOnMemoryTight: boolean;
             maxConcurrent: number;
             maxPlanWorkers?: null | number;
             /** @enum {integer} */
             maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
+            maxWorkers?: null | number;
+            minFreeDiskGb?: null | number;
             planReview?: components["schemas"]["LadoPlanReviewSettings"];
         };
         UpdateLadoProjectSettingsRequest: {
@@ -9731,6 +9853,12 @@ export interface components {
             ladoMode?: null | boolean;
             /** @description How many executions run at once in the project. It changes without a presence proof. */
             maxConcurrent?: null | number;
+            /** @description Replace the globs whose overlap does not hold work back; an invalid glob refuses with LADO_OVERLAP_IGNORE_INVALID. It changes without a presence proof. */
+            overlapIgnore?: null | string[];
+            /** @description Go back to LADO's default list of globs whose overlap does not count. */
+            overlapIgnoreDefaults?: boolean;
+            /** @description Hold a task while a live run of another task of the project may touch the same files. It changes without a presence proof. */
+            overlapWait?: null | boolean;
         };
         UpdateLadoRuleRequest: {
             /** @description Archive or unarchive the rule. */
@@ -17080,6 +17208,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LadoTaskResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoTaskParts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersLadoTaskPartsResponse"];
                 };
             };
             /** @description Not Found */

@@ -65,7 +65,7 @@ func TestLadoAPI_GetProjectSettings(t *testing.T) {
 		t.Fatalf("status = %d, body %s", status, body)
 	}
 	if got := decodeLadoSettings(t, body); !reflect.DeepEqual(got, controllers.LadoProjectSettingsResponse{ProjectID: "mer", LadoMode: true, CheckCommands: []controllers.LadoCheckCommandBody{},
-		CheckCommandsSHA256: domain.LadoCheckCommandsSHA256(nil)}) {
+		CheckCommandsSHA256: domain.LadoCheckCommandsSHA256(nil), OverlapIgnore: domain.LadoDefaultOverlapIgnore, OverlapIgnoreIsDefault: true}) {
 		t.Fatalf("response = %+v", got)
 	}
 	if svc.gotID != "mer" {

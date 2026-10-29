@@ -330,6 +330,35 @@ func ladoPlanContentResponse(plan domain.LadoPlan) LadoPlanContentResponse {
 		Reviewer:           plan.Reviewer,
 		PlanSource:         plan.PlanSource,
 		ChangeKinds:        orEmpty(plan.ChangeKinds),
+		Parts:              ladoPlanPartResponses(plan.Parts),
+		IntegrationSteps:   orEmptyInts(plan.IntegrationSteps()),
+		Warnings:           orEmpty(plan.Warnings()),
 		Body:               plan.Body,
 	}
+}
+
+func orEmptyInts(values []int) []int {
+	if values == nil {
+		return []int{}
+	}
+	return values
+}
+
+func ladoPlanPartResponses(parts []domain.LadoPlanPart) []LadoPlanPartResponse {
+	phases := domain.LadoPartPhases(parts)
+	out := make([]LadoPlanPartResponse, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, LadoPlanPartResponse{
+			ID: part.ID, Title: part.Title, Steps: orEmptyInts(part.Steps), AffectedPaths: orEmptyStrings(part.AffectedPaths),
+			DependsOn: orEmptyStrings(part.DependsOn), Phase: phases[part.ID],
+		})
+	}
+	return out
+}
+
+func orEmptyStrings(values []string) []string {
+	if values == nil {
+		return []string{}
+	}
+	return values
 }

@@ -183,3 +183,39 @@ func settingsPayload(s domain.LadoDispatchSettings) map[string]any {
 		"maxWorkers":         s.MaxWorkers, "holdOnDiskLow": s.HoldOnDiskLow, "minFreeDiskGb": s.MinFreeDiskGB,
 	}
 }
+
+// PartsView is a task's newest parts run as the task window shows it: the
+// run's integration branch and where it stands, and each part's progress.
+// Run is zero, and Parts empty, while the task's newest approval runs no
+// parts.
+type PartsView struct {
+	Entry domain.LadoQueueEntry
+	Run   domain.LadoPartRun
+	Parts []domain.LadoTaskPart
+}
+
+// TaskParts returns the parts run of the task's newest approval.
+func (s *Service) TaskParts(ctx context.Context, id domain.LadoTaskID) (PartsView, error) {
+	task, ok, err := s.deps.Store.LadoTask(ctx, id)
+	if err != nil {
+		s.deps.Log.Error("LADO could not read a task's parts", "task", id, "err", err)
+		return PartsView{}, apierr.Internal("LADO_PARTS_LOAD_FAILED", "Failed to load the task's parts")
+	}
+	if !ok {
+		return PartsView{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "LADO task not found")
+	}
+	view := PartsView{Entry: task.Queue, Parts: []domain.LadoTaskPart{}}
+	if task.Queue.PartsStartedAt.IsZero() {
+		return view, nil
+	}
+	run, ok, err := s.deps.Store.LadoPartRun(ctx, task.Queue.ID)
+	if err == nil && ok {
+		view.Run = run
+		view.Parts, err = s.deps.Store.LadoTaskParts(ctx, task.Queue.ID)
+	}
+	if err != nil {
+		s.deps.Log.Error("LADO could not read a task's parts", "task", id, "err", err)
+		return PartsView{}, apierr.Internal("LADO_PARTS_LOAD_FAILED", "Failed to load the task's parts")
+	}
+	return view, nil
+}

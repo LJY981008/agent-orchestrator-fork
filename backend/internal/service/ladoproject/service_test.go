@@ -51,7 +51,7 @@ func (f *fakeStore) stored(projectID domain.ProjectID) domain.LadoProjectSetting
 	if settings, ok := f.settings[projectID]; ok {
 		return settings
 	}
-	return domain.LadoProjectSettings{ProjectID: projectID, MaxConcurrent: 1, CheckCommands: []domain.LadoCheckCommand{}, CheckTimeoutMinutes: domain.LadoCheckTimeoutDefault}
+	return domain.LadoProjectSettings{ProjectID: projectID, MaxConcurrent: 1, CheckCommands: []domain.LadoCheckCommand{}, CheckTimeoutMinutes: domain.LadoCheckTimeoutDefault, OverlapWait: true}
 }
 
 func (f *fakeStore) save(settings domain.LadoProjectSettings) {
@@ -134,6 +134,18 @@ func (f *fakeStore) SetLadoProjectCheckTimeout(_ context.Context, projectID doma
 	}
 	settings := f.stored(projectID)
 	settings.CheckTimeoutMinutes, settings.UpdatedAt = minutes, event.At
+	f.save(settings)
+	f.events = append(f.events, event)
+	return nil
+}
+
+func (f *fakeStore) SetLadoProjectOverlap(_ context.Context, projectID domain.ProjectID, wait bool, ignore []string, event domain.LadoAuditEvent) error {
+	f.writes++
+	if f.writeErr != nil {
+		return f.writeErr
+	}
+	settings := f.stored(projectID)
+	settings.OverlapWait, settings.OverlapIgnore, settings.UpdatedAt = wait, ignore, event.At
 	f.save(settings)
 	f.events = append(f.events, event)
 	return nil
@@ -660,4 +672,35 @@ func TestCheckCommandsChangeNeedsPresence(t *testing.T) {
 	if want := []string{"project.lado_mode_off", "project.max_concurrent_changed", "project.check_timeout_changed", "project.check_commands_changed"}; !slices.Equal(actions, want) {
 		t.Fatalf("audit actions = %v, want %v", actions, want)
 	}
+}
+
+// The overlap wait and its ignore list change without presence and are
+// audited; the defaults come back with overlapIgnoreDefaults, a bad glob is
+// refused, and the same values write nothing.
+func TestUpdateSettingsChangesTheOverlapWait(t *testing.T) {
+	store := &fakeStore{}
+	svc := newService(store)
+	ctx := context.Background()
+	got, err := svc.Settings(ctx, "mer")
+	if err != nil || !got.OverlapWait || got.OverlapIgnore != nil {
+		t.Fatalf("defaults = %+v, %v; want the wait on with the default list", got, err)
+	}
+	ignore := []string{" docs/** ", "DESIGN.md", "docs/**", ""}
+	got, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{OverlapWait: boolPtr(false), OverlapIgnore: &ignore, Presence: noPresence(t)})
+	if err != nil || got.OverlapWait || !slices.Equal(got.OverlapIgnore, []string{"docs/**", "DESIGN.md"}) {
+		t.Fatalf("UpdateSettings = %+v, %v", got, err)
+	}
+	if len(store.events) != 1 || store.events[0].Action != "project.overlap_changed" || store.events[0].Actor != "api" {
+		t.Fatalf("events = %+v", store.events)
+	}
+	if _, err := svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{OverlapWait: boolPtr(false)}); err != nil || store.writes != 1 {
+		t.Fatalf("the same value wrote again: %v, %d writes", err, store.writes)
+	}
+	got, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{OverlapIgnoreDefaults: true})
+	if err != nil || got.OverlapIgnore != nil {
+		t.Fatalf("back to the defaults = %+v, %v", got, err)
+	}
+	bad := []string{"/etc/**"}
+	_, err = svc.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{OverlapIgnore: &bad})
+	requireAPIError(t, err, apierr.KindInvalid, "LADO_OVERLAP_IGNORE_INVALID")
 }

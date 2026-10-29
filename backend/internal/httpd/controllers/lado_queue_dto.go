@@ -17,12 +17,13 @@ type LadoQueueItemResponse struct {
 	ProjectID string `json:"projectId"`
 	IssueRef  string `json:"issueRef"`
 	Title     string `json:"title" description:"The issue's title as LADO last read it."`
-	State     string `json:"state" enum:"queued,waiting,dispatching,dispatched,failed,review_required,blocked,superseded,cancelled" description:"Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker."`
-	Reason    string `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,memory_tight,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the entry waits, needs review or is blocked, for the app to translate."`
+	State     string `json:"state" enum:"queued,waiting,dispatching,running_parts,dispatched,failed,review_required,blocked,superseded,cancelled" description:"Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker."`
+	Reason    string `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,slot_workers,memory_tight,disk_low,paths_overlap,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the entry waits, needs review or is blocked, for the app to translate."`
 	Attempts  int    `json:"attempts" description:"Attempts to start the worker so far. LADO gives up after three; waiting for a slot, memory or the issue is not an attempt."`
 	// NextAttemptAt is omitted once it is due.
 	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty" description:"When LADO looks at the entry again; omitted once that is due."`
 	Error         string     `json:"error,omitempty" description:"Why the last attempt failed, without secrets."`
+	WaitingDetail string     `json:"waitingDetail,omitempty" description:"What the entry waits for where its reason names something: the issue of the other task whose live run may touch the same files, for paths_overlap."`
 	EnqueuedAt    time.Time  `json:"enqueuedAt" description:"When the plan was approved."`
 }
 
@@ -33,11 +34,12 @@ type LadoQueueResponse struct {
 
 // LadoTaskQueueResponse is the queue entry of a task's newest approval.
 type LadoTaskQueueResponse struct {
-	State         string     `json:"state" enum:"queued,waiting,dispatching,dispatched,failed,review_required,blocked,superseded,cancelled"`
-	Reason        string     `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,memory_tight,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the entry waits, needs review or is blocked."`
+	State         string     `json:"state" enum:"queued,waiting,dispatching,running_parts,dispatched,failed,review_required,blocked,superseded,cancelled"`
+	Reason        string     `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,slot_workers,memory_tight,disk_low,paths_overlap,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the entry waits, needs review or is blocked."`
 	Attempts      int        `json:"attempts" description:"Attempts to start the worker so far; LADO gives up after three."`
 	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty" description:"When LADO looks at the entry again; omitted once that is due."`
-	Error         string     `json:"error,omitempty" description:"Why starting the worker failed, without secrets."`
+	Error         string     `json:"error,omitempty" description:"Why starting the worker failed, without secrets; for a parts run that failed, which part and why."`
+	WaitingDetail string     `json:"waitingDetail,omitempty" description:"The issue of the other task whose live run may touch the same files, for paths_overlap."`
 	EnqueuedAt    time.Time  `json:"enqueuedAt" description:"When the plan was approved; the dispatcher takes the oldest first."`
 }
 
@@ -134,6 +136,9 @@ type LadoExecutionResponse struct {
 	DeadlineAt   *time.Time                    `json:"deadlineAt,omitempty" description:"When LADO stops the run; omitted without a limit."`
 	TimedOutAt   *time.Time                    `json:"timedOutAt,omitempty" description:"When LADO stopped the run at its deadline."`
 	SessionEnded bool                          `json:"sessionEnded"`
+	Role         string                        `json:"role,omitempty" enum:"part,merge,integration" description:"What the worker does in a task split into parts: one part, the merge of one part, or the integration that opens the pull request; omitted for a task's one worker."`
+	PartID       string                        `json:"partId,omitempty" description:"The part a part or merge worker works on."`
+	Branch       string                        `json:"branch,omitempty" description:"The branch LADO started the worker on; omitted when AO named it."`
 	State        string                        `json:"state" enum:"running,validating,integration_pending,integrating,failed,completed,closed_unmerged" description:"The state the run gives its task, as the daemon derives it: running without a PR, failed when it timed out or ended without one, and once a PR is open that PR's verification and integration."`
 	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested,status_not_posted,merged_without_approval" description:"Why the run is in its state, as the task's stateReason says it."`
 	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
@@ -145,11 +150,14 @@ type LadoExecutionResponse struct {
 // LadoDispatchSettingsResponse is the dispatcher's settings for every
 // project.
 type LadoDispatchSettingsResponse struct {
-	MaxConcurrent     int                       `json:"maxConcurrent" minimum:"1" maximum:"8" description:"How many executions run at once across projects. Each project has its own cap too."`
+	MaxConcurrent     int                       `json:"maxConcurrent" minimum:"1" maximum:"8" description:"How many tasks run at once across projects; a task split into parts counts once. Each project has its own cap too."`
 	MaxRunMinutes     int                       `json:"maxRunMinutes" enum:"[0,60,120,240,480,720,1440]" description:"How long an execution may run before LADO stops it; 0 means no limit."`
 	HoldOnMemoryTight bool                      `json:"holdOnMemoryTight" description:"Keep queued work and plan requests waiting while memory pressure is tight."`
 	MaxPlanWorkers    int                       `json:"maxPlanWorkers" minimum:"1" maximum:"8" description:"How many plan requests run their plan workers at once across projects, apart from the executions' caps; a designer and its critic count as one."`
 	PlanReview        LadoPlanReviewSettingsDTO `json:"planReview" description:"When LADO skips the review of a plan worker's draft."`
+	MaxWorkers        int                       `json:"maxWorkers" minimum:"1" maximum:"12" description:"How many LADO workers run at once across projects: single, part, merge and integration workers, apart from plan workers. maxConcurrent and the projects' caps count tasks."`
+	HoldOnDiskLow     bool                      `json:"holdOnDiskLow" description:"Keep new runs and parts waiting while the free disk space is under minFreeDiskGb."`
+	MinFreeDiskGB     int                       `json:"minFreeDiskGb" minimum:"1" maximum:"1000" description:"The free disk space, in gigabytes, under which new runs and parts wait."`
 	UpdatedAt         *time.Time                `json:"updatedAt,omitempty" description:"When the settings last changed; omitted while the defaults apply."`
 }
 
@@ -172,4 +180,7 @@ type UpdateLadoDispatchSettingsRequest struct {
 	HoldOnMemoryTight *bool                      `json:"holdOnMemoryTight" nullable:"false"`
 	MaxPlanWorkers    *int                       `json:"maxPlanWorkers,omitempty" minimum:"1" maximum:"8"`
 	PlanReview        *LadoPlanReviewSettingsDTO `json:"planReview,omitempty"`
+	MaxWorkers        *int                       `json:"maxWorkers,omitempty" minimum:"1" maximum:"12"`
+	HoldOnDiskLow     *bool                      `json:"holdOnDiskLow,omitempty"`
+	MinFreeDiskGB     *int                       `json:"minFreeDiskGb,omitempty" minimum:"1" maximum:"1000"`
 }

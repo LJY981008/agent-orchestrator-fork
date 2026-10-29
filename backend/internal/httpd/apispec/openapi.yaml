@@ -5500,6 +5500,46 @@ paths:
       summary: Cancel a task; the issue is never closed or edited
       tags:
       - lado
+  /api/v1/lado/tasks/{taskId}/parts:
+    get:
+      operationId: getLadoTaskParts
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersLadoTaskPartsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get the parts run of a task''s newest approval: its integration branch
+        and each part''s progress'
+      tags:
+      - lado
   /api/v1/lado/tasks/{taskId}/plan-requests:
     post:
       operationId: requestLadoPlan
@@ -17024,6 +17064,164 @@ components:
         deleteArtifacts:
           type: boolean
       type: object
+    ControllersLadoPlanPartResponse:
+      properties:
+        affectedPaths:
+          items:
+            type: string
+          type: array
+        dependsOn:
+          description: The parts merged before this one starts.
+          items:
+            type: string
+          type: array
+        id:
+          type: string
+        phase:
+          description: 'The display phase: 1 for a part without dependencies, one
+            more than the latest of its dependencies otherwise; 0 on a dependency
+            cycle.'
+          type: integer
+        steps:
+          description: 1-based numbers into the plan's steps.
+          items:
+            type: integer
+          type: array
+        title:
+          type: string
+      required:
+      - id
+      - title
+      - steps
+      - affectedPaths
+      - dependsOn
+      - phase
+      type: object
+    ControllersLadoTaskPartResponse:
+      properties:
+        affectedPaths:
+          items:
+            type: string
+          type: array
+        attempts:
+          description: Workers started for the part so far; LADO gives up after two.
+          type: integer
+        branch:
+          type: string
+        dependsOn:
+          items:
+            type: string
+          type: array
+        error:
+          description: Why the part's last worker did not finish it.
+          type: string
+        id:
+          type: string
+        mergeAttempts:
+          type: integer
+        mergeSessionId:
+          description: The merge worker resolving the part's conflict.
+          type: string
+        mergedSha:
+          description: The integration branch's commit once the part was merged.
+          type: string
+        phase:
+          description: The display phase, as the plan view shows it.
+          type: integer
+        sessionId:
+          description: The part's newest worker session.
+          type: string
+        startSha:
+          description: The integration branch's commit the part's branch started from.
+          type: string
+        state:
+          description: waiting until it can start; running in its worker; done once
+            its worker reported done; merging while LADO merges it; merged once its
+            commits are on the integration branch; conflict while a merge worker resolves
+            its merge; failed once its attempts ran out.
+          enum:
+          - waiting
+          - running
+          - done
+          - merging
+          - merged
+          - conflict
+          - failed
+          type: string
+        steps:
+          items:
+            type: integer
+          type: array
+        summary:
+          description: The part worker's done report, with the merge worker's note
+            when it had one.
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+        waitingDetail:
+          description: The parts it waits for (part_dependency) or the running part
+            whose paths overlap (part_overlap).
+          type: string
+        waitingReason:
+          description: Why a waiting part, or a conflict waiting for its merge worker,
+            has not started.
+          enum:
+          - part_dependency
+          - part_overlap
+          - slot_workers
+          - memory_tight
+          - disk_low
+          type: string
+      required:
+      - id
+      - title
+      - phase
+      - steps
+      - affectedPaths
+      - dependsOn
+      - state
+      - attempts
+      - mergeAttempts
+      - updatedAt
+      type: object
+    ControllersLadoTaskPartsResponse:
+      properties:
+        baseSha:
+          description: The approved base commit the integration branch started from.
+          type: string
+        branch:
+          description: The integration branch; omitted while the newest approval runs
+            no parts.
+          type: string
+        headSha:
+          description: Where LADO last moved the integration branch.
+          type: string
+        parts:
+          items:
+            $ref: '#/components/schemas/ControllersLadoTaskPartResponse'
+          type: array
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - parts
+      type: object
+    ControllersLadoTaskPartsSummaryResponse:
+      properties:
+        merged:
+          description: The parts merged into the integration branch so far.
+          type: integer
+        total:
+          type: integer
+      required:
+      - total
+      - merged
+      type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
         hostId:
@@ -19502,13 +19700,17 @@ components:
       type: object
     LadoDispatchSettingsResponse:
       properties:
+        holdOnDiskLow:
+          description: Keep new runs and parts waiting while the free disk space is
+            under minFreeDiskGb.
+          type: boolean
         holdOnMemoryTight:
           description: Keep queued work and plan requests waiting while memory pressure
             is tight.
           type: boolean
         maxConcurrent:
-          description: How many executions run at once across projects. Each project
-            has its own cap too.
+          description: How many tasks run at once across projects; a task split into
+            parts counts once. Each project has its own cap too.
           maximum: 8
           minimum: 1
           type: integer
@@ -19531,6 +19733,19 @@ components:
           - 720
           - 1440
           type: integer
+        maxWorkers:
+          description: 'How many LADO workers run at once across projects: single,
+            part, merge and integration workers, apart from plan workers. maxConcurrent
+            and the projects'' caps count tasks.'
+          maximum: 12
+          minimum: 1
+          type: integer
+        minFreeDiskGb:
+          description: The free disk space, in gigabytes, under which new runs and
+            parts wait.
+          maximum: 1000
+          minimum: 1
+          type: integer
         planReview:
           $ref: '#/components/schemas/LadoPlanReviewSettings'
           description: When LADO skips the review of a plan worker's draft.
@@ -19547,6 +19762,9 @@ components:
       - holdOnMemoryTight
       - maxPlanWorkers
       - planReview
+      - maxWorkers
+      - holdOnDiskLow
+      - minFreeDiskGb
       type: object
     LadoEffectiveAgentResponse:
       properties:
@@ -19847,6 +20065,10 @@ components:
           type: integer
         base:
           $ref: '#/components/schemas/LadoExecutionBaseResponse'
+        branch:
+          description: The branch LADO started the worker on; omitted when AO named
+            it.
+          type: string
         deadlineAt:
           description: When LADO stops the run; omitted without a limit.
           format: date-time
@@ -19857,11 +20079,23 @@ components:
           $ref: '#/components/schemas/LadoIntegrationApprovalResponse'
           description: The integration approval of the PR's current head; omitted
             without one.
+        partId:
+          description: The part a part or merge worker works on.
+          type: string
         plan:
           $ref: '#/components/schemas/LadoExecutionPlanResponse'
         pr:
           $ref: '#/components/schemas/LadoExecutionPRResponse'
           description: The newest PR of the worker session; omitted while it has none.
+        role:
+          description: 'What the worker does in a task split into parts: one part,
+            the merge of one part, or the integration that opens the pull request;
+            omitted for a task''s one worker.'
+          enum:
+          - part
+          - merge
+          - integration
+          type: string
         sessionEnded:
           type: boolean
         sessionId:
@@ -20302,6 +20536,18 @@ components:
           items:
             type: string
           type: array
+        integrationSteps:
+          description: The 1-based numbers of the steps no part takes, which the integration
+            worker does once every part is merged; empty without parts.
+          items:
+            type: integer
+          type: array
+        parts:
+          description: The parts LADO runs in parallel workers, in the plan's order;
+            empty when one worker runs the whole plan.
+          items:
+            $ref: '#/components/schemas/ControllersLadoPlanPartResponse'
+          type: array
         permissionCeiling:
           type: string
         planSource:
@@ -20321,6 +20567,14 @@ components:
           items:
             type: string
           type: array
+        warnings:
+          description: 'What the plan view warns about without blocking the approval:
+            unsplit_large_plan for six or more steps without parts.'
+          enum:
+          - unsplit_large_plan
+          items:
+            type: string
+          type: array
       required:
       - steps
       - acceptanceCriteria
@@ -20328,6 +20582,9 @@ components:
       - testCommands
       - reviewRequired
       - changeKinds
+      - parts
+      - integrationSteps
+      - warnings
       - body
       type: object
     LadoPlanCritiqueResponse:
@@ -20931,8 +21188,22 @@ components:
           description: Whether the project's workers are under LADO's worker gate.
           type: boolean
         maxConcurrent:
-          description: How many executions run at once in the project, 1 to 8.
+          description: How many tasks run at once in the project, 1 to 8; a task split
+            into parts counts once.
           type: integer
+        overlapIgnore:
+          description: The globs whose overlap does not hold work back, between tasks
+            and between a task's parts.
+          items:
+            type: string
+          type: array
+        overlapIgnoreIsDefault:
+          description: overlapIgnore is LADO's default list.
+          type: boolean
+        overlapWait:
+          description: Hold a task while a live run of another task of the project
+            may touch the same files.
+          type: boolean
         projectId:
           type: string
       required:
@@ -20942,6 +21213,9 @@ components:
       - checkCommands
       - checkCommandsSha256
       - checkTimeoutMinutes
+      - overlapWait
+      - overlapIgnore
+      - overlapIgnoreIsDefault
       type: object
     LadoQueueItemResponse:
       properties:
@@ -20980,7 +21254,10 @@ components:
           - agent_unsupported
           - slot_global
           - slot_project
+          - slot_workers
           - memory_tight
+          - disk_low
+          - paths_overlap
           - issue_unreadable
           - retry
           - lado_mode_off
@@ -20993,6 +21270,7 @@ components:
           - queued
           - waiting
           - dispatching
+          - running_parts
           - dispatched
           - failed
           - review_required
@@ -21004,6 +21282,11 @@ components:
           type: string
         title:
           description: The issue's title as LADO last read it.
+          type: string
+        waitingDetail:
+          description: 'What the entry waits for where its reason names something:
+            the issue of the other task whose live run may touch the same files, for
+            paths_overlap.'
           type: string
       required:
       - id
@@ -22799,7 +23082,8 @@ components:
           format: date-time
           type: string
         error:
-          description: Why starting the worker failed, without secrets.
+          description: Why starting the worker failed, without secrets; for a parts
+            run that failed, which part and why.
           type: string
         nextAttemptAt:
           description: When LADO looks at the entry again; omitted once that is due.
@@ -22818,7 +23102,10 @@ components:
           - agent_unsupported
           - slot_global
           - slot_project
+          - slot_workers
           - memory_tight
+          - disk_low
+          - paths_overlap
           - issue_unreadable
           - retry
           - lado_mode_off
@@ -22829,12 +23116,17 @@ components:
           - queued
           - waiting
           - dispatching
+          - running_parts
           - dispatched
           - failed
           - review_required
           - blocked
           - superseded
           - cancelled
+          type: string
+        waitingDetail:
+          description: The issue of the other task whose live run may touch the same
+            files, for paths_overlap.
           type: string
       required:
       - state
@@ -22856,7 +23148,9 @@ components:
           type: string
         execution:
           $ref: '#/components/schemas/LadoTaskExecutionResponse'
-          description: The newest execution; omitted before the first worker started.
+          description: 'The newest execution that opens the task''s pull request:
+            its one worker, or for a task split into parts its integration worker;
+            omitted before that worker started.'
         id:
           type: string
         issue:
@@ -22864,6 +23158,11 @@ components:
         model:
           description: Model chosen for the task's execution.
           type: string
+        parts:
+          $ref: '#/components/schemas/ControllersLadoTaskPartsSummaryResponse'
+          description: How far the parts run of the newest approval got; omitted for
+            a task without parts. GET /api/v1/lado/tasks/{taskId}/parts lists the
+            parts.
         plan:
           $ref: '#/components/schemas/LadoTaskPlanResponse'
         projectId:
@@ -22923,7 +23222,10 @@ components:
           - ended_without_pr
           - slot_global
           - slot_project
+          - slot_workers
           - memory_tight
+          - disk_low
+          - paths_overlap
           - issue_unreadable
           - retry
           - lado_mode_off
@@ -27227,6 +27529,10 @@ components:
       type: object
     UpdateLadoDispatchSettingsRequest:
       properties:
+        holdOnDiskLow:
+          type:
+          - "null"
+          - boolean
         holdOnMemoryTight:
           type: boolean
         maxConcurrent:
@@ -27249,6 +27555,18 @@ components:
           - 720
           - 1440
           type: integer
+        maxWorkers:
+          maximum: 12
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        minFreeDiskGb:
+          maximum: 1000
+          minimum: 1
+          type:
+          - "null"
+          - integer
         planReview:
           $ref: '#/components/schemas/LadoPlanReviewSettings'
       required:
@@ -27299,6 +27617,26 @@ components:
           type:
           - "null"
           - integer
+        overlapIgnore:
+          description: Replace the globs whose overlap does not hold work back; an
+            invalid glob refuses with LADO_OVERLAP_IGNORE_INVALID. It changes without
+            a presence proof.
+          items:
+            type: string
+          maxItems: 50
+          type:
+          - "null"
+          - array
+        overlapIgnoreDefaults:
+          description: Go back to LADO's default list of globs whose overlap does
+            not count.
+          type: boolean
+        overlapWait:
+          description: Hold a task while a live run of another task of the project
+            may touch the same files. It changes without a presence proof.
+          type:
+          - "null"
+          - boolean
       type: object
     UpdateLadoRuleRequest:
       properties:

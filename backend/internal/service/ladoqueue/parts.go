@@ -186,7 +186,7 @@ func (s *Service) followPart(ctx context.Context, r *partRun, i int) error {
 		if part.MergeSessionID == "" {
 			return nil
 		}
-		done, _, ended, err := s.workerOutcome(ctx, r, part.MergeSessionID)
+		done, note, ended, err := s.workerOutcome(ctx, r, part.MergeSessionID)
 		if err != nil || (!done && !ended) {
 			return err
 		}
@@ -194,7 +194,7 @@ func (s *Service) followPart(ctx context.Context, r *partRun, i int) error {
 			return s.mergeAttemptFailed(ctx, r, i, "the merge worker ended without reporting done")
 		}
 		s.stopFinished(ctx, r.task.ID, part.MergeSessionID)
-		return s.fastForward(ctx, r, i)
+		return s.fastForward(ctx, r, i, note)
 	}
 	return nil
 }
@@ -306,9 +306,10 @@ func (s *Service) finishMerge(ctx context.Context, r *partRun, i int) error {
 }
 
 // fastForward moves the integration branch to a merge worker's branch, which
-// must hold both the integration head and the part's tip. Anything else is a
-// merge that is still to be done.
-func (s *Service) fastForward(ctx context.Context, r *partRun, i int) error {
+// must hold both the integration head and the part's tip, and keeps the merge
+// worker's note with the part's. Anything else is a merge that is still to be
+// done.
+func (s *Service) fastForward(ctx context.Context, r *partRun, i int, note string) error {
 	part := &r.parts[i]
 	tip, err := s.deps.PartGit.BranchSHA(ctx, r.run.RepoDir, part.MergeBranch)
 	if err != nil {
@@ -339,6 +340,10 @@ func (s *Service) fastForward(ctx context.Context, r *partRun, i int) error {
 	}
 	next := *part
 	next.State, next.MergedSHA = domain.LadoPartMerged, tip
+	if note = oneLine(note); note != "" {
+		// The integration worker reads how the conflict was resolved.
+		next.Summary = strings.TrimSpace(next.Summary + " Merge worker: " + note)
+	}
 	return s.recordMerged(ctx, r, i, next, domain.LadoPartConflict, map[string]any{"mergeWorker": part.MergeSessionID})
 }
 

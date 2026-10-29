@@ -151,14 +151,13 @@ func (s *Store) MergeLadoTaskPart(ctx context.Context, part domain.LadoTaskPart,
 		if n == 0 {
 			return errStale
 		}
-		if part.MergedSHA != oldHead {
-			n, err = q.SetLadoPartRunHead(ctx, gen.SetLadoPartRunHeadParams{HeadSha: part.MergedSHA, QueueEntryID: string(part.QueueEntryID), OldHeadSha: oldHead})
-			if err != nil {
-				return err
-			}
-			if n == 0 {
-				return errStale
-			}
+		// An empty part leaves the head where it is, and still checks it.
+		n, err = q.SetLadoPartRunHead(ctx, gen.SetLadoPartRunHeadParams{HeadSha: part.MergedSHA, QueueEntryID: string(part.QueueEntryID), OldHeadSha: oldHead})
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return errStale
 		}
 		_, err = appendLadoAuditEventTx(ctx, q, event)
 		return err

@@ -11,7 +11,7 @@ var ladoPartsTables = []string{"lado_part_runs", "lado_task_parts"}
 
 // 0010 rebuilds lado_executions without its one-execution-per-entry UNIQUE
 // constraint while verification rows reference it: the earlier execution and
-// its check run survive with role '', an entry then takes part workers beside
+// its check run survive with role ”, an entry then takes part workers beside
 // its one pull request worker, and the round trip removes the part workers
 // and gives the constraint back.
 func TestLadoMigrate0010RebuildsExecutionsAndRoundTrips(t *testing.T) {
@@ -55,7 +55,7 @@ func TestLadoMigrate0010RebuildsExecutionsAndRoundTrips(t *testing.T) {
 		t.Fatal("an unknown role was accepted")
 	}
 	if _, err := db.Exec(`INSERT INTO lado_check_runs (id, execution_session_id, head_sha, name, command, status, started_at)
-		VALUES ('orphan', 'missing', '`+ladoVerifyHead+`', 'test', 'go test', 'passed', CURRENT_TIMESTAMP)`); err == nil {
+		VALUES ('orphan', 'missing', '` + ladoVerifyHead + `', 'test', 'go test', 'passed', CURRENT_TIMESTAMP)`); err == nil {
 		t.Fatal("a check run of no execution was accepted: the rebuilt table lost its references")
 	}
 	var workers, wait, disk int

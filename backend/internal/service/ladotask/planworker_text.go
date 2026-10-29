@@ -126,7 +126,9 @@ func (s *Service) designerPrompt(ctx context.Context, task domain.LadoTask, req 
 	b.WriteString("\n## Where the work starts\n\n")
 	b.WriteString(s.baseText(ctx, task))
 
-	b.WriteString("\n## Plan format\n\nUse this format exactly. LADO checks the front matter, and a plan with problems cannot be approved:\n\n")
+	b.WriteString("\n## Parallel parts\n\n")
+	b.WriteString(partsGuidance)
+	b.WriteString("## Plan format\n\nUse this format exactly. LADO checks the front matter, and a plan with problems cannot be approved:\n\n")
 	fmt.Fprintf(&b, planFormat, task.ID, snapshot.ID)
 	b.WriteString("\n\nchange_kinds lists which of db_schema, external_api, auth and data_deletion the work makes; leave it out when it makes none. " +
 		"LADO reviews a plan with any of them, or with more affected paths than the developer's limit, before you finish it.\n\n")
@@ -301,6 +303,24 @@ func problemText(p domain.LadoPlanProblem) string {
 		what = fmt.Sprintf("the plan has no \"## %s\" section", domain.LadoPlanReviewHeading)
 	case domain.LadoPlanReviewUnaddressed:
 		what = "the review section does not answer these P1 or major findings with 반영 or 미반영 and a reason"
+	case domain.LadoPlanPartCount:
+		what = fmt.Sprintf("a plan with parts has %d to %d of them", domain.LadoPlanMinParts, domain.LadoPlanMaxParts)
+	case domain.LadoPlanPartInvalidID:
+		what = "a part id must be lower case letters, digits and -, start with a letter, and not be integration or start with merge-"
+	case domain.LadoPlanPartDuplicateID:
+		what = "two parts have the same id"
+	case domain.LadoPlanPartUnknownDependency:
+		what = "depends_on names a part that does not exist"
+	case domain.LadoPlanPartCycle:
+		what = "the parts depend on each other in a cycle"
+	case domain.LadoPlanPartStepOutOfRange:
+		what = "a part names a step number that is not in steps"
+	case domain.LadoPlanPartStepShared:
+		what = "two parts name the same step"
+	case domain.LadoPlanPartPathOutside:
+		what = "a part's path is not inside the plan's affected_paths"
+	case domain.LadoPlanPartMissing:
+		what = "a part lacks a title, steps or affected_paths"
 	default:
 		what = p.Code
 	}

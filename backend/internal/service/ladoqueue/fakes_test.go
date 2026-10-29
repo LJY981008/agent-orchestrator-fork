@@ -713,8 +713,8 @@ type fakeTasks struct {
 	onInput func()
 	// revisionPaths are the paths of revisions no input holds.
 	revisionPaths map[domain.LadoPlanRevisionID][]string
-	checks     int
-	inputCalls int
+	checks        int
+	inputCalls    int
 }
 
 func (f *fakeTasks) IssueCheck(_ context.Context, task domain.LadoTask) (ladotask.IssueCheck, error) {

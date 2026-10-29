@@ -61,6 +61,7 @@ func (c *LadoController) listQueue(w http.ResponseWriter, r *http.Request) {
 			Attempts:      entry.AttemptCount,
 			NextAttemptAt: ladoNextAttempt(entry, now),
 			Error:         entry.ErrorMessage,
+			WaitingDetail: ladoWaitingDetail(entry, state),
 			EnqueuedAt:    entry.EnqueuedAt,
 		})
 	}
@@ -144,6 +145,33 @@ func (c *LadoController) putDispatchSettings(w http.ResponseWriter, r *http.Requ
 		}
 		change.PlanReview = domain.LadoPlanReviewSettings{Skip: review.Skip, MaxPaths: review.MaxPaths, Patterns: review.Patterns}
 	}
+	// The service keeps the worker cap and the disk threshold when zero; a
+	// zero sent on purpose is out of range.
+	if req.MaxWorkers != nil {
+		if *req.MaxWorkers == 0 {
+			envelope.WriteError(w, r, ladoqueue.InvalidSettings("maxWorkers must be 1 to 12."))
+			return
+		}
+		change.MaxWorkers = *req.MaxWorkers
+	}
+	if req.HoldOnDiskLow != nil || req.MinFreeDiskGB != nil {
+		current, err := c.Queue.Settings(r.Context())
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		change.HoldOnDiskLow, change.MinFreeDiskGB = current.HoldOnDiskLow, current.MinFreeDiskGB
+		if req.HoldOnDiskLow != nil {
+			change.HoldOnDiskLow = *req.HoldOnDiskLow
+		}
+		if req.MinFreeDiskGB != nil {
+			if *req.MinFreeDiskGB == 0 {
+				envelope.WriteError(w, r, ladoqueue.InvalidSettings("minFreeDiskGb must be 1 to 1000."))
+				return
+			}
+			change.MinFreeDiskGB = *req.MinFreeDiskGB
+		}
+	}
 	settings, err := c.Queue.SetSettings(r.Context(), change)
 	if err != nil {
 		envelope.WriteError(w, r, err)
@@ -186,8 +214,18 @@ func ladoTaskQueueResponse(entry domain.LadoQueueEntry, now time.Time) *LadoTask
 		Attempts:      entry.AttemptCount,
 		NextAttemptAt: ladoNextAttempt(entry, now),
 		Error:         entry.ErrorMessage,
+		WaitingDetail: ladoWaitingDetail(entry, state),
 		EnqueuedAt:    entry.EnqueuedAt,
 	}
+}
+
+// ladoWaitingDetail is what a waiting entry waits for, where its reason names
+// something.
+func ladoWaitingDetail(entry domain.LadoQueueEntry, state domain.LadoQueueState) string {
+	if state == domain.LadoQueueWaiting && entry.WaitingReason == domain.LadoWaitingPathsOverlap {
+		return entry.WaitingDetail
+	}
+	return ""
 }
 
 func ladoTaskExecutionResponse(task domain.LadoTask) *LadoTaskExecutionResponse {
@@ -264,6 +302,9 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 		DeadlineAt:   ladoOptionalTime(exec.DeadlineAt),
 		TimedOutAt:   ladoOptionalTime(exec.TimedOutAt),
 		SessionEnded: exec.SessionTerminated,
+		Role:         exec.Role,
+		PartID:       exec.PartID,
+		Branch:       exec.Branch,
 		State:        string(state),
 		StateReason:  reason,
 		PR:           ladoExecutionPRResponse(exec.PR),
@@ -283,6 +324,9 @@ func ladoDispatchSettingsResponse(settings domain.LadoDispatchSettings) LadoDisp
 		PlanReview: LadoPlanReviewSettingsDTO{
 			Skip: settings.PlanReview.Skip, MaxPaths: settings.PlanReview.MaxPaths, Patterns: patterns,
 		},
-		UpdatedAt: ladoOptionalTime(settings.UpdatedAt),
+		MaxWorkers:    settings.MaxWorkers,
+		HoldOnDiskLow: settings.HoldOnDiskLow,
+		MinFreeDiskGB: settings.MinFreeDiskGB,
+		UpdatedAt:     ladoOptionalTime(settings.UpdatedAt),
 	}
 }
