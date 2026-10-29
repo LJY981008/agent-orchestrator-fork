@@ -5643,6 +5643,46 @@ paths:
       summary: List a task's plan requests, revisions and approvals
       tags:
       - lado
+  /api/v1/lado/tasks/{taskId}/timings:
+    get:
+      operationId: getLadoTaskTimings
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskTimingsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get how long a task's stages took, from intake to merge, and what each
+        of its plan and execution sessions spent on investigation
+      tags:
+      - lado
   /api/v1/lado/tasks/imports:
     post:
       operationId: importLadoTasks
@@ -5696,6 +5736,63 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: Import open issues as tasks; writes nothing to the tracker
+      tags:
+      - lado
+  /api/v1/lado/timings:
+    get:
+      operationId: getLadoTimings
+      parameters:
+      - description: Project whose tasks are summed up.
+        in: query
+        name: projectId
+        required: true
+        schema:
+          description: Project whose tasks are summed up.
+          type: string
+      - description: How many of the newest tasks with an issue to sum up. Defaults
+          to 20.
+        in: query
+        name: limit
+        schema:
+          description: How many of the newest tasks with an issue to sum up. Defaults
+            to 20.
+          maximum: 100
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTimingsSummaryResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get a project''s timing baseline: its newest tasks'' timings, the
+        median and longest time between adjacent stages, and each session role''s
+        median investigation'
       tags:
       - lado
   /api/v1/link-preview:
@@ -20219,6 +20316,33 @@ components:
       - verificationSha256
       - confirm
       type: object
+    LadoInvestigationSummaryResponse:
+      properties:
+        medianCalls:
+          type: integer
+        medianInvestigateMs:
+          format: int64
+          type: integer
+        medianInvestigationCalls:
+          type: integer
+        role:
+          enum:
+          - designer
+          - critic
+          - worker
+          - part
+          - merge
+          - integration
+          type: string
+        sessions:
+          type: integer
+      required:
+      - role
+      - sessions
+      - medianCalls
+      - medianInvestigationCalls
+      - medianInvestigateMs
+      type: object
     LadoIssueCommentResponse:
       properties:
         author:
@@ -21529,6 +21653,76 @@ components:
           type: string
       required:
       - ok
+      type: object
+    LadoSessionMetricsResponse:
+      properties:
+        commandCalls:
+          description: Commands that neither read nor search.
+          type: integer
+        editCalls:
+          type: integer
+        firstActivityAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        firstEditAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        investigateMs:
+          description: Milliseconds from the first tool call to the first edit, or
+            to the last activity without one.
+          format: int64
+          type: integer
+        investigationCalls:
+          description: Read and search calls.
+          type: integer
+        lastActivityAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        readCalls:
+          type: integer
+        role:
+          enum:
+          - designer
+          - critic
+          - worker
+          - part
+          - merge
+          - integration
+          type: string
+        searchCalls:
+          type: integer
+        sessionId:
+          type: string
+        stored:
+          description: False when the metrics were computed at read time from the
+            session's activities.
+          type: boolean
+        toolCalls:
+          description: Commands, file changes and MCP tool calls.
+          type: integer
+        updatedAt:
+          description: When the stored row was written; omitted for computed metrics.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - sessionId
+      - role
+      - toolCalls
+      - readCalls
+      - searchCalls
+      - commandCalls
+      - editCalls
+      - investigationCalls
+      - investigateMs
+      - stored
       type: object
     LadoSetupAcceptanceResponse:
       properties:
@@ -23256,6 +23450,54 @@ components:
       - plan
       - createdAt
       type: object
+    LadoTaskTimelineResponse:
+      properties:
+        approvals:
+          type: integer
+        planRequests:
+          type: integer
+        points:
+          description: A stage the task did not reach has no point.
+          items:
+            $ref: '#/components/schemas/LadoTimingPointResponse'
+          type: array
+        revisions:
+          type: integer
+        runs:
+          description: The executions that open the task's pull request.
+          type: integer
+        totalMs:
+          description: Milliseconds from intake to merge; 0 before the merge.
+          format: int64
+          type: integer
+      required:
+      - points
+      - totalMs
+      - planRequests
+      - revisions
+      - approvals
+      - runs
+      type: object
+    LadoTaskTimingsResponse:
+      properties:
+        issueRef:
+          type: string
+        sessions:
+          items:
+            $ref: '#/components/schemas/LadoSessionMetricsResponse'
+          type: array
+        taskId:
+          type: string
+        timeline:
+          $ref: '#/components/schemas/LadoTaskTimelineResponse'
+        title:
+          type: string
+      required:
+      - taskId
+      - title
+      - timeline
+      - sessions
+      type: object
     LadoTaskViewResponse:
       properties:
         comments:
@@ -23280,6 +23522,101 @@ components:
       - comments
       - issueChangedSincePlan
       - history
+      type: object
+    LadoTimingGapResponse:
+      properties:
+        count:
+          description: The tasks that went from one stage straight to the other.
+          type: integer
+        from:
+          enum:
+          - received
+          - plan_requested
+          - revision
+          - approved
+          - run_started
+          - pr_opened
+          - verified
+          - integration_approved
+          - merged
+          type: string
+        maxMs:
+          format: int64
+          type: integer
+        medianMs:
+          format: int64
+          type: integer
+        to:
+          enum:
+          - received
+          - plan_requested
+          - revision
+          - approved
+          - run_started
+          - pr_opened
+          - verified
+          - integration_approved
+          - merged
+          type: string
+      required:
+      - from
+      - to
+      - count
+      - medianMs
+      - maxMs
+      type: object
+    LadoTimingPointResponse:
+      properties:
+        at:
+          format: date-time
+          type: string
+        estimated:
+          description: The time was inferred for an execution that ran before LADO
+            recorded it; an estimated verified time is an upper bound.
+          type: boolean
+        sincePrevMs:
+          description: Milliseconds since the point before; 0 for the first point.
+          format: int64
+          type: integer
+        stage:
+          enum:
+          - received
+          - plan_requested
+          - revision
+          - approved
+          - run_started
+          - pr_opened
+          - verified
+          - integration_approved
+          - merged
+          type: string
+      required:
+      - stage
+      - at
+      - sincePrevMs
+      - estimated
+      type: object
+    LadoTimingsSummaryResponse:
+      properties:
+        gaps:
+          items:
+            $ref: '#/components/schemas/LadoTimingGapResponse'
+          type: array
+        investigation:
+          items:
+            $ref: '#/components/schemas/LadoInvestigationSummaryResponse'
+          type: array
+        projectId:
+          type: string
+        tasks:
+          items:
+            $ref: '#/components/schemas/LadoTaskTimingsResponse'
+          type: array
+      required:
+      - projectId
+      - tasks
+      - gaps
+      - investigation
       type: object
     LadoTokenCheckResponse:
       properties:

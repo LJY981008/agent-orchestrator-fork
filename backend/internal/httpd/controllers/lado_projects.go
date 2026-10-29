@@ -75,6 +75,8 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/queue", c.listQueue)
 	r.Get("/lado/executions/{sessionId}", c.getExecution)
 	r.Get("/lado/tasks/{taskId}/parts", c.getTaskParts)
+	r.Get("/lado/tasks/{taskId}/timings", c.getTaskTimings)
+	r.Get("/lado/timings", c.getTimings)
 	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
 	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
 	c.registerSetup(r)
