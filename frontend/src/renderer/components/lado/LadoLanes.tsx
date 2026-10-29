@@ -141,13 +141,21 @@ const startedStates = new Set<LadoTask["state"]>(["running", "validating", "inte
 // whose worker started. A failed run stays, to be approved again, and so
 // does an issue closed before any run.
 function inLanes(task: LadoTask): boolean {
+	if (runningParts(task)) return true;
 	if (startedStates.has(task.state)) return false;
 	return task.state !== "closed_unmerged" || task.execution === undefined;
 }
 
 // Approved plans LADO starts next; approved is what an older daemon sends.
 function isQueued(task: LadoTask): boolean {
-	return task.state === "queued" || task.state === "dispatching" || task.state === "approved";
+	return task.state === "queued" || task.state === "dispatching" || task.state === "approved" || runningParts(task);
+}
+
+// A task whose parts run before its integration worker starts has no session
+// card of its own yet, so it stays in the Queued lane, its card saying how
+// many parts are merged (docs/LJY-PRD/TDD.md §5.4).
+function runningParts(task: LadoTask): boolean {
+	return task.state === "running" && task.parts !== undefined && task.execution === undefined;
 }
 
 // Like the session lanes, newest first; tasks whose issue closed go last.

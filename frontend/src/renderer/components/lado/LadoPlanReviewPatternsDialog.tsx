@@ -98,6 +98,9 @@ export function LadoPlanReviewPatternsDialog({
 				holdOnMemoryTight: settings.holdOnMemoryTight,
 				maxPlanWorkers: settings.maxPlanWorkers,
 				planReview: { ...settings.planReview, patterns },
+				maxWorkers: settings.maxWorkers,
+				holdOnDiskLow: settings.holdOnDiskLow,
+				minFreeDiskGb: settings.minFreeDiskGb,
 			},
 			{ onSuccess: close },
 		);

@@ -80,9 +80,30 @@ review:
 plan_source: <issue, or comment:<id> when the plan follows a comment>
 change_kinds:
   - <db_schema, external_api, auth or data_deletion; leave change_kinds out when the work makes none of these changes>
+parts:
+  - id: <a lower-case id, such as backend>
+    title: <what the part does>
+    steps: [<the 1-based numbers of the steps this part does>]
+    affected_paths:
+      - <the part's own globs, inside affected_paths above>
+    depends_on: [<ids of the parts that must be merged first; [] for none>]
 ---
 
 <the plan in prose: the approach, the decisions made and the questions left open>`
+
+// partsGuidance asks for a plan split into parallel parts by default, and
+// says how to split it (docs/LJY-PRD/TDD.md §5.4).
+const partsGuidance = `Plan for parallel parts by default. LADO runs each part in its own worker at the same time, merges the parts into one integration branch as they finish, ` +
+	`and then starts one integration worker that reviews the merged parts against each other, does the steps no part took, runs every check and opens the pull request.
+
+- Steps that do not touch the same files go into different parts of the same phase, which run at once.
+- A step that needs another part's result goes into a later phase: name that part in depends_on.
+- Files many steps change together (locale JSON files, generated files such as schema.ts, openapi.yaml or sqlc's gen/, shared documents) belong to the integration steps or to one part.
+- Give each part narrow affected_paths. Parts whose paths overlap do not run at once.
+- Leave the steps that check, document or publish the whole work (full checks, docs, pull request) out of every part: they are the integration steps.
+- Use 2 to 8 parts. When the work is small or can only be done in order, leave parts out and say why in one line of the plan's prose; one worker then does the whole plan.
+
+`
 
 // planRequestMessage is the coordination message that asks the orchestrator
 // for a plan. The snapshot itself sits in a file next to the plan, so a long
@@ -114,6 +135,7 @@ func planRequestMessage(task domain.LadoTask, req domain.LadoPlanRequest, snapsh
 		b.WriteString("If a comment already holds a plan for this issue, follow it: keep its steps and decisions, and set plan_source to comment:<its id>. " +
 			"Otherwise write the plan yourself and set plan_source to issue.\n\n")
 	}
+	b.WriteString(partsGuidance)
 	b.WriteString("Use this format exactly. LADO checks the front matter, and a plan with problems cannot be approved:\n\n")
 	fmt.Fprintf(&b, planFormat, task.ID, snapshot.ID)
 	b.WriteString("\n")

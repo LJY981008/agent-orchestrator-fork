@@ -46,8 +46,12 @@ type LadoTask struct {
 	Plan LadoTaskPlan
 	// Queue is the queue entry of the newest approval, zero when it has none.
 	Queue LadoQueueEntry
-	// Execution is the task's newest execution, zero when it has none.
+	// Execution is the task's newest execution that can open its pull
+	// request, a single worker's or an integration worker's, zero when it has
+	// none.
 	Execution LadoExecution
+	// Parts is how far the parts run of Queue got, zero without one.
+	Parts LadoTaskPartsSummary
 }
 
 // LadoTaskPlan is what a task's state needs to know about its plans: the
@@ -222,6 +226,12 @@ func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
 	var entryState LadoQueueState
 	if t.Queue.ID != "" && t.Queue.PlanApprovalID == t.Plan.Approval.ID {
 		entryState = t.Queue.State(now)
+	}
+	if entryState == LadoQueueRunningParts {
+		// The parts' workers run, and the integration worker, which opens
+		// the pull request, has not started yet. As with a dispatched
+		// worker, later rule changes do not stop them.
+		return LadoTaskRunning, ""
 	}
 	switch {
 	case t.Plan.RulesChanged():

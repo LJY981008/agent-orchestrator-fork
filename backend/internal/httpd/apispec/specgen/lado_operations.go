@@ -101,6 +101,10 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoQueueItemResponse":             "LadoQueueItemResponse",
 	"ControllersLadoQueueResponse":                 "LadoQueueResponse",
 	"ControllersLadoTaskQueueResponse":             "LadoTaskQueueResponse",
+	"ControllersLadoTaskPartsResponse":             "LadoTaskPartsResponse",
+	"ControllersLadoTaskPartResponse":              "LadoTaskPartResponse",
+	"ControllersLadoTaskPartsSummaryResponse":      "LadoTaskPartsSummaryResponse",
+	"ControllersLadoPlanPartResponse":              "LadoPlanPartResponse",
 	"ControllersLadoExecutionPRResponse":           "LadoExecutionPRResponse",
 	"ControllersLadoTaskExecutionResponse":         "LadoTaskExecutionResponse",
 	"ControllersLadoSessionIDParam":                "LadoSessionIDParam",
@@ -383,6 +387,12 @@ func ladoOperations() []operation {
 			summary:    "List the approved plans waiting for the dispatcher, in the order it takes them",
 			pathParams: []any{controllers.ListLadoQueueQuery{}},
 			resps:      ladoResps(http.StatusOK, controllers.LadoQueueResponse{}),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/tasks/{taskId}/parts", id: "getLadoTaskParts", tag: "lado",
+			summary:    "Get the parts run of a task's newest approval: its integration branch and each part's progress",
+			pathParams: []any{controllers.LadoTaskIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoTaskPartsResponse{}, http.StatusNotFound),
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/lado/executions/{sessionId}", id: "getLadoExecution", tag: "lado",

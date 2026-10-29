@@ -100,10 +100,33 @@ func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask)
 	for _, execution := range executions {
 		newest[execution.TaskID] = execution
 	}
+	var partEntries []string
 	for i := range tasks {
 		task := &tasks[i]
 		task.Queue = byApproval[task.Plan.Approval.ID]
 		task.Execution = newest[task.ID]
+		if !task.Queue.PartsStartedAt.IsZero() {
+			partEntries = append(partEntries, string(task.Queue.ID))
+		}
+	}
+	if len(partEntries) == 0 {
+		return nil
+	}
+	parts, err := s.qr.ListLadoTaskPartsForEntries(ctx, partEntries)
+	if err != nil {
+		return fmt.Errorf("read LADO task parts: %w", err)
+	}
+	summaries := map[domain.LadoQueueEntryID]domain.LadoTaskPartsSummary{}
+	for _, row := range parts {
+		summary := summaries[domain.LadoQueueEntryID(row.QueueEntryID)]
+		summary.Total++
+		if row.State == string(domain.LadoPartMerged) {
+			summary.Merged++
+		}
+		summaries[domain.LadoQueueEntryID(row.QueueEntryID)] = summary
+	}
+	for i := range tasks {
+		tasks[i].Parts = summaries[tasks[i].Queue.ID]
 	}
 	return nil
 }
@@ -319,9 +342,17 @@ func (s *Store) ReleaseLadoQueueEntry(ctx context.Context, id domain.LadoQueueEn
 // and gives back the attempt its claim counted: waiting for a free slot, for
 // memory or for the issue is not an attempt.
 func (s *Store) HoldLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, waiting string, nextAttempt time.Time) (bool, error) {
+	return s.HoldLadoQueueEntryFor(ctx, id, token, waiting, "", nextAttempt)
+}
+
+// HoldLadoQueueEntryFor holds the entry as HoldLadoQueueEntry does and records
+// what it waits for: the issue of the other task for
+// domain.LadoWaitingPathsOverlap.
+func (s *Store) HoldLadoQueueEntryFor(ctx context.Context, id domain.LadoQueueEntryID, token, waiting, detail string, nextAttempt time.Time) (bool, error) {
 	return s.writeLadoRow(ctx, "hold LADO queue entry", func(q *gen.Queries) (int64, error) {
 		return q.HoldLadoQueueEntry(ctx, gen.HoldLadoQueueEntryParams{
 			WaitingReason: waiting,
+			WaitingDetail: detail,
 			NextAttemptAt: ladoNullTime(nextAttempt),
 			ID:            string(id),
 			LeaseToken:    ladoNullString(token),
@@ -684,11 +715,11 @@ func (s *Store) LadoDispatchGrant(ctx context.Context, entryID domain.LadoQueueE
 // linked, while the worker still starts. Any other id, and an unknown entry,
 // report false.
 func (s *Store) LadoEntryPolicyByClientRequest(ctx context.Context, clientRequestID string) (domain.LadoEntryPolicy, bool, error) {
-	entryID, _, ok := domain.ParseLadoClientRequestID(clientRequestID)
+	run, ok := domain.ParseLadoRunClientRequestID(clientRequestID)
 	if !ok {
 		return domain.LadoEntryPolicy{}, false, nil
 	}
-	raw, err := s.qr.GetLadoQueueEntrySnapshot(ctx, string(entryID))
+	raw, err := s.qr.GetLadoQueueEntrySnapshot(ctx, string(run.Entry))
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.LadoEntryPolicy{}, false, nil
 	}
@@ -740,6 +771,9 @@ func (s *Store) SetLadoDispatchSettings(ctx context.Context, settings domain.Lad
 			PlanReviewSkip:         boolInt(settings.PlanReview.Skip),
 			PlanReviewSkipMaxPaths: int64(settings.PlanReview.MaxPaths),
 			PlanReviewPatterns:     ladoReviewPatternsJSON(settings.PlanReview.Patterns),
+			MaxWorkers:             int64(settings.MaxWorkers),
+			HoldOnDiskLow:          boolInt(settings.HoldOnDiskLow),
+			MinFreeDiskGb:          int64(settings.MinFreeDiskGB),
 		}); err != nil {
 			return err
 		}
@@ -838,6 +872,10 @@ func ladoQueueEntryFromGen(row gen.LadoQueueEntry) domain.LadoQueueEntry {
 		FailedAt:             ladoTimeFromNull(row.FailedAt),
 		SupersededAt:         ladoTimeFromNull(row.SupersededAt),
 		CancelledAt:          ladoTimeFromNull(row.CancelledAt),
+		PartsStartedAt:       ladoTimeFromNull(row.PartsStartedAt),
+		PartSpawnRequest:     row.PartSpawnRequest,
+		PartSpawnExpiresAt:   ladoTimeFromNull(row.PartSpawnExpiresAt),
+		WaitingDetail:        row.WaitingDetail,
 	}
 }
 
@@ -868,6 +906,10 @@ func ladoExecutionFromGen(row gen.LadoExecution) domain.LadoExecution {
 		TimedOutAt:           ladoTimeFromNull(row.TimedOutAt),
 		SettledAt:            ladoTimeFromNull(row.SettledAt),
 		IntegrationGated:     row.IntegrationGated == 1,
+		Role:                 row.Role,
+		PartID:               row.PartID,
+		Branch:               row.Branch,
+		StartSHA:             row.StartSha,
 	}
 }
 
@@ -890,7 +932,10 @@ func ladoDispatchSettingsFromGen(row gen.LadoDispatchSetting) domain.LadoDispatc
 			MaxPaths: int(row.PlanReviewSkipMaxPaths),
 			Patterns: patterns,
 		},
-		UpdatedAt: row.UpdatedAt.UTC(),
+		MaxWorkers:    int(row.MaxWorkers),
+		HoldOnDiskLow: row.HoldOnDiskLow == 1,
+		MinFreeDiskGB: int(row.MinFreeDiskGb),
+		UpdatedAt:     row.UpdatedAt.UTC(),
 	}
 }
 

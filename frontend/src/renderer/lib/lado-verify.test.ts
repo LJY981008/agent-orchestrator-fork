@@ -88,6 +88,9 @@ const settings: LadoProjectSettings = {
 	checkCommands: [{ name: "test", command: "npm test" }],
 	checkCommandsSha256: "0".repeat(64),
 	checkTimeoutMinutes: 30,
+	overlapWait: true,
+	overlapIgnore: [],
+	overlapIgnoreIsDefault: true,
 };
 
 beforeEach(() => {

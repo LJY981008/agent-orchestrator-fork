@@ -31,6 +31,10 @@ type Sessions interface {
 // Grants reads whether the dispatcher holds a queue entry for an attempt.
 type Grants interface {
 	LadoDispatchGrant(ctx context.Context, entryID domain.LadoQueueEntryID, attempt int, now time.Time) (domain.LadoDispatchGrant, error)
+	// LadoPartSpawnGrant is the grant of a parts run worker's client request
+	// id: active only while the dispatcher starts that worker
+	// (docs/LJY-PRD/TDD.md §5.4).
+	LadoPartSpawnGrant(ctx context.Context, clientRequestID string, now time.Time) (domain.LadoDispatchGrant, error)
 }
 
 // Policies reads what an execution keeps from its rule snapshot, found
@@ -97,7 +101,7 @@ func (g *Gate) AuthorizeSpawn(ctx context.Context, cfg ports.SpawnConfig) error 
 	if err != nil {
 		return err
 	}
-	if _, _, dispatch := domain.ParseLadoClientRequestID(cfg.ClientRequestID); dispatch && !granted {
+	if _, dispatch := domain.ParseLadoRunClientRequestID(cfg.ClientRequestID); dispatch && !granted {
 		return apierr.Conflict("LADO_TASK_REQUIRED",
 			"Client request ids that start with lado: are LADO's: only its dispatcher starts sessions with them.",
 			map[string]any{"projectId": string(cfg.ProjectID), "clientRequestId": cfg.ClientRequestID})
@@ -148,14 +152,21 @@ func (g *Gate) AuthorizeSend(ctx context.Context, target domain.SessionID, origi
 
 // granted reports whether the spawn is the dispatcher's: its client request id
 // names a queue entry and an attempt, a lease holds the entry for that
-// attempt right now, and the entry is of the spawn's project and has the
+// attempt right now (or, for a parts run worker, the entry's spawn request is
+// that id right now), and the entry is of the spawn's project and has the
 // spawn's dispatch hash.
 func (g *Gate) granted(ctx context.Context, cfg ports.SpawnConfig) (bool, error) {
-	entryID, attempt, ok := domain.ParseLadoClientRequestID(cfg.ClientRequestID)
+	run, ok := domain.ParseLadoRunClientRequestID(cfg.ClientRequestID)
 	if !ok {
 		return false, nil
 	}
-	grant, err := g.grants.LadoDispatchGrant(ctx, entryID, attempt, time.Now())
+	var grant domain.LadoDispatchGrant
+	var err error
+	if run.Role == domain.LadoRoleSingle {
+		grant, err = g.grants.LadoDispatchGrant(ctx, run.Entry, run.Attempt, time.Now())
+	} else {
+		grant, err = g.grants.LadoPartSpawnGrant(ctx, cfg.ClientRequestID, time.Now())
+	}
 	if err != nil {
 		return false, fmt.Errorf("LADO gate: %w", err)
 	}

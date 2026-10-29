@@ -112,18 +112,31 @@ type LadoPlanHistoryResponse struct {
 // LadoPlanContentResponse is a plan file's front matter, as far as it could
 // be read.
 type LadoPlanContentResponse struct {
-	BaseRef            string   `json:"baseRef,omitempty"`
-	Steps              []string `json:"steps"`
-	AcceptanceCriteria []string `json:"acceptanceCriteria"`
-	AffectedPaths      []string `json:"affectedPaths"`
-	TestCommands       []string `json:"testCommands"`
-	Risk               string   `json:"risk,omitempty"`
-	PermissionCeiling  string   `json:"permissionCeiling,omitempty"`
-	ReviewRequired     bool     `json:"reviewRequired"`
-	Reviewer           string   `json:"reviewer,omitempty"`
-	PlanSource         string   `json:"planSource,omitempty" description:"issue, or comment:<id> for a plan converted from an issue comment."`
-	ChangeKinds        []string `json:"changeKinds" description:"The changes the plan declares: db_schema, external_api, auth or data_deletion."`
-	Body               string   `json:"body" description:"The Markdown after the front matter."`
+	BaseRef            string                 `json:"baseRef,omitempty"`
+	Steps              []string               `json:"steps"`
+	AcceptanceCriteria []string               `json:"acceptanceCriteria"`
+	AffectedPaths      []string               `json:"affectedPaths"`
+	TestCommands       []string               `json:"testCommands"`
+	Risk               string                 `json:"risk,omitempty"`
+	PermissionCeiling  string                 `json:"permissionCeiling,omitempty"`
+	ReviewRequired     bool                   `json:"reviewRequired"`
+	Reviewer           string                 `json:"reviewer,omitempty"`
+	PlanSource         string                 `json:"planSource,omitempty" description:"issue, or comment:<id> for a plan converted from an issue comment."`
+	ChangeKinds        []string               `json:"changeKinds" description:"The changes the plan declares: db_schema, external_api, auth or data_deletion."`
+	Parts              []LadoPlanPartResponse `json:"parts" description:"The parts LADO runs in parallel workers, in the plan's order; empty when one worker runs the whole plan."`
+	IntegrationSteps   []int                  `json:"integrationSteps" description:"The 1-based numbers of the steps no part takes, which the integration worker does once every part is merged; empty without parts."`
+	Warnings           []string               `json:"warnings" description:"What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts."`
+	Body               string                 `json:"body" description:"The Markdown after the front matter."`
+}
+
+// LadoPlanPartResponse is one part of a plan.
+type LadoPlanPartResponse struct {
+	ID            string   `json:"id"`
+	Title         string   `json:"title"`
+	Steps         []int    `json:"steps" description:"1-based numbers into the plan's steps."`
+	AffectedPaths []string `json:"affectedPaths"`
+	DependsOn     []string `json:"dependsOn" description:"The parts merged before this one starts."`
+	Phase         int      `json:"phase" description:"The display phase: 1 for a part without dependencies, one more than the latest of its dependencies otherwise; 0 on a dependency cycle."`
 }
 
 // LadoPlanResponse is one revision with its pinned content.

@@ -88,6 +88,9 @@ function planned(overrides: Partial<lado.LadoPlan> = {}): lado.LadoPlan {
 			planSource: "comment:30",
 			body: "Approach in prose.",
 			changeKinds: [],
+			parts: [],
+			integrationSteps: [],
+			warnings: [],
 		},
 		...overrides,
 	};

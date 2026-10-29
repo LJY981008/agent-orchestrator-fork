@@ -542,7 +542,7 @@ func (q *Queries) ListLadoExecutionReviews(ctx context.Context, executionSession
 }
 
 const listLadoExecutionsToVerify = `-- name: ListLadoExecutionsToVerify :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
     p.target_branch AS pr_target_branch, p.title AS pr_title,
     NOT EXISTS (
@@ -551,7 +551,8 @@ SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_app
 FROM lado_executions e
 JOIN pr p ON p.session_id = e.session_id
 LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
-WHERE NOT EXISTS (
+WHERE e.role IN ('', 'integration')
+  AND NOT EXISTS (
         SELECT 1 FROM pr newer
         WHERE newer.session_id = p.session_id
           AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
@@ -610,6 +611,10 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 			&i.LadoExecution.SettledAt,
 			&i.LadoExecution.SettledPRURL,
 			&i.LadoExecution.SettledPRState,
+			&i.LadoExecution.Role,
+			&i.LadoExecution.PartID,
+			&i.LadoExecution.Branch,
+			&i.LadoExecution.StartSha,
 			&i.PRURL,
 			&i.PRNumber,
 			&i.PRState,

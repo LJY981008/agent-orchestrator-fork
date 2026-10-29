@@ -23,6 +23,9 @@ const defaults: lado.LadoDispatchSettings = {
 		maxPaths: 3,
 		patterns: { db_schema: ["**/migrations*/**", "**/*.sql"], external_api: ["**/openapi*"], auth: ["**/auth/**"], data_deletion: [] },
 	},
+	maxWorkers: 6,
+	holdOnDiskLow: true,
+	minFreeDiskGb: 10,
 };
 
 /** What a save sends: every value, the plan worker ones too. */
@@ -39,7 +42,7 @@ function renderSection() {
 	);
 }
 
-const concurrent = () => screen.getByRole("button", { name: "Concurrent runs" });
+const concurrent = () => screen.getByRole("button", { name: "Concurrent tasks" });
 const runTime = () => screen.getByRole("button", { name: "Maximum run time" });
 const memory = () => screen.getByRole("switch", { name: "Wait while memory is tight" });
 const rowOf = (control: HTMLElement) => control.closest<HTMLElement>(".settings-row-bar")!;
@@ -59,6 +62,9 @@ describe("RunsSection", () => {
 			...input,
 			maxPlanWorkers: input.maxPlanWorkers ?? defaults.maxPlanWorkers,
 			planReview: input.planReview ?? defaults.planReview,
+			maxWorkers: input.maxWorkers ?? defaults.maxWorkers,
+			holdOnDiskLow: input.holdOnDiskLow ?? defaults.holdOnDiskLow,
+			minFreeDiskGb: input.minFreeDiskGb ?? defaults.minFreeDiskGb,
 			updatedAt: "2026-10-23T10:00:00Z",
 		}));
 	});
@@ -68,7 +74,7 @@ describe("RunsSection", () => {
 	it("shows the saved settings, the daemon's defaults before any save", async () => {
 		renderSection();
 
-		expect(await screen.findByRole("button", { name: "Concurrent runs" })).toHaveTextContent("2");
+		expect(await screen.findByRole("button", { name: "Concurrent tasks" })).toHaveTextContent("2");
 		expect(runTime()).toHaveTextContent("8 hours");
 		expect(memory()).toBeChecked();
 		expect(screen.getByText("These apply only to approved tasks in projects with LADO mode on.")).toBeInTheDocument();
@@ -79,7 +85,7 @@ describe("RunsSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await user.click(await screen.findByRole("button", { name: "Concurrent runs" }));
+		await user.click(await screen.findByRole("button", { name: "Concurrent tasks" }));
 		expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8"]);
 		await user.keyboard("{Escape}");
 
@@ -99,7 +105,7 @@ describe("RunsSection", () => {
 		const user = userEvent.setup();
 		renderSection();
 
-		await choose(await screen.findByRole("button", { name: "Concurrent runs" }), "4");
+		await choose(await screen.findByRole("button", { name: "Concurrent tasks" }), "4");
 		await waitFor(() => expect(concurrent()).toHaveTextContent("4"));
 		expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxConcurrent: 4 }));
 
@@ -121,10 +127,33 @@ describe("RunsSection", () => {
 		expect(lado.updateLadoDispatchSettings).toHaveBeenCalledTimes(4);
 	});
 
+	it("saves the worker cap and the disk wait with the other settings", async () => {
+		const user = userEvent.setup();
+		renderSection();
+		const workers = await screen.findByRole("button", { name: "Concurrent workers" });
+		expect(workers).toHaveTextContent("6");
+		expect(screen.getByText(/Part, merge and integration workers count/)).toBeInTheDocument();
+		await choose(workers, "9");
+		await waitFor(() => expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxWorkers: 9 })));
+
+		const disk = () => screen.getByRole("button", { name: "Free disk space" });
+		await waitFor(() => expect(disk()).toBeEnabled());
+		expect(disk()).toHaveTextContent("10 GB");
+		await choose(disk(), "20 GB");
+		await waitFor(() => expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxWorkers: 9, minFreeDiskGb: 20 })));
+
+		const wait = () => screen.getByRole("switch", { name: "Wait while the disk is low" });
+		await waitFor(() => expect(wait()).toBeEnabled());
+		await user.click(wait());
+		await waitFor(() => expect(lado.updateLadoDispatchSettings).toHaveBeenLastCalledWith(sent({ maxWorkers: 9, minFreeDiskGb: 20, holdOnDiskLow: false })));
+		// Without the wait the threshold does not count.
+		await waitFor(() => expect(disk()).toBeDisabled());
+	});
+
 	it("does not save a value that is already set", async () => {
 		renderSection();
 
-		await choose(await screen.findByRole("button", { name: "Concurrent runs" }), "2");
+		await choose(await screen.findByRole("button", { name: "Concurrent tasks" }), "2");
 		await choose(runTime(), "8 hours");
 		expect(lado.updateLadoDispatchSettings).not.toHaveBeenCalled();
 	});
@@ -245,6 +274,6 @@ describe("RunsSection", () => {
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("LADO could not read or save its data.");
 		expect(screen.queryByRole("switch")).not.toBeInTheDocument();
-		expect(within(document.body).queryByRole("button", { name: "Concurrent runs" })).not.toBeInTheDocument();
+		expect(within(document.body).queryByRole("button", { name: "Concurrent tasks" })).not.toBeInTheDocument();
 	});
 });

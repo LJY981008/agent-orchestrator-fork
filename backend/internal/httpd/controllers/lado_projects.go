@@ -74,6 +74,7 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/effective", c.getEffective)
 	r.Get("/lado/queue", c.listQueue)
 	r.Get("/lado/executions/{sessionId}", c.getExecution)
+	r.Get("/lado/tasks/{taskId}/parts", c.getTaskParts)
 	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
 	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
 	c.registerSetup(r)
@@ -109,11 +110,14 @@ func (c *LadoController) putProjectSettings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	in := ladoproject.UpdateInput{
-		LadoMode:            req.LadoMode,
-		MaxConcurrent:       req.MaxConcurrent,
-		CheckTimeoutMinutes: req.CheckTimeoutMinutes,
-		CheckCommandsBase:   req.CheckCommandsBase,
-		Presence:            c.presenceCheck(r, body),
+		LadoMode:              req.LadoMode,
+		MaxConcurrent:         req.MaxConcurrent,
+		CheckTimeoutMinutes:   req.CheckTimeoutMinutes,
+		CheckCommandsBase:     req.CheckCommandsBase,
+		OverlapWait:           req.OverlapWait,
+		OverlapIgnore:         req.OverlapIgnore,
+		OverlapIgnoreDefaults: req.OverlapIgnoreDefaults,
+		Presence:              c.presenceCheck(r, body),
 	}
 	if req.CheckCommands != nil {
 		commands := make([]domain.LadoCheckCommand, 0, len(*req.CheckCommands))
@@ -140,11 +144,14 @@ func ladoProjectSettingsResponse(settings domain.LadoProjectSettings) LadoProjec
 		commands = append(commands, LadoCheckCommandBody{Name: command.Name, Command: command.Command})
 	}
 	return LadoProjectSettingsResponse{
-		ProjectID:           string(settings.ProjectID),
-		LadoMode:            settings.LadoMode,
-		MaxConcurrent:       settings.MaxConcurrent,
-		CheckCommands:       commands,
-		CheckCommandsSHA256: domain.LadoCheckCommandsSHA256(settings.CheckCommands),
-		CheckTimeoutMinutes: settings.CheckTimeoutMinutes,
+		ProjectID:              string(settings.ProjectID),
+		LadoMode:               settings.LadoMode,
+		MaxConcurrent:          settings.MaxConcurrent,
+		CheckCommands:          commands,
+		CheckCommandsSHA256:    domain.LadoCheckCommandsSHA256(settings.CheckCommands),
+		CheckTimeoutMinutes:    settings.CheckTimeoutMinutes,
+		OverlapWait:            settings.OverlapWait,
+		OverlapIgnore:          settings.OverlapIgnoreOrDefault(),
+		OverlapIgnoreIsDefault: settings.OverlapIgnore == nil,
 	}
 }

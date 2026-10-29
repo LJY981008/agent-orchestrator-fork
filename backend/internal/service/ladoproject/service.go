@@ -27,6 +27,9 @@ type Store interface {
 	// hash to base, else fails with domain.ErrLadoCheckCommandsChanged.
 	SetLadoProjectCheckCommands(ctx context.Context, projectID domain.ProjectID, base string, cmds []domain.LadoCheckCommand, proof *domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
 	SetLadoProjectCheckTimeout(ctx context.Context, projectID domain.ProjectID, minutes int, audit domain.LadoAuditEvent) error
+	// SetLadoProjectOverlap stores the overlap wait and the globs whose
+	// overlap does not count, nil for the defaults.
+	SetLadoProjectOverlap(ctx context.Context, projectID domain.ProjectID, wait bool, ignore []string, event domain.LadoAuditEvent) error
 }
 
 // Projects reads AO's project registry.
@@ -87,6 +90,14 @@ type UpdateInput struct {
 	// CheckTimeoutMinutes is each check command's time limit,
 	// domain.LadoCheckTimeoutMin to domain.LadoCheckTimeoutMax.
 	CheckTimeoutMinutes *int
+	// OverlapWait holds a task while a live run of another task of the
+	// project may touch the same files, and OverlapIgnore replaces the globs
+	// whose overlap does not count; an empty list after
+	// OverlapIgnoreDefaults goes back to the defaults (docs/LJY-PRD/TDD.md
+	// §5.4).
+	OverlapWait           *bool
+	OverlapIgnore         *[]string
+	OverlapIgnoreDefaults bool
 	// Presence checks the request's human-presence proof for an action. The
 	// service calls it only when the change turns LADO mode off or changes
 	// the check commands, which the daemon runs outside any agent sandbox
@@ -110,8 +121,9 @@ func (s *Service) Settings(ctx context.Context, projectID domain.ProjectID) (dom
 // Sending a current value changes nothing. The cap and the time limit change
 // without presence, audited as the API's.
 func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID, in UpdateInput) (domain.LadoProjectSettings, error) {
-	if in.LadoMode == nil && in.MaxConcurrent == nil && in.CheckCommands == nil && in.CheckTimeoutMinutes == nil {
-		return domain.LadoProjectSettings{}, apierr.Invalid("LADO_SETTINGS_EMPTY", "Send ladoMode, maxConcurrent, checkTimeoutMinutes or checkCommands.", nil)
+	if in.LadoMode == nil && in.MaxConcurrent == nil && in.CheckCommands == nil && in.CheckTimeoutMinutes == nil &&
+		in.OverlapWait == nil && in.OverlapIgnore == nil && !in.OverlapIgnoreDefaults {
+		return domain.LadoProjectSettings{}, apierr.Invalid("LADO_SETTINGS_EMPTY", "Send ladoMode, maxConcurrent, checkTimeoutMinutes, checkCommands, overlapWait or overlapIgnore.", nil)
 	}
 	if err := validate(in); err != nil {
 		return domain.LadoProjectSettings{}, err
@@ -151,6 +163,28 @@ func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID
 		}
 		wrote = true
 	}
+	if in.OverlapWait != nil || in.OverlapIgnore != nil || in.OverlapIgnoreDefaults {
+		wait, ignore := current.OverlapWait, current.OverlapIgnore
+		if in.OverlapWait != nil {
+			wait = *in.OverlapWait
+		}
+		switch {
+		case in.OverlapIgnoreDefaults:
+			ignore = nil
+		case in.OverlapIgnore != nil:
+			ignore = cleanGlobs(*in.OverlapIgnore)
+		}
+		if wait != current.OverlapWait || !slices.Equal(ignore, current.OverlapIgnore) || (ignore == nil) != (current.OverlapIgnore == nil) {
+			payload, _ := json.Marshal(map[string]any{"from": map[string]any{"wait": current.OverlapWait, "ignore": current.OverlapIgnore},
+				"to": map[string]any{"wait": wait, "ignore": ignore}})
+			event := s.apiEvent(projectID, "project.overlap_changed", 0, 0)
+			event.Payload = payload
+			if err := s.deps.Store.SetLadoProjectOverlap(ctx, projectID, wait, ignore, event); err != nil {
+				return domain.LadoProjectSettings{}, apierr.Internal("LADO_SETTINGS_UPDATE_FAILED", "Failed to update LADO project settings")
+			}
+			wrote = true
+		}
+	}
 	if commandsProof != nil {
 		if err := s.setCheckCommands(ctx, projectID, current.CheckCommands, *in.CheckCommands, in.CheckCommandsBase, *commandsProof); err != nil {
 			return domain.LadoProjectSettings{}, err
@@ -163,8 +197,38 @@ func (s *Service) UpdateSettings(ctx context.Context, projectID domain.ProjectID
 	return current, nil
 }
 
+// cleanGlobs trims the globs and leaves out blank ones and repeats.
+func cleanGlobs(globs []string) []string {
+	out := []string{}
+	for _, glob := range globs {
+		glob = strings.TrimSpace(glob)
+		if glob != "" && !slices.Contains(out, glob) {
+			out = append(out, glob)
+		}
+	}
+	return out
+}
+
+// maxOverlapIgnore caps the globs whose overlap does not count, and
+// maxOverlapGlobBytes each glob.
+const (
+	maxOverlapIgnore    = 50
+	maxOverlapGlobBytes = 300
+)
+
 // validate refuses an invalid value before anything is read or written.
 func validate(in UpdateInput) error {
+	if in.OverlapIgnore != nil {
+		if len(*in.OverlapIgnore) > maxOverlapIgnore {
+			return apierr.Invalid("LADO_OVERLAP_IGNORE_INVALID", fmt.Sprintf("overlapIgnore takes at most %d globs", maxOverlapIgnore), map[string]any{"max": maxOverlapIgnore})
+		}
+		for i, glob := range *in.OverlapIgnore {
+			glob = strings.TrimSpace(glob)
+			if len(glob) > maxOverlapGlobBytes || strings.HasPrefix(glob, "/") || strings.Contains(glob, "\\") || strings.ContainsAny(glob, "\x00\n\r") {
+				return apierr.Invalid("LADO_OVERLAP_IGNORE_INVALID", fmt.Sprintf("overlapIgnore[%d] is not a glob relative to the repository root", i), map[string]any{"index": i})
+			}
+		}
+	}
 	if n := in.MaxConcurrent; n != nil && (*n < 1 || *n > domain.LadoMaxConcurrent) {
 		return apierr.Invalid("LADO_DISPATCH_SETTINGS_INVALID",
 			fmt.Sprintf("maxConcurrent must be 1 to %d, got %d", domain.LadoMaxConcurrent, *n), map[string]any{"min": 1, "max": domain.LadoMaxConcurrent})

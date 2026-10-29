@@ -519,7 +519,7 @@ func TestLadoQueueChangesPublishEvents(t *testing.T) {
 	expect("execution of a session AO no longer has", "lado_execution mer-gone/")
 
 	// Dispatch settings and project caps publish nothing.
-	if err := q.UpsertLadoDispatchSettings(ctx, gen.UpsertLadoDispatchSettingsParams{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: 0, UpdatedAt: at, MaxPlanWorkers: 2, PlanReviewSkip: 1, PlanReviewSkipMaxPaths: 3}); err != nil {
+	if err := q.UpsertLadoDispatchSettings(ctx, gen.UpsertLadoDispatchSettingsParams{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: 0, UpdatedAt: at, MaxPlanWorkers: 2, PlanReviewSkip: 1, PlanReviewSkipMaxPaths: 3, MaxWorkers: 6, HoldOnDiskLow: 1, MinFreeDiskGb: 10}); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.UpsertLadoProjectMaxConcurrent(ctx, gen.UpsertLadoProjectMaxConcurrentParams{ProjectID: "mer", MaxConcurrent: 2, UpdatedAt: at}); err != nil {
@@ -1383,8 +1383,8 @@ func TestLadoDispatchSettingsDefaultsAndUpdate(t *testing.T) {
 	// replaces the one before.
 	plans, review := domain.LadoDefaultMaxPlanWorkers, domain.DefaultLadoPlanReviewSettings()
 	for i, settings := range []domain.LadoDispatchSettings{
-		{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: false, MaxPlanWorkers: plans, PlanReview: review},
-		{MaxConcurrent: 1, MaxRunMinutes: 0, HoldOnMemoryTight: true, MaxPlanWorkers: plans, PlanReview: review},
+		{MaxConcurrent: 3, MaxRunMinutes: 60, HoldOnMemoryTight: false, MaxPlanWorkers: plans, PlanReview: review, MaxWorkers: 6, HoldOnDiskLow: true, MinFreeDiskGB: 10},
+		{MaxConcurrent: 1, MaxRunMinutes: 0, HoldOnMemoryTight: true, MaxPlanWorkers: plans, PlanReview: review, MaxWorkers: 12, HoldOnDiskLow: false, MinFreeDiskGB: 50},
 	} {
 		changedAt := at.Add(time.Duration(i) * time.Hour)
 		stored, err := s.SetLadoDispatchSettings(ctx, settings, event("dispatch.settings_changed", changedAt))

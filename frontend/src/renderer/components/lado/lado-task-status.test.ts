@@ -115,3 +115,29 @@ describe("ladoTaskStatus", () => {
 		}
 	});
 });
+
+// LADO fork: a task split into parts (docs/LJY-PRD/TDD.md §5.4).
+describe("parts and overlapping work", () => {
+	const en = createFullAppI18n("en").t;
+	const ko = createFullAppI18n("ko").t;
+
+	it("says how many parts of a running task are merged", () => {
+		const running = { ...task("running"), execution: undefined, parts: { total: 4, merged: 2 } };
+		expect(ladoTaskStatus(running, en)).toEqual({ label: "Running", tone: "working" });
+		expect(ladoTaskReason(running, en, "en")).toBe("Parts 2/4");
+		expect(ladoTaskReason(running, ko, "ko")).toBe("파트 2/4");
+		expect(ladoTaskReason({ ...task("running") }, en, "en")).toBeNull();
+	});
+
+	it("names the task a queued task waits for when their files overlap", () => {
+		const queued: LadoTask = {
+			...task("queued", "paths_overlap"),
+			execution: undefined,
+			queue: { state: "waiting", reason: "paths_overlap", waitingDetail: "github:acme/demo#7", attempts: 0, enqueuedAt: "2026-10-27T00:00:00Z" },
+		};
+		expect(ladoTaskReason(queued, en, "en")).toBe("Waiting for #7, which changes the same files");
+		expect(ladoTaskReason({ ...queued, queue: { ...queued.queue!, waitingDetail: undefined } }, en, "en")).toBe("Waiting for a task that changes the same files");
+		expect(ladoTaskReason({ ...task("queued", "slot_workers"), execution: undefined }, en, "en")).toBe("Waiting for a free worker slot");
+		expect(ladoTaskReason({ ...task("queued", "disk_low"), execution: undefined }, ko, "ko")).toBe("디스크 공간을 기다리는 중");
+	});
+});

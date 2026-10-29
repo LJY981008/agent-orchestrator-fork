@@ -267,6 +267,9 @@ func ladoTaskResponse(task domain.LadoTask) LadoTaskResponse {
 		Execution: ladoTaskExecutionResponse(task),
 		CreatedAt: task.CreatedAt,
 	}
+	if task.Parts.Total > 0 {
+		resp.Parts = &LadoTaskPartsSummaryResponse{Total: task.Parts.Total, Merged: task.Parts.Merged}
+	}
 	if id, err := domain.ParseLadoIssueRef(task.IssueRef); err == nil {
 		resp.Issue.Number = domain.LadoIssueNumber(id)
 	}

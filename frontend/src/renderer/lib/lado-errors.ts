@@ -14,6 +14,8 @@ import {
 	type LadoPlanWorker,
 	type LadoPlanWorkerPhase,
 	type LadoQueueReason,
+	type LadoTaskPartState,
+	type LadoTaskPartWaitingReason,
 	type LadoTaskStateReason,
 } from "./lado";
 
@@ -194,6 +196,8 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_EXECUTION_NO_PR: "lado.error.executionNoPr",
 	LADO_CHECK_RUN_NOT_FOUND: "lado.error.checkRunNotFound",
 	LADO_CHECK_COMMANDS_INVALID: "lado.error.checkCommandsInvalid",
+	LADO_OVERLAP_IGNORE_INVALID: "lado.error.overlapIgnoreInvalid",
+	LADO_PARTS_LOAD_FAILED: "lado.error.partsLoadFailed",
 	LADO_PROTECTED_PATHS_INVALID: "lado.error.protectedPathsInvalid",
 	LADO_INTEGRATION_APPROVAL_REQUIRED: "lado.error.integrationApprovalRequired",
 	LADO_MERGE_GATE_FAILED: "lado.error.mergeGateFailed",
@@ -397,6 +401,16 @@ const planProblemKeys: Partial<Record<string, LadoPlanProblemKey>> = {
 	unknown_base_ref: "lado.planProblem.unknown_base_ref",
 	plan_review_missing: "lado.planProblem.plan_review_missing",
 	plan_review_unaddressed: "lado.planProblem.plan_review_unaddressed",
+	// A plan's parts (docs/LJY-PRD/TDD.md §5.4).
+	part_count: "lado.planProblem.part_count",
+	part_invalid_id: "lado.planProblem.part_invalid_id",
+	part_duplicate_id: "lado.planProblem.part_duplicate_id",
+	part_unknown_dependency: "lado.planProblem.part_unknown_dependency",
+	part_cycle: "lado.planProblem.part_cycle",
+	part_step_out_of_range: "lado.planProblem.part_step_out_of_range",
+	part_step_shared: "lado.planProblem.part_step_shared",
+	part_path_outside: "lado.planProblem.part_path_outside",
+	part_missing_field: "lado.planProblem.part_missing_field",
 };
 
 /**
@@ -492,7 +506,10 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	ended_without_pr: "lado.reason.ended_without_pr",
 	slot_global: "lado.reason.slot_global",
 	slot_project: "lado.reason.slot_project",
+	slot_workers: "lado.reason.slot_workers",
 	memory_tight: "lado.reason.memory_tight",
+	disk_low: "lado.reason.disk_low",
+	paths_overlap: "lado.reason.paths_overlap",
 	issue_unreadable: "lado.reason.issue_unreadable",
 	retry: "lado.reason.retry",
 	lado_mode_off: "lado.reason.lado_mode_off",
@@ -845,4 +862,42 @@ const protectedPathProblemKeys: Partial<Record<string, LadoProtectedPathProblemK
 export function ladoProtectedPathProblemText(t: TFunction, details: Record<string, unknown>): string {
 	const key = typeof details.reason === "string" ? protectedPathProblemKeys[details.reason] : undefined;
 	return key ? t(key) : "";
+}
+
+type LadoPartKey = Extract<MessageKey, `lado.parts.${string}`>;
+
+// A part's state and why it waits (backend/internal/domain/lado_parts.go).
+// Keyed by the API's enums, so a value the daemon adds fails the typecheck
+// until it has words here.
+const partStateKeys: Record<LadoTaskPartState, LadoPartKey> = {
+	waiting: "lado.parts.state.waiting",
+	running: "lado.parts.state.running",
+	done: "lado.parts.state.done",
+	merging: "lado.parts.state.merging",
+	merged: "lado.parts.state.merged",
+	conflict: "lado.parts.state.conflict",
+	failed: "lado.parts.state.failed",
+};
+
+/** A part's state, in the developer's language. */
+export function ladoPartStateText(t: TFunction, state: LadoTaskPartState): string {
+	return t(partStateKeys[state]);
+}
+
+/**
+ * Why a part waits, in the developer's language: the parts it waits for, the
+ * running part whose paths overlap, or the slot, memory or disk the whole
+ * queue waits for.
+ */
+export function ladoPartWaitingText(t: TFunction, reason: LadoTaskPartWaitingReason | undefined, detail: string | undefined): string {
+	switch (reason) {
+		case undefined:
+			return "";
+		case "part_dependency":
+			return t("lado.parts.waiting.part_dependency", { parts: detail ?? "" });
+		case "part_overlap":
+			return t("lado.parts.waiting.part_overlap", { part: detail ?? "" });
+		default:
+			return ladoReasonText(t, reason);
+	}
 }

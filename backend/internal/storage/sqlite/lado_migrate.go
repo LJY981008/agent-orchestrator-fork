@@ -103,7 +103,22 @@ END`,
     OLD.failed_at IS NOT NEW.failed_at OR
     OLD.superseded_at IS NOT NEW.superseded_at OR
     OLD.cancelled_at IS NOT NEW.cancelled_at OR
-    OLD.attempt_count IS NOT NEW.attempt_count`),
+    OLD.attempt_count IS NOT NEW.attempt_count OR
+    OLD.parts_started_at IS NOT NEW.parts_started_at OR
+    OLD.waiting_detail IS NOT NEW.waiting_detail`),
+	// A parts run publishes its task's change when it starts and when the
+	// integration branch moves, and each part when it starts and when what
+	// the task view shows of it changes (docs/LJY-PRD/TDD.md §5.4).
+	ladoPlanCDCTrigger("lado_cdc_part_runs_insert", "AFTER INSERT ON lado_part_runs", ""),
+	ladoPlanCDCTrigger("lado_cdc_part_runs_update", "AFTER UPDATE ON lado_part_runs", "WHEN OLD.head_sha IS NOT NEW.head_sha"),
+	ladoPlanCDCTrigger("lado_cdc_task_parts_insert", "AFTER INSERT ON lado_task_parts", ""),
+	ladoPlanCDCTrigger("lado_cdc_task_parts_update", "AFTER UPDATE ON lado_task_parts",
+		`WHEN OLD.state IS NOT NEW.state OR
+    OLD.waiting_reason IS NOT NEW.waiting_reason OR
+    OLD.waiting_detail IS NOT NEW.waiting_detail OR
+    OLD.session_id IS NOT NEW.session_id OR
+    OLD.merge_session_id IS NOT NEW.merge_session_id OR
+    OLD.attempts IS NOT NEW.attempts`),
 	// An execution publishes on its session when it starts and when it times
 	// out. Dispatch settings and project caps publish nothing.
 	ladoExecutionCDCTrigger("lado_cdc_executions_insert", "AFTER INSERT ON lado_executions", ""),

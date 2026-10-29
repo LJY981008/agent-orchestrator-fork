@@ -1,8 +1,9 @@
 package ladoqueue
 
-// Admission (decision f of the step 6 plan): how many executions run at once,
-// overall and in each project, and whether memory is too tight to start one
-// more. An entry that waits for a slot or for memory does not spend an
+// Admission (decision f of the step 6 plan, as parallel parts revised it):
+// how many tasks run at once, overall and in each project, how many LADO
+// workers run at once, and whether memory or disk is too tight to start one
+// more. An entry that waits for a slot, memory or disk does not spend an
 // attempt.
 
 import (
@@ -22,14 +23,16 @@ import (
 // out to need.
 const maxClaimsPerPass = 50
 
-// admit claims entries one at a time, oldest first, while a run slot is free,
-// and dispatches each. Entries of projects with LADO mode off wait for it.
-// While memory is tight and the settings hold dispatch then, or while the
-// running executions fill every slot, the open entries are marked waiting
-// for that and nothing is claimed. A project whose running executions fill
-// its own slots is left out of the claims, and its open entries wait for a
-// slot there; a worker this pass starts takes its slots at once, and may
-// fill its project too. Each project's cap is read once a pass.
+// admit claims entries one at a time, oldest first, while a task slot and a
+// worker slot are free, and dispatches each. Entries of projects with LADO
+// mode off wait for it. While memory is tight and the settings hold dispatch
+// then, while the free disk space is low, while the running workers fill
+// every worker slot, or while the running tasks fill every task slot, the
+// open entries are marked waiting for that and nothing is claimed. A project
+// whose running tasks fill its own slots is left out of the claims, and its
+// open entries wait for a slot there. What runs is read again before each
+// claim, so a worker or a parts run this pass starts takes its slots at
+// once. Each project's cap is read once a pass.
 func (s *Service) admit(ctx context.Context, now time.Time, settings domain.LadoDispatchSettings) error {
 	if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingModeOff, nil); err != nil {
 		return err
@@ -38,14 +41,8 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 		_, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingMemoryTight, nil)
 		return err
 	}
-	// Running executions and live leases both take a slot.
-	total, perProject, err := s.deps.Store.CountLiveLadoExecutions(ctx, now)
-	if err != nil {
-		return err
-	}
-	free := settings.MaxConcurrent - total
-	if free <= 0 {
-		_, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotGlobal, nil)
+	if s.diskLow(settings, "") {
+		_, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingDiskLow, nil)
 		return err
 	}
 	var problems []error
@@ -61,30 +58,48 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 		caps[project] = limit
 		return limit, nil
 	}
-	var full []domain.ProjectID
-	// fill leaves a project out of the claims; its open entries wait for a
-	// slot there, which is written only when the reason changes.
-	fill := func(project domain.ProjectID) {
-		full = append(full, project)
-		if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotProject, &project); err != nil {
-			problems = append(problems, err)
-		}
-	}
-	for _, project := range slices.Sorted(maps.Keys(perProject)) {
-		limit, err := capOf(project)
-		if err != nil {
-			// Without its cap the project may be full: it waits a pass.
-			problems = append(problems, err)
-			full = append(full, project)
-			continue
-		}
-		if perProject[project] >= limit {
-			fill(project)
-		}
-	}
+	marked := map[domain.ProjectID]bool{}
 	for range maxClaimsPerPass {
-		if free <= 0 || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			break
+		}
+		load, err := s.deps.Store.LadoRunLoad(ctx, now)
+		if err != nil {
+			problems = append(problems, err)
+			break
+		}
+		if load.Workers >= settings.MaxWorkers {
+			if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotWorkers, nil); err != nil {
+				problems = append(problems, err)
+			}
+			break
+		}
+		if load.TaskCount() >= settings.MaxConcurrent {
+			if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotGlobal, nil); err != nil {
+				problems = append(problems, err)
+			}
+			break
+		}
+		perProject := load.TasksByProject()
+		var full []domain.ProjectID
+		for _, project := range slices.Sorted(maps.Keys(perProject)) {
+			limit, err := capOf(project)
+			if err != nil {
+				// Without its cap the project may be full: it waits a pass.
+				problems = append(problems, err)
+				full = append(full, project)
+				continue
+			}
+			if perProject[project] >= limit {
+				full = append(full, project)
+				// Its open entries wait for a slot there, written once.
+				if !marked[project] {
+					marked[project] = true
+					if _, err := s.deps.Store.SetLadoQueueWaiting(ctx, domain.LadoWaitingSlotProject, &project); err != nil {
+						problems = append(problems, err)
+					}
+				}
+			}
 		}
 		claimed, err := s.deps.Store.ClaimLadoQueueEntries(ctx, now, s.leaseEnd(now), 1, full, s.deps.NewID)
 		if err != nil {
@@ -103,24 +118,15 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 			}
 			break
 		}
-		if perProject[entry.ProjectID] >= limit {
+		if perProject[entry.ProjectID] >= limit && !load.Runs(entry.TaskID) {
 			// Only a race gets here: the claim left full projects out.
 			if err := s.hold(ctx, entry, domain.LadoWaitingSlotProject, now.Add(s.deps.Interval)); err != nil {
 				problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
 			}
-			full = append(full, entry.ProjectID)
 			continue
 		}
-		started, err := s.dispatch(ctx, entry, settings, now)
-		if err != nil {
+		if _, err := s.dispatch(ctx, entry, settings, load, now); err != nil {
 			problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
-		}
-		if started {
-			free--
-			perProject[entry.ProjectID]++
-			if perProject[entry.ProjectID] >= limit {
-				fill(entry.ProjectID)
-			}
 		}
 	}
 	return errors.Join(problems...)

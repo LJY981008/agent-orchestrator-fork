@@ -545,7 +545,8 @@ func (s *Store) LadoSetupAdoption(ctx context.Context, id domain.LadoSetupAdopti
 // sessions get these, so a later edit never reaches a running execution. Any
 // other id, and an unknown entry, report false.
 func (s *Store) LadoSetupVersionsForClientRequest(ctx context.Context, clientRequestID string) ([]domain.LadoSetupItemWithVersion, bool, error) {
-	entryID, _, ok := domain.ParseLadoClientRequestID(clientRequestID)
+	run, ok := domain.ParseLadoRunClientRequestID(clientRequestID)
+	entryID := run.Entry
 	if !ok {
 		return nil, false, nil
 	}
@@ -571,7 +572,8 @@ func (s *Store) LadoSetupVersionsForClientRequest(ctx context.Context, clientReq
 // request id names was taken, which is when its setup was pinned; false when
 // the id names no execution.
 func (s *Store) LadoSetupPinnedAt(ctx context.Context, clientRequestID string) (time.Time, bool, error) {
-	entryID, _, ok := domain.ParseLadoClientRequestID(clientRequestID)
+	run, ok := domain.ParseLadoRunClientRequestID(clientRequestID)
+	entryID := run.Entry
 	if !ok {
 		return time.Time{}, false, nil
 	}

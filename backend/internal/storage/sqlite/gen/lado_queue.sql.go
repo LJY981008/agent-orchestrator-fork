@@ -41,6 +41,7 @@ SET cancelled_at = ?
 WHERE task_id = ?
   AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
 `
 
 type CancelOpenLadoQueueEntriesForTaskParams struct {
@@ -62,10 +63,12 @@ SET lease_token = ?1,
     claimed_at = ?2,
     lease_expires_at = ?3,
     attempt_count = attempt_count + 1,
-    waiting_reason = ''
+    waiting_reason = '',
+    waiting_detail = ''
 WHERE id = ?4
   AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND (lease_token IS NULL OR lease_expires_at <= ?2)
   AND (next_attempt_at IS NULL OR next_attempt_at <= ?2)
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
@@ -202,7 +205,8 @@ func (q *Queries) FailLadoQueueEntry(ctx context.Context, arg FailLadoQueueEntry
 
 const getLadoDispatchSettings = `-- name: GetLadoDispatchSettings :one
 SELECT id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at,
-    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns
+    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns,
+    max_workers, hold_on_disk_low, min_free_disk_gb
 FROM lado_dispatch_settings
 WHERE id = 1
 `
@@ -220,12 +224,15 @@ func (q *Queries) GetLadoDispatchSettings(ctx context.Context) (LadoDispatchSett
 		&i.PlanReviewSkip,
 		&i.PlanReviewSkipMaxPaths,
 		&i.PlanReviewPatterns,
+		&i.MaxWorkers,
+		&i.HoldOnDiskLow,
+		&i.MinFreeDiskGb,
 	)
 	return i, err
 }
 
 const getLadoExecution = `-- name: GetLadoExecution :one
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
@@ -263,6 +270,10 @@ func (q *Queries) GetLadoExecution(ctx context.Context, sessionID string) (GetLa
 		&i.LadoExecution.SettledAt,
 		&i.LadoExecution.SettledPRURL,
 		&i.LadoExecution.SettledPRState,
+		&i.LadoExecution.Role,
+		&i.LadoExecution.PartID,
+		&i.LadoExecution.Branch,
+		&i.LadoExecution.StartSha,
 		&i.SessionTerminated,
 	)
 	return i, err
@@ -285,7 +296,8 @@ const getLadoQueueEntry = `-- name: GetLadoQueueEntry :one
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE id = ?
 `
@@ -313,12 +325,16 @@ func (q *Queries) GetLadoQueueEntry(ctx context.Context, id string) (LadoQueueEn
 		&i.FailedAt,
 		&i.SupersededAt,
 		&i.CancelledAt,
+		&i.PartsStartedAt,
+		&i.PartSpawnRequest,
+		&i.PartSpawnExpiresAt,
+		&i.WaitingDetail,
 	)
 	return i, err
 }
 
 const getLadoQueueEntryPlan = `-- name: GetLadoQueueEntryPlan :one
-SELECT e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, r.id AS plan_revision_id, r.sha256 AS plan_sha256, r.base_sha AS plan_base_sha,
+SELECT e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, e.parts_started_at, e.part_spawn_request, e.part_spawn_expires_at, e.waiting_detail, r.id AS plan_revision_id, r.sha256 AS plan_sha256, r.base_sha AS plan_base_sha,
     p.sha256 AS snapshot_sha256
 FROM lado_queue_entries e
 JOIN lado_plan_approvals a ON a.id = e.plan_approval_id
@@ -360,6 +376,10 @@ func (q *Queries) GetLadoQueueEntryPlan(ctx context.Context, id string) (GetLado
 		&i.LadoQueueEntry.FailedAt,
 		&i.LadoQueueEntry.SupersededAt,
 		&i.LadoQueueEntry.CancelledAt,
+		&i.LadoQueueEntry.PartsStartedAt,
+		&i.LadoQueueEntry.PartSpawnRequest,
+		&i.LadoQueueEntry.PartSpawnExpiresAt,
+		&i.LadoQueueEntry.WaitingDetail,
 		&i.PlanRevisionID,
 		&i.PlanSha256,
 		&i.PlanBaseSha,
@@ -390,12 +410,14 @@ SET lease_token = NULL,
     lease_expires_at = NULL,
     attempt_count = attempt_count - 1,
     waiting_reason = ?1,
-    next_attempt_at = ?2
-WHERE id = ?3 AND lease_token = ?4
+    waiting_detail = ?2,
+    next_attempt_at = ?3
+WHERE id = ?4 AND lease_token = ?5
 `
 
 type HoldLadoQueueEntryParams struct {
 	WaitingReason string
+	WaitingDetail string
 	NextAttemptAt sql.NullTime
 	ID            string
 	LeaseToken    sql.NullString
@@ -405,6 +427,7 @@ type HoldLadoQueueEntryParams struct {
 func (q *Queries) HoldLadoQueueEntry(ctx context.Context, arg HoldLadoQueueEntryParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, holdLadoQueueEntry,
 		arg.WaitingReason,
+		arg.WaitingDetail,
 		arg.NextAttemptAt,
 		arg.ID,
 		arg.LeaseToken,
@@ -419,8 +442,9 @@ const insertLadoExecution = `-- name: InsertLadoExecution :exec
 INSERT INTO lado_executions (
     session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
     attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at,
-    base_branch, base_remote, dispatch_local_base_sha, integration_gated
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+    base_branch, base_remote, dispatch_local_base_sha, integration_gated,
+    role, part_id, branch, start_sha
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
 `
 
 type InsertLadoExecutionParams struct {
@@ -439,6 +463,10 @@ type InsertLadoExecutionParams struct {
 	BaseBranch           string
 	BaseRemote           string
 	DispatchLocalBaseSha string
+	Role                 string
+	PartID               string
+	Branch               string
+	StartSha             string
 }
 
 // Every execution this dispatcher starts runs under integration approval.
@@ -459,6 +487,10 @@ func (q *Queries) InsertLadoExecution(ctx context.Context, arg InsertLadoExecuti
 		arg.BaseBranch,
 		arg.BaseRemote,
 		arg.DispatchLocalBaseSha,
+		arg.Role,
+		arg.PartID,
+		arg.Branch,
+		arg.StartSha,
 	)
 	return err
 }
@@ -494,10 +526,12 @@ const listClaimableLadoQueueEntries = `-- name: ListClaimableLadoQueueEntries :m
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND (lease_token IS NULL OR lease_expires_at <= ?1)
   AND (next_attempt_at IS NULL OR next_attempt_at <= ?1)
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
@@ -544,6 +578,10 @@ func (q *Queries) ListClaimableLadoQueueEntries(ctx context.Context, arg ListCla
 			&i.FailedAt,
 			&i.SupersededAt,
 			&i.CancelledAt,
+			&i.PartsStartedAt,
+			&i.PartSpawnRequest,
+			&i.PartSpawnExpiresAt,
+			&i.WaitingDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -559,12 +597,13 @@ func (q *Queries) ListClaimableLadoQueueEntries(ctx context.Context, arg ListCla
 }
 
 const listLadoExecutionsForTasks = `-- name: ListLadoExecutionsForTasks :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
 FROM lado_executions e
 WHERE e.task_id IN (/*SLICE:task_ids*/?)
+  AND e.role IN ('', 'integration')
 ORDER BY e.task_id, e.started_at DESC, e.session_id DESC
 `
 
@@ -615,6 +654,10 @@ func (q *Queries) ListLadoExecutionsForTasks(ctx context.Context, taskIds []stri
 			&i.LadoExecution.SettledAt,
 			&i.LadoExecution.SettledPRURL,
 			&i.LadoExecution.SettledPRState,
+			&i.LadoExecution.Role,
+			&i.LadoExecution.PartID,
+			&i.LadoExecution.Branch,
+			&i.LadoExecution.StartSha,
 			&i.SessionTerminated,
 		); err != nil {
 			return nil, err
@@ -634,7 +677,7 @@ const listLadoExecutionsPastDeadline = `-- name: ListLadoExecutionsPastDeadline 
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
     e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
     e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
-    e.settled_pr_state
+    e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE e.deadline_at <= ?1
@@ -675,6 +718,10 @@ func (q *Queries) ListLadoExecutionsPastDeadline(ctx context.Context, now sql.Nu
 			&i.SettledAt,
 			&i.SettledPRURL,
 			&i.SettledPRState,
+			&i.Role,
+			&i.PartID,
+			&i.Branch,
+			&i.StartSha,
 		); err != nil {
 			return nil, err
 		}
@@ -693,7 +740,8 @@ const listLadoQueueEntriesForTasks = `-- name: ListLadoQueueEntriesForTasks :man
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE task_id IN (/*SLICE:task_ids*/?)
 ORDER BY task_id, enqueued_at DESC, id DESC
@@ -738,6 +786,10 @@ func (q *Queries) ListLadoQueueEntriesForTasks(ctx context.Context, taskIds []st
 			&i.FailedAt,
 			&i.SupersededAt,
 			&i.CancelledAt,
+			&i.PartsStartedAt,
+			&i.PartSpawnRequest,
+			&i.PartSpawnExpiresAt,
+			&i.WaitingDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -756,7 +808,8 @@ const listLeasedLadoQueueEntries = `-- name: ListLeasedLadoQueueEntries :many
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE lease_token IS NOT NULL
 ORDER BY claimed_at, id
@@ -791,6 +844,10 @@ func (q *Queries) ListLeasedLadoQueueEntries(ctx context.Context) ([]LadoQueueEn
 			&i.FailedAt,
 			&i.SupersededAt,
 			&i.CancelledAt,
+			&i.PartsStartedAt,
+			&i.PartSpawnRequest,
+			&i.PartSpawnExpiresAt,
+			&i.WaitingDetail,
 		); err != nil {
 			return nil, err
 		}
@@ -809,7 +866,7 @@ const listLiveLadoExecutions = `-- name: ListLiveLadoExecutions :many
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
     e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
     e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
-    e.settled_pr_state
+    e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE s.is_terminated = 0
@@ -847,6 +904,10 @@ func (q *Queries) ListLiveLadoExecutions(ctx context.Context) ([]LadoExecution, 
 			&i.SettledAt,
 			&i.SettledPRURL,
 			&i.SettledPRState,
+			&i.Role,
+			&i.PartID,
+			&i.Branch,
+			&i.StartSha,
 		); err != nil {
 			return nil, err
 		}
@@ -862,12 +923,13 @@ func (q *Queries) ListLiveLadoExecutions(ctx context.Context) ([]LadoExecution, 
 }
 
 const listOpenLadoQueueEntriesWithIssues = `-- name: ListOpenLadoQueueEntriesWithIssues :many
-SELECT e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, t.issue_ref, t.issue_title
+SELECT e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, e.parts_started_at, e.part_spawn_request, e.part_spawn_expires_at, e.waiting_detail, t.issue_ref, t.issue_title
 FROM lado_queue_entries e
 JOIN lado_tasks t ON t.id = e.task_id
 WHERE (e.project_id = ?1 OR ?1 IS NULL)
   AND e.dispatched_session_id IS NULL AND e.failed_at IS NULL AND e.superseded_at IS NULL
   AND e.cancelled_at IS NULL AND e.review_required_reason = '' AND e.blocked_reason = ''
+  AND e.parts_started_at IS NULL
 ORDER BY e.enqueued_at, e.id
 `
 
@@ -908,6 +970,10 @@ func (q *Queries) ListOpenLadoQueueEntriesWithIssues(ctx context.Context, projec
 			&i.LadoQueueEntry.FailedAt,
 			&i.LadoQueueEntry.SupersededAt,
 			&i.LadoQueueEntry.CancelledAt,
+			&i.LadoQueueEntry.PartsStartedAt,
+			&i.LadoQueueEntry.PartSpawnRequest,
+			&i.LadoQueueEntry.PartSpawnExpiresAt,
+			&i.LadoQueueEntry.WaitingDetail,
 			&i.IssueRef,
 			&i.IssueTitle,
 		); err != nil {
@@ -995,7 +1061,8 @@ SET lease_token = NULL,
     claimed_at = NULL,
     lease_expires_at = NULL,
     next_attempt_at = ?1,
-    waiting_reason = ?2
+    waiting_reason = ?2,
+    waiting_detail = ''
 WHERE id = ?3 AND lease_token = ?4
 `
 
@@ -1044,9 +1111,11 @@ func (q *Queries) SetLadoQueueEntryDispatched(ctx context.Context, arg SetLadoQu
 
 const setLadoQueueWaiting = `-- name: SetLadoQueueWaiting :execrows
 UPDATE lado_queue_entries
-SET waiting_reason = ?1
+SET waiting_reason = ?1,
+    waiting_detail = ''
 WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND lease_token IS NULL
   AND waiting_reason <> ?1
   AND (lado_queue_entries.project_id = ?2 OR ?2 IS NULL)
@@ -1071,9 +1140,11 @@ func (q *Queries) SetLadoQueueWaiting(ctx context.Context, arg SetLadoQueueWaiti
 
 const setLadoQueueWaitingModeOff = `-- name: SetLadoQueueWaitingModeOff :execrows
 UPDATE lado_queue_entries
-SET waiting_reason = ?1
+SET waiting_reason = ?1,
+    waiting_detail = ''
 WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND lease_token IS NULL
   AND waiting_reason <> ?1
   AND (lado_queue_entries.project_id = ?2 OR ?2 IS NULL)
@@ -1100,6 +1171,7 @@ SET superseded_at = ?
 WHERE task_id = ?
   AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
 `
 
 type SupersedeOpenLadoQueueEntriesParams struct {
@@ -1118,9 +1190,10 @@ func (q *Queries) SupersedeOpenLadoQueueEntries(ctx context.Context, arg Superse
 const upsertLadoDispatchSettings = `-- name: UpsertLadoDispatchSettings :exec
 INSERT INTO lado_dispatch_settings (
     id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at,
-    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns
+    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns,
+    max_workers, hold_on_disk_low, min_free_disk_gb
 )
-VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     max_concurrent = excluded.max_concurrent,
     max_run_minutes = excluded.max_run_minutes,
@@ -1129,7 +1202,10 @@ ON CONFLICT (id) DO UPDATE SET
     max_plan_workers = excluded.max_plan_workers,
     plan_review_skip = excluded.plan_review_skip,
     plan_review_skip_max_paths = excluded.plan_review_skip_max_paths,
-    plan_review_patterns = excluded.plan_review_patterns
+    plan_review_patterns = excluded.plan_review_patterns,
+    max_workers = excluded.max_workers,
+    hold_on_disk_low = excluded.hold_on_disk_low,
+    min_free_disk_gb = excluded.min_free_disk_gb
 `
 
 type UpsertLadoDispatchSettingsParams struct {
@@ -1141,6 +1217,9 @@ type UpsertLadoDispatchSettingsParams struct {
 	PlanReviewSkip         int64
 	PlanReviewSkipMaxPaths int64
 	PlanReviewPatterns     string
+	MaxWorkers             int64
+	HoldOnDiskLow          int64
+	MinFreeDiskGb          int64
 }
 
 func (q *Queries) UpsertLadoDispatchSettings(ctx context.Context, arg UpsertLadoDispatchSettingsParams) error {
@@ -1153,6 +1232,9 @@ func (q *Queries) UpsertLadoDispatchSettings(ctx context.Context, arg UpsertLado
 		arg.PlanReviewSkip,
 		arg.PlanReviewSkipMaxPaths,
 		arg.PlanReviewPatterns,
+		arg.MaxWorkers,
+		arg.HoldOnDiskLow,
+		arg.MinFreeDiskGb,
 	)
 	return err
 }

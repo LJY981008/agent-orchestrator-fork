@@ -114,6 +114,8 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 		Projects: store,
 		Branches: work.branches,
 		Memory:   work.memory,
+		FreeDisk: ladoqueue.FreeDiskBytes,
+		DataDir:  cfg.DataDir,
 		Log:      log,
 	})
 	if work.sessions != nil {

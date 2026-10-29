@@ -483,3 +483,16 @@ test("a failed cancel keeps the dialog open with the reason", async () => {
 	fireEvent.click(within(dialog).getByRole("button", { name: "Cancel task" }));
 	expect(await within(dialog).findByText("This task no longer exists.")).toBeInTheDocument();
 });
+
+test("a task running its parts stays in Queued and says how many are merged", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-parts", state: "running", plan: approvedPlan, parts: { total: 4, merged: 2 }, issue: { ...task.issue, title: "Split work" } },
+	]);
+	renderLane();
+	const queued = await screen.findByTestId("lado-queued-lane");
+	await within(queued).findByText("Split work");
+	expect(within(queued).getByTestId("lado-task-state")).toHaveTextContent("Running");
+	expect(within(queued).getByTestId("lado-task-reason")).toHaveTextContent("Parts 2/4");
+	expect(within(screen.getByTestId("lado-plan-lane")).queryByText("Split work")).not.toBeInTheDocument();
+});

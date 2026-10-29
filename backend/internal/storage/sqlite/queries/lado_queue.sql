@@ -8,13 +8,15 @@ UPDATE lado_queue_entries
 SET superseded_at = ?
 WHERE task_id = ?
   AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
-  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = '';
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL;
 
 -- name: GetLadoQueueEntry :one
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE id = ?;
 
@@ -22,7 +24,8 @@ WHERE id = ?;
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE task_id IN (sqlc.slice('task_ids'))
 ORDER BY task_id, enqueued_at DESC, id DESC;
@@ -32,7 +35,8 @@ UPDATE lado_queue_entries
 SET cancelled_at = ?
 WHERE task_id = ?
   AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
-  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = '';
+  AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL;
 
 -- name: ListClaimableLadoQueueEntries :many
 -- Open entries whose lease is empty or expired and whose wait is over, in
@@ -41,10 +45,12 @@ WHERE task_id = ?
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND (lease_token IS NULL OR lease_expires_at <= sqlc.arg(now))
   AND (next_attempt_at IS NULL OR next_attempt_at <= sqlc.arg(now))
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
@@ -60,10 +66,12 @@ SET lease_token = sqlc.arg(lease_token),
     claimed_at = sqlc.arg(now),
     lease_expires_at = sqlc.arg(lease_expires_at),
     attempt_count = attempt_count + 1,
-    waiting_reason = ''
+    waiting_reason = '',
+    waiting_detail = ''
 WHERE id = sqlc.arg(id)
   AND dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND (lease_token IS NULL OR lease_expires_at <= sqlc.arg(now))
   AND (next_attempt_at IS NULL OR next_attempt_at <= sqlc.arg(now))
   AND project_id IN (SELECT project_id FROM lado_project_settings WHERE lado_mode = 1)
@@ -75,7 +83,8 @@ SET lease_token = NULL,
     claimed_at = NULL,
     lease_expires_at = NULL,
     next_attempt_at = sqlc.narg(next_attempt_at),
-    waiting_reason = sqlc.arg(waiting_reason)
+    waiting_reason = sqlc.arg(waiting_reason),
+    waiting_detail = ''
 WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
 
 -- name: HoldLadoQueueEntry :execrows
@@ -86,6 +95,7 @@ SET lease_token = NULL,
     lease_expires_at = NULL,
     attempt_count = attempt_count - 1,
     waiting_reason = sqlc.arg(waiting_reason),
+    waiting_detail = sqlc.arg(waiting_detail),
     next_attempt_at = sqlc.narg(next_attempt_at)
 WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
 
@@ -94,9 +104,11 @@ WHERE id = sqlc.arg(id) AND lease_token = sqlc.arg(lease_token);
 -- project or of all when project_id is NULL. Attempts and next attempts stay.
 -- An entry that already waits for the reason is not written again.
 UPDATE lado_queue_entries
-SET waiting_reason = sqlc.arg(reason)
+SET waiting_reason = sqlc.arg(reason),
+    waiting_detail = ''
 WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND lease_token IS NULL
   AND waiting_reason <> sqlc.arg(reason)
   AND (lado_queue_entries.project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL)
@@ -105,9 +117,11 @@ WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS N
 -- name: SetLadoQueueWaitingModeOff :execrows
 -- SetLadoQueueWaiting for the entries of projects with LADO mode off.
 UPDATE lado_queue_entries
-SET waiting_reason = sqlc.arg(reason)
+SET waiting_reason = sqlc.arg(reason),
+    waiting_detail = ''
 WHERE dispatched_session_id IS NULL AND failed_at IS NULL AND superseded_at IS NULL
   AND cancelled_at IS NULL AND review_required_reason = '' AND blocked_reason = ''
+  AND parts_started_at IS NULL
   AND lease_token IS NULL
   AND waiting_reason <> sqlc.arg(reason)
   AND (lado_queue_entries.project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL)
@@ -181,13 +195,15 @@ JOIN lado_tasks t ON t.id = e.task_id
 WHERE (e.project_id = sqlc.narg(project_id) OR sqlc.narg(project_id) IS NULL)
   AND e.dispatched_session_id IS NULL AND e.failed_at IS NULL AND e.superseded_at IS NULL
   AND e.cancelled_at IS NULL AND e.review_required_reason = '' AND e.blocked_reason = ''
+  AND e.parts_started_at IS NULL
 ORDER BY e.enqueued_at, e.id;
 
 -- name: ListLeasedLadoQueueEntries :many
 SELECT id, task_id, project_id, plan_approval_id, policy_snapshot_id, enqueued_at,
     attempt_count, next_attempt_at, lease_token, claimed_at, lease_expires_at,
     waiting_reason, review_required_reason, blocked_reason, error_message,
-    dispatched_session_id, failed_at, superseded_at, cancelled_at
+    dispatched_session_id, failed_at, superseded_at, cancelled_at,
+    parts_started_at, part_spawn_request, part_spawn_expires_at, waiting_detail
 FROM lado_queue_entries
 WHERE lease_token IS NOT NULL
 ORDER BY claimed_at, id;
@@ -197,8 +213,9 @@ ORDER BY claimed_at, id;
 INSERT INTO lado_executions (
     session_id, task_id, queue_entry_id, plan_revision_id, plan_approval_id, policy_snapshot_id,
     attempt, plan_base_sha, dispatch_base_sha, base_commits_ahead, started_at, deadline_at,
-    base_branch, base_remote, dispatch_local_base_sha, integration_gated
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1);
+    base_branch, base_remote, dispatch_local_base_sha, integration_gated,
+    role, part_id, branch, start_sha
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?);
 
 -- name: GetLadoExecution :one
 -- With whether the session ended, as in ListLadoExecutionsForTasks.
@@ -218,6 +235,7 @@ SELECT sqlc.embed(e),
     ) AS session_terminated
 FROM lado_executions e
 WHERE e.task_id IN (sqlc.slice('task_ids'))
+  AND e.role IN ('', 'integration')
 ORDER BY e.task_id, e.started_at DESC, e.session_id DESC;
 
 -- name: ListLiveLadoExecutions :many
@@ -225,7 +243,7 @@ ORDER BY e.task_id, e.started_at DESC, e.session_id DESC;
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
     e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
     e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
-    e.settled_pr_state
+    e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE s.is_terminated = 0
@@ -253,7 +271,7 @@ ORDER BY project_id;
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id,
     e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at,
     e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url,
-    e.settled_pr_state
+    e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha
 FROM lado_executions e
 JOIN sessions s ON s.id = e.session_id
 WHERE e.deadline_at <= sqlc.arg(now)
@@ -268,16 +286,18 @@ WHERE session_id = ? AND timed_out_at IS NULL;
 
 -- name: GetLadoDispatchSettings :one
 SELECT id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at,
-    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns
+    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns,
+    max_workers, hold_on_disk_low, min_free_disk_gb
 FROM lado_dispatch_settings
 WHERE id = 1;
 
 -- name: UpsertLadoDispatchSettings :exec
 INSERT INTO lado_dispatch_settings (
     id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at,
-    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns
+    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns,
+    max_workers, hold_on_disk_low, min_free_disk_gb
 )
-VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     max_concurrent = excluded.max_concurrent,
     max_run_minutes = excluded.max_run_minutes,
@@ -286,7 +306,10 @@ ON CONFLICT (id) DO UPDATE SET
     max_plan_workers = excluded.max_plan_workers,
     plan_review_skip = excluded.plan_review_skip,
     plan_review_skip_max_paths = excluded.plan_review_skip_max_paths,
-    plan_review_patterns = excluded.plan_review_patterns;
+    plan_review_patterns = excluded.plan_review_patterns,
+    max_workers = excluded.max_workers,
+    hold_on_disk_low = excluded.hold_on_disk_low,
+    min_free_disk_gb = excluded.min_free_disk_gb;
 
 -- name: GetLadoProjectMaxConcurrent :one
 SELECT max_concurrent

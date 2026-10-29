@@ -158,6 +158,8 @@ As built in step 6, the dispatcher looks again right before it spawns (TDD §5.3
 
 As built in step 7, setup items add no capability class: a kind that cannot reach both the terminal and the Chat path of its tool is never adoptable (§9.1), and a task gets only the items of its own agent's tool (§4).
 
+As built in #32 (TDD §5.4), a task whose plan has parts runs part, merge and integration workers, each a fresh session. Every one of them is an execution of the task's queue entry and runs under the task's one approval and rule snapshot: the same rule text in its system prompt, the same permission ceiling on its turns, the same pinned local setup, the same agent and model. The gate finds the snapshot through the worker's client request id (`lado:<entry>/<part>/<n>`, `lado:<entry>/merge-<part>/<n>`, `lado:<entry>/integration/<n>`) and grants each spawn only while the dispatcher starts it. What a worker does in its role (its steps and paths only, commit without push, report done; resolve a merge; review the parts against each other and open the PR) is in LADO's prompt, not in the rules, so a rule change after approval reaches none of them, as with a single worker.
+
 ## 8. Snapshot and change semantics
 
 - The snapshot is fixed with the plan approval (TDD §5.2). The approval's queue entry points at it, and the dispatcher compares it with a fresh resolution before it spawns (TDD §5.3). It holds rule version ids, the binding behind each entry, setup item ids and content hashes, the AO build and its system-layer hash, the compiler version, required capabilities, the permission ceiling, and the canonical sha256.

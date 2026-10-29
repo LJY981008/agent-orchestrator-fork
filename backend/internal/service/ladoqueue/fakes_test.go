@@ -255,6 +255,11 @@ type fakeStore struct {
 	// them.
 	checks    []domain.LadoCheckCommand
 	checksErr error
+	// liveTasks are other tasks' live runs, extraWorkers other running
+	// workers; overlapOff turns the projects' overlap wait off.
+	liveTasks    []domain.LadoLiveRunTask
+	extraWorkers int
+	overlapOff   bool
 }
 
 func (f *fakeStore) add(entries ...domain.LadoQueueEntry) {
@@ -315,21 +320,110 @@ func (f *fakeStore) LadoProjectMaxConcurrent(_ context.Context, project domain.P
 	return domain.LadoDefaultProjectMaxConcurrent, nil
 }
 
-func (f *fakeStore) CountLiveLadoExecutions(_ context.Context, now time.Time) (int, map[domain.ProjectID]int, error) {
+// LadoRunLoad counts what the store does: each running execution of the
+// fake is its own task and worker, and so is each live lease.
+func (f *fakeStore) LadoRunLoad(_ context.Context, now time.Time) (domain.LadoRunLoad, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	total, perProject := 0, map[domain.ProjectID]int{}
+	var load domain.LadoRunLoad
 	for project, n := range f.running {
-		total += n
-		perProject[project] += n
+		for i := range n {
+			load.Tasks = append(load.Tasks, domain.LadoLiveRunTask{
+				TaskID: domain.LadoTaskID(fmt.Sprintf("running-%s-%d", project, i)), ProjectID: project,
+			})
+		}
+		load.Workers += n
 	}
 	for _, e := range f.entries {
 		if open(e) && e.LeaseToken != "" && e.LeaseExpiresAt.After(now) {
-			total++
-			perProject[e.ProjectID]++
+			load.Tasks = append(load.Tasks, domain.LadoLiveRunTask{TaskID: e.TaskID, ProjectID: e.ProjectID})
+			load.Workers++
 		}
 	}
-	return total, perProject, nil
+	load.Tasks = append(load.Tasks, f.liveTasks...)
+	load.Workers += f.extraWorkers
+	return load, nil
+}
+
+func (f *fakeStore) LadoProjectSettings(_ context.Context, project domain.ProjectID) (domain.LadoProjectSettings, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	settings := domain.LadoProjectSettings{ProjectID: project, LadoMode: !f.modeOff[project], OverlapWait: !f.overlapOff}
+	return settings, nil
+}
+
+func (f *fakeStore) HoldLadoQueueEntryFor(_ context.Context, id domain.LadoQueueEntryID, token, waiting, detail string, next time.Time) (bool, error) {
+	return f.leased(id, token, func(e *domain.LadoQueueEntry) {
+		e.AttemptCount--
+		e.WaitingReason, e.WaitingDetail, e.NextAttemptAt = waiting, detail, next
+	}), nil
+}
+
+// The fake keeps no parts runs; the parts tests run on the real store
+// (parts_test.go).
+
+func (f *fakeStore) StartLadoPartRun(context.Context, string, domain.LadoPartRun, []domain.LadoTaskPart, domain.LadoAuditEvent) error {
+	return errors.New("the fake store keeps no parts runs")
+}
+
+func (f *fakeStore) ActiveLadoPartRuns(context.Context) ([]domain.LadoActivePartRun, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LadoPartRun(context.Context, domain.LadoQueueEntryID) (domain.LadoPartRun, bool, error) {
+	return domain.LadoPartRun{}, false, nil
+}
+
+func (f *fakeStore) LadoTaskParts(context.Context, domain.LadoQueueEntryID) ([]domain.LadoTaskPart, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) UpdateLadoTaskPart(context.Context, domain.LadoTaskPart, domain.LadoPartState) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) MergeLadoTaskPart(context.Context, domain.LadoTaskPart, domain.LadoPartState, string, domain.LadoAuditEvent) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) FailLadoPartRun(context.Context, domain.LadoQueueEntryID, string, domain.LadoAuditEvent) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) EndLadoPartRun(context.Context, domain.LadoQueueEntryID, bool, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) SetLadoPartSpawnRequest(context.Context, domain.LadoQueueEntryID, string, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) ClearLadoPartSpawnRequest(context.Context, domain.LadoQueueEntryID, string) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) LadoPartSpawnRequests(context.Context) ([]domain.LadoQueueEntry, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LadoPartSpawnGrant(context.Context, string, time.Time) (domain.LadoDispatchGrant, error) {
+	return domain.LadoDispatchGrant{}, nil
+}
+
+func (f *fakeStore) LinkLadoPartExecution(context.Context, string, domain.LadoExecution, *domain.LadoTaskPart, domain.LadoPartState) error {
+	return errors.New("the fake store keeps no parts runs")
+}
+
+func (f *fakeStore) BumpLadoPartRunIntegrationAttempts(context.Context, domain.LadoQueueEntryID, int, time.Time) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) LadoExecutionsForEntry(context.Context, domain.LadoQueueEntryID) ([]domain.LadoExecution, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LatestSessionReport(context.Context, domain.SessionID) (domain.ReportState, string, bool, error) {
+	return "", "", false, nil
 }
 
 // SetLadoQueueWaiting writes what the store's statement does: the reason of
@@ -616,9 +710,11 @@ type fakeTasks struct {
 	inputs   map[domain.LadoTaskID]ladotask.RunInput
 	inputErr error
 	// onInput runs inside RunInput.
-	onInput    func()
-	checks     int
-	inputCalls int
+	onInput func()
+	// revisionPaths are the paths of revisions no input holds.
+	revisionPaths map[domain.LadoPlanRevisionID][]string
+	checks        int
+	inputCalls    int
 }
 
 func (f *fakeTasks) IssueCheck(_ context.Context, task domain.LadoTask) (ladotask.IssueCheck, error) {
@@ -640,6 +736,27 @@ func (f *fakeTasks) IssueCheck(_ context.Context, task domain.LadoTask) (ladotas
 		state = domain.IssueOpen
 	}
 	return ladotask.IssueCheck{SHA256: snapshot.SHA256(), State: state}, nil
+}
+
+// RevisionPaths reads the affected paths of the plan of the input whose
+// revision is id.
+func (f *fakeTasks) RevisionPaths(_ context.Context, id domain.LadoPlanRevisionID) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inputs := []ladotask.RunInput{f.input}
+	for _, in := range f.inputs {
+		inputs = append(inputs, in)
+	}
+	for _, in := range inputs {
+		if in.Revision.ID == id {
+			plan, _ := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{})
+			return plan.AffectedPaths, nil
+		}
+	}
+	if paths, ok := f.revisionPaths[id]; ok {
+		return paths, nil
+	}
+	return nil, fmt.Errorf("revision %s not found", id)
 }
 
 func (f *fakeTasks) RunInput(_ context.Context, task domain.LadoTask) (ladotask.RunInput, error) {

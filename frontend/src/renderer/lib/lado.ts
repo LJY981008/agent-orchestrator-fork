@@ -55,6 +55,11 @@ export type LadoTaskState = LadoTask["state"];
 export type LadoTaskStateReason = NonNullable<LadoTask["stateReason"]>;
 export type LadoTaskQueue = components["schemas"]["LadoTaskQueueResponse"];
 export type LadoTaskExecution = components["schemas"]["LadoTaskExecutionResponse"];
+export type LadoTaskParts = components["schemas"]["LadoTaskPartsResponse"];
+export type LadoTaskPart = components["schemas"]["LadoTaskPartResponse"];
+export type LadoTaskPartState = LadoTaskPart["state"];
+export type LadoTaskPartWaitingReason = NonNullable<LadoTaskPart["waitingReason"]>;
+export type LadoPlanPart = components["schemas"]["LadoPlanPartResponse"];
 export type LadoQueueItem = components["schemas"]["LadoQueueItemResponse"];
 export type LadoQueueState = LadoQueueItem["state"];
 export type LadoQueueReason = NonNullable<LadoQueueItem["reason"]>;
@@ -123,6 +128,8 @@ export const ladoTasksQueryKey = (projectId: string) => ["lado", "tasks", projec
 export const ladoProjectIssuesQueryKey = (projectId: string) => ["lado", "issues", projectId] as const;
 export const ladoProjectRepositoriesQueryKey = (projectId: string) => ["lado", "repositories", projectId] as const;
 export const ladoTaskViewQueryKey = (taskId: string) => ["lado", "task", taskId] as const;
+/** Under the task view's key, so whatever refreshes the task refreshes its parts. */
+export const ladoTaskPartsQueryKey = (taskId: string) => ["lado", "task", taskId, "parts"] as const;
 /** Plan revisions are pinned, but whether one is the latest or approved changes. */
 export const ladoPlanQueryRoot = ["lado", "plan"] as const;
 export const ladoPlanQueryKey = (revisionId: string) => ["lado", "plan", revisionId] as const;
@@ -217,6 +224,14 @@ export async function updateLadoCheckTimeout(projectId: string, minutes: number)
 /** Changes how many executions run at once in the project; it needs no confirmation. */
 export async function updateLadoProjectSettings(projectId: string, input: { maxConcurrent: number }): Promise<LadoProjectSettings> {
 	return putLadoProjectSettings(projectId, { maxConcurrent: input.maxConcurrent }, "Could not change the project's LADO settings");
+}
+
+/** Whether a task waits for another's overlapping run, and the globs whose overlap does not count. */
+export type LadoProjectOverlapInput = { overlapWait?: boolean; overlapIgnore?: string[]; overlapIgnoreDefaults?: boolean };
+
+/** Changes the project's overlap wait or the globs whose overlap does not count; neither needs presence. */
+export async function updateLadoProjectOverlap(projectId: string, input: LadoProjectOverlapInput): Promise<LadoProjectSettings> {
+	return putLadoProjectSettings(projectId, input, "Could not change the project's LADO settings");
 }
 
 async function putLadoProjectSettings(
@@ -333,6 +348,15 @@ export async function checkLadoConnection(input: LadoConnectionRequest): Promise
 export async function createLadoConnection(input: LadoConnectionRequest): Promise<LadoConnection> {
 	const { data, error } = await apiClient.POST("/api/v1/lado/connections", { body: input });
 	if (error) throw ladoError(error, "Could not connect the repository");
+	return data;
+}
+
+/** The parts run of the task's newest approval: its integration branch and each part. */
+export async function fetchLadoTaskParts(taskId: string): Promise<LadoTaskParts> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/tasks/{taskId}/parts", {
+		params: { path: { taskId } },
+	});
+	if (error) throw ladoError(error, "Could not load the task's parts");
 	return data;
 }
 

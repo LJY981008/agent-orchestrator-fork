@@ -129,6 +129,14 @@ func (s *Service) SetSettings(ctx context.Context, settings domain.LadoDispatchS
 	} else if settings.PlanReview.Patterns == nil {
 		settings.PlanReview.Patterns = current.PlanReview.Patterns
 	}
+	// The worker cap and the disk threshold keep their values when the
+	// change leaves them out.
+	if settings.MaxWorkers == 0 {
+		settings.MaxWorkers = current.MaxWorkers
+	}
+	if settings.MinFreeDiskGB == 0 {
+		settings.HoldOnDiskLow, settings.MinFreeDiskGB = current.HoldOnDiskLow, current.MinFreeDiskGB
+	}
 	if err := settings.Validate(); err != nil {
 		return domain.LadoDispatchSettings{}, InvalidSettings(strings.TrimPrefix(err.Error(), domain.ErrLadoDispatchSettingsInvalid.Error()+": "))
 	}
@@ -163,7 +171,8 @@ func InvalidSettings(message string) error {
 func sameSettings(a, b domain.LadoDispatchSettings) bool {
 	return a.MaxConcurrent == b.MaxConcurrent && a.MaxRunMinutes == b.MaxRunMinutes && a.HoldOnMemoryTight == b.HoldOnMemoryTight &&
 		a.MaxPlanWorkers == b.MaxPlanWorkers && a.PlanReview.Skip == b.PlanReview.Skip && a.PlanReview.MaxPaths == b.PlanReview.MaxPaths &&
-		reflect.DeepEqual(a.PlanReview.Patterns, b.PlanReview.Patterns)
+		reflect.DeepEqual(a.PlanReview.Patterns, b.PlanReview.Patterns) &&
+		a.MaxWorkers == b.MaxWorkers && a.HoldOnDiskLow == b.HoldOnDiskLow && a.MinFreeDiskGB == b.MinFreeDiskGB
 }
 
 func settingsPayload(s domain.LadoDispatchSettings) map[string]any {
@@ -171,5 +180,42 @@ func settingsPayload(s domain.LadoDispatchSettings) map[string]any {
 		"maxConcurrent": s.MaxConcurrent, "maxRunMinutes": s.MaxRunMinutes, "holdOnMemoryTight": s.HoldOnMemoryTight,
 		"maxPlanWorkers": s.MaxPlanWorkers, "planReviewSkip": s.PlanReview.Skip, "planReviewSkipMaxPaths": s.PlanReview.MaxPaths,
 		"planReviewPatterns": s.PlanReview.Patterns,
+		"maxWorkers":         s.MaxWorkers, "holdOnDiskLow": s.HoldOnDiskLow, "minFreeDiskGb": s.MinFreeDiskGB,
 	}
+}
+
+// PartsView is a task's newest parts run as the task window shows it: the
+// run's integration branch and where it stands, and each part's progress.
+// Run is zero, and Parts empty, while the task's newest approval runs no
+// parts.
+type PartsView struct {
+	Entry domain.LadoQueueEntry
+	Run   domain.LadoPartRun
+	Parts []domain.LadoTaskPart
+}
+
+// TaskParts returns the parts run of the task's newest approval.
+func (s *Service) TaskParts(ctx context.Context, id domain.LadoTaskID) (PartsView, error) {
+	task, ok, err := s.deps.Store.LadoTask(ctx, id)
+	if err != nil {
+		s.deps.Log.Error("LADO could not read a task's parts", "task", id, "err", err)
+		return PartsView{}, apierr.Internal("LADO_PARTS_LOAD_FAILED", "Failed to load the task's parts")
+	}
+	if !ok {
+		return PartsView{}, apierr.NotFound("LADO_TASK_NOT_FOUND", "LADO task not found")
+	}
+	view := PartsView{Entry: task.Queue, Parts: []domain.LadoTaskPart{}}
+	if task.Queue.PartsStartedAt.IsZero() {
+		return view, nil
+	}
+	run, ok, err := s.deps.Store.LadoPartRun(ctx, task.Queue.ID)
+	if err == nil && ok {
+		view.Run = run
+		view.Parts, err = s.deps.Store.LadoTaskParts(ctx, task.Queue.ID)
+	}
+	if err != nil {
+		s.deps.Log.Error("LADO could not read a task's parts", "task", id, "err", err)
+		return PartsView{}, apierr.Internal("LADO_PARTS_LOAD_FAILED", "Failed to load the task's parts")
+	}
+	return view, nil
 }

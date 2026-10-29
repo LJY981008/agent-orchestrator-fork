@@ -99,6 +99,9 @@ func TestRequestPlanStartsAPlanWorkerWithoutTheOrchestrator(t *testing.T) {
 		string(req.ID), "If a comment already holds a plan", "Commit messages in Korean: Write commits in Korean.", "permission mode at most",
 		".github/**", "The worker starts from origin/main. Write base_ref: main", "plan_source:", "change_kinds:",
 		"ao lado plan submit --request " + string(req.ID) + " --draft <<'LADO_PLAN_EOF'", "## 계획 검수",
+		// Parallel parts are the default, with how to split them.
+		"Plan for parallel parts by default", "go into different parts of the same phase", "name that part in depends_on",
+		"locale JSON files", "parts:\n  - id:", "depends_on:", "leave parts out and say why",
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, cfg.Prompt)

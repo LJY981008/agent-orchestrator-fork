@@ -62,7 +62,7 @@ var issueRecheckAfter = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.M
 // spending its attempt. A pass that stops before the spawn hands the entry
 // back as it was. It reports whether a worker started, which takes a run
 // slot, and returns only the writes that failed.
-func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, now time.Time) (bool, error) {
+func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, load domain.LadoRunLoad, now time.Time) (bool, error) {
 	// 1. The entry's approval is the task's newest and still covers the
 	// latest revision, and the task runs no worker of another approval.
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
@@ -171,8 +171,33 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
 	}
 
+	// 7. No live run of another task of the project may touch the plan's
+	// files, while the project holds such tasks back, and the project's disk
+	// has room (docs/LJY-PRD/TDD.md §5.4).
+	plan, problems := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{Task: task.ID, Issue: task.IssueRef})
+	if partsUnreadable(problems) {
+		// An approved plan's parts read; a plan whose front matter or parts
+		// do not must not run as a single worker by mistake.
+		return false, s.attemptFailed(ctx, entry, "the approved plan could not be read")
+	}
+	if other, waits, err := s.overlapping(ctx, task, plan.AffectedPaths, load); err != nil {
+		if ctx.Err() != nil {
+			return false, s.handBack(ctx, entry)
+		}
+		s.deps.Log.Warn("LADO could not compare a queued task's paths with the running tasks", "entry", entry.ID, "task", task.ID, "err", err)
+		return false, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+	} else if waits {
+		return false, s.holdFor(ctx, entry, domain.LadoWaitingPathsOverlap, string(other), now.Add(s.deps.Interval))
+	}
+	if s.diskLow(settings, dir) {
+		return false, s.hold(ctx, entry, domain.LadoWaitingDiskLow, now.Add(recheckAfter))
+	}
+
 	if ctx.Err() != nil {
 		return false, s.handBack(ctx, entry)
+	}
+	if len(plan.Parts) > 0 {
+		return s.startParts(ctx, entry, task, in, plan, dir, base, dispatchSHA, ahead, localSHA)
 	}
 	cfg := spawnConfig(task, entry, in, agent, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
@@ -501,6 +526,43 @@ func (s *Service) hold(ctx context.Context, entry domain.LadoQueueEntry, waiting
 	return s.settled(entry, "waiting: "+waiting, ok, err, slog.LevelDebug)
 }
 
+// holdFor holds the entry as hold does and records what it waits for.
+func (s *Service) holdFor(ctx context.Context, entry domain.LadoQueueEntry, waiting, detail string, until time.Time) error {
+	ok, err := s.deps.Store.HoldLadoQueueEntryFor(context.WithoutCancel(ctx), entry.ID, entry.LeaseToken, waiting, detail, until)
+	return s.settled(entry, "waiting: "+waiting, ok, err, slog.LevelDebug)
+}
+
+// overlapping returns the issue of another task of the project whose live run
+// may touch a file the task's plan names, while the project holds such tasks
+// back; the globs the project lets overlap do not count. A task without
+// paths overlaps nothing.
+func (s *Service) overlapping(ctx context.Context, task domain.LadoTask, paths []string, load domain.LadoRunLoad) (domain.IssueID, bool, error) {
+	if len(paths) == 0 {
+		return "", false, nil
+	}
+	settings, err := s.deps.Store.LadoProjectSettings(ctx, task.ProjectID)
+	if err != nil {
+		return "", false, err
+	}
+	if !settings.OverlapWait {
+		return "", false, nil
+	}
+	ignore := settings.OverlapIgnoreOrDefault()
+	for _, other := range load.Tasks {
+		if other.ProjectID != task.ProjectID || other.TaskID == task.ID {
+			continue
+		}
+		theirs, err := s.deps.Tasks.RevisionPaths(ctx, other.PlanRevisionID)
+		if err != nil {
+			return "", false, err
+		}
+		if _, _, ok := domain.LadoPathsOverlap(paths, theirs, ignore); ok {
+			return other.IssueRef, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 func (s *Service) release(ctx context.Context, entry domain.LadoQueueEntry, next time.Time, waiting string) error {
 	ok, err := s.deps.Store.ReleaseLadoQueueEntry(context.WithoutCancel(ctx), entry.ID, entry.LeaseToken, next, waiting)
 	return s.settled(entry, "released", ok, err, slog.LevelDebug)
@@ -553,4 +615,19 @@ func problem(err error, fallback string) string {
 // spaces.
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// partsUnreadable reports whether a plan's problems leave its parts unknown:
+// its front matter could not be read at all, or its parts list has a problem.
+func partsUnreadable(problems []domain.LadoPlanProblem) bool {
+	for _, p := range problems {
+		switch {
+		case p.Field == "parts", strings.HasPrefix(p.Code, "part_"):
+			return true
+		case p.Code == domain.LadoPlanTooLarge, p.Code == domain.LadoPlanNotText,
+			p.Code == domain.LadoPlanMissingFrontMatter, p.Code == domain.LadoPlanInvalidFrontMatter:
+			return true
+		}
+	}
+	return false
 }
