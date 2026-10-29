@@ -162,6 +162,7 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
 		return domain.LadoVerification{}, fmt.Errorf("store the record of head %s: %w", in.head, err)
 	}
+	s.markVerified(ctx, record)
 	return record, nil
 }
 

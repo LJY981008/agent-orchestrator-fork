@@ -922,6 +922,9 @@ type verifyStore struct {
 	// ladoModes the projects in LADO mode (approve_test.go).
 	proofs    []domain.LadoPresenceProof
 	ladoModes map[domain.ProjectID]bool
+	// timings holds the stage times and session metrics the loop records
+	// (timings_test.go).
+	timings verifyTimings
 }
 
 func verifyKey(session domain.SessionID, head string) string { return string(session) + "@" + head }

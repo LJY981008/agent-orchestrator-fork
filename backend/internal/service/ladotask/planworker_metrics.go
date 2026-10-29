@@ -73,9 +73,12 @@ func (s *Service) recordMetrics(ctx context.Context, req domain.LadoPlanRequest,
 	}
 }
 
-// refreshMetrics reads the sessions' usage again for the request's newest
-// revision, once its sessions stopped.
+// refreshMetrics stores the investigation metrics of the request's sessions
+// once they stopped, with or without a revision (timings.go), and reads their
+// usage again for the request's newest revision.
 func (s *Service) refreshMetrics(ctx context.Context, req domain.LadoPlanRequest) {
+	_, critiques := s.lastCritique(ctx, req.ID)
+	s.storePlanSessionMetrics(ctx, req, critiques)
 	revisions, err := s.deps.Store.ListLadoPlanRevisions(ctx, req.TaskID)
 	if err != nil {
 		return
@@ -88,7 +91,6 @@ func (s *Service) refreshMetrics(ctx context.Context, req domain.LadoPlanRequest
 		if err != nil || !ok {
 			return
 		}
-		_, critiques := s.lastCritique(ctx, req.ID)
 		m.Sessions = s.planUsage(ctx, req, critiques)
 		m.UpdatedAt = s.deps.Clock().UTC()
 		if err := s.deps.Store.SetLadoPlanRevisionMetrics(ctx, m); err != nil {

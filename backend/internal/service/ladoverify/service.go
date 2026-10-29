@@ -73,6 +73,12 @@ type Store interface {
 	LadoSessionsNamingPR(ctx context.Context, prURL string) ([]domain.SessionID, error)
 	ResetLadoIntegrationStatus(ctx context.Context, id string) error
 	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
+	// The stage timings and investigation metrics (timings.go).
+	MarkLadoExecutionPRSeen(ctx context.Context, session domain.SessionID, prURL string, at time.Time) error
+	MarkLadoExecutionVerified(ctx context.Context, session domain.SessionID, at time.Time) error
+	LadoExecutionsForEntry(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoExecution, error)
+	LadoSessionActivityFacts(ctx context.Context, session domain.SessionID) ([]domain.LadoActivityFact, error)
+	UpsertLadoSessionMetrics(ctx context.Context, m domain.LadoSessionMetrics) error
 }
 
 // Tasks reads LADO's tasks (*store.Store).
@@ -182,6 +188,10 @@ type Service struct {
 	// could not verify it.
 	headFetched map[string]time.Time
 	failedAt    map[domain.SessionID]time.Time
+	// prSeen and verified hold the executions whose first PR sighting and
+	// first verification this daemon stored (timings.go).
+	prSeen   map[domain.SessionID]bool
+	verified map[domain.SessionID]bool
 	// runCtx is the context of the loop Start began, while it runs; the
 	// background reads RefreshProtection starts run under it.
 	runCtx context.Context
@@ -223,6 +233,8 @@ func New(deps Deps) *Service {
 		statusTried: map[string]time.Time{},
 		headFetched: map[string]time.Time{},
 		failedAt:    map[domain.SessionID]time.Time{},
+		prSeen:      map[domain.SessionID]bool{},
+		verified:    map[domain.SessionID]bool{},
 	}
 }
 
@@ -481,6 +493,7 @@ func (s *Service) cancelLeftovers(ctx context.Context) error {
 // an open PR's head. A head AO has not observed yet waits for AO (the store
 // does not list it).
 func (s *Service) verifyExecution(ctx context.Context, exec domain.LadoExecution) error {
+	s.markPRSeen(ctx, exec)
 	switch {
 	case exec.PR.Merged || exec.PR.Closed:
 		return s.settle(ctx, exec)
