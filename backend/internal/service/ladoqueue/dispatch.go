@@ -174,7 +174,12 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	// 7. No live run of another task of the project may touch the plan's
 	// files, while the project holds such tasks back, and the project's disk
 	// has room (docs/LJY-PRD/TDD.md §5.4).
-	plan, _ := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{})
+	plan, problems := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{Task: task.ID, Issue: task.IssueRef})
+	if partsUnreadable(problems) {
+		// An approved plan's parts read; a plan whose front matter or parts
+		// do not must not run as a single worker by mistake.
+		return false, s.attemptFailed(ctx, entry, "the approved plan could not be read")
+	}
 	if other, waits, err := s.overlapping(ctx, task, plan.AffectedPaths, load); err != nil {
 		if ctx.Err() != nil {
 			return false, s.handBack(ctx, entry)
@@ -610,4 +615,19 @@ func problem(err error, fallback string) string {
 // spaces.
 func oneLine(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// partsUnreadable reports whether a plan's problems leave its parts unknown:
+// its front matter could not be read at all, or its parts list has a problem.
+func partsUnreadable(problems []domain.LadoPlanProblem) bool {
+	for _, p := range problems {
+		switch {
+		case p.Field == "parts", strings.HasPrefix(p.Code, "part_"):
+			return true
+		case p.Code == domain.LadoPlanTooLarge, p.Code == domain.LadoPlanNotText,
+			p.Code == domain.LadoPlanMissingFrontMatter, p.Code == domain.LadoPlanInvalidFrontMatter:
+			return true
+		}
+	}
+	return false
 }

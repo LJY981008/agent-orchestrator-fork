@@ -35,7 +35,7 @@ func (s *Service) startParts(ctx context.Context, entry domain.LadoQueueEntry, t
 		// Without the base commit there is nothing to branch from: try again.
 		return false, s.attemptFailed(ctx, entry, "the base commit could not be read")
 	}
-	branch := domain.LadoIntegrationBranch(task.ID)
+	branch := domain.LadoIntegrationBranch(task.ID, entry.ID)
 	if err := s.deps.PartGit.CreateBranch(ctx, dir, branch, dispatchSHA); err != nil {
 		s.deps.Log.Warn("LADO could not make a task's integration branch", "entry", entry.ID, "task", task.ID, "branch", branch, "err", err)
 		return false, s.attemptFailed(ctx, entry, "the integration branch could not be made")
@@ -332,6 +332,18 @@ func (s *Service) fastForward(ctx context.Context, r *partRun, i int, note strin
 	if !holdsPart {
 		return s.mergeAttemptFailed(ctx, r, i, "the merge worker's branch does not hold the part")
 	}
+	if current != r.run.HeadSHA {
+		// LADO moved the branch and stopped before recording it: the move
+		// was a fast-forward to the worker's branch or a merge of it onto
+		// the recorded head. Anything else moved outside LADO.
+		parents, err := s.deps.PartGit.Parents(ctx, r.run.RepoDir, current)
+		if err == nil && (current == tip || (len(parents) == 2 && parents[0] == r.run.HeadSHA && parents[1] == tip)) {
+			next := *part
+			next.State, next.MergedSHA = domain.LadoPartMerged, current
+			return s.recordMergedAt(ctx, r, i, next, domain.LadoPartConflict, r.run.HeadSHA, map[string]any{"mergeWorker": part.MergeSessionID, "recovered": true})
+		}
+		return s.failRun(ctx, r, part.PartID, "the integration branch moved outside LADO")
+	}
 	head := tip
 	ahead, err := s.deps.PartGit.IsAncestor(ctx, r.run.RepoDir, current, tip)
 	if err != nil {
@@ -473,7 +485,7 @@ func (s *Service) startReady(ctx context.Context, r *partRun, settings domain.La
 		if load.Workers >= settings.MaxWorkers || tight || diskLow {
 			return nil
 		}
-		return s.startIntegration(ctx, r, settings, load)
+		return s.startIntegration(ctx, r, settings, load, now)
 	}
 	ignore := domain.LadoDefaultOverlapIgnore
 	if ps, err := s.deps.Store.LadoProjectSettings(ctx, r.run.ProjectID); err == nil {
@@ -585,7 +597,7 @@ func (s *Service) input(ctx context.Context, r *partRun) (ladotask.RunInput, err
 func (s *Service) startPart(ctx context.Context, r *partRun, i int, settings domain.LadoDispatchSettings) error {
 	part := &r.parts[i]
 	attempt := part.Attempts + 1
-	branch := domain.LadoPartBranch(r.task.ID, part.PartID, attempt)
+	branch := domain.LadoPartBranch(r.task.ID, r.entry.ID, part.PartID, attempt)
 	in, err := s.input(ctx, r)
 	if err != nil {
 		return err
@@ -640,7 +652,7 @@ func retryDue(part domain.LadoTaskPart, now time.Time) bool {
 func (s *Service) startMergeWorker(ctx context.Context, r *partRun, i int, settings domain.LadoDispatchSettings) error {
 	part := &r.parts[i]
 	attempt := part.MergeAttempts + 1
-	branch := domain.LadoMergeBranch(r.task.ID, part.PartID, attempt)
+	branch := domain.LadoMergeBranch(r.task.ID, r.entry.ID, part.PartID, attempt)
 	in, err := s.input(ctx, r)
 	if err != nil {
 		return err
@@ -668,7 +680,11 @@ func (s *Service) startMergeWorker(ctx context.Context, r *partRun, i int, setti
 // startIntegration starts the integration worker on the integration branch,
 // which no worktree has checked out: LADO never checks it out, and every
 // part and merge worker worked on its own branch.
-func (s *Service) startIntegration(ctx context.Context, r *partRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad) error {
+func (s *Service) startIntegration(ctx context.Context, r *partRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad, now time.Time) error {
+	if now.Before(r.run.IntegrationRetryAt) {
+		// It waits for its next start after a failed one.
+		return nil
+	}
 	attempt := r.run.IntegrationAttempts + 1
 	if attempt > maxAttempts {
 		return s.failRun(ctx, r, domain.LadoRoleIntegration, "the integration worker could not start")
@@ -681,7 +697,13 @@ func (s *Service) startIntegration(ctx context.Context, r *partRun, settings dom
 	if err != nil {
 		return err
 	}
-	if ok, err := s.deps.Store.BumpLadoPartRunIntegrationAttempts(ctx, r.entry.ID, r.run.IntegrationAttempts); err != nil || !ok {
+	// A start that fails is tried again 30 seconds after the first and two
+	// minutes after the second, as a queue entry is.
+	var retryAt time.Time
+	if attempt <= len(retryAfter) {
+		retryAt = s.deps.Clock().UTC().Add(retryAfter[attempt-1])
+	}
+	if ok, err := s.deps.Store.BumpLadoPartRunIntegrationAttempts(ctx, r.entry.ID, r.run.IntegrationAttempts, retryAt); err != nil || !ok {
 		return err
 	}
 	r.run.IntegrationAttempts = attempt
@@ -877,11 +899,11 @@ func (s *Service) relinkRunWorker(ctx context.Context, entry domain.LadoQueueEnt
 		next := parts[i]
 		oldState = next.State
 		if req.Role == domain.LadoRolePart {
-			branch = domain.LadoPartBranch(task.ID, req.Part, req.Attempt)
+			branch = domain.LadoPartBranch(task.ID, entry.ID, req.Part, req.Attempt)
 			next.State, next.Attempts, next.Branch, next.StartSHA = domain.LadoPartRunning, req.Attempt, branch, run.HeadSHA
 			next.WaitingReason, next.WaitingDetail = "", ""
 		} else {
-			branch = domain.LadoMergeBranch(task.ID, req.Part, req.Attempt)
+			branch = domain.LadoMergeBranch(task.ID, entry.ID, req.Part, req.Attempt)
 			next.MergeAttempts, next.MergeBranch, next.WaitingReason, next.WaitingDetail = req.Attempt, branch, "", ""
 		}
 		part = &next

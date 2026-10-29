@@ -115,7 +115,8 @@ CREATE TABLE lado_part_runs (
     base_remote             TEXT NOT NULL DEFAULT '',
     dispatch_local_base_sha TEXT NOT NULL DEFAULT '',
     started_at              TIMESTAMP NOT NULL,
-    integration_attempts    INTEGER NOT NULL DEFAULT 0 CHECK (integration_attempts >= 0)
+    integration_attempts    INTEGER NOT NULL DEFAULT 0 CHECK (integration_attempts >= 0),
+    integration_retry_at    TIMESTAMP
 );
 
 CREATE TABLE lado_task_parts (

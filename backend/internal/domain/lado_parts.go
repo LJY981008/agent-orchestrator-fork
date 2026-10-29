@@ -499,8 +499,10 @@ type LadoPartRun struct {
 	BaseRemote           string
 	DispatchLocalBaseSHA string
 	StartedAt            time.Time
-	// IntegrationAttempts counts the integration worker's starts so far.
+	// IntegrationAttempts counts the integration worker's starts so far, and
+	// IntegrationRetryAt is when a start that failed may be tried again.
 	IntegrationAttempts int
+	IntegrationRetryAt  time.Time
 }
 
 // LadoTaskPartsSummary is how far a task's newest parts run got: merged parts
@@ -520,24 +522,42 @@ func LadoTaskShortID(id LadoTaskID) string {
 	return short
 }
 
-// LadoIntegrationBranch is the branch a task's parts merge into.
-func LadoIntegrationBranch(task LadoTaskID) string {
-	return "lado/" + LadoTaskShortID(task) + "/" + ladoPartReservedID
+// LadoEntryShortID is the part of a queue entry id branch names use: the
+// first eight characters after "lado-queue-". Each approval queues its own
+// entry, so a task approved again runs its parts on branches of their own.
+func LadoEntryShortID(id LadoQueueEntryID) string {
+	short := strings.TrimPrefix(string(id), "lado-queue-")
+	if len(short) > 8 {
+		short = short[:8]
+	}
+	return short
+}
+
+// ladoRunBranch is "lado/<task>/<entry>/<name>": the branches of one parts
+// run, apart from every other run's, the same task's earlier runs included.
+func ladoRunBranch(task LadoTaskID, entry LadoQueueEntryID, name string) string {
+	return "lado/" + LadoTaskShortID(task) + "/" + LadoEntryShortID(entry) + "/" + name
+}
+
+// LadoIntegrationBranch is the branch a parts run's parts merge into.
+func LadoIntegrationBranch(task LadoTaskID, entry LadoQueueEntryID) string {
+	return ladoRunBranch(task, entry, ladoPartReservedID)
 }
 
 // LadoPartBranch is the branch of a part's attempt: the first attempt has the
-// part's id, a later one adds "-<attempt>".
-func LadoPartBranch(task LadoTaskID, part string, attempt int) string {
-	name := "lado/" + LadoTaskShortID(task) + "/" + part
+// part's id, a later one adds ".<attempt>". A part id has no dot, so no
+// attempt's branch is another part's.
+func LadoPartBranch(task LadoTaskID, entry LadoQueueEntryID, part string, attempt int) string {
+	name := part
 	if attempt > 1 {
-		name += "-" + strconv.Itoa(attempt)
+		name += "." + strconv.Itoa(attempt)
 	}
-	return name
+	return ladoRunBranch(task, entry, name)
 }
 
 // LadoMergeBranch is the branch of a merge worker's attempt for a part.
-func LadoMergeBranch(task LadoTaskID, part string, attempt int) string {
-	return LadoPartBranch(task, ladoMergePrefix+part, attempt)
+func LadoMergeBranch(task LadoTaskID, entry LadoQueueEntryID, part string, attempt int) string {
+	return LadoPartBranch(task, entry, ladoMergePrefix+part, attempt)
 }
 
 // LadoRunRequest is what a LADO execution's client request id names: the

@@ -422,15 +422,18 @@ func ladoPartRunFromGen(row gen.LadoPartRun) domain.LadoPartRun {
 		DispatchLocalBaseSHA: row.DispatchLocalBaseSha,
 		StartedAt:            row.StartedAt.UTC(),
 		IntegrationAttempts:  int(row.IntegrationAttempts),
+		IntegrationRetryAt:   ladoTimeFromNull(row.IntegrationRetryAt),
 	}
 }
 
 // BumpLadoPartRunIntegrationAttempts counts one more start of the run's
-// integration worker, while the run still has old starts; it reports whether
-// it wrote.
-func (s *Store) BumpLadoPartRunIntegrationAttempts(ctx context.Context, entryID domain.LadoQueueEntryID, old int) (bool, error) {
+// integration worker, while the run still has old starts, and records when a
+// start that fails may be tried again; it reports whether it wrote.
+func (s *Store) BumpLadoPartRunIntegrationAttempts(ctx context.Context, entryID domain.LadoQueueEntryID, old int, retryAt time.Time) (bool, error) {
 	return s.writeLadoRow(ctx, "count a LADO integration start", func(q *gen.Queries) (int64, error) {
-		return q.BumpLadoPartRunIntegrationAttempts(ctx, gen.BumpLadoPartRunIntegrationAttemptsParams{QueueEntryID: string(entryID), OldAttempts: int64(old)})
+		return q.BumpLadoPartRunIntegrationAttempts(ctx, gen.BumpLadoPartRunIntegrationAttemptsParams{
+			RetryAt: ladoNullTime(retryAt), QueueEntryID: string(entryID), OldAttempts: int64(old),
+		})
 	})
 }
 

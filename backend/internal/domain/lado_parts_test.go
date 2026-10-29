@@ -202,17 +202,29 @@ func TestLadoRunClientRequestIDsRoundTrip(t *testing.T) {
 
 func TestLadoPartBranches(t *testing.T) {
 	task := domain.LadoTaskID("lado-task-c14c6be2-d106-48d5")
-	if got := domain.LadoIntegrationBranch(task); got != "lado/c14c6be2/integration" {
+	entry := domain.LadoQueueEntryID("lado-queue-500878f7-5c3b")
+	if got := domain.LadoIntegrationBranch(task, entry); got != "lado/c14c6be2/500878f7/integration" {
 		t.Fatalf("integration branch = %s", got)
 	}
-	if got := domain.LadoPartBranch(task, "api", 1); got != "lado/c14c6be2/api" {
+	if got := domain.LadoPartBranch(task, entry, "api", 1); got != "lado/c14c6be2/500878f7/api" {
 		t.Fatalf("part branch = %s", got)
 	}
-	if got := domain.LadoPartBranch(task, "api", 2); got != "lado/c14c6be2/api-2" {
+	if got := domain.LadoPartBranch(task, entry, "api", 2); got != "lado/c14c6be2/500878f7/api.2" {
 		t.Fatalf("retry branch = %s", got)
 	}
-	if got := domain.LadoMergeBranch(task, "api", 1); got != "lado/c14c6be2/merge-api" {
+	if got := domain.LadoMergeBranch(task, entry, "api", 1); got != "lado/c14c6be2/500878f7/merge-api" {
 		t.Fatalf("merge branch = %s", got)
+	}
+	// A retry's branch is never another part's, and a later approval's run
+	// never reuses an earlier run's branches.
+	if domain.LadoPartBranch(task, entry, "api", 2) == domain.LadoPartBranch(task, entry, "api-2", 1) {
+		t.Fatal("the second attempt of api shares part api-2's branch")
+	}
+	if domain.LadoMergeBranch(task, entry, "api", 2) == domain.LadoMergeBranch(task, entry, "api-2", 1) {
+		t.Fatal("the second merge of api shares api-2's merge branch")
+	}
+	if domain.LadoIntegrationBranch(task, entry) == domain.LadoIntegrationBranch(task, "lado-queue-71aa0c3e-0000") {
+		t.Fatal("two approvals of the task share an integration branch")
 	}
 }
 

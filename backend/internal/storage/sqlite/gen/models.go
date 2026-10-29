@@ -568,6 +568,7 @@ type LadoPartRun struct {
 	DispatchLocalBaseSha string
 	StartedAt            time.Time
 	IntegrationAttempts  int64
+	IntegrationRetryAt   sql.NullTime
 }
 
 type LadoPlanApproval struct {

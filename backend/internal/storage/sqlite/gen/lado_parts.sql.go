@@ -14,20 +14,22 @@ import (
 
 const bumpLadoPartRunIntegrationAttempts = `-- name: BumpLadoPartRunIntegrationAttempts :execrows
 UPDATE lado_part_runs
-SET integration_attempts = integration_attempts + 1
-WHERE lado_part_runs.queue_entry_id = ?1
-  AND lado_part_runs.integration_attempts = ?2
+SET integration_attempts = integration_attempts + 1,
+    integration_retry_at = ?1
+WHERE lado_part_runs.queue_entry_id = ?2
+  AND lado_part_runs.integration_attempts = ?3
 `
 
 type BumpLadoPartRunIntegrationAttemptsParams struct {
+	RetryAt      sql.NullTime
 	QueueEntryID string
 	OldAttempts  int64
 }
 
 // Counts one more start of the integration worker, while it still has the
-// count the caller read.
+// count the caller read, and when a start that fails may be tried again.
 func (q *Queries) BumpLadoPartRunIntegrationAttempts(ctx context.Context, arg BumpLadoPartRunIntegrationAttemptsParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, bumpLadoPartRunIntegrationAttempts, arg.QueueEntryID, arg.OldAttempts)
+	result, err := q.db.ExecContext(ctx, bumpLadoPartRunIntegrationAttempts, arg.RetryAt, arg.QueueEntryID, arg.OldAttempts)
 	if err != nil {
 		return 0, err
 	}
@@ -126,7 +128,7 @@ func (q *Queries) FailLadoPartRun(ctx context.Context, arg FailLadoPartRunParams
 const getLadoPartRun = `-- name: GetLadoPartRun :one
 SELECT queue_entry_id, task_id, project_id, plan_revision_id, repo_dir, branch, base_sha, head_sha,
     plan_base_sha, base_commits_ahead, base_branch, base_remote, dispatch_local_base_sha, started_at,
-    integration_attempts
+    integration_attempts, integration_retry_at
 FROM lado_part_runs
 WHERE queue_entry_id = ?
 `
@@ -150,6 +152,7 @@ func (q *Queries) GetLadoPartRun(ctx context.Context, queueEntryID string) (Lado
 		&i.DispatchLocalBaseSha,
 		&i.StartedAt,
 		&i.IntegrationAttempts,
+		&i.IntegrationRetryAt,
 	)
 	return i, err
 }
@@ -308,7 +311,7 @@ func (q *Queries) LatestSessionReportState(ctx context.Context, sessionID string
 }
 
 const listActiveLadoPartRuns = `-- name: ListActiveLadoPartRuns :many
-SELECT r.queue_entry_id, r.task_id, r.project_id, r.plan_revision_id, r.repo_dir, r.branch, r.base_sha, r.head_sha, r.plan_base_sha, r.base_commits_ahead, r.base_branch, r.base_remote, r.dispatch_local_base_sha, r.started_at, r.integration_attempts, e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, e.parts_started_at, e.part_spawn_request, e.part_spawn_expires_at, e.waiting_detail
+SELECT r.queue_entry_id, r.task_id, r.project_id, r.plan_revision_id, r.repo_dir, r.branch, r.base_sha, r.head_sha, r.plan_base_sha, r.base_commits_ahead, r.base_branch, r.base_remote, r.dispatch_local_base_sha, r.started_at, r.integration_attempts, r.integration_retry_at, e.id, e.task_id, e.project_id, e.plan_approval_id, e.policy_snapshot_id, e.enqueued_at, e.attempt_count, e.next_attempt_at, e.lease_token, e.claimed_at, e.lease_expires_at, e.waiting_reason, e.review_required_reason, e.blocked_reason, e.error_message, e.dispatched_session_id, e.failed_at, e.superseded_at, e.cancelled_at, e.parts_started_at, e.part_spawn_request, e.part_spawn_expires_at, e.waiting_detail
 FROM lado_part_runs r
 JOIN lado_queue_entries e ON e.id = r.queue_entry_id
 WHERE e.parts_started_at IS NOT NULL
@@ -349,6 +352,7 @@ func (q *Queries) ListActiveLadoPartRuns(ctx context.Context) ([]ListActiveLadoP
 			&i.LadoPartRun.DispatchLocalBaseSha,
 			&i.LadoPartRun.StartedAt,
 			&i.LadoPartRun.IntegrationAttempts,
+			&i.LadoPartRun.IntegrationRetryAt,
 			&i.LadoQueueEntry.ID,
 			&i.LadoQueueEntry.TaskID,
 			&i.LadoQueueEntry.ProjectID,

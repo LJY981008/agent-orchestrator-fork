@@ -84,7 +84,7 @@ type PartStore interface {
 	LadoPartSpawnRequests(ctx context.Context) ([]domain.LadoQueueEntry, error)
 	LadoPartSpawnGrant(ctx context.Context, clientRequestID string, now time.Time) (domain.LadoDispatchGrant, error)
 	LinkLadoPartExecution(ctx context.Context, request string, exec domain.LadoExecution, part *domain.LadoTaskPart, oldState domain.LadoPartState) error
-	BumpLadoPartRunIntegrationAttempts(ctx context.Context, entryID domain.LadoQueueEntryID, old int) (bool, error)
+	BumpLadoPartRunIntegrationAttempts(ctx context.Context, entryID domain.LadoQueueEntryID, old int, retryAt time.Time) (bool, error)
 	LadoExecutionsForEntry(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoExecution, error)
 	LatestSessionReport(ctx context.Context, sessionID domain.SessionID) (domain.ReportState, string, bool, error)
 }

@@ -219,7 +219,7 @@ func spawnIDs(cfgs []ports.SpawnConfig) []string {
 func TestAPartsRunMergesItsPartsAndStartsTheIntegrationWorker(t *testing.T) {
 	pf := newPartsFixture(t)
 	ctx := context.Background()
-	integration := domain.LadoIntegrationBranch("task-1")
+	integration := domain.LadoIntegrationBranch("task-1", storeEntry)
 
 	pf.tick(t, t0)
 	if got := pf.branch(t, integration); got != pf.main {
@@ -231,7 +231,7 @@ func TestAPartsRunMergesItsPartsAndStartsTheIntegrationWorker(t *testing.T) {
 	}
 	for i, part := range []string{"a", "b"} {
 		cfg := spawned[i]
-		if cfg.Branch != "lado/task-1/"+part || cfg.ClientRequestHash != testDispatchHash() || cfg.RequestedMode != domain.SessionModeChat {
+		if cfg.Branch != "lado/task-1/1/"+part || cfg.ClientRequestHash != testDispatchHash() || cfg.RequestedMode != domain.SessionModeChat {
 			t.Fatalf("spawn of %s = %+v", part, cfg)
 		}
 		if got := pf.branch(t, cfg.Branch); got != pf.main {
@@ -252,7 +252,7 @@ func TestAPartsRunMergesItsPartsAndStartsTheIntegrationWorker(t *testing.T) {
 	}
 
 	// a reports done: LADO stops its worker and merges it without a checkout.
-	aTip := commitOn(t, pf.repo, "lado/task-1/a", map[string]string{"svc/a.go": "package svc\n", "shared.txt": "start\na\n"})
+	aTip := commitOn(t, pf.repo, "lado/task-1/1/a", map[string]string{"svc/a.go": "package svc\n", "shared.txt": "start\na\n"})
 	pf.reportDone(t, parts["a"].SessionID, "added the service")
 	pf.tick(t, t0.Add(time.Minute))
 	parts = pf.parts(t, storeEntry)
@@ -269,27 +269,27 @@ func TestAPartsRunMergesItsPartsAndStartsTheIntegrationWorker(t *testing.T) {
 	if !slices.Contains(pf.sessions.killed(), parts["a"].SessionID) {
 		t.Fatalf("a's worker was not stopped after done: kills %v", pf.sessions.killed())
 	}
-	if parts["c"].State != domain.LadoPartRunning || parts["c"].StartSHA != head || pf.branch(t, "lado/task-1/c") != head {
+	if parts["c"].State != domain.LadoPartRunning || parts["c"].StartSHA != head || pf.branch(t, "lado/task-1/1/c") != head {
 		t.Fatalf("part c = %+v, want it started from the merge %s", parts["c"], head)
 	}
 	pf.requireUntouched(t)
 
 	// b changes the same line: its merge conflicts and goes to a merge worker.
-	bTip := commitOn(t, pf.repo, "lado/task-1/b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\nb\n"})
+	bTip := commitOn(t, pf.repo, "lado/task-1/1/b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\nb\n"})
 	pf.reportDone(t, parts["b"].SessionID, "added the page")
 	pf.tick(t, t0.Add(2*time.Minute))
 	parts = pf.parts(t, storeEntry)
-	if parts["b"].State != domain.LadoPartConflict || parts["b"].MergeSessionID == "" || parts["b"].MergeBranch != "lado/task-1/merge-b" {
+	if parts["b"].State != domain.LadoPartConflict || parts["b"].MergeSessionID == "" || parts["b"].MergeBranch != "lado/task-1/1/merge-b" {
 		t.Fatalf("part b = %+v, want a merge worker on its conflict", parts["b"])
 	}
 	if got := pf.branch(t, integration); got != head {
 		t.Fatalf("a conflicting merge moved the integration branch to %s", got)
 	}
 	merge := pf.sessions.spawned()[len(pf.sessions.spawned())-1]
-	if merge.ClientRequestID != "lado:lado-queue-1/merge-b/1" || merge.Branch != "lado/task-1/merge-b" || !strings.Contains(merge.Prompt, bTip) {
+	if merge.ClientRequestID != "lado:lado-queue-1/merge-b/1" || merge.Branch != "lado/task-1/1/merge-b" || !strings.Contains(merge.Prompt, bTip) {
 		t.Fatalf("merge worker spawn = %+v", merge)
 	}
-	resolved := commitOn(t, pf.repo, "lado/task-1/merge-b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\na\nb\n"}, head, bTip)
+	resolved := commitOn(t, pf.repo, "lado/task-1/1/merge-b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\na\nb\n"}, head, bTip)
 	pf.reportDone(t, parts["b"].MergeSessionID, "kept both lines")
 	pf.tick(t, t0.Add(3*time.Minute))
 	parts = pf.parts(t, storeEntry)
@@ -344,7 +344,7 @@ func TestAPartThatEndsWithoutDoneIsRetriedThenFailsTheTask(t *testing.T) {
 	endStoreSession(t, pf.storeFixture, first.SessionID)
 	pf.tick(t, t0.Add(time.Minute))
 	second := pf.parts(t, storeEntry)["a"]
-	if second.State != domain.LadoPartRunning || second.Attempts != 2 || second.SessionID == first.SessionID || second.Branch != "lado/task-1/a-2" {
+	if second.State != domain.LadoPartRunning || second.Attempts != 2 || second.SessionID == first.SessionID || second.Branch != "lado/task-1/1/a.2" {
 		t.Fatalf("part a after its worker ended = %+v, want a new worker on a new branch", second)
 	}
 	if last := pf.sessions.spawned()[len(pf.sessions.spawned())-1]; last.ClientRequestID != "lado:lado-queue-1/a/2" {
@@ -413,10 +413,10 @@ func TestPartsWaitForAWorkerSlot(t *testing.T) {
 // it and does not merge twice.
 func TestAMergeIsNotAppliedTwiceAfterARestart(t *testing.T) {
 	pf := newPartsFixture(t)
-	integration := domain.LadoIntegrationBranch("task-1")
+	integration := domain.LadoIntegrationBranch("task-1", storeEntry)
 	pf.tick(t, t0)
 	parts := pf.parts(t, storeEntry)
-	commitOn(t, pf.repo, "lado/task-1/a", map[string]string{"svc/a.go": "package svc\n"})
+	commitOn(t, pf.repo, "lado/task-1/1/a", map[string]string{"svc/a.go": "package svc\n"})
 	pf.reportDone(t, parts["a"].SessionID, "done")
 	crashing := &crashAfterMove{PartGit: execPartGit{}}
 	pf.svc = New(Deps{
@@ -528,17 +528,17 @@ func TestTwoTasksRunTheirPartsAtOnce(t *testing.T) {
 	if err != nil || load.TaskCount() != 2 || load.Workers != 5 {
 		t.Fatalf("load = %d tasks and %d workers (%v), want 2 tasks and 5 workers", load.TaskCount(), load.Workers, err)
 	}
-	if e := pf.parts(t, entry2)["e"]; e.Branch != "lado/task-7/e" {
+	if e := pf.parts(t, entry2)["e"]; e.Branch != "lado/task-7/7/e" {
 		t.Fatalf("part e = %+v", e)
 	}
 	parts := pf.parts(t, storeEntry)
 	for i, part := range []string{"a", "b", "c"} {
 		dir := []string{"svc", "web", "docs"}[i]
-		commitOn(t, pf.repo, "lado/task-1/"+part, map[string]string{dir + "/x.txt": part})
+		commitOn(t, pf.repo, "lado/task-1/1/"+part, map[string]string{dir + "/x.txt": part})
 		pf.reportDone(t, parts[part].SessionID, part+" done")
 	}
 	pf.tick(t, t0.Add(time.Minute))
-	if d := pf.parts(t, storeEntry)["d"]; d.State != domain.LadoPartRunning || d.StartSHA != pf.branch(t, domain.LadoIntegrationBranch("task-1")) {
+	if d := pf.parts(t, storeEntry)["d"]; d.State != domain.LadoPartRunning || d.StartSHA != pf.branch(t, domain.LadoIntegrationBranch("task-1", storeEntry)) {
 		t.Fatalf("part d = %+v, want it started once a, b and c merged", d)
 	}
 }
@@ -583,7 +583,7 @@ func TestAPartWhoseWorkerDoesNotStartWaitsBeforeItTriesAgain(t *testing.T) {
 	}
 	pf.tick(t, t0.Add(31*time.Second))
 	a = pf.parts(t, storeEntry)["a"]
-	if a.State != domain.LadoPartRunning || a.Attempts != 2 || a.Branch != "lado/task-1/a-2" {
+	if a.State != domain.LadoPartRunning || a.Attempts != 2 || a.Branch != "lado/task-1/1/a.2" {
 		t.Fatalf("part a after its wait = %+v, want its second worker running", a)
 	}
 	if task, _, _ := pf.db.LadoTask(ctx, "task-1"); task.StateAt(t0.Add(31*time.Second)) != domain.LadoTaskRunning {
@@ -596,14 +596,14 @@ func TestAPartWhoseWorkerDoesNotStartWaitsBeforeItTriesAgain(t *testing.T) {
 // integration branch instead of spending the merge worker's attempt.
 func TestAMergeWorkersBranchIsMergedOntoAMovedIntegrationBranch(t *testing.T) {
 	pf := newPartsFixture(t)
-	integration := domain.LadoIntegrationBranch("task-1")
+	integration := domain.LadoIntegrationBranch("task-1", storeEntry)
 	pf.tick(t, t0)
 	parts := pf.parts(t, storeEntry)
-	commitOn(t, pf.repo, "lado/task-1/a", map[string]string{"svc/a.go": "package svc\n", "shared.txt": "start\na\n"})
+	commitOn(t, pf.repo, "lado/task-1/1/a", map[string]string{"svc/a.go": "package svc\n", "shared.txt": "start\na\n"})
 	pf.reportDone(t, parts["a"].SessionID, "a done")
 	pf.tick(t, t0.Add(time.Minute))
 	headA := pf.branch(t, integration)
-	bTip := commitOn(t, pf.repo, "lado/task-1/b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\nb\n"})
+	bTip := commitOn(t, pf.repo, "lado/task-1/1/b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\nb\n"})
 	pf.reportDone(t, parts["b"].SessionID, "b done")
 	pf.tick(t, t0.Add(2*time.Minute))
 	parts = pf.parts(t, storeEntry)
@@ -611,14 +611,14 @@ func TestAMergeWorkersBranchIsMergedOntoAMovedIntegrationBranch(t *testing.T) {
 		t.Fatalf("part b = %+v, want a merge worker", parts["b"])
 	}
 	// c merges while the merge worker works.
-	commitOn(t, pf.repo, "lado/task-1/c", map[string]string{"docs/c.md": "c\n"})
+	commitOn(t, pf.repo, "lado/task-1/1/c", map[string]string{"docs/c.md": "c\n"})
 	pf.reportDone(t, parts["c"].SessionID, "c done")
 	pf.tick(t, t0.Add(3*time.Minute))
 	headC := pf.branch(t, integration)
 	if headC == headA || pf.parts(t, storeEntry)["c"].State != domain.LadoPartMerged {
 		t.Fatal("c did not merge while b's merge worker worked")
 	}
-	resolved := commitOn(t, pf.repo, "lado/task-1/merge-b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\na\nb\n"}, headA, bTip)
+	resolved := commitOn(t, pf.repo, "lado/task-1/1/merge-b", map[string]string{"web/b.tsx": "export {}\n", "shared.txt": "start\na\nb\n"}, headA, bTip)
 	pf.reportDone(t, pf.parts(t, storeEntry)["b"].MergeSessionID, "kept both")
 	spawns := len(pf.sessions.spawned())
 	pf.tick(t, t0.Add(4*time.Minute))
@@ -637,4 +637,134 @@ func TestAMergeWorkersBranchIsMergedOntoAMovedIntegrationBranch(t *testing.T) {
 		t.Fatalf("spawned %v after the merge, want the integration worker only", spawnIDs(pf.sessions.spawned()[spawns:]))
 	}
 	pf.requireUntouched(t)
+}
+
+// A task approved again runs its new parts run on branches of its own: the
+// earlier run's branches, which a worker moved, are left alone and do not
+// stop the new run.
+func TestATaskApprovedAgainRunsItsPartsOnNewBranches(t *testing.T) {
+	pf := newPartsFixture(t)
+	ctx := context.Background()
+	pf.tick(t, t0)
+	first := pf.parts(t, storeEntry)
+	commitOn(t, pf.repo, first["a"].Branch, map[string]string{"svc/a.go": "package svc\n"})
+	oldIntegration := domain.LadoIntegrationBranch("task-1", storeEntry)
+	commitOn(t, pf.repo, oldIntegration, map[string]string{"stray.txt": "moved\n"})
+
+	at := t0.Add(time.Minute)
+	approval := domain.LadoPlanApproval{ID: "approval-again", RevisionID: "rev-2", TaskID: "task-1", SHA256: testPlanSHA, ApprovedAt: at}
+	snapshot := testSnapshot(claudeAgent(), false)
+	snapshot.ID, snapshot.ApprovalID = "snap-again", approval.ID
+	entry := domain.LadoQueueEntryID("lado-queue-2nd")
+	if _, _, err := pf.db.ApproveLadoPlan(ctx, approval,
+		domain.LadoPresenceProof{Nonce: "nonce-again-AAAAAAAAAAAAAAAA", Action: domain.LadoPresencePlanApprove, SubjectID: "rev-2", ExpiresAt: at.Add(time.Minute), UsedAt: at},
+		domain.LadoAuditEvent{At: at, Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: "rev-2"},
+		&snapshot, &domain.LadoQueueEntry{ID: entry}); err != nil {
+		t.Fatalf("approve again: %v", err)
+	}
+	pf.tasks.mu.Lock()
+	pf.tasks.input.Approval, pf.tasks.input.Snapshot = approval, snapshot
+	pf.tasks.mu.Unlock()
+	task, _, _ := pf.db.LadoTask(ctx, "task-1")
+	task.Plan.Snapshot = domain.LadoPolicySnapshotRef{ID: snapshot.ID, SHA256: snapshot.SHA256}
+	pf.policy.sha = snapshot.SHA256
+
+	pf.tick(t, at.Add(time.Minute))
+	for _, part := range []string{"a", "b"} {
+		if !slices.Contains(pf.sessions.killed(), first[part].SessionID) {
+			t.Fatalf("the earlier run's worker of %s still runs", part)
+		}
+	}
+	newIntegration := domain.LadoIntegrationBranch("task-1", entry)
+	if newIntegration == oldIntegration || pf.branch(t, newIntegration) != pf.main {
+		t.Fatalf("new integration branch %s = %s, want its own branch at the base", newIntegration, pf.branch(t, newIntegration))
+	}
+	second := pf.parts(t, entry)
+	if second["a"].State != domain.LadoPartRunning || second["a"].Branch != "lado/task-1/2nd/a" || pf.branch(t, second["a"].Branch) != pf.main {
+		t.Fatalf("part a of the new run = %+v, want a fresh branch at the base", second["a"])
+	}
+	if old, _, _ := pf.db.LadoTask(ctx, "task-1"); old.Queue.ID != entry || old.StateAt(at.Add(time.Minute)) != domain.LadoTaskRunning {
+		t.Fatalf("task = %s with entry %s, want the new run running", old.StateAt(at), old.Queue.ID)
+	}
+}
+
+// A daemon that stops after moving the integration branch to a merge
+// worker's result, and before recording it, records the move when it starts
+// again: for a fast-forward and for a merge onto a moved head alike, without
+// merging twice.
+func TestAMergeWorkersMoveIsRecordedAfterARestart(t *testing.T) {
+	for _, moved := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fast-forward", true: "merge onto a moved head"}[moved], func(t *testing.T) {
+			pf := newPartsFixture(t)
+			integration := domain.LadoIntegrationBranch("task-1", storeEntry)
+			pf.tick(t, t0)
+			parts := pf.parts(t, storeEntry)
+			commitOn(t, pf.repo, parts["a"].Branch, map[string]string{"shared.txt": "start\na\n"})
+			pf.reportDone(t, parts["a"].SessionID, "a")
+			pf.tick(t, t0.Add(time.Minute))
+			headA := pf.branch(t, integration)
+			bTip := commitOn(t, pf.repo, parts["b"].Branch, map[string]string{"shared.txt": "start\nb\n"})
+			pf.reportDone(t, parts["b"].SessionID, "b")
+			pf.tick(t, t0.Add(2*time.Minute))
+			if moved {
+				commitOn(t, pf.repo, pf.parts(t, storeEntry)["c"].Branch, map[string]string{"docs/c.md": "c\n"})
+				pf.reportDone(t, pf.parts(t, storeEntry)["c"].SessionID, "c")
+				pf.tick(t, t0.Add(3*time.Minute))
+			}
+			b := pf.parts(t, storeEntry)["b"]
+			commitOn(t, pf.repo, b.MergeBranch, map[string]string{"shared.txt": "start\na\nb\n"}, headA, bTip)
+			pf.reportDone(t, b.MergeSessionID, "kept both")
+			crashing := &crashAfterMove{PartGit: execPartGit{}}
+			pf.svc = New(Deps{
+				Store: pf.db, Tasks: pf.tasks, Policy: pf.policy, Sessions: pf.sessions, Projects: pf.projects, Branches: pf.branches,
+				Memory: pf.memory, Git: pf.git, PartGit: crashing, Clock: pf.clock, NewID: pf.newID,
+				Log: slog.New(slog.NewTextHandler(pf.logs, nil)),
+			})
+			pf.setClock(t0.Add(4 * time.Minute))
+			_ = pf.svc.Tick(context.Background(), t0.Add(4*time.Minute))
+			after := pf.branch(t, integration)
+			if pf.parts(t, storeEntry)["b"].State != domain.LadoPartConflict || !crashing.crashed.Load() {
+				t.Fatalf("part b = %+v, want the move made and not recorded", pf.parts(t, storeEntry)["b"])
+			}
+			pf.svc = pf.dispatcher(pf.db, pf.git)
+			pf.tick(t, t0.Add(5*time.Minute))
+			b = pf.parts(t, storeEntry)["b"]
+			if b.State != domain.LadoPartMerged || b.MergedSHA != after || pf.branch(t, integration) != after {
+				t.Fatalf("part b = %+v, integration %s; want the earlier move %s recorded", b, pf.branch(t, integration), after)
+			}
+			if run, _, _ := pf.db.LadoPartRun(context.Background(), storeEntry); run.HeadSHA != after {
+				t.Fatalf("run head = %s, want %s", run.HeadSHA, after)
+			}
+		})
+	}
+}
+
+// An integration worker AO could not start is started again only after its
+// wait, in a new session.
+func TestAnIntegrationWorkerThatDoesNotStartWaitsBeforeItTriesAgain(t *testing.T) {
+	pf := newPartsFixture(t)
+	pf.sessions.errs = []error{nil, nil, nil, errors.New("the chat driver is not ready")}
+	pf.tick(t, t0)
+	parts := pf.parts(t, storeEntry)
+	pf.reportDone(t, parts["a"].SessionID, "nothing")
+	pf.reportDone(t, parts["b"].SessionID, "nothing")
+	pf.tick(t, t0.Add(time.Minute))
+	pf.reportDone(t, pf.parts(t, storeEntry)["c"].SessionID, "nothing")
+	pf.tick(t, t0.Add(2*time.Minute))
+	spawns := pf.sessions.spawned()
+	if len(spawns) != 4 || spawns[3].ClientRequestID != "lado:lado-queue-1/integration/1" {
+		t.Fatalf("spawned %v, want the integration worker's first start", spawnIDs(spawns))
+	}
+	pf.tick(t, t0.Add(2*time.Minute+15*time.Second))
+	if len(pf.sessions.spawned()) != 4 {
+		t.Fatal("the integration worker started again before its wait was over")
+	}
+	pf.tick(t, t0.Add(2*time.Minute+31*time.Second))
+	spawns = pf.sessions.spawned()
+	if len(spawns) != 5 || spawns[4].ClientRequestID != "lado:lado-queue-1/integration/2" {
+		t.Fatalf("spawned %v, want the integration worker's second start", spawnIDs(spawns))
+	}
+	if task, _, _ := pf.db.LadoTask(context.Background(), "task-1"); task.Execution.Role != domain.LadoRoleIntegration {
+		t.Fatalf("task execution = %+v, want the integration worker", task.Execution)
+	}
 }

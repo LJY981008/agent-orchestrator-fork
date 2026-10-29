@@ -25,7 +25,7 @@ INSERT INTO lado_task_parts (
 -- name: GetLadoPartRun :one
 SELECT queue_entry_id, task_id, project_id, plan_revision_id, repo_dir, branch, base_sha, head_sha,
     plan_base_sha, base_commits_ahead, base_branch, base_remote, dispatch_local_base_sha, started_at,
-    integration_attempts
+    integration_attempts, integration_retry_at
 FROM lado_part_runs
 WHERE queue_entry_id = ?;
 
@@ -228,8 +228,9 @@ LIMIT 1;
 
 -- name: BumpLadoPartRunIntegrationAttempts :execrows
 -- Counts one more start of the integration worker, while it still has the
--- count the caller read.
+-- count the caller read, and when a start that fails may be tried again.
 UPDATE lado_part_runs
-SET integration_attempts = integration_attempts + 1
+SET integration_attempts = integration_attempts + 1,
+    integration_retry_at = sqlc.narg(retry_at)
 WHERE lado_part_runs.queue_entry_id = sqlc.arg(queue_entry_id)
   AND lado_part_runs.integration_attempts = sqlc.arg(old_attempts);

@@ -56,6 +56,14 @@
 - 남는 것: 취소되거나 대체된 파트 실행은 파트의 마지막 상태를 그대로 둔다. sweep 이 멈춘 파트도 작업 창에서 "실행 중"으로 보인다(랩의 작업 3 의 c). 작업 자체는 취소됨으로 보인다.
 - 변경 경로는 모두 플랜의 `affected_paths` 안이다. upstream 공유 파일은 건드리지 않았다(TDD §1.2 변경 없음).
 
+## AO 리뷰
+
+- 1회차(`f5119b79c`, changes_requested). 필수 셋을 모두 고쳤다.
+  1. 같은 작업을 다시 승인하면 브랜치 이름(`lado/<task>/…`)이 이전 실행과 겹쳐 새 실행이 실패하거나 이전 워커의 커밋에서 시작할 수 있었다. 이름에 큐 항목 짧은 id 를 넣어 `lado/<task>/<entry>/…` 로 실행마다 따로 두었다(`TestATaskApprovedAgainRunsItsPartsOnNewBranches`).
+  2. 병합 워커 결과로 통합 브랜치를 옮긴 뒤 기록 전에 멈추면 다음 패스가 영원히 실패하거나 같은 병합을 매번 다시 만들 수 있었다. 브랜치 끝이 기록된 head 와 다르면 워커 끝(fast-forward)이거나 [기록된 head, 워커 끝]을 부모로 한 병합일 때만 기록하고, 아니면 "LADO 밖에서 움직임"으로 실패시켰다(`TestAMergeWorkersMoveIsRecordedAfterARestart`, 두 경우).
+  3. 재시도 브랜치 접미사 `-<n>` 이 유효한 파트 id(`api-2`)와 겹쳤다. 파트 id 에 없는 `.` 을 써 `api.2` 로 했다(`TestLadoPartBranches`).
+- 선택 둘도 반영했다. 통합 워커 띄우기 실패도 30초·2분을 기다린다(`lado_part_runs.integration_retry_at`, `TestAnIntegrationWorkerThatDoesNotStartWaitsBeforeItTriesAgain`). 디스패치에서 front matter 나 parts 를 읽지 못한 승인된 계획은 단일 워커로 돌지 않고 시도를 쓴다.
+
 ## 통합 검수
 
 이 PR 은 이 워커 하나가 차례로 만들었으므로 파트 사이 검수 대상은 없다. 랩에서 통합 워커가 한 검수는 아래 "랩 확인"에 적는다.

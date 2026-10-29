@@ -414,7 +414,7 @@ func (f *fakeStore) LinkLadoPartExecution(context.Context, string, domain.LadoEx
 	return errors.New("the fake store keeps no parts runs")
 }
 
-func (f *fakeStore) BumpLadoPartRunIntegrationAttempts(context.Context, domain.LadoQueueEntryID, int) (bool, error) {
+func (f *fakeStore) BumpLadoPartRunIntegrationAttempts(context.Context, domain.LadoQueueEntryID, int, time.Time) (bool, error) {
 	return false, nil
 }
 
