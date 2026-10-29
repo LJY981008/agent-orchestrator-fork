@@ -1,6 +1,6 @@
 # 2026-10-29 LADO 계획 워커 — 계획은 계획 워커가 쓰고, 오케스트레이터는 알림만
 
-> 이슈 #27(#33 통합) · LADO 작업 `lado-task-ddda62ff-e2c1-4236-94ac-2dc00983eeec` · 승인된 플랜 revision 4 (sha256 7d42031009ab) · 워커 세션 `agent-orchestrator-fork-7` · 브랜치 `ao/plan-worker-2/plan-workers`
+> 이슈 #27(#33 통합) · LADO 작업 `lado-task-ddda62ff-e2c1-4236-94ac-2dc00983eeec` · 승인된 플랜 revision 4 (sha256 7d42031009ab) · 워커 세션 `agent-orchestrator-fork-7` · 세션 브랜치 `ao/plan-worker-2/root` · PR #37(#36 을 대체)
 
 ## 의도/목적 — 왜 이 작업을 하나
 
@@ -30,6 +30,7 @@
 | HTTP·화면 | 작업·계획 DTO(계획 워커, 검수, 측정값, change_kinds), 칸반 카드·작업 창 상태와 세션 링크, 계획 화면 검수 결과·측정값, 설정 → 규칙 계획 카드와 버전 되돌리기, 설정 → 실행 계획 워커 카드와 경로 패턴 대화상자, 8개 로캘 | 44fc76e17 |
 | 로컬 확인 | lint 지적 수정과 그 과정에서 찾은 쓰기 오류 누락 | 86f544611 |
 | 랩 | 랩에서 찾은 결함 세 건과 안내 다듬기(아래 "결정과 이탈") | 02f064c66, af6a53855, 53efadbc3, 5ac873b29 |
+| AO 리뷰 | 1·2회차 선택 의견 중 둘(알림 재기록, 검수자 알림 맵) | 73eef1b0d |
 | 문서 | TDD §1.1·§1.2·§2·§3.1·§4.2·§4.3·§4.5·§5.1·§5.3·§6.2·§9·§13·§14, PRD(TASK-007, 관문 19, D14), ADR 0007, LADO.md·LADO.ko.md, DESIGN.md 결정 기록, 이 문서 | 6f9413da4 |
 
 ## 설계 확인 결과 (플랜 2단계)
@@ -63,6 +64,9 @@
 - 랩에서 찾은 결함: 계획 화면이 세션 토큰에 캐시 읽기·쓰기를 다시 더해 부풀렸다. AO 의 입력 토큰은 이미 캐시를 포함한다(랩: 입력 3.74M 중 캐시 읽기 3.58M). 입력+출력으로 세고 API 설명에 적었다.
 - 랩에서 찾은 결함: 랩에서 검수자 규칙에 "[LAB] 로 시작" 문구를 넣었는데 검수 결과 제목에 나오지 않았다. LADO 프롬프트 소스가 두 곳에서 설치되고, 나중에 설치되는 로컬 설정 쪽 소스에 규칙 읽기가 빠져 설계자·검수자 지시문이 계획 워커에 전혀 가지 않았다. 그 소스도 규칙을 읽게 하고, 데몬 배선 테스트(`TestWireLadoInstallsTheSetupHooks`)가 검수자 세션의 LADO 절에 Plan critic 지시문이 있는지 보게 했다(고치기 전에는 실패).
 - 랩에서 다듬은 것: 설계자가 `ls && cat …` 와 `gh … 2>&1 | head` 를 먼저 시도하다 거절당했다(거절 문구를 읽고 Grep·Read 와 리다이렉트 없는 명령으로 바꿔 계속함). 지시문과 거절 문구에 허용·거절되는 형태를 미리 적었다. 계획이 오는 중에는 작업 창의 "계획이 없습니다. 요청하면…" 안내를 숨겼다.
+- PR 을 세션 브랜치로 옮김(오너 지시, 2026-10-29): 처음 PR #36 은 하위 브랜치 `ao/plan-worker-2/plan-workers` 에서 열었다. 오너가 세션 브랜치 `ao/plan-worker-2/root` 에서 열고 LADO 실행에 연결됐는지 `ao session get` 으로 확인하라고 해서, 같은 커밋을 세션 브랜치로 빨리 감기해 PR #37 을 열었다. `ao session get` 의 `prs` 와 LADO 실행의 `pr` 이 #37 로 바뀐 것을 본 뒤에 #36 을 닫았다(먼저 닫으면 실행이 닫힌 PR 로 정산될 수 있어서). 세션 브랜치는 origin/main 을 추적하므로 push 는 늘 명시적 refspec 으로 했다.
+- PR 제목을 한국어로(규칙과 플랜의 충돌): 플랜은 "PR 제목과 본문은 영어"라고 했지만, 이 실행에 승인된 규칙 "Commit messages in Korean" 을 LADO 의 커밋 검사가 PR 제목에도 적용한다(squash 병합이면 PR 제목이 커밋 제목이 되므로). #36 의 영어 제목은 `prTitle: not_korean` 으로 실패했고, 실행은 `commit_messages_failed` 로 검증 중에 머물러 통합 승인을 막았다. 오너 지시대로 이 상황의 권장안을 골랐다: 집행되는 규칙을 따른다. 제목은 영어 Conventional Commit 접두어에 한국어 제목(`feat(lado): 계획 워커가 계획을 쓰고 오케스트레이터는 알림만 받는다`), 본문은 영어다. #37 에서 실행은 `checks_pending` 으로 바뀌었다.
+- AO 리뷰의 선택 의견(1·2회차 공통): 알림 수집이 매 틱마다 이미 넣은 알림을 다시 쓰는 것은, 이 프로세스가 넣었거나 이미 있던 키를 기억해 다시 쓰지 않게 고쳤다(`TestTickQueuesOneLinePerEvent` 가 두 번째 틱의 쓰기 0건을 확인). 검수자 알림 맵이 정리되지 않는 것은, 검수가 끝나거나 실패하거나 요청이 닫히면 지우게 고쳤다(`TestCriticRemindersAreForgottenOnceTheReviewEnds`). 두 테스트 모두 고치기 전 코드에서 실패한다. 나머지 둘은 고치지 않았다. "맨 Bash 를 거부 목록에"는 Claude Code 에서 거부 규칙이 허용 규칙을 이기므로 허용한 읽기 전용 git·gh 와 제출 명령까지 막는다. 훅이 실패해도 Edit·Write·NotebookEdit 와 쓰기 명령은 ACP 거부 목록이 막는다. "작업이 취소되면 정리가 done 으로 보인다"는 화면에 영향이 없다(작업은 취소됨으로 보이고, 작업 창은 끝난 요청의 계획 워커 줄을 보이지 않는다). 둘은 후속으로 남긴다. 알림 수집이 매 틱 사실을 다시 읽는 비용도 남는다(쓰기는 없어짐).
 - 테스트 환경: 세션 환경의 `AO_*` 변수(특히 `AO_RUN_FILE`, `AO_DATA_DIR`, `AO_SESSION_ID`)가 Go 테스트에 새어 실사용 데몬을 가리켰다. Go 테스트는 `AO_*` 를 모두 지운 환경에서 돌렸다.
 
 ## 랩 확인 (2026-10-29)
@@ -85,4 +89,5 @@
 
 - 로컬(HEAD 기준, Go 테스트는 `AO_*`·Claude·Codex 설정 변수를 지우고 임시 HOME 으로): sqlc·api drift 없음, `go.work.sum` 변경 없음, 트리 깨끗함; gofmt·build(`GOOS=windows`·`darwin` 포함)·vet; golangci-lint v2.13.2 0건; race(격리 HOME) `ladotask`·`ladoqueue`·`ladonotify`·`ladosetup`·`ladogate`·`ladoproject`·`ladopolicy`·`session_manager`·`domain`·`httpd`·`daemon`·`cli`, `storage/sqlite/store`(226초)·`storage/sqlite`(1495초, 기본 10분 제한에 걸려 `-timeout 60m` 으로); cloud-client generate·typecheck·test; frontend typecheck·typecheck:e2e·vitest(535 파일, 8834 테스트); 렌더러 smoke 91 통과, 채팅 spec 5개(`chat-agent-switch`, `chat-continue`, `chat-interface-refusal`, `chat-message-overflow`, `chat-queued-attachments`)가 race 와 함께 돌 때 실패했고 단독 재실행에서 6개 모두 통과(LADO 와 무관); gitleaks v7 누출 없음.
 - PR CI(#36): 첫 push(53efadbc3)에서 `cloud-build-test` 만 도커 이미지 미러의 429(요청 과다)로 실패했고, 다음 push(1d585b469)에서 통과했다. 나머지는 모두 통과.
-- AO 리뷰: (진행하며 채운다.)
+- PR CI(#37, head 6b578b3b1): 24개 모두 통과.
+- AO 리뷰: 1회차(#36, run 573918dd, 오케스트레이터가 실행) approved, 2회차(#37, run 9dfc1365) approved, 둘 다 head 6b578b3b1, 변경 요청 없음, 선택 의견 4개(위 "결정과 이탈"). 선택 의견 둘을 고친 마지막 head 에 3회차를 받는다.
