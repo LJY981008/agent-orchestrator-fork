@@ -518,6 +518,15 @@ type LadoExecutionReview struct {
 	CancelledAt        sql.NullTime
 }
 
+type LadoExecutionTiming struct {
+	SessionID         string
+	PRURL             string
+	PRSeenAt          sql.NullTime
+	PRSeenEstimated   int64
+	VerifiedAt        sql.NullTime
+	VerifiedEstimated int64
+}
+
 type LadoIntegrationApproval struct {
 	ID                 string
 	ExecutionSessionID string
@@ -750,6 +759,22 @@ type LadoRuleVersion struct {
 	Sha256          string
 	Actor           string
 	CreatedAt       time.Time
+}
+
+type LadoSessionMetric struct {
+	SessionID       string
+	TaskID          string
+	Role            string
+	ToolCalls       int64
+	ReadCalls       int64
+	SearchCalls     int64
+	CommandCalls    int64
+	EditCalls       int64
+	FirstActivityAt sql.NullTime
+	FirstEditAt     sql.NullTime
+	LastActivityAt  sql.NullTime
+	InvestigateMs   int64
+	UpdatedAt       time.Time
 }
 
 type LadoSetupAdoption struct {
