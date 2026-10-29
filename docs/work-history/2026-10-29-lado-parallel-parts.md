@@ -68,7 +68,13 @@
 
 ## 로컬 확인
 
-(마무리 때 채운다)
+- `npm run sqlc`·`npm run api` 뒤 생성 파일 drift 없음. specgen 이름표에 새 DTO 넷(파트 응답·파트·요약·계획 파트)을 올려 `Controllers` 접두어 없는 스키마 이름이 되게 했다.
+- backend: `gofmt` 깨끗, `go build ./...`, `go vet ./...`, `GOOS=windows go vet ./internal/service/ladoqueue/...` 통과. golangci-lint v2.13.2 0 issues(처음 돌린 결과 6건: errorlint 3, rowserrcheck·sqlclosecheck 각 1, unparam 1을 고침).
+- race(격리 HOME): ladoqueue·ladotask·ladoproject·ladoverify·ladogate·session_manager·domain·httpd·daemon `GO_RACE_OK`, sqlite·store는 아래.
+- frontend: `typecheck`·`typecheck:e2e` 통과(처음엔 스키마 이름과 옛 테스트 고정값의 새 필드 누락으로 실패해 고침). vitest 537 파일 중 1건(`browser-history-store.test.ts`)이 race 테스트와 함께 돌 때 20초 시간 초과로 실패했고, 단독 재실행은 통과했다. 렌더러 smoke 96건 중 채팅 스펙 7건이 부하에서 실패했고, 그 스펙만 다시 돌리면 8건 모두 통과했다(플랜이 예상한 불안정).
+- gitleaks v7.4.0(CI 와 같은 방식, `origin/main..HEAD` 커밋): 누출 없음. 게이트 스크립트의 기본 바이너리 경로에는 바이너리가 없어 `/tmp/lrf-tools/gitleaks` 를 썼다.
+- `test:browser-postcondition-integration` 은 `xvfb-run` 이 없어 로컬에서 돌리지 못했다(빈칸).
+- `go.work.sum` 변경 없음.
 
 ## 랩 확인 (2026-10-29)
 
