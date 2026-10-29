@@ -54,7 +54,15 @@ const (
 	LadoEnforcementValidator    LadoEnforcement = "validator"
 	LadoEnforcementToolPolicy   LadoEnforcement = "tool_policy"
 	LadoEnforcementWorkflowGate LadoEnforcement = "workflow_gate"
+	// LadoEnforcementPlanRole makes a rule a plan worker role's instructions
+	// (docs/LJY-PRD/TDD.md §5.1): its text reaches the plan worker sessions of
+	// that role only, never an execution, and the rule stays out of rule
+	// snapshots, so editing it changes no approval.
+	LadoEnforcementPlanRole LadoEnforcement = "plan_role"
 )
+
+// LadoRuleCategoryPlanning is the category of the plan worker roles' rules.
+const LadoRuleCategoryPlanning = "planning"
 
 // LadoStrength is how firmly a rule holds, which follows from its
 // enforcement (docs/LJY-PRD/HARNESS.md §6).
@@ -97,6 +105,11 @@ const (
 	// LadoProtectedPathsConfig names the paths a PR changes only when its
 	// approved plan names them.
 	LadoRuleProtectedPaths LadoRuleID = "paths.protected"
+	// LadoRulePlanDesigner and LadoRulePlanCritic are the instructions of the
+	// plan workers' designer and critic (LadoEnforcementPlanRole). They are
+	// global rules the developer edits like any other.
+	LadoRulePlanDesigner LadoRuleID = "plan.role.designer"
+	LadoRulePlanCritic   LadoRuleID = "plan.role.critic"
 )
 
 // LadoRuleContent is what one rule version says (docs/LJY-PRD/HARNESS.md
@@ -173,6 +186,21 @@ func (c LadoRuleContent) Strength() LadoStrength {
 // Has reports whether the rule uses the enforcement class.
 func (c LadoRuleContent) Has(e LadoEnforcement) bool {
 	return slices.Contains(c.Enforcement, e)
+}
+
+// PlanRole returns the plan worker role whose instructions the rule holds, and
+// whether it is a role's rule.
+func (c LadoRuleContent) PlanRole(id LadoRuleID) (LadoPlanRole, bool) {
+	if !c.Has(LadoEnforcementPlanRole) {
+		return "", false
+	}
+	switch id {
+	case LadoRulePlanDesigner:
+		return LadoPlanRoleDesigner, true
+	case LadoRulePlanCritic:
+		return LadoPlanRoleCritic, true
+	}
+	return "", false
 }
 
 // LadoRuleVersion is one version of a rule. Versions never change; an edit

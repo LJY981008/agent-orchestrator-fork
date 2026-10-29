@@ -145,16 +145,31 @@ type LadoExecutionResponse struct {
 // LadoDispatchSettingsResponse is the dispatcher's settings for every
 // project.
 type LadoDispatchSettingsResponse struct {
-	MaxConcurrent     int        `json:"maxConcurrent" minimum:"1" maximum:"8" description:"How many executions run at once across projects. Each project has its own cap too."`
-	MaxRunMinutes     int        `json:"maxRunMinutes" enum:"[0,60,120,240,480,720,1440]" description:"How long an execution may run before LADO stops it; 0 means no limit."`
-	HoldOnMemoryTight bool       `json:"holdOnMemoryTight" description:"Keep queued work waiting while memory pressure is tight."`
-	UpdatedAt         *time.Time `json:"updatedAt,omitempty" description:"When the settings last changed; omitted while the defaults apply."`
+	MaxConcurrent     int                       `json:"maxConcurrent" minimum:"1" maximum:"8" description:"How many executions run at once across projects. Each project has its own cap too."`
+	MaxRunMinutes     int                       `json:"maxRunMinutes" enum:"[0,60,120,240,480,720,1440]" description:"How long an execution may run before LADO stops it; 0 means no limit."`
+	HoldOnMemoryTight bool                      `json:"holdOnMemoryTight" description:"Keep queued work and plan requests waiting while memory pressure is tight."`
+	MaxPlanWorkers    int                       `json:"maxPlanWorkers" minimum:"1" maximum:"8" description:"How many plan requests run their plan workers at once across projects, apart from the executions' caps; a designer and its critic count as one."`
+	PlanReview        LadoPlanReviewSettingsDTO `json:"planReview" description:"When LADO skips the review of a plan worker's draft."`
+	UpdatedAt         *time.Time                `json:"updatedAt,omitempty" description:"When the settings last changed; omitted while the defaults apply."`
 }
 
-// UpdateLadoDispatchSettingsRequest replaces the dispatch settings. Every
-// field is required; the change needs no presence proof.
+// LadoPlanReviewSettingsDTO says when LADO skips the review of a draft: with
+// skip on, a plan with at most maxPaths affected paths that neither declares
+// nor, by the patterns, touches a database schema, an external API,
+// authentication or data deletion.
+type LadoPlanReviewSettingsDTO struct {
+	Skip     bool                `json:"skip" description:"Skip the review of small plans; off reviews every draft."`
+	MaxPaths int                 `json:"maxPaths" minimum:"1" maximum:"20" description:"The most affected paths a plan may name and skip the review."`
+	Patterns map[string][]string `json:"patterns" description:"Globs that infer a change kind (db_schema, external_api, auth, data_deletion) from a plan's affected paths."`
+}
+
+// UpdateLadoDispatchSettingsRequest replaces the dispatch settings. The
+// executions' fields are required; the plan worker fields keep their values
+// when omitted. The change needs no presence proof.
 type UpdateLadoDispatchSettingsRequest struct {
-	MaxConcurrent     *int  `json:"maxConcurrent" nullable:"false" minimum:"1" maximum:"8"`
-	MaxRunMinutes     *int  `json:"maxRunMinutes" nullable:"false" enum:"[0,60,120,240,480,720,1440]"`
-	HoldOnMemoryTight *bool `json:"holdOnMemoryTight" nullable:"false"`
+	MaxConcurrent     *int                       `json:"maxConcurrent" nullable:"false" minimum:"1" maximum:"8"`
+	MaxRunMinutes     *int                       `json:"maxRunMinutes" nullable:"false" enum:"[0,60,120,240,480,720,1440]"`
+	HoldOnMemoryTight *bool                      `json:"holdOnMemoryTight" nullable:"false"`
+	MaxPlanWorkers    *int                       `json:"maxPlanWorkers,omitempty" minimum:"1" maximum:"8"`
+	PlanReview        *LadoPlanReviewSettingsDTO `json:"planReview,omitempty"`
 }

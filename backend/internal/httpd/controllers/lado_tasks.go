@@ -31,6 +31,8 @@ type LadoTaskService interface {
 	Plans(ctx context.Context, id domain.LadoTaskID) (ladotask.PlanHistory, error)
 	Plan(ctx context.Context, revisionID domain.LadoPlanRevisionID) (ladotask.PlanView, error)
 	ApprovePlan(ctx context.Context, revisionID domain.LadoPlanRevisionID, sha256, policySHA256 string, proof domain.LadoPresenceProof) (domain.LadoPlanApproval, error)
+	SubmitPlan(ctx context.Context, in ladotask.SubmitPlanInput) (domain.LadoPlanRequest, error)
+	SubmitCritique(ctx context.Context, in ladotask.SubmitCritiqueInput) (domain.LadoPlanCritique, error)
 }
 
 const (

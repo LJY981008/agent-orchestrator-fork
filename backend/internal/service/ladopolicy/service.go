@@ -351,6 +351,8 @@ func (s *Service) Update(ctx context.Context, id domain.LadoRuleID, in UpdateInp
 		return ChangeResult{}, apierr.Invalid("LADO_PROTECTED_PATHS_INVALID", "Only the protected paths rule has paths.", map[string]any{"rule": string(id)})
 	case in.BaseVersion != rule.Version.Number:
 		return ChangeResult{}, ruleChanged(in.BaseVersion)
+	case rule.Version.Content.Has(domain.LadoEnforcementPlanRole) && (in.Archived != nil || in.Category != nil || in.Conflicts != nil):
+		return ChangeResult{}, planRoleFixed(id)
 	}
 	now := s.now()
 	if in.CeilingMode != nil {
@@ -599,6 +601,8 @@ func (s *Service) SetBinding(ctx context.Context, in BindingInput) (ChangeResult
 		return ChangeResult{}, ruleNotFound(in.RuleID)
 	case rule.Protected:
 		return ChangeResult{}, ruleProtected(rule.ID)
+	case rule.Version.Content.Has(domain.LadoEnforcementPlanRole):
+		return ChangeResult{}, planRoleFixed(rule.ID)
 	case !rule.ArchivedAt.IsZero():
 		return ChangeResult{}, apierr.Conflict("LADO_RULE_ARCHIVED", "This rule is archived. Unarchive it first.", map[string]any{"rule": string(rule.ID)})
 	}
@@ -813,6 +817,36 @@ func (s *Service) CurrentSHA256(ctx context.Context, task domain.LadoTask) (stri
 		return "", err
 	}
 	return r.SHA256, nil
+}
+
+// Summary is what a plan worker learns of the rules the task's worker follows
+// now (ladotask.Policy): each rule that is on, with the text the worker gets,
+// the permission ceiling and the protected paths. It resolves the rules
+// without a plan, which a plan worker has yet to write.
+func (s *Service) Summary(ctx context.Context, task domain.LadoTask) (domain.LadoRuleSummary, error) {
+	r, _, err := s.resolveTask(ctx, task, domain.LadoPlanRevision{})
+	if err != nil {
+		return domain.LadoRuleSummary{}, err
+	}
+	summary := domain.LadoRuleSummary{Ceiling: r.Ceiling}
+	for _, e := range r.Entries {
+		if !e.On {
+			continue
+		}
+		content := e.Rule.Version.Content
+		item := domain.LadoRuleSummaryItem{Name: content.Name}
+		if content.Has(domain.LadoEnforcementPrompt) {
+			item.Instruction = content.Instruction
+		}
+		summary.Rules = append(summary.Rules, item)
+		if e.Rule.ID == domain.LadoRuleProtectedPaths {
+			var paths domain.LadoProtectedPathsConfig
+			if json.Unmarshal(content.Config, &paths) == nil {
+				summary.ProtectedPaths = paths.Globs
+			}
+		}
+	}
+	return summary, nil
 }
 
 // CurrentSHA256s is CurrentSHA256 for many tasks, as a task list needs it:
@@ -1244,6 +1278,13 @@ func ruleNotFound(id domain.LadoRuleID) error {
 func ruleProtected(id domain.LadoRuleID) error {
 	return apierr.New(apierr.KindForbidden, "LADO_RULE_PROTECTED",
 		"This rule is protected: it is always on, and only the permission ceiling's mode and the protected paths can change.", map[string]any{"rule": string(id)})
+}
+
+// planRoleFixed refuses what a plan worker role's rule does not take: a
+// binding, archiving, another category or conflicts. Its name and text change.
+func planRoleFixed(id domain.LadoRuleID) error {
+	return apierr.Conflict("LADO_RULE_PLAN_ROLE", "A plan worker role's instructions always apply to plan workers: edit their name or text instead.",
+		map[string]any{"rule": string(id)})
 }
 
 func ruleChanged(base int) error {

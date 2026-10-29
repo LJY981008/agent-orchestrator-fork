@@ -19,6 +19,17 @@ func (s *Service) SetWorkGate(gate ports.WorkGate) {
 	s.workGate = gate
 }
 
+// ladoReadOnly reports whether LADO keeps a session read-only: a plan worker
+// (docs/LJY-PRD/TDD.md §5.1), whose Chat provider then runs in its read-only
+// sandbox as a reviewer's does. The gate answers through an optional method,
+// so the worker gate's port stays as it is.
+func (s *Service) ladoReadOnly(ctx context.Context, id domain.SessionID) bool {
+	gate, ok := s.workGate.(interface {
+		ReadOnlySession(context.Context, domain.SessionID) bool
+	})
+	return ok && id != "" && gate.ReadOnlySession(ctx, id)
+}
+
 func (s *Service) authorizeLadoMessage(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) error {
 	if s.workGate == nil {
 		return nil

@@ -228,6 +228,7 @@ func NewRootCommand(deps Deps) *cobra.Command {
 	root.AddCommand(newReviewCommand(ctx))
 	root.AddCommand(newAutomationCommand(ctx))
 	root.AddCommand(newCueCommand(ctx))
+	root.AddCommand(newLadoCommand(ctx)) // LADO fork
 	root.AddCommand(newCompletionCommand())
 	root.AddCommand(newVersionCommand())
 

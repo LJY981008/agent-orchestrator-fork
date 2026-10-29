@@ -35,6 +35,7 @@ var routineInternalCLICommands = []string{
 	"ao unreal-provider",
 	"ao codex-login",
 	"ao claude-login",
+	"ao lado", // LADO fork: what LADO's plan workers submit
 }
 
 // CLIActorType infers the actor for legacy loopback CLI telemetry requests that

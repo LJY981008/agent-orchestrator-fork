@@ -55,7 +55,10 @@ type LadoTask struct {
 // covers, and the rules of that approval then and now.
 type LadoTaskPlan struct {
 	Request LadoPlanRequest
-	Latest  LadoPlanRevision
+	// Critique is the newest review of Request's draft, zero when it has
+	// none.
+	Critique LadoPlanCritique
+	Latest   LadoPlanRevision
 	// Approval is the newest approval of any of the task's revisions. It is
 	// valid only while it covers the latest revision with that revision's
 	// sha256 (docs/LJY-PRD/TDD.md §3.2).

@@ -29,7 +29,10 @@ func (m *Manager) SetLadoSetupHome(home ports.LadoSetupHome) {
 // applyLadoSetupHome points a Claude Code launch environment at the session's
 // LADO config home. It runs after augmentAgentRuntimeEnv, whose setup-token
 // injection skips a launch that names CLAUDE_CONFIG_DIR. An error fails the
-// launch rather than start the session without its managed setup.
+// launch rather than start the session without its managed setup. A LADO
+// plan worker's environment is marked too (domain.LadoPlanWorkerEnv): AO's
+// hook command then decides each of its tool calls, and the Chat driver passes
+// its tool lists (docs/LJY-PRD/TDD.md §5.1).
 func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id domain.SessionID, env map[string]string) error {
 	if m.ladoSetupHome == nil || env == nil || !m.isClaudeCodeAgent(agent) {
 		return nil
@@ -37,6 +40,9 @@ func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id 
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
 		return fmt.Errorf("LADO setup home: %w", err)
+	}
+	if domain.IsLadoPlanWorkerClientRequestID(rec.ClientRequestID) {
+		setProtectedEnv(env, domain.LadoPlanWorkerEnv, "1", envKeysCaseInsensitive)
 	}
 	vars, err := m.ladoSetupHome.PrepareClaudeHome(ctx, ports.LadoSetupHomeInput{
 		SessionID:       id,

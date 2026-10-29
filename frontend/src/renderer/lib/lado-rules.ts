@@ -37,6 +37,9 @@ export const LADO_RULE_INTEGRATION_APPROVAL = "integration.approval.required";
 export const LADO_RULE_NO_DIRECT_WRITE = "git.protected_branch.no_direct_write";
 export const LADO_RULE_TESTS_MUST_PASS = "test.command.must_pass";
 export const LADO_RULE_PROTECTED_PATHS = LADO_PROTECTED_PATHS_RULE_ID;
+// What LADO tells its plan workers (docs/LJY-PRD/TDD.md §5.1).
+export const LADO_RULE_PLAN_DESIGNER = "plan.role.designer";
+export const LADO_RULE_PLAN_CRITIC = "plan.role.critic";
 
 type BuiltinKeys = { seedName: string; name: MessageKey; description: MessageKey };
 
@@ -82,6 +85,16 @@ const builtinRules: Partial<Record<string, BuiltinKeys>> = {
 		seedName: "Protected paths",
 		name: "lado.rules.builtin.protectedPaths.name",
 		description: "lado.rules.builtin.protectedPaths.description",
+	},
+	[LADO_RULE_PLAN_DESIGNER]: {
+		seedName: "Plan designer",
+		name: "lado.rules.builtin.planDesigner.name",
+		description: "lado.rules.builtin.planDesigner.description",
+	},
+	[LADO_RULE_PLAN_CRITIC]: {
+		seedName: "Plan critic",
+		name: "lado.rules.builtin.planCritic.name",
+		description: "lado.rules.builtin.planCritic.description",
 	},
 };
 

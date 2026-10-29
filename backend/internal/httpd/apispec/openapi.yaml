@@ -3654,6 +3654,122 @@ paths:
         again, its attempts started over; needs no presence proof
       tags:
       - lado
+  /api/v1/lado/plan-requests/{requestId}/critique:
+    post:
+      operationId: submitLadoPlanCritique
+      parameters:
+      - description: LADO plan request id.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: LADO plan request id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitLadoCritiqueRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoPlanCritiqueResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Submit a critic's findings on a plan worker's draft; only the request's
+        running critic session may
+      tags:
+      - lado
+  /api/v1/lado/plan-requests/{requestId}/submit:
+    post:
+      operationId: submitLadoPlan
+      parameters:
+      - description: LADO plan request id.
+        in: path
+        name: requestId
+        required: true
+        schema:
+          description: LADO plan request id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SubmitLadoPlanRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoPlanRequestResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Submit a plan worker's draft or final plan; only the request's designer
+        session may
+      tags:
+      - lado
   /api/v1/lado/plans/{revisionId}:
     get:
       operationId: getLadoPlan
@@ -5444,8 +5560,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Pin the issue with its trusted comments and ask the project's orchestrator
-        for a plan or a changed plan
+      summary: Pin the issue with its trusted comments and ask a plan worker for a
+        plan or a changed plan
       tags:
       - lado
   /api/v1/lado/tasks/{taskId}/plans:
@@ -18076,7 +18192,7 @@ components:
             request.
           type: string
         sourceCommentId:
-          description: An issue comment that holds the plan; the orchestrator converts
+          description: An issue comment that holds the plan; the plan worker converts
             it faithfully.
           type: string
       type: object
@@ -19387,11 +19503,19 @@ components:
     LadoDispatchSettingsResponse:
       properties:
         holdOnMemoryTight:
-          description: Keep queued work waiting while memory pressure is tight.
+          description: Keep queued work and plan requests waiting while memory pressure
+            is tight.
           type: boolean
         maxConcurrent:
           description: How many executions run at once across projects. Each project
             has its own cap too.
+          maximum: 8
+          minimum: 1
+          type: integer
+        maxPlanWorkers:
+          description: How many plan requests run their plan workers at once across
+            projects, apart from the executions' caps; a designer and its critic count
+            as one.
           maximum: 8
           minimum: 1
           type: integer
@@ -19407,6 +19531,9 @@ components:
           - 720
           - 1440
           type: integer
+        planReview:
+          $ref: '#/components/schemas/LadoPlanReviewSettings'
+          description: When LADO skips the review of a plan worker's draft.
         updatedAt:
           description: When the settings last changed; omitted while the defaults
             apply.
@@ -19418,6 +19545,8 @@ components:
       - maxConcurrent
       - maxRunMinutes
       - holdOnMemoryTight
+      - maxPlanWorkers
+      - planReview
       type: object
     LadoEffectiveAgentResponse:
       properties:
@@ -20032,7 +20161,7 @@ components:
         id:
           type: string
         included:
-          description: A plan request pins this comment for the orchestrator.
+          description: A plan request pins this comment for the plan worker.
           type: boolean
         url:
           type: string
@@ -20167,6 +20296,12 @@ components:
         body:
           description: The Markdown after the front matter.
           type: string
+        changeKinds:
+          description: 'The changes the plan declares: db_schema, external_api, auth
+            or data_deletion.'
+          items:
+            type: string
+          type: array
         permissionCeiling:
           type: string
         planSource:
@@ -20192,13 +20327,113 @@ components:
       - affectedPaths
       - testCommands
       - reviewRequired
+      - changeKinds
       - body
+      type: object
+    LadoPlanCritiqueResponse:
+      properties:
+        attempt:
+          description: 1 and 2 for the critic sessions, 0 for a skipped review.
+          type: integer
+        failureReason:
+          description: Why the critic gave no result.
+          type: string
+        findings:
+          items:
+            $ref: '#/components/schemas/LadoPlanFindingResponse'
+          type: array
+        finishedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        requestId:
+          type: string
+        sessionId:
+          description: The critic session.
+          type: string
+        skipReason:
+          description: Why LADO skipped the review.
+          type: string
+        startedAt:
+          format: date-time
+          type: string
+        state:
+          enum:
+          - running
+          - done
+          - failed
+          - skipped
+          type: string
+      required:
+      - requestId
+      - attempt
+      - state
+      - findings
+      - startedAt
+      type: object
+    LadoPlanFindingInput:
+      properties:
+        failure_scenario:
+          type: string
+        id:
+          type: string
+        severity:
+          enum:
+          - P1
+          - major
+          - minor
+          type: string
+        suggestion:
+          type: string
+        title:
+          type: string
+        where:
+          type: string
+      required:
+      - id
+      - severity
+      - title
+      type: object
+    LadoPlanFindingResponse:
+      properties:
+        answer:
+          description: How the plan's review section answers the finding; omitted
+            when it does not.
+          enum:
+          - addressed
+          - not_addressed
+          type: string
+        failureScenario:
+          type: string
+        id:
+          type: string
+        severity:
+          enum:
+          - P1
+          - major
+          - minor
+          type: string
+        suggestion:
+          type: string
+        title:
+          type: string
+        where:
+          type: string
+      required:
+      - id
+      - severity
+      - title
       type: object
     LadoPlanHistoryResponse:
       properties:
         approvals:
           items:
             $ref: '#/components/schemas/LadoPlanApprovalResponse'
+          type: array
+        critiques:
+          items:
+            $ref: '#/components/schemas/LadoPlanCritiqueResponse'
           type: array
         requests:
           items:
@@ -20212,11 +20447,73 @@ components:
       - requests
       - revisions
       - approvals
+      - critiques
+      type: object
+    LadoPlanMetricsResponse:
+      properties:
+        addressed:
+          description: P1 and major findings the plan says it took.
+          type: integer
+        changeKinds:
+          items:
+            type: string
+          type: array
+        critiqueMs:
+          description: Over every critic session of the review.
+          format: int64
+          type: integer
+        designMs:
+          description: From the designer's start to its draft.
+          format: int64
+          type: integer
+        major:
+          type: integer
+        minor:
+          type: integer
+        notAddressed:
+          description: P1 and major findings the plan says it did not take, with a
+            reason.
+          type: integer
+        p1:
+          type: integer
+        review:
+          enum:
+          - done
+          - skipped
+          - failed
+          - none
+          type: string
+        reviseMs:
+          description: From the review's result to the final plan.
+          format: int64
+          type: integer
+        sessions:
+          items:
+            $ref: '#/components/schemas/LadoPlanSessionUsageResponse'
+          type: array
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - designMs
+      - critiqueMs
+      - reviseMs
+      - review
+      - p1
+      - major
+      - minor
+      - addressed
+      - notAddressed
+      - sessions
+      - changeKinds
+      - updatedAt
       type: object
     LadoPlanProblemResponse:
       properties:
         code:
-          description: Stable problem code the app translates.
+          description: 'Stable problem code the app translates. plan_review_missing:
+            a plan worker''s plan has no review section; plan_review_unaddressed:
+            it does not answer the P1 and major findings that detail lists.'
           enum:
           - too_large
           - not_text
@@ -20229,6 +20526,8 @@ components:
           - unknown_source_comment
           - wrong_source
           - unknown_base_ref
+          - plan_review_missing
+          - plan_review_unaddressed
           type: string
         detail:
           description: The offending value, or the parser's message.
@@ -20254,30 +20553,67 @@ components:
         deliveryError:
           type: string
         failedAt:
-          description: When LADO stopped trying to deliver the request.
+          description: 'When the request failed: LADO stopped delivering it to the
+            orchestrator, or its plan worker failed.'
           format: date-time
           type:
           - "null"
           - string
+        failureCode:
+          enum:
+          - plan_worker_spawn_failed
+          - plan_worker_no_plan
+          - plan_worker_timed_out
+          - plan_worker_agent_unsupported
+          - replaced
+          type: string
         id:
+          type: string
+        kind:
+          description: 'Who writes the plan: a plan worker, or, for a request made
+            before plan workers, the orchestrator.'
+          enum:
+          - orchestrator
+          - worker
           type: string
         note:
           description: What the developer asked to change.
+          type: string
+        phase:
+          description: Where a plan worker request is; omitted for a request to an
+            orchestrator.
+          enum:
+          - waiting
+          - designing
+          - critiquing
+          - revising
+          - submitted
+          - fixing
+          - done
+          - failed
+          - replaced
           type: string
         requestedAt:
           format: date-time
           type: string
         sessionId:
-          description: The orchestrator session asked for the plan.
+          description: 'The session that writes the plan: the orchestrator asked,
+            or the plan worker''s designer; empty while a plan worker waits to start.'
           type: string
         sourceCommentId:
           description: The issue comment the developer named as the plan.
           type: string
         taskId:
           type: string
+        waitingReason:
+          enum:
+          - plan_worker_capacity
+          - memory_tight
+          type: string
       required:
       - id
       - taskId
+      - kind
       - sessionId
       - requestedAt
       - deliveryAttempts
@@ -20290,6 +20626,8 @@ components:
         content:
           description: The pinned plan file; empty when the pin is missing.
           type: string
+        critique:
+          $ref: '#/components/schemas/LadoPlanCritiqueResponse'
         latest:
           description: This is the task's newest revision.
           type: boolean
@@ -20307,6 +20645,31 @@ components:
       - latest
       - approved
       type: object
+    LadoPlanReviewSettings:
+      properties:
+        maxPaths:
+          description: The most affected paths a plan may name and skip the review.
+          maximum: 20
+          minimum: 1
+          type: integer
+        patterns:
+          additionalProperties:
+            items:
+              type: string
+            type: array
+          description: Globs that infer a change kind (db_schema, external_api, auth,
+            data_deletion) from a plan's affected paths.
+          type:
+          - object
+          - "null"
+        skip:
+          description: Skip the review of small plans; off reviews every draft.
+          type: boolean
+      required:
+      - skip
+      - maxPaths
+      - patterns
+      type: object
     LadoPlanRevisionResponse:
       properties:
         baseRef:
@@ -20322,6 +20685,8 @@ components:
         issueSnapshotSha256:
           description: The pinned issue snapshot the plan was made from.
           type: string
+        metrics:
+          $ref: '#/components/schemas/LadoPlanMetricsResponse'
         number:
           type: integer
         problems:
@@ -20383,6 +20748,106 @@ components:
       - source
       - valid
       - createdAt
+      type: object
+    LadoPlanSessionUsageResponse:
+      properties:
+        cacheReadTokens:
+          description: The part of inputTokens read from the provider's cache.
+          format: int64
+          type: integer
+        cacheWriteTokens:
+          description: The part of inputTokens written to the provider's cache.
+          format: int64
+          type: integer
+        costNanos:
+          description: AO's cost estimate in nano dollars; omitted when AO priced
+            none of the session's events.
+          type:
+          - "null"
+          - integer
+        inputTokens:
+          description: 'All input, as AO counts it: cache reads and writes included.'
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        role:
+          enum:
+          - design
+          - critique
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - role
+      - inputTokens
+      - outputTokens
+      - cacheReadTokens
+      - cacheWriteTokens
+      type: object
+    LadoPlanWorkerResponse:
+      properties:
+        criticSessionId:
+          description: The newest critic session of the draft's review, once one started.
+          type: string
+        designerSessionId:
+          description: The designer session, once it started.
+          type: string
+        failureCode:
+          description: Why the request failed, for the app to translate.
+          enum:
+          - plan_worker_spawn_failed
+          - plan_worker_no_plan
+          - plan_worker_timed_out
+          - plan_worker_agent_unsupported
+          - replaced
+          type: string
+        phase:
+          description: 'waiting: for a plan worker slot or for memory; designing:
+            the designer drafts the plan; critiquing: a critic reviews the draft,
+            or LADO decides to skip the review; revising: the designer answers the
+            review; submitted: LADO pins the final plan; fixing: the designer fixes
+            the pinned plan''s problems, once; done: the plan is pinned and the sessions
+            stopped; failed and replaced end the request.'
+          enum:
+          - waiting
+          - designing
+          - critiquing
+          - revising
+          - submitted
+          - fixing
+          - done
+          - failed
+          - replaced
+          type: string
+        requestId:
+          type: string
+        review:
+          description: How the newest review of the draft went; omitted before one.
+          enum:
+          - running
+          - done
+          - failed
+          - skipped
+          type: string
+        startedAt:
+          description: When the designer started.
+          format: date-time
+          type:
+          - "null"
+          - string
+        waitingReason:
+          description: 'Why the request waits: every plan worker slot of the Runs
+            settings is taken, or memory is tight.'
+          enum:
+          - plan_worker_capacity
+          - memory_tight
+          type: string
+      required:
+      - requestId
+      - phase
       type: object
     LadoPolicyProblemResponse:
       properties:
@@ -20736,7 +21201,8 @@ components:
           type: string
         enforcement:
           description: 'How LADO applies the rule: prompt, validator, tool_policy
-            or workflow_gate.'
+            or workflow_gate; plan_role for a plan worker role''s instructions, which
+            reach plan workers only.'
           items:
             type: string
           type: array
@@ -22305,10 +22771,11 @@ components:
         latest:
           $ref: '#/components/schemas/LadoPlanRevisionSummaryResponse'
         requestError:
-          description: Why LADO stopped delivering the newest request, when it did.
+          description: 'Why the newest request failed, when it did: the details behind
+            its failure code.'
           type: string
         requestPending:
-          description: A plan request waits for the orchestrator's plan.
+          description: The newest plan request still waits for its plan.
           type: boolean
         requestedAt:
           description: When the newest plan request was made.
@@ -22316,6 +22783,8 @@ components:
           type:
           - "null"
           - string
+        worker:
+          $ref: '#/components/schemas/LadoPlanWorkerResponse'
       required:
       - requestPending
       type: object
@@ -26359,6 +26828,35 @@ components:
       - sourceGenerationId
       - handoff
       type: object
+    SubmitLadoCritiqueRequest:
+      properties:
+        findings:
+          items:
+            $ref: '#/components/schemas/LadoPlanFindingInput'
+          type: array
+        sessionId:
+          description: The submitting session; it must be the request's running critic.
+          type: string
+      required:
+      - sessionId
+      - findings
+      type: object
+    SubmitLadoPlanRequest:
+      properties:
+        content:
+          description: The whole plan file.
+          type: string
+        draft:
+          description: The draft LADO reviews; without it the plan is final and LADO
+            pins it.
+          type: boolean
+        sessionId:
+          description: The submitting session; it must be the request's designer.
+          type: string
+      required:
+      - sessionId
+      - content
+      type: object
     SubmitReviewInput:
       properties:
         body:
@@ -26735,6 +27233,12 @@ components:
           maximum: 8
           minimum: 1
           type: integer
+        maxPlanWorkers:
+          maximum: 8
+          minimum: 1
+          type:
+          - "null"
+          - integer
         maxRunMinutes:
           enum:
           - 0
@@ -26745,6 +27249,8 @@ components:
           - 720
           - 1440
           type: integer
+        planReview:
+          $ref: '#/components/schemas/LadoPlanReviewSettings'
       required:
       - maxConcurrent
       - maxRunMinutes

@@ -58,6 +58,22 @@ type fakeLadoTaskService struct {
 	gotSHA       string
 	gotPolicySHA string
 	gotProof     domain.LadoPresenceProof
+	// Plan worker routes.
+	critique    domain.LadoPlanCritique
+	gotSubmit   ladotask.SubmitPlanInput
+	gotCritique ladotask.SubmitCritiqueInput
+}
+
+func (f *fakeLadoTaskService) SubmitPlan(_ context.Context, in ladotask.SubmitPlanInput) (domain.LadoPlanRequest, error) {
+	f.calls++
+	f.gotSubmit = in
+	return f.request, f.err
+}
+
+func (f *fakeLadoTaskService) SubmitCritique(_ context.Context, in ladotask.SubmitCritiqueInput) (domain.LadoPlanCritique, error) {
+	f.calls++
+	f.gotCritique = in
+	return f.critique, f.err
 }
 
 func (f *fakeLadoTaskService) View(_ context.Context, id domain.LadoTaskID) (ladotask.TaskView, error) {

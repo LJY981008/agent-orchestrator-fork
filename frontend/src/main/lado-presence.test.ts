@@ -54,7 +54,7 @@ function planResponse(overrides: PlanOverrides = {}): components["schemas"]["Lad
 		approved: false,
 		content: "---\ntask: lado-task-1\n---\n",
 		latest: overrides.latest ?? true,
-		plan: { acceptanceCriteria: [], affectedPaths: [], body: "", reviewRequired: false, steps: [], testCommands: [] },
+		plan: { acceptanceCriteria: [], affectedPaths: [], body: "", changeKinds: [], reviewRequired: false, steps: [], testCommands: [] },
 		revision: {
 			createdAt: "2026-10-20T00:00:00Z",
 			id: "lado-plan-1",

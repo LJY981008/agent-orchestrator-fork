@@ -3,7 +3,9 @@
 // person or AO itself messages a worker. An execution, the worker LADO
 // dispatched, keeps the agent, interface and permission ceiling it was
 // approved with, and one LADO stopped for good is not restored. Client
-// request ids of the form lado:<entry>/<attempt> are the dispatcher's alone.
+// request ids of the form lado:<entry>/<attempt> are the dispatcher's alone,
+// and those of the form lado:plan/<request>/<role>/<attempt> LADO's plan
+// workers', which run read-only (docs/LJY-PRD/TDD.md §5.1).
 package ladogate
 
 import (
@@ -43,6 +45,13 @@ type Executions interface {
 	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
 }
 
+// PlanWorkers reads LADO's plan worker requests and the reviews of their
+// drafts.
+type PlanWorkers interface {
+	LadoPlanRequest(ctx context.Context, id domain.LadoPlanRequestID) (domain.LadoPlanRequest, bool, error)
+	LadoPlanCritique(ctx context.Context, id domain.LadoPlanRequestID, attempt int) (domain.LadoPlanCritique, bool, error)
+}
+
 // Gate implements ports.WorkGate. Every read error refuses the work.
 type Gate struct {
 	settings   Settings
@@ -50,6 +59,7 @@ type Gate struct {
 	grants     Grants
 	policies   Policies
 	executions Executions
+	plans      PlanWorkers
 }
 
 var _ ports.WorkGate = (*Gate)(nil)
@@ -60,12 +70,29 @@ func New(settings Settings, sessions Sessions, grants Grants, policies Policies,
 	return &Gate{settings: settings, sessions: sessions, grants: grants, policies: policies, executions: executions}
 }
 
+// SetPlanWorkers installs the reads of plan worker requests. The daemon calls
+// it with New; without it no plan worker starts.
+func (g *Gate) SetPlanWorkers(plans PlanWorkers) {
+	g.plans = plans
+}
+
 // AuthorizeSpawn refuses automations and every new worker in a LADO project
-// but the one LADO's dispatcher starts for the queue entry it holds;
-// orchestrators still start there. In every project, and outside them, a
-// LADO client request id needs the dispatcher's grant: the dispatcher takes
-// the session that holds one for its queue entry's worker.
+// but the one LADO's dispatcher starts for the queue entry it holds and the
+// plan workers LADO starts; orchestrators still start there. In every
+// project, and outside them, a LADO client request id needs LADO's grant: the
+// dispatcher takes the session that holds one for its queue entry's worker,
+// and a plan worker's id is granted only while LADO starts that session.
 func (g *Gate) AuthorizeSpawn(ctx context.Context, cfg ports.SpawnConfig) error {
+	if planWorker, granted, err := g.planWorkerGranted(ctx, cfg); err != nil {
+		return err
+	} else if planWorker {
+		if !granted {
+			return apierr.Conflict("LADO_PLAN_WORKER_REQUIRED",
+				"Client request ids that start with lado:plan/ are LADO's: only its plan loop starts plan workers with them.",
+				map[string]any{"projectId": string(cfg.ProjectID), "clientRequestId": cfg.ClientRequestID})
+		}
+		return nil
+	}
 	granted, err := g.granted(ctx, cfg)
 	if err != nil {
 		return err
@@ -133,6 +160,51 @@ func (g *Gate) granted(ctx context.Context, cfg ports.SpawnConfig) (bool, error)
 		return false, fmt.Errorf("LADO gate: %w", err)
 	}
 	return grant.Active && grant.ProjectID == cfg.ProjectID && grant.Hash == cfg.ClientRequestHash, nil
+}
+
+// planWorkerGranted reports whether the spawn is a plan worker's, and whether
+// LADO starts it now: its hash fits its client request id, it is a worker of
+// the project of an open plan worker request, and the request is starting
+// that attempt of its designer, or that attempt of a critic whose session is
+// not recorded yet.
+func (g *Gate) planWorkerGranted(ctx context.Context, cfg ports.SpawnConfig) (bool, bool, error) {
+	id, role, attempt, ok := domain.ParseLadoPlanWorkerClientRequestID(cfg.ClientRequestID)
+	if !ok {
+		return false, false, nil
+	}
+	if g.plans == nil || cfg.Kind != domain.KindWorker || cfg.ClientRequestHash != domain.LadoPlanWorkerHash(cfg.ClientRequestID) {
+		return true, false, nil
+	}
+	req, found, err := g.plans.LadoPlanRequest(ctx, id)
+	if err != nil {
+		return true, false, fmt.Errorf("LADO gate: read plan request %s: %w", id, err)
+	}
+	if !found || !req.Open() {
+		return true, false, nil
+	}
+	task, found, err := g.executions.LadoTask(ctx, req.TaskID)
+	if err != nil {
+		return true, false, fmt.Errorf("LADO gate: read task %s: %w", req.TaskID, err)
+	}
+	if !found || task.ProjectID != cfg.ProjectID {
+		return true, false, nil
+	}
+	if role == domain.LadoPlanRoleDesigner {
+		return true, req.WorkerStartedAt.IsZero() && req.WorkerAttempts == attempt, nil
+	}
+	critique, found, err := g.plans.LadoPlanCritique(ctx, id, attempt)
+	if err != nil {
+		return true, false, fmt.Errorf("LADO gate: read plan critique %s/%d: %w", id, attempt, err)
+	}
+	return true, found && critique.State == domain.LadoCritiqueRunning && critique.SessionID == "", nil
+}
+
+// ReadOnlySession reports whether a session must run read-only: a plan
+// worker. The Chat service then asks the provider for a read-only sandbox,
+// which Codex enforces. A session that cannot be read is not one.
+func (g *Gate) ReadOnlySession(ctx context.Context, target domain.SessionID) bool {
+	rec, found, err := g.sessions.GetSession(ctx, target)
+	return err == nil && found && domain.IsLadoPlanWorkerClientRequestID(rec.ClientRequestID)
 }
 
 // ClampTurnSettings lowers the approval of an execution's next turns to its
@@ -208,7 +280,8 @@ func (g *Gate) AuthorizeRestore(ctx context.Context, target domain.SessionID) er
 // execution reads whether target is an execution, a session started for a
 // queue entry, and what it keeps from the entry's rule snapshot. The session's
 // client request id finds the entry, so this holds from the spawn on, before
-// the dispatcher links the execution.
+// the dispatcher links the execution. A plan worker counts as one, with the
+// ceiling auto.
 func (g *Gate) execution(ctx context.Context, target domain.SessionID) (domain.LadoEntryPolicy, bool, error) {
 	rec, found, err := g.sessions.GetSession(ctx, target)
 	if err != nil {
@@ -216,6 +289,11 @@ func (g *Gate) execution(ctx context.Context, target domain.SessionID) (domain.L
 	}
 	if !found {
 		return domain.LadoEntryPolicy{}, false, nil
+	}
+	if domain.IsLadoPlanWorkerClientRequestID(rec.ClientRequestID) {
+		// A plan worker runs in auto at most, never bypass, and keeps its
+		// agent and interface, as an execution does.
+		return domain.LadoEntryPolicy{Ceiling: domain.PermissionModeAuto}, true, nil
 	}
 	policy, execution, err := g.policies.LadoEntryPolicyByClientRequest(ctx, rec.ClientRequestID)
 	if err != nil {

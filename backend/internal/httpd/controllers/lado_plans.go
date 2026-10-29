@@ -6,6 +6,7 @@ package controllers
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -80,14 +81,19 @@ func (c *LadoController) getPlan(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, LadoPlanResponse{
+	resp := LadoPlanResponse{
 		Task:     ladoTaskResponse(view.Task),
-		Revision: ladoPlanRevisionResponse(view.Revision),
+		Revision: ladoPlanRevisionWithMetrics(view.Revision, view.Metrics),
 		Content:  view.Content,
 		Plan:     ladoPlanContentResponse(view.Plan),
 		Latest:   view.Latest,
 		Approved: view.Approved,
-	})
+	}
+	if view.Critique.State != "" {
+		critique := ladoPlanCritiqueResponse(view.Critique, view.Plan.Body)
+		resp.Critique = &critique
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (c *LadoController) approvePlan(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +210,7 @@ func ladoTaskPlanResponse(plan domain.LadoTaskPlan) LadoTaskPlanResponse {
 		if !plan.Request.FailedAt.IsZero() {
 			resp.RequestError = plan.Request.DeliveryError
 		}
+		resp.Worker = ladoPlanWorkerResponse(plan.Request, plan.Critique)
 	}
 	if latest := plan.Latest; latest.ID != "" {
 		resp.Latest = &LadoPlanRevisionSummaryResponse{
@@ -237,11 +244,26 @@ func ladoPlanRevisionResponse(rev domain.LadoPlanRevision) LadoPlanRevisionRespo
 	}
 }
 
+// ladoPlanRevisionWithMetrics is a revision with what making it took.
+func ladoPlanRevisionWithMetrics(rev domain.LadoPlanRevision, metrics *domain.LadoPlanRevisionMetrics) LadoPlanRevisionResponse {
+	resp := ladoPlanRevisionResponse(rev)
+	resp.Metrics = ladoPlanMetricsResponse(metrics)
+	return resp
+}
+
 func ladoPlanRequestResponse(req domain.LadoPlanRequest) LadoPlanRequestResponse {
+	session := req.SessionID
+	if req.IsWorker() {
+		session = req.WorkerSession()
+	}
 	return LadoPlanRequestResponse{
 		ID:               string(req.ID),
 		TaskID:           string(req.TaskID),
-		SessionID:        string(req.SessionID),
+		Kind:             string(cmp.Or(req.Kind, domain.LadoPlanRequestOrchestrator)),
+		SessionID:        string(session),
+		Phase:            string(req.WorkerPhase()),
+		WaitingReason:    req.WaitingReason,
+		FailureCode:      req.FailureCode,
 		SourceCommentID:  req.SourceCommentID,
 		Note:             req.Note,
 		BasedOn:          string(req.BasedOn),
@@ -268,12 +290,20 @@ func ladoPlanHistoryResponse(history ladotask.PlanHistory) LadoPlanHistoryRespon
 		Requests:  make([]LadoPlanRequestResponse, 0, len(history.Requests)),
 		Revisions: make([]LadoPlanRevisionResponse, 0, len(history.Revisions)),
 		Approvals: make([]LadoPlanApprovalResponse, 0, len(history.Approvals)),
+		Critiques: make([]LadoPlanCritiqueResponse, 0, len(history.Critiques)),
+	}
+	for _, c := range history.Critiques {
+		resp.Critiques = append(resp.Critiques, ladoPlanCritiqueResponse(c, ""))
 	}
 	for _, req := range history.Requests {
 		resp.Requests = append(resp.Requests, ladoPlanRequestResponse(req))
 	}
 	for _, rev := range history.Revisions {
-		resp.Revisions = append(resp.Revisions, ladoPlanRevisionResponse(rev))
+		var metrics *domain.LadoPlanRevisionMetrics
+		if m, ok := history.Metrics[rev.ID]; ok {
+			metrics = &m
+		}
+		resp.Revisions = append(resp.Revisions, ladoPlanRevisionWithMetrics(rev, metrics))
 	}
 	for _, approval := range history.Approvals {
 		resp.Approvals = append(resp.Approvals, ladoPlanApprovalResponse(approval))
@@ -299,6 +329,7 @@ func ladoPlanContentResponse(plan domain.LadoPlan) LadoPlanContentResponse {
 		ReviewRequired:     plan.ReviewRequired,
 		Reviewer:           plan.Reviewer,
 		PlanSource:         plan.PlanSource,
+		ChangeKinds:        orEmpty(plan.ChangeKinds),
 		Body:               plan.Body,
 	}
 }

@@ -978,8 +978,8 @@ func TestDryRunWritesNothing(t *testing.T) {
 	if got := fx.rule(t, domain.LadoRuleKoreanCommits); got.Global != domain.LadoBindingOff {
 		t.Fatalf("Korean rule = %+v, want it still off", got)
 	}
-	if rules, err := fx.svc.List(ctx, true); err != nil || len(rules) != 9 {
-		t.Fatalf("List = %d rules, %v, want the 8 built-in and 1 user rule", len(rules), err)
+	if rules, err := fx.svc.List(ctx, true); err != nil || len(rules) != 11 {
+		t.Fatalf("List = %d rules, %v, want the 10 built-in and 1 user rule", len(rules), err)
 	}
 	// Asking for what is already so writes nothing either.
 	same, err := fx.svc.SetBinding(ctx, BindingInput{RuleID: user.ID, Scope: domain.LadoScopeGlobal, State: domain.LadoBindingOff})
@@ -1171,8 +1171,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		t.Fatalf("second EnsureBuiltins: %v", err)
 	}
 
-	if rows := fx.rows(t); rows.rules != 8 || rows.versions != 8 || rows.bindings != 8 {
-		t.Fatalf("rows = %+v, want 8 rules with one version and one binding each", rows)
+	if rows := fx.rows(t); rows.rules != 10 || rows.versions != 10 || rows.bindings != 10 {
+		t.Fatalf("rows = %+v, want 10 rules with one version and one binding each", rows)
 	}
 	var seeded []auditRow
 	for _, event := range fx.events(t) {
@@ -1180,8 +1180,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 			seeded = append(seeded, event)
 		}
 	}
-	if len(seeded) != 8 {
-		t.Fatalf("rule.created events = %+v, want 8", seeded)
+	if len(seeded) != 10 {
+		t.Fatalf("rule.created events = %+v, want 10", seeded)
 	}
 	for _, event := range seeded {
 		if event.Actor != "lado" || !reflect.DeepEqual(event.Payload, map[string]any{"version": float64(1), "builtin": true}) {
@@ -1189,8 +1189,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		}
 	}
 	rules, err := fx.svc.List(ctx, true)
-	if err != nil || len(rules) != 8 {
-		t.Fatalf("List = %+v, %v, want 8 rules", rules, err)
+	if err != nil || len(rules) != 10 {
+		t.Fatalf("List = %+v, %v, want 10 rules", rules, err)
 	}
 	global := map[domain.LadoRuleID]domain.LadoBindingState{
 		domain.LadoRulePlanApproval:        domain.LadoBindingOn,
@@ -1201,6 +1201,8 @@ func TestEnsureBuiltinsSeedsOnce(t *testing.T) {
 		domain.LadoRuleNoDirectWrite:       domain.LadoBindingOn,
 		domain.LadoRuleTestsMustPass:       domain.LadoBindingOn,
 		domain.LadoRuleProtectedPaths:      domain.LadoBindingOn,
+		domain.LadoRulePlanDesigner:        domain.LadoBindingOn,
+		domain.LadoRulePlanCritic:          domain.LadoBindingOn,
 	}
 	for _, view := range rules {
 		rule := view.Rule
@@ -1308,8 +1310,8 @@ func TestEnsureBuiltinsUpgradesAnUnchangedKoreanRule(t *testing.T) {
 			t.Fatalf("upgrade events = %+v, want one by lado for the Korean rule with %v", upgrades, want)
 		}
 		// The gates of a pull request are seeded on the same start.
-		if rows := fx.rows(t); rows.rules != 8 || rows.versions != 9 {
-			t.Fatalf("rows = %+v, want 8 rules and 9 versions", rows)
+		if rows := fx.rows(t); rows.rules != 10 || rows.versions != 11 {
+			t.Fatalf("rows = %+v, want 10 rules and 11 versions", rows)
 		}
 		view, err := fx.svc.Effective(ctx, EffectiveInput{ProjectID: "demo"})
 		if err != nil || !slices.ContainsFunc(view.Content.Validators, func(v SnapshotValidator) bool { return v.Kind == ValidatorCommitMessageLocale }) {
@@ -1345,7 +1347,7 @@ func TestEnsureBuiltinsUpgradesAnUnchangedKoreanRule(t *testing.T) {
 		if upgrades := fx.upgradeEvents(t); len(upgrades) != 0 {
 			t.Fatalf("upgrade events = %+v, want none", upgrades)
 		}
-		if rows := fx.rows(t); rows.rules != 8 {
+		if rows := fx.rows(t); rows.rules != 10 {
 			t.Fatalf("rows = %+v, want the gates seeded next to the kept rule", rows)
 		}
 	})

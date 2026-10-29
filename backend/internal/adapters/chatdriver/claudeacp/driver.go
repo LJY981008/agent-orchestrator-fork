@@ -320,15 +320,15 @@ func validateClaudeACPExecutable(binary, goos string) error {
 func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	standing := strings.TrimSpace(cfg.SystemPrompt)
 	if standing == "" {
-		return nil
+		return withLadoPlanWorkerTools(cfg, nil) // LADO fork
 	}
 	// Append AO's standing instructions to Claude Code's own prompt. Replacing
 	// the preset would discard Claude's native coding/tool instructions.
-	return map[string]any{
+	return withLadoPlanWorkerTools(cfg, map[string]any{ // LADO fork
 		"systemPrompt": map[string]any{
 			"type": "preset", "preset": "claude_code", "append": standing,
 		},
-	}
+	})
 }
 
 func claudeSessionMode(permission ports.PermissionMode) string {

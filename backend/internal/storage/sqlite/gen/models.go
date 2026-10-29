@@ -456,11 +456,15 @@ type LadoConflictAcceptance struct {
 }
 
 type LadoDispatchSetting struct {
-	ID                int64
-	MaxConcurrent     int64
-	MaxRunMinutes     int64
-	HoldOnMemoryTight int64
-	UpdatedAt         time.Time
+	ID                     int64
+	MaxConcurrent          int64
+	MaxRunMinutes          int64
+	HoldOnMemoryTight      int64
+	UpdatedAt              time.Time
+	MaxPlanWorkers         int64
+	PlanReviewSkip         int64
+	PlanReviewSkipMaxPaths int64
+	PlanReviewPatterns     string
 }
 
 type LadoEvidenceLink struct {
@@ -524,6 +528,23 @@ type LadoIntegrationApproval struct {
 	StatusError        string
 }
 
+type LadoNoticeState struct {
+	ID    int64
+	Since time.Time
+}
+
+type LadoOrchestratorNotice struct {
+	ID         int64
+	ProjectID  string
+	NoticeKey  string
+	Text       string
+	OccurredAt time.Time
+	CreatedAt  time.Time
+	SentAt     sql.NullTime
+	SentTo     string
+	DroppedAt  sql.NullTime
+}
+
 type LadoPlanApproval struct {
 	ID         string
 	RevisionID string
@@ -531,6 +552,19 @@ type LadoPlanApproval struct {
 	Sha256     string
 	ProofNonce string
 	ApprovedAt time.Time
+}
+
+type LadoPlanCritique struct {
+	ID            string
+	RequestID     string
+	Attempt       int64
+	SessionID     string
+	State         string
+	SkipReason    string
+	FailureReason string
+	FindingsJson  string
+	StartedAt     time.Time
+	FinishedAt    sql.NullTime
 }
 
 type LadoPlanRequest struct {
@@ -546,6 +580,19 @@ type LadoPlanRequest struct {
 	DeliveryAttempts    int64
 	DeliveryError       string
 	FailedAt            sql.NullTime
+	Kind                string
+	WaitingReason       string
+	WorkerAttempts      int64
+	WorkerStartedAt     sql.NullTime
+	DraftSha256         string
+	DraftSubmittedAt    sql.NullTime
+	FeedbackSentAt      sql.NullTime
+	FinalSha256         string
+	SubmittedAt         sql.NullTime
+	FixRequestedAt      sql.NullTime
+	RemindedAt          sql.NullTime
+	CleanedAt           sql.NullTime
+	FailureCode         string
 }
 
 type LadoPlanRevision struct {
@@ -563,6 +610,23 @@ type LadoPlanRevision struct {
 	IssueSnapshotSha256 string
 	ProblemsJson        string
 	CreatedAt           time.Time
+}
+
+type LadoPlanRevisionMetric struct {
+	RevisionID        string
+	RequestID         string
+	DesignMs          int64
+	CritiqueMs        int64
+	ReviseMs          int64
+	Review            string
+	P1Count           int64
+	MajorCount        int64
+	MinorCount        int64
+	AddressedCount    int64
+	NotAddressedCount int64
+	SessionsJson      string
+	ChangeKindsJson   string
+	UpdatedAt         time.Time
 }
 
 type LadoPolicySnapshot struct {

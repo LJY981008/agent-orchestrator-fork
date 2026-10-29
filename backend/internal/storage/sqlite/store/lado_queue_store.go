@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"time"
 
@@ -731,10 +732,14 @@ func (s *Store) SetLadoDispatchSettings(ctx context.Context, settings domain.Lad
 	var stored domain.LadoDispatchSettings
 	err := s.inTx(ctx, "set LADO dispatch settings", func(q *gen.Queries) error {
 		if err := q.UpsertLadoDispatchSettings(ctx, gen.UpsertLadoDispatchSettingsParams{
-			MaxConcurrent:     int64(settings.MaxConcurrent),
-			MaxRunMinutes:     int64(settings.MaxRunMinutes),
-			HoldOnMemoryTight: boolInt(settings.HoldOnMemoryTight),
-			UpdatedAt:         event.At.UTC(),
+			MaxConcurrent:          int64(settings.MaxConcurrent),
+			MaxRunMinutes:          int64(settings.MaxRunMinutes),
+			HoldOnMemoryTight:      boolInt(settings.HoldOnMemoryTight),
+			UpdatedAt:              event.At.UTC(),
+			MaxPlanWorkers:         int64(settings.MaxPlanWorkers),
+			PlanReviewSkip:         boolInt(settings.PlanReview.Skip),
+			PlanReviewSkipMaxPaths: int64(settings.PlanReview.MaxPaths),
+			PlanReviewPatterns:     ladoReviewPatternsJSON(settings.PlanReview.Patterns),
 		}); err != nil {
 			return err
 		}
@@ -867,10 +872,37 @@ func ladoExecutionFromGen(row gen.LadoExecution) domain.LadoExecution {
 }
 
 func ladoDispatchSettingsFromGen(row gen.LadoDispatchSetting) domain.LadoDispatchSettings {
+	patterns := domain.DefaultLadoPlanReviewPatterns()
+	if row.PlanReviewPatterns != "" {
+		// The column only ever holds what the store wrote.
+		var stored map[string][]string
+		if json.Unmarshal([]byte(row.PlanReviewPatterns), &stored) == nil {
+			patterns = stored
+		}
+	}
 	return domain.LadoDispatchSettings{
 		MaxConcurrent:     int(row.MaxConcurrent),
 		MaxRunMinutes:     int(row.MaxRunMinutes),
 		HoldOnMemoryTight: row.HoldOnMemoryTight == 1,
-		UpdatedAt:         row.UpdatedAt.UTC(),
+		MaxPlanWorkers:    int(row.MaxPlanWorkers),
+		PlanReview: domain.LadoPlanReviewSettings{
+			Skip:     row.PlanReviewSkip == 1,
+			MaxPaths: int(row.PlanReviewSkipMaxPaths),
+			Patterns: patterns,
+		},
+		UpdatedAt: row.UpdatedAt.UTC(),
 	}
+}
+
+// ladoReviewPatternsJSON stores the default patterns as "", so a later LADO
+// with better defaults applies them; any other set as JSON.
+func ladoReviewPatternsJSON(patterns map[string][]string) string {
+	if patterns == nil || reflect.DeepEqual(patterns, domain.DefaultLadoPlanReviewPatterns()) {
+		return ""
+	}
+	data, err := json.Marshal(patterns)
+	if err != nil {
+		return ""
+	}
+	return string(data)
 }

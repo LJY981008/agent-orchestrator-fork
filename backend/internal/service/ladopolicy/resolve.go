@@ -169,13 +169,18 @@ func (r Resolution) SnapshotRules() []domain.LadoPolicySnapshotRule {
 	return rules
 }
 
-// resolveEntries decides each rule that is not archived, oldest first. A
+// resolveEntries decides each rule that is not archived and is no plan worker
+// role's, oldest first. A
 // protected rule is on whatever its bindings say. Otherwise the nearest
 // binding wins: the task's, then the project's, then the Global one, which
 // is off unless it says on. Bindings of other projects and tasks do not
 // count.
 func resolveEntries(in Input) []Entry {
-	rules := slices.DeleteFunc(slices.Clone(in.Rules), func(rule domain.LadoRule) bool { return !rule.ArchivedAt.IsZero() })
+	// A plan worker role's rule reaches plan workers only, never an
+	// execution, so it never enters a resolution or a snapshot.
+	rules := slices.DeleteFunc(slices.Clone(in.Rules), func(rule domain.LadoRule) bool {
+		return !rule.ArchivedAt.IsZero() || rule.Version.Content.Has(domain.LadoEnforcementPlanRole)
+	})
 	slices.SortFunc(rules, func(a, b domain.LadoRule) int {
 		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 	})

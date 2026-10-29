@@ -30,9 +30,12 @@ type LadoPlanRevisionSummaryResponse struct {
 
 // LadoTaskPlanResponse is what the board needs to know about a task's plans.
 type LadoTaskPlanResponse struct {
-	RequestPending bool       `json:"requestPending" description:"A plan request waits for the orchestrator's plan."`
+	RequestPending bool       `json:"requestPending" description:"The newest plan request still waits for its plan."`
 	RequestedAt    *time.Time `json:"requestedAt,omitempty" description:"When the newest plan request was made."`
-	RequestError   string     `json:"requestError,omitempty" description:"Why LADO stopped delivering the newest request, when it did."`
+	RequestError   string     `json:"requestError,omitempty" description:"Why the newest request failed, when it did: the details behind its failure code."`
+	// Worker is the newest request's plan worker; omitted for a request made
+	// before plan workers.
+	Worker *LadoPlanWorkerResponse `json:"worker,omitempty"`
 	// Latest is the newest revision.
 	Latest *LadoPlanRevisionSummaryResponse `json:"latest,omitempty"`
 	// ApprovedRevisionID is set while a valid approval covers the latest
@@ -42,7 +45,7 @@ type LadoTaskPlanResponse struct {
 
 // LadoPlanProblemResponse is one thing wrong with a plan file.
 type LadoPlanProblemResponse struct {
-	Code   string `json:"code" enum:"too_large,not_text,missing_front_matter,invalid_front_matter,missing_field,invalid_field,wrong_task,wrong_issue,unknown_source_comment,wrong_source,unknown_base_ref" description:"Stable problem code the app translates."`
+	Code   string `json:"code" enum:"too_large,not_text,missing_front_matter,invalid_front_matter,missing_field,invalid_field,wrong_task,wrong_issue,unknown_source_comment,wrong_source,unknown_base_ref,plan_review_missing,plan_review_unaddressed" description:"Stable problem code the app translates. plan_review_missing: a plan worker's plan has no review section; plan_review_unaddressed: it does not answer the P1 and major findings that detail lists."`
 	Field  string `json:"field,omitempty" description:"The front matter key the problem is about."`
 	Detail string `json:"detail,omitempty" description:"The offending value, or the parser's message."`
 }
@@ -61,13 +64,21 @@ type LadoPlanRevisionResponse struct {
 	Valid               bool                      `json:"valid"`
 	Problems            []LadoPlanProblemResponse `json:"problems"`
 	CreatedAt           time.Time                 `json:"createdAt"`
+	// Metrics is what making the revision took; omitted for a plan an
+	// orchestrator wrote.
+	Metrics *LadoPlanMetricsResponse `json:"metrics,omitempty"`
 }
 
-// LadoPlanRequestResponse is one request to the orchestrator for a plan.
+// LadoPlanRequestResponse is one request for a plan: to a plan worker, or,
+// before plan workers, to the orchestrator.
 type LadoPlanRequestResponse struct {
 	ID               string     `json:"id"`
 	TaskID           string     `json:"taskId"`
-	SessionID        string     `json:"sessionId" description:"The orchestrator session asked for the plan."`
+	Kind             string     `json:"kind" enum:"orchestrator,worker" description:"Who writes the plan: a plan worker, or, for a request made before plan workers, the orchestrator."`
+	SessionID        string     `json:"sessionId" description:"The session that writes the plan: the orchestrator asked, or the plan worker's designer; empty while a plan worker waits to start."`
+	Phase            string     `json:"phase,omitempty" enum:"waiting,designing,critiquing,revising,submitted,fixing,done,failed,replaced" description:"Where a plan worker request is; omitted for a request to an orchestrator."`
+	WaitingReason    string     `json:"waitingReason,omitempty" enum:"plan_worker_capacity,memory_tight"`
+	FailureCode      string     `json:"failureCode,omitempty" enum:"plan_worker_spawn_failed,plan_worker_no_plan,plan_worker_timed_out,plan_worker_agent_unsupported,replaced"`
 	SourceCommentID  string     `json:"sourceCommentId,omitempty" description:"The issue comment the developer named as the plan."`
 	Note             string     `json:"note,omitempty" description:"What the developer asked to change."`
 	BasedOn          string     `json:"basedOn,omitempty" description:"The revision a change request starts from."`
@@ -75,7 +86,7 @@ type LadoPlanRequestResponse struct {
 	DeliveredAt      *time.Time `json:"deliveredAt,omitempty"`
 	DeliveryAttempts int        `json:"deliveryAttempts"`
 	DeliveryError    string     `json:"deliveryError,omitempty"`
-	FailedAt         *time.Time `json:"failedAt,omitempty" description:"When LADO stopped trying to deliver the request."`
+	FailedAt         *time.Time `json:"failedAt,omitempty" description:"When the request failed: LADO stopped delivering it to the orchestrator, or its plan worker failed."`
 }
 
 // LadoPlanApprovalResponse is one approval of an exact plan revision.
@@ -93,6 +104,9 @@ type LadoPlanHistoryResponse struct {
 	Requests  []LadoPlanRequestResponse  `json:"requests"`
 	Revisions []LadoPlanRevisionResponse `json:"revisions"`
 	Approvals []LadoPlanApprovalResponse `json:"approvals"`
+	// Critiques are the reviews of plan workers' drafts, by request and
+	// attempt.
+	Critiques []LadoPlanCritiqueResponse `json:"critiques"`
 }
 
 // LadoPlanContentResponse is a plan file's front matter, as far as it could
@@ -108,6 +122,7 @@ type LadoPlanContentResponse struct {
 	ReviewRequired     bool     `json:"reviewRequired"`
 	Reviewer           string   `json:"reviewer,omitempty"`
 	PlanSource         string   `json:"planSource,omitempty" description:"issue, or comment:<id> for a plan converted from an issue comment."`
+	ChangeKinds        []string `json:"changeKinds" description:"The changes the plan declares: db_schema, external_api, auth or data_deletion."`
 	Body               string   `json:"body" description:"The Markdown after the front matter."`
 }
 
@@ -119,12 +134,15 @@ type LadoPlanResponse struct {
 	Plan     LadoPlanContentResponse  `json:"plan"`
 	Latest   bool                     `json:"latest" description:"This is the task's newest revision."`
 	Approved bool                     `json:"approved" description:"A valid approval covers this revision."`
+	// Critique is the newest review of the draft of the revision's request,
+	// with how the plan answers each finding; omitted without one.
+	Critique *LadoPlanCritiqueResponse `json:"critique,omitempty"`
 }
 
-// CreateLadoPlanRequestRequest asks the orchestrator for a plan, or for
-// changes to the latest one.
+// CreateLadoPlanRequestRequest asks for a plan, or for changes to the latest
+// one; a plan worker writes it.
 type CreateLadoPlanRequestRequest struct {
-	SourceCommentID string `json:"sourceCommentId,omitempty" description:"An issue comment that holds the plan; the orchestrator converts it faithfully."`
+	SourceCommentID string `json:"sourceCommentId,omitempty" description:"An issue comment that holds the plan; the plan worker converts it faithfully."`
 	Note            string `json:"note,omitempty" description:"What to change in the latest revision; makes this a change request."`
 }
 
@@ -150,7 +168,7 @@ type LadoIssueCommentResponse struct {
 	Author        string    `json:"author"`
 	AuthorTrusted bool      `json:"authorTrusted" description:"The author can work on the repository."`
 	ByLado        bool      `json:"byLado" description:"LADO wrote this comment; it is never read back into a plan."`
-	Included      bool      `json:"included" description:"A plan request pins this comment for the orchestrator."`
+	Included      bool      `json:"included" description:"A plan request pins this comment for the plan worker."`
 	CreatedAt     time.Time `json:"createdAt"`
 	Body          string    `json:"body"`
 	URL           string    `json:"url,omitempty"`

@@ -279,9 +279,16 @@ type LadoDispatchSettings struct {
 	// MaxRunMinutes is how long an execution may run before LADO stops it,
 	// one of LadoRunMinuteChoices; 0 means no limit.
 	MaxRunMinutes int
-	// HoldOnMemoryTight keeps entries waiting while memory pressure is tight.
+	// HoldOnMemoryTight keeps entries waiting while memory pressure is tight,
+	// and plan requests too.
 	HoldOnMemoryTight bool
-	UpdatedAt         time.Time
+	// MaxPlanWorkers caps the plan requests whose workers run at once across
+	// projects, apart from the executions' caps; a designer and its critic
+	// count as one (docs/LJY-PRD/TDD.md §5.1).
+	MaxPlanWorkers int
+	// PlanReview decides when a draft's review is skipped.
+	PlanReview LadoPlanReviewSettings
+	UpdatedAt  time.Time
 }
 
 // LadoMaxConcurrent is the highest cap on running executions, overall and per
@@ -301,19 +308,32 @@ var LadoRunMinuteChoices = []int{0, 60, 120, 240, 480, 720, 1440}
 var ErrLadoDispatchSettingsInvalid = errors.New("invalid dispatch settings")
 
 // DefaultLadoDispatchSettings are the settings without a stored row: two
-// executions at once, up to eight hours each, held while memory is tight.
+// executions at once, up to eight hours each, held while memory is tight; two
+// plan requests at once, and no review of a small plan.
 func DefaultLadoDispatchSettings() LadoDispatchSettings {
-	return LadoDispatchSettings{MaxConcurrent: 2, MaxRunMinutes: 480, HoldOnMemoryTight: true}
+	return LadoDispatchSettings{MaxConcurrent: 2, MaxRunMinutes: 480, HoldOnMemoryTight: true,
+		MaxPlanWorkers: LadoDefaultMaxPlanWorkers, PlanReview: DefaultLadoPlanReviewSettings()}
 }
 
+// LadoDefaultMaxPlanWorkers is how many plan requests run at once until the
+// developer sets another number, from 1 to LadoMaxConcurrent.
+const LadoDefaultMaxPlanWorkers = 2
+
 // Validate refuses a cap outside 1 to LadoMaxConcurrent and a run time that
-// is not one of LadoRunMinuteChoices.
+// is not one of LadoRunMinuteChoices, for executions and plan requests alike,
+// and review skip settings out of range.
 func (s LadoDispatchSettings) Validate() error {
 	if s.MaxConcurrent < 1 || s.MaxConcurrent > LadoMaxConcurrent {
 		return fmt.Errorf("%w: maxConcurrent must be 1 to %d, got %d", ErrLadoDispatchSettingsInvalid, LadoMaxConcurrent, s.MaxConcurrent)
 	}
 	if !slices.Contains(LadoRunMinuteChoices, s.MaxRunMinutes) {
 		return fmt.Errorf("%w: maxRunMinutes must be one of %v, got %d", ErrLadoDispatchSettingsInvalid, LadoRunMinuteChoices, s.MaxRunMinutes)
+	}
+	if s.MaxPlanWorkers < 1 || s.MaxPlanWorkers > LadoMaxConcurrent {
+		return fmt.Errorf("%w: maxPlanWorkers must be 1 to %d, got %d", ErrLadoDispatchSettingsInvalid, LadoMaxConcurrent, s.MaxPlanWorkers)
+	}
+	if err := s.PlanReview.Validate(); err != nil {
+		return fmt.Errorf("%w: %w", ErrLadoDispatchSettingsInvalid, err)
 	}
 	return nil
 }

@@ -53,12 +53,13 @@ func (s *Service) WatchPlans(ctx context.Context) {
 	}
 }
 
-// deliverWaiting retries the task's newest request while it waits, and
-// gives up older ones a newer request replaced.
+// deliverWaiting retries the task's newest request to an orchestrator while
+// it waits, and gives up older ones a newer request replaced. Requests made
+// before plan workers are the only ones an orchestrator gets.
 func (s *Service) deliverWaiting(ctx context.Context, task domain.LadoTask, requests []domain.LadoPlanRequest) {
 	now := s.deps.Clock().UTC()
 	for i, req := range requests {
-		if !req.DeliveredAt.IsZero() || !req.FailedAt.IsZero() {
+		if req.IsWorker() || !req.DeliveredAt.IsZero() || !req.FailedAt.IsZero() {
 			continue
 		}
 		if i < len(requests)-1 {
@@ -97,18 +98,28 @@ func (s *Service) failRequest(ctx context.Context, req domain.LadoPlanRequest, a
 }
 
 // pinPlans pins the versions of the task's plan file that are not revisions
-// yet, oldest first, in every orchestrator the task's requests went to.
+// yet, oldest first, in every session the task's requests went to: the
+// orchestrators of requests made before plan workers, and each designer that
+// submitted a final plan. Of a designer's versions, only the plan it
+// submitted last is pinned.
 func (s *Service) pinPlans(ctx context.Context, task domain.LadoTask, requests []domain.LadoPlanRequest) {
 	path := domain.LadoPlanPath(task.ID)
 	seen := map[domain.SessionID]bool{}
 	for _, req := range requests {
-		if seen[req.SessionID] {
+		session := req.SessionID
+		if req.IsWorker() {
+			session = req.WorkerSession()
+			if session == "" || req.SubmittedAt.IsZero() {
+				continue
+			}
+		}
+		if seen[session] {
 			continue
 		}
-		seen[req.SessionID] = true
-		versions, err := s.deps.Artifacts.Versions(ctx, req.SessionID, path)
+		seen[session] = true
+		versions, err := s.deps.Artifacts.Versions(ctx, session, path)
 		if err != nil {
-			s.deps.Log.Debug("LADO could not list plan versions", "task", task.ID, "session", req.SessionID, "err", err)
+			s.deps.Log.Debug("LADO could not list plan versions", "task", task.ID, "session", session, "err", err)
 			continue
 		}
 		sort.Slice(versions, func(i, j int) bool { return versions[i].Version < versions[j].Version })
@@ -121,7 +132,7 @@ func (s *Service) pinPlans(ctx context.Context, task domain.LadoTask, requests [
 				continue
 			}
 			owner, ok := requestFor(requests, version)
-			if !ok {
+			if !ok || (owner.IsWorker() && version.SHA256 != owner.FinalSHA256) {
 				continue
 			}
 			if err := s.pinVersion(ctx, task, owner, version); err != nil {
@@ -190,6 +201,8 @@ func (s *Service) pinVersion(ctx context.Context, task domain.LadoTask, req doma
 			problems = append(problems, domain.LadoPlanProblem{Code: domain.LadoPlanUnknownBaseRef, Field: "base_ref", Detail: plan.BaseRef})
 		}
 	}
+	reviewed, addressed, notAddressed := s.reviewProblems(ctx, req, plan)
+	problems = append(problems, reviewed...)
 	source := string(version.Source)
 	if source == "" {
 		source = string(domain.ArtifactVersionSourceAgent)
@@ -214,6 +227,10 @@ func (s *Service) pinVersion(ctx context.Context, task domain.LadoTask, req doma
 	}
 	if created {
 		s.deps.Log.Info("LADO pinned a plan revision", "task", task.ID, "revision", rev.Number, "problems", len(rev.Problems))
+		s.recordMetrics(ctx, req, rev, plan, addressed, notAddressed)
+		if req.IsWorker() {
+			s.kickPlans()
+		}
 	}
 	return nil
 }

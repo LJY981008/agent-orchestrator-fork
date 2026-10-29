@@ -57,9 +57,8 @@ func ladoDevPresenceOn(raw string) bool {
 // missing part leaves the plan loop off, or the dispatcher unable to start
 // workers, as in tests that only need tasks.
 type ladoWorkDeps struct {
-	orchestrators ladoOrchestratorSpawner
-	sender        ladoMessageSender
-	artifacts     *artifactversions.Capturer
+	sender    ladoMessageSender
+	artifacts *artifactversions.Capturer
 	// sessions starts and stops workers: AO's session service.
 	sessions ladoqueue.Sessions
 	// branches resolves the branch a worker starts from: the session
@@ -78,11 +77,6 @@ type ladoWorkDeps struct {
 	ladoModes ladoModeHook
 }
 
-// ladoOrchestratorSpawner is AO's session service.
-type ladoOrchestratorSpawner interface {
-	SpawnOrchestrator(ctx context.Context, projectID domain.ProjectID, clean bool, mode domain.SessionMode, approval domain.PermissionMode) (domain.Session, error)
-}
-
 // ladoMessageSender is AO's session manager.
 type ladoMessageSender interface {
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
@@ -93,30 +87,12 @@ type ladoSessionReader interface {
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 }
 
-// ladoOrchestrators finds a project's orchestrator through AO's session
-// service and messages it through the session manager.
+// ladoOrchestrators reads the orchestrators of plan requests made before
+// plan workers in AO's store and messages them through the session manager.
 type ladoOrchestrators struct {
-	spawner ladoOrchestratorSpawner
 	sender  ladoMessageSender
 	store   ladoSessionReader
 	dataDir string
-}
-
-// Orchestrator returns the project's newest active orchestrator, or starts
-// one, as the desktop does when a project is added.
-func (o ladoOrchestrators) Orchestrator(ctx context.Context, projectID domain.ProjectID) (ladotask.OrchestratorSession, error) {
-	sess, err := o.spawner.SpawnOrchestrator(ctx, projectID, false, "", "")
-	if err != nil {
-		return ladotask.OrchestratorSession{}, err
-	}
-	found, ok, err := o.Session(ctx, sess.ID)
-	if err != nil {
-		return ladotask.OrchestratorSession{}, err
-	}
-	if !ok {
-		return ladotask.OrchestratorSession{}, fmt.Errorf("orchestrator %s is not recorded", sess.ID)
-	}
-	return found, nil
 }
 
 func (o ladoOrchestrators) Session(ctx context.Context, id domain.SessionID) (ladotask.OrchestratorSession, bool, error) {
@@ -163,4 +139,79 @@ func (a ladoArtifacts) Read(ctx context.Context, version domain.SessionArtifactV
 		return nil, fmt.Errorf("session %s is gone", version.SessionID)
 	}
 	return a.capturer.ReadVersion(rec, version)
+}
+
+// ladoPlanSessionService is what plan workers use of AO's session service:
+// spawning and stopping sessions.
+type ladoPlanSessionService interface {
+	Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error)
+	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
+}
+
+// ladoPlanSessionStore reads plan worker sessions.
+type ladoPlanSessionStore interface {
+	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+	GetSessionByClientRequestID(ctx context.Context, key string) (domain.SessionRecord, bool, error)
+}
+
+// ladoPlanSessions starts, reads, messages and stops LADO's plan workers
+// through AO's session service, store and session manager
+// (ladotask.PlanSessions).
+type ladoPlanSessions struct {
+	sessions ladoPlanSessionService
+	sender   ladoMessageSender
+	store    ladoPlanSessionStore
+}
+
+func (p ladoPlanSessions) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	return p.sessions.Spawn(ctx, cfg)
+}
+
+func (p ladoPlanSessions) Session(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	return p.store.GetSession(ctx, id)
+}
+
+func (p ladoPlanSessions) SessionByClientRequest(ctx context.Context, id string) (domain.SessionRecord, bool, error) {
+	return p.store.GetSessionByClientRequestID(ctx, id)
+}
+
+// Send delivers a message as the daemon, which the worker gate lets reach a
+// plan worker.
+func (p ladoPlanSessions) Send(ctx context.Context, id domain.SessionID, message string) error {
+	return p.sender.Send(ctx, id, message, nil)
+}
+
+func (p ladoPlanSessions) Stop(ctx context.Context, id domain.SessionID) error {
+	_, err := p.sessions.RequestKill(ctx, id)
+	return err
+}
+
+// ladoNoticeOrchestrators finds a project's live orchestrator in AO's store,
+// without starting one, and messages it as the daemon (ladonotify).
+type ladoNoticeOrchestrators struct {
+	store interface {
+		ListSessions(ctx context.Context, project domain.ProjectID) ([]domain.SessionRecord, error)
+	}
+	sender ladoMessageSender
+}
+
+func (o ladoNoticeOrchestrators) Orchestrator(ctx context.Context, project domain.ProjectID) (domain.SessionID, domain.ActivityState, bool, error) {
+	recs, err := o.store.ListSessions(ctx, project)
+	if err != nil {
+		return "", "", false, err
+	}
+	var newest domain.SessionRecord
+	for _, rec := range recs {
+		if rec.Kind == domain.KindOrchestrator && !rec.IsTerminated && (newest.ID == "" || rec.CreatedAt.After(newest.CreatedAt)) {
+			newest = rec
+		}
+	}
+	if newest.ID == "" {
+		return "", "", false, nil
+	}
+	return newest.ID, newest.Activity.State, true, nil
+}
+
+func (o ladoNoticeOrchestrators) Send(ctx context.Context, id domain.SessionID, message string) error {
+	return o.sender.Send(ctx, id, message, nil)
 }

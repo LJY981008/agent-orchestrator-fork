@@ -229,3 +229,25 @@ func TestSafeNativeTranscriptPathFollowsProjectsLink(t *testing.T) {
 		}
 	}
 }
+
+// A LADO plan worker's Claude Code launch is marked, so AO's hook command
+// decides its tool calls and the Chat driver passes its tool lists; another
+// session's is not.
+func TestApplyLadoSetupHomeMarksPlanWorkers(t *testing.T) {
+	ctx := context.Background()
+	claude := claudeagent.New()
+	st := newFakeStore()
+	st.sessions["plan-1"] = domain.SessionRecord{ID: "plan-1", ProjectID: "mer", ClientRequestID: domain.LadoPlanWorkerClientRequestID("req-1", domain.LadoPlanRoleCritic, 1)}
+	st.sessions["s-1"] = domain.SessionRecord{ID: "s-1", ProjectID: "mer", ClientRequestID: "lado:lado-queue-1/1"}
+	m := New(Deps{Store: st, Agents: switchTestAgents{domain.HarnessClaudeCode: claude, domain.HarnessCodex: fakeAgent{}}})
+	m.SetLadoSetupHome(&fakeLadoHome{home: t.TempDir()})
+	for id, want := range map[domain.SessionID]string{"plan-1": "1", "s-1": ""} {
+		env := map[string]string{"PATH": "/bin"}
+		if err := m.applyLadoSetupHome(ctx, claude, id, env); err != nil {
+			t.Fatalf("%s: %v", id, err)
+		}
+		if env[domain.LadoPlanWorkerEnv] != want {
+			t.Fatalf("%s: %s = %q, want %q", id, domain.LadoPlanWorkerEnv, env[domain.LadoPlanWorkerEnv], want)
+		}
+	}
+}

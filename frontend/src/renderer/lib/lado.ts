@@ -28,6 +28,14 @@ export type LadoPlanRevision = components["schemas"]["LadoPlanRevisionResponse"]
 export type LadoPlanProblem = components["schemas"]["LadoPlanProblemResponse"];
 export type LadoPlanRequest = components["schemas"]["LadoPlanRequestResponse"];
 export type LadoPlanApproval = components["schemas"]["LadoPlanApprovalResponse"];
+// Plan workers (docs/LJY-PRD/TDD.md §5.1): where a request's worker is, a
+// draft's review and what making a revision took.
+export type LadoPlanWorker = components["schemas"]["LadoPlanWorkerResponse"];
+export type LadoPlanWorkerPhase = LadoPlanWorker["phase"];
+export type LadoPlanCritique = components["schemas"]["LadoPlanCritiqueResponse"];
+export type LadoPlanFinding = components["schemas"]["LadoPlanFindingResponse"];
+export type LadoPlanMetrics = components["schemas"]["LadoPlanMetricsResponse"];
+export type LadoPlanReviewSettings = components["schemas"]["LadoPlanReviewSettings"];
 export type LadoRule = components["schemas"]["LadoRuleResponse"];
 export type LadoRuleVersion = components["schemas"]["LadoRuleVersionResponse"];
 export type LadoRuleDetail = components["schemas"]["LadoRuleDetailResponse"];
@@ -78,6 +86,15 @@ type LadoIntegrationInput = components["schemas"]["ApproveLadoIntegrationRequest
 
 /** The protected rule whose globs keep workers away from protected paths. */
 export const LADO_PROTECTED_PATHS_RULE_ID = "paths.protected";
+
+/** The change kinds a plan declares in change_kinds, in display order. */
+export const LADO_CHANGE_KINDS = ["db_schema", "external_api", "auth", "data_deletion"] as const;
+export type LadoChangeKind = (typeof LADO_CHANGE_KINDS)[number];
+
+/** Whether a rule holds a plan worker role's instructions, which reach plan workers only. */
+export function ladoIsPlanRole(rule: { enforcement: readonly string[] }): boolean {
+	return rule.enforcement.includes("plan_role");
+}
 
 /**
  * A failed LADO call. It keeps the daemon's error code and details, so the

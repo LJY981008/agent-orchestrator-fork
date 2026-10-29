@@ -267,18 +267,26 @@ SET timed_out_at = ?
 WHERE session_id = ? AND timed_out_at IS NULL;
 
 -- name: GetLadoDispatchSettings :one
-SELECT id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at
+SELECT id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at,
+    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns
 FROM lado_dispatch_settings
 WHERE id = 1;
 
 -- name: UpsertLadoDispatchSettings :exec
-INSERT INTO lado_dispatch_settings (id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at)
-VALUES (1, ?, ?, ?, ?)
+INSERT INTO lado_dispatch_settings (
+    id, max_concurrent, max_run_minutes, hold_on_memory_tight, updated_at,
+    max_plan_workers, plan_review_skip, plan_review_skip_max_paths, plan_review_patterns
+)
+VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (id) DO UPDATE SET
     max_concurrent = excluded.max_concurrent,
     max_run_minutes = excluded.max_run_minutes,
     hold_on_memory_tight = excluded.hold_on_memory_tight,
-    updated_at = excluded.updated_at;
+    updated_at = excluded.updated_at,
+    max_plan_workers = excluded.max_plan_workers,
+    plan_review_skip = excluded.plan_review_skip,
+    plan_review_skip_max_paths = excluded.plan_review_skip_max_paths,
+    plan_review_patterns = excluded.plan_review_patterns;
 
 -- name: GetLadoProjectMaxConcurrent :one
 SELECT max_concurrent

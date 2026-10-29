@@ -1,15 +1,17 @@
 // LADO fork: the rows of Settings → Rules (docs/LJY-PRD/HARNESS.md §12). A
 // protected rule is always on and only the permission ceiling's mode changes;
-// its menu only opens the history. Any other rule has its Global switch and a
-// menu for the rest, where turning it off, archiving it and deleting it stay
-// three separate actions.
+// its menu only opens the history. A plan worker role's instructions always
+// reach plan workers (docs/LJY-PRD/TDD.md §5.1), so their row has no switch
+// and its menu only edits them and opens the history. Any other rule has its
+// Global switch and a menu for the rest, where turning it off, archiving it
+// and deleting it stay three separate actions.
 import type { TFunction } from "i18next";
 import { Archive, ArchiveRestore, History, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { LADO_CEILING_MODES, type LadoCeilingMode } from "../../../shared/lado-presence";
 import type { MessageKey } from "../../i18n/messages";
-import type { LadoRule } from "../../lib/lado";
+import { ladoIsPlanRole, type LadoRule } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import {
 	LADO_RULE_PERMISSION_CEILING,
@@ -29,6 +31,7 @@ const categoryKeys: Partial<Record<string, MessageKey>> = {
 	workflow: "lado.rules.category.workflow",
 	tools: "lado.rules.category.tools",
 	git: "lado.rules.category.git",
+	planning: "lado.rules.category.planning",
 };
 
 // The permission modes as AO's project settings name them.
@@ -166,7 +169,9 @@ export type LadoRuleRowActions = {
 /**
  * A rule that is not protected. Its one line under the name: what a built-in
  * does, the category when no card heading names it (Archived mixes them),
- * how strongly LADO applies it, and where it is forced on or off.
+ * how strongly LADO applies it, and where it is forced on or off. A plan
+ * worker role's row says muted "Always used" in place of the switch, and its
+ * line only what it is for: it takes no binding and reaches no task's rules.
  */
 export function LadoRuleRow({
 	rule,
@@ -184,16 +189,18 @@ export function LadoRuleRow({
 	const { t } = useTranslation();
 	const name = ladoRuleName(t, rule.id, rule.name);
 	const description = ladoRuleDescription(t, rule.id, rule.name);
+	const planRole = ladoIsPlanRole(rule);
 	const meta = [
 		...(showCategory ? [ladoCategoryLabel(t, rule.category)] : []),
-		ladoStrengthLabel(t, rule.strength),
-		...ladoOverrideSummary(t, rule),
+		...(planRole ? [] : [ladoStrengthLabel(t, rule.strength), ...ladoOverrideSummary(t, rule)]),
 	].join(" · ");
-	const detail = description ? <>{description} {meta}</> : meta;
+	const detail = description && meta ? <>{description} {meta}</> : description || meta;
 	return (
 		<SettingsRow data-testid="lado-rule-row" data-rule-id={rule.id} label={name} description={withFailure(t, detail, error)}>
 			<div className="flex items-center gap-2">
-				{rule.archived ? null : (
+				{rule.archived ? null : planRole ? (
+					<span className="text-sm text-settings-muted">{t("lado.rules.planRoleAlways")}</span>
+				) : (
 					<Switch
 						aria-label={t("lado.rules.global", { name })}
 						checked={rule.global === "on"}
@@ -240,8 +247,10 @@ function HistoryItem({ onSelect }: { onSelect: () => void }) {
 
 function LadoRuleMenu({ rule, name, busy, actions }: { rule: LadoRule; name: string; busy: boolean; actions: LadoRuleRowActions }) {
 	const { t } = useTranslation();
-	// LADO's own rules are never deleted, so their menu does not offer it.
+	// LADO's own rules are never deleted, so their menu does not offer it, and
+	// a plan worker role is never archived either.
 	const deletable = !rule.builtin;
+	const archivable = !ladoIsPlanRole(rule);
 	return (
 		<RowMenu name={name} busy={busy}>
 			{rule.archived ? (
@@ -256,10 +265,12 @@ function LadoRuleMenu({ rule, name, busy, actions }: { rule: LadoRule; name: str
 						{t("lado.rules.edit")}
 					</DropdownMenuItem>
 					<HistoryItem onSelect={actions.onHistory} />
-					<DropdownMenuItem onSelect={actions.onArchive}>
-						<Archive aria-hidden="true" />
-						{t("lado.rules.archive")}
-					</DropdownMenuItem>
+					{archivable ? (
+						<DropdownMenuItem onSelect={actions.onArchive}>
+							<Archive aria-hidden="true" />
+							{t("lado.rules.archive")}
+						</DropdownMenuItem>
+					) : null}
 				</>
 			)}
 			{deletable ? (

@@ -51,7 +51,7 @@ type LadoRuleResponse struct {
 	Version       int                        `json:"version" description:"The active version's number; an edit sends it back as baseVersion."`
 	VersionID     string                     `json:"versionId"`
 	SHA256        string                     `json:"sha256" description:"Hash of the active version's content."`
-	Enforcement   []string                   `json:"enforcement" description:"How LADO applies the rule: prompt, validator, tool_policy or workflow_gate."`
+	Enforcement   []string                   `json:"enforcement" description:"How LADO applies the rule: prompt, validator, tool_policy or workflow_gate; plan_role for a plan worker role's instructions, which reach plan workers only."`
 	Strength      string                     `json:"strength" enum:"prevents,detects,advisory"`
 	Ceiling       *LadoRuleCeiling           `json:"ceiling,omitempty" description:"The permission ceiling's setting; only that rule has one."`
 	Paths         *LadoRulePaths             `json:"paths,omitempty" description:"The protected paths' globs; only paths.protected has them."`

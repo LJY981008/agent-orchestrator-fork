@@ -63,7 +63,7 @@ function view(overrides: Partial<lado.LadoTaskView> = {}): lado.LadoTaskView {
 		issue: { title: "Add login", body: "The plan is in the comments.", state: "open", url: task.issue.url },
 		comments,
 		issueChangedSincePlan: false,
-		history: { requests: [], revisions: [], approvals: [] },
+		history: { requests: [], revisions: [], approvals: [], critiques: [] },
 		...overrides,
 	};
 }
@@ -87,13 +87,14 @@ function planned(overrides: Partial<lado.LadoPlan> = {}): lado.LadoPlan {
 			reviewer: "claude-code",
 			planSource: "comment:30",
 			body: "Approach in prose.",
+			changeKinds: [],
 		},
 		...overrides,
 	};
 }
 
 function plannedView(plan: lado.LadoPlan = planned()): lado.LadoTaskView {
-	return view({ task: plan.task, history: { requests: [], revisions: [plan.revision], approvals: [] } });
+	return view({ task: plan.task, history: { requests: [], revisions: [plan.revision], approvals: [], critiques: [] } });
 }
 
 // The rules that apply to the task; an approval sends their snapshot hash.
@@ -132,7 +133,7 @@ function renderDialog(onOpenChange: (open: boolean) => void = () => undefined) {
 beforeEach(() => {
 	vi.resetAllMocks();
 	vi.mocked(lado.requestLadoPlan).mockResolvedValue({
-		id: "req-2", taskId: "lado-task-1", sessionId: "demo-orch-1", requestedAt: "2026-10-20T10:00:00Z", deliveryAttempts: 1,
+		id: "req-2", taskId: "lado-task-1", kind: "worker", phase: "waiting", sessionId: "", requestedAt: "2026-10-20T10:00:00Z", deliveryAttempts: 0,
 	});
 	vi.mocked(lado.fetchLadoEffective).mockResolvedValue(rules("e".repeat(64)));
 	vi.mocked(lado.fetchLadoRules).mockResolvedValue([]);
@@ -153,7 +154,7 @@ test("shows the issue and marks which comments a plan may use", async () => {
 	expect(within(rows[1]).queryByRole("button", { name: "Use as plan" })).not.toBeInTheDocument();
 	expect(within(rows[1]).getByText("Left out of plans: the author cannot work on the repository")).toBeInTheDocument();
 	expect(within(rows[2]).getByText("Written by LADO; never read back into a plan")).toBeInTheDocument();
-	expect(within(dialog).getByText("No plan yet. Ask the project's orchestrator for one.")).toBeInTheDocument();
+	expect(within(dialog).getByText("No plan yet. Request one, and a read-only plan worker writes it.")).toBeInTheDocument();
 });
 
 test("a comment can be the plan", async () => {
@@ -177,6 +178,155 @@ test("requests a plan, then waits for it", async () => {
 	await waitFor(() => expect(lado.requestLadoPlan).toHaveBeenCalledWith("lado-task-1", {}));
 	expect(await within(dialog).findByText("Waiting for the orchestrator's plan…")).toBeInTheDocument();
 	expect(within(dialog).getByRole("button", { name: "Request a plan" })).toBeDisabled();
+});
+
+// LADO fork: plan workers (docs/LJY-PRD/TDD.md §5.1).
+test("a plan worker's request shows where it stands and opens its sessions", async () => {
+	const worker: lado.LadoPlanWorker = {
+		requestId: "req-2",
+		phase: "critiquing",
+		review: "running",
+		designerSessionId: "demo-plan-1",
+		criticSessionId: "demo-plan-2",
+	};
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(view({ task: { ...task, plan: { requestPending: true, worker } } }));
+	const onOpenChange = vi.fn();
+	renderDialog(onOpenChange);
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const line = await within(dialog).findByTestId("lado-plan-worker");
+	// Only the state is announced; the sessions are controls beside it.
+	const status = within(line).getByRole("status");
+	expect(status).toHaveTextContent("Plan worker writing · Reviewing the draft");
+	expect(line.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-working)]");
+	expect(within(dialog).queryByText("Waiting for the orchestrator's plan…")).not.toBeInTheDocument();
+	// The status line says a plan is on its way; nothing asks for one.
+	expect(within(dialog).queryByText("No plan yet. Request one, and a read-only plan worker writes it.")).not.toBeInTheDocument();
+	expect(within(dialog).getByRole("button", { name: "Request a plan" })).toBeDisabled();
+
+	fireEvent.click(within(line).getByRole("button", { name: "Open critic" }));
+	expect(onOpenChange).toHaveBeenCalledWith(false);
+	expect(navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-plan-2" } });
+	fireEvent.click(within(line).getByRole("button", { name: "Open plan worker" }));
+	expect(navigate).toHaveBeenLastCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-plan-1" } });
+});
+
+test("a plan worker waiting for its turn says why, with no session yet", async () => {
+	const worker: lado.LadoPlanWorker = { requestId: "req-2", phase: "waiting", waitingReason: "memory_tight" };
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(view({ task: { ...task, plan: { requestPending: true, worker } } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const line = await within(dialog).findByTestId("lado-plan-worker");
+	expect(line).toHaveTextContent("Waiting for a plan worker · Memory is tight");
+	expect(line.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-idle)]");
+	expect(within(line).queryByRole("button")).not.toBeInTheDocument();
+});
+
+test("a failed plan worker says why, and a plan can be requested again", async () => {
+	const worker: lado.LadoPlanWorker = { requestId: "req-2", phase: "failed", failureCode: "plan_worker_no_plan", designerSessionId: "demo-plan-1" };
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(
+		view({ task: { ...task, plan: { requestPending: false, requestError: "the plan worker ended without a draft", worker } } }),
+	);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const failure = await within(dialog).findByRole("alert");
+	expect(failure).toHaveTextContent("The plan request failed: The plan worker ended without a plan");
+	// The daemon's own words stay on hover.
+	expect(failure).toHaveAttribute("title", "the plan worker ended without a draft");
+	expect(within(dialog).getByRole("button", { name: "Open plan worker" })).toBeInTheDocument();
+	const request = within(dialog).getByRole("button", { name: "Request a plan" });
+	expect(request).toBeEnabled();
+	fireEvent.click(request);
+	await waitFor(() => expect(lado.requestLadoPlan).toHaveBeenCalledWith("lado-task-1", {}));
+});
+
+test("shows a plan worker's review: what it took, the findings and how the plan answers them", async () => {
+	const metrics: lado.LadoPlanMetrics = {
+		designMs: 18 * 60_000,
+		critiqueMs: 15 * 60_000,
+		reviseMs: 3 * 60_000,
+		review: "done",
+		p1: 1,
+		major: 1,
+		minor: 1,
+		addressed: 1,
+		notAddressed: 1,
+		changeKinds: ["db_schema"],
+		sessions: [
+			// Input holds the cache reads and writes, as AO counts it.
+			{ sessionId: "demo-plan-1", role: "design", inputTokens: 1_150_000, outputTokens: 50_000, cacheReadTokens: 900_000, cacheWriteTokens: 50_000, costNanos: 1_500_000_000 },
+			{ sessionId: "demo-plan-2", role: "critique", inputTokens: 580_000, outputTokens: 20_000, cacheReadTokens: 450_000, cacheWriteTokens: 30_000, costNanos: 500_000_000 },
+		],
+		updatedAt: "2026-10-20T09:30:00Z",
+	};
+	const critique: lado.LadoPlanCritique = {
+		requestId: "req-1",
+		attempt: 1,
+		sessionId: "demo-plan-2",
+		state: "done",
+		startedAt: "2026-10-20T09:10:00Z",
+		findings: [
+			{ id: "C3", severity: "minor", title: "Name the helper" },
+			{ id: "C1", severity: "P1", title: "Migration runs before the backfill", answer: "addressed" },
+			{ id: "C2", severity: "major", title: "No rollback step", answer: "not_addressed" },
+		],
+	};
+	const plan = planned({ revision: { ...revision, metrics }, critique });
+	plan.plan.changeKinds = ["db_schema", "auth"];
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(plan));
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(plan);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const shown = await within(dialog).findByTestId("lado-plan");
+	expect(within(shown).getByText("Database schema, Authentication")).toBeInTheDocument();
+	const review = within(shown).getByTestId("lado-plan-review");
+	expect(within(review).getByTestId("lado-plan-metrics")).toHaveTextContent(
+		"Design 21 min · 1.2M tokens / Review 15 min · 600K tokens · P1 1 · major 1 · minor 1 → addressed 1 · not addressed 1 · $2.00",
+	);
+	// P1 first, then major and minor; a P1 or major finding the plan did not take is a caution.
+	const rows = within(review).getAllByRole("listitem");
+	expect(rows.map((row) => row.textContent)).toEqual([
+		"C1P1Migration runs before the backfillAddressed",
+		"C2majorNo rollback stepNot addressed",
+		"C3minorName the helperNo answer",
+	]);
+	expect(within(rows[1]).getByText("Not addressed")).toHaveClass("text-[var(--color-status-in-review)]");
+	expect(within(rows[0]).getByText("Addressed")).toHaveClass("text-muted-foreground");
+});
+
+test("a skipped or failed review says so", async () => {
+	const metrics: lado.LadoPlanMetrics = {
+		designMs: 5 * 60_000, critiqueMs: 0, reviseMs: 0, review: "skipped", p1: 0, major: 0, minor: 0, addressed: 0, notAddressed: 0,
+		changeKinds: [], sessions: [], updatedAt: "2026-10-20T09:30:00Z",
+	};
+	const skipped = planned({
+		revision: { ...revision, metrics },
+		critique: { requestId: "req-1", attempt: 0, state: "skipped", skipReason: "2 affected paths", startedAt: "2026-10-20T09:10:00Z", findings: [] },
+	});
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(skipped));
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(skipped);
+	const { unmount } = renderDialog();
+	let review = await screen.findByTestId("lado-plan-review");
+	expect(within(review).getByTestId("lado-plan-metrics")).toHaveTextContent(/^Design 5 min$/);
+	expect(review).toHaveTextContent("Review skipped: a small plan without risky changes");
+	unmount();
+
+	const failed = planned({
+		revision: { ...revision, metrics: { ...metrics, review: "failed", critiqueMs: 90 * 60_000 } },
+		critique: { requestId: "req-1", attempt: 2, state: "failed", failureReason: "no findings within 45m0s", startedAt: "2026-10-20T09:10:00Z", findings: [] },
+	});
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(plannedView(failed));
+	vi.mocked(lado.fetchLadoPlan).mockResolvedValue(failed);
+	renderDialog();
+	review = await screen.findByTestId("lado-plan-review");
+	expect(within(review).getByTestId("lado-plan-metrics")).toHaveTextContent(/^Design 5 min \/ Review 90 min$/);
+	const warning = within(review).getByTestId("lado-plan-review-failed");
+	expect(warning).toHaveTextContent("The review failed, also on its second try");
+	expect(warning).toHaveClass("text-[var(--color-status-in-review)]");
+	expect(warning).toHaveAttribute("title", "no findings within 45m0s");
 });
 
 test("shows the plan and approves the exact revision", async () => {
@@ -343,7 +493,7 @@ test("an older revision says why it cannot be approved", async () => {
 	const latest = { ...revision, number: 2 };
 	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(view({
 		task: { ...task, state: "planned", plan: { requestPending: false, latest } },
-		history: { requests: [], revisions: [older, latest], approvals: [] },
+		history: { requests: [], revisions: [older, latest], approvals: [], critiques: [] },
 	}));
 	vi.mocked(lado.fetchLadoPlan).mockImplementation(async (id) => planned(id === "lado-plan-0" ? { revision: older, latest: false } : { revision: latest }));
 	renderDialog();

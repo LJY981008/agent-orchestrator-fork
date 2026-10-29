@@ -68,10 +68,26 @@ BEGIN
 END`,
 	// Plan requests, revisions and approvals change a task's state, so they
 	// publish the task's change. A delivery retry that changes only the
-	// attempt count publishes nothing; delivery and giving up do.
+	// attempt count publishes nothing; delivery and giving up do, and so does
+	// each step of a plan worker but a reminder and a spawn attempt.
 	ladoPlanCDCTrigger("lado_cdc_plan_requests_insert", "AFTER INSERT ON lado_plan_requests", ""),
 	ladoPlanCDCTrigger("lado_cdc_plan_requests_update", "AFTER UPDATE ON lado_plan_requests",
-		"WHEN OLD.delivered_at IS NOT NEW.delivered_at OR OLD.failed_at IS NOT NEW.failed_at"),
+		`WHEN OLD.delivered_at IS NOT NEW.delivered_at OR OLD.failed_at IS NOT NEW.failed_at OR
+    OLD.session_id IS NOT NEW.session_id OR
+    OLD.waiting_reason IS NOT NEW.waiting_reason OR
+    OLD.draft_submitted_at IS NOT NEW.draft_submitted_at OR
+    OLD.feedback_sent_at IS NOT NEW.feedback_sent_at OR
+    OLD.submitted_at IS NOT NEW.submitted_at OR
+    OLD.fix_requested_at IS NOT NEW.fix_requested_at OR
+    OLD.cleaned_at IS NOT NEW.cleaned_at`),
+	// A plan worker's critique publishes its task's change when it is made,
+	// when its critic starts and when it ends; revision metrics when they are
+	// written.
+	ladoPlanRequestChildCDCTrigger("lado_cdc_plan_critiques_insert", "AFTER INSERT ON lado_plan_critiques", ""),
+	ladoPlanRequestChildCDCTrigger("lado_cdc_plan_critiques_update", "AFTER UPDATE ON lado_plan_critiques",
+		"WHEN OLD.state IS NOT NEW.state OR OLD.session_id IS NOT NEW.session_id"),
+	ladoPlanRequestChildCDCTrigger("lado_cdc_plan_revision_metrics_insert", "AFTER INSERT ON lado_plan_revision_metrics", ""),
+	ladoPlanRequestChildCDCTrigger("lado_cdc_plan_revision_metrics_update", "AFTER UPDATE ON lado_plan_revision_metrics", ""),
 	ladoPlanCDCTrigger("lado_cdc_plan_revisions_insert", "AFTER INSERT ON lado_plan_revisions", ""),
 	ladoPlanCDCTrigger("lado_cdc_plan_approvals_insert", "AFTER INSERT ON lado_plan_approvals", ""),
 	// A queue entry publishes its task's change when it is made and when a
@@ -150,6 +166,26 @@ BEGIN
     FROM lado_tasks
     JOIN projects ON projects.id = lado_tasks.project_id
     WHERE lado_tasks.id = NEW.task_id;
+END`
+}
+
+// ladoPlanRequestChildCDCTrigger publishes a change of the task whose plan
+// request NEW.request_id names, in the task's project.
+func ladoPlanRequestChildCDCTrigger(name, event, when string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_task', 'taskId', lado_tasks.id, 'projectId', projects.id),
+        datetime('now')
+    FROM lado_plan_requests
+    JOIN lado_tasks ON lado_tasks.id = lado_plan_requests.task_id
+    JOIN projects ON projects.id = lado_tasks.project_id
+    WHERE lado_plan_requests.id = NEW.request_id;
 END`
 }
 

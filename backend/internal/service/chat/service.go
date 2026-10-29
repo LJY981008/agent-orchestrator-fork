@@ -350,7 +350,7 @@ func (s *Service) settleOrphanedWork(ctx context.Context, session domain.Session
 // the user can act on.
 func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, error) {
 	owner := conversationOwner(cfg)
-	if owner.Kind == domain.ConversationOwnerReview {
+	if owner.Kind == domain.ConversationOwnerReview || s.ladoReadOnly(ctx, cfg.SessionID) { // LADO fork: plan workers
 		cfg.ReadOnly = true
 	}
 	gate := s.controllerGate(owner)

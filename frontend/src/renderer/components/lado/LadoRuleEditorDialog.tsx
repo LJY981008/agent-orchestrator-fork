@@ -2,13 +2,24 @@
 // daemon validates the rule; its error codes are shown in the developer's
 // language under the field they are about. An edit starts from the version
 // the developer opened, so a newer one stops it until they reload, which
-// keeps their edits on top of the newer version.
+// keeps their edits on top of the newer version. Opened from an older
+// version, it starts from that version's text, so saving restores it as the
+// newest version. A plan worker role's instructions keep their category and
+// take no conflicts, so their editor leaves both out.
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, X } from "lucide-react";
 import { Fragment, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Trans, useTranslation } from "react-i18next";
 import { useRestoreFocusOnClose } from "../../hooks/useRestoreFocusOnClose";
-import { fetchLadoRule, LadoApiError, ladoRulesQueryRoot, type LadoRule, type LadoUpdateRuleInput } from "../../lib/lado";
+import {
+	fetchLadoRule,
+	LadoApiError,
+	ladoIsPlanRole,
+	ladoRulesQueryRoot,
+	type LadoRule,
+	type LadoRuleVersion,
+	type LadoUpdateRuleInput,
+} from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import { ladoRuleName, useLadoRuleChange, type LadoRuleChangeRequest } from "../../lib/lado-rules";
 import { cn } from "../../lib/utils";
@@ -48,7 +59,7 @@ const fieldOfCode: Partial<Record<string, Field>> = {
 
 type Draft = { name: string; category: string; instruction: string; conflicts: string[] };
 
-function draftOf(rule: LadoRule | undefined): Draft {
+function draftOf(rule: LadoRule | LadoRuleVersion | undefined): Draft {
 	return {
 		name: rule?.name ?? "",
 		category: rule?.category ?? "",
@@ -83,21 +94,24 @@ function rebase(base: LadoRule, draft: Draft, newer: LadoRule): Draft {
 }
 
 /**
- * Creates a rule when rule is undefined, otherwise edits it. rules names the
- * rules a new or edited rule can conflict with; protected rules are always
- * on, so they are not offered. A rule created for one project (projectId) is
- * on there only; the daemon leaves it off everywhere else. Mount it again for
- * each opening.
+ * Creates a rule when rule is undefined, otherwise edits it, from the text of
+ * the version from when it is set. rules names the rules a new or edited rule
+ * can conflict with; protected rules are always on and plan worker roles
+ * never in a task's rules, so neither is offered. A rule created for one
+ * project (projectId) is on there only; the daemon leaves it off everywhere
+ * else. Mount it again for each opening.
  */
 export function LadoRuleEditorDialog({
 	open,
 	rule,
+	from,
 	rules,
 	projectId,
 	onOpenChange,
 }: {
 	open: boolean;
 	rule?: LadoRule;
+	from?: LadoRuleVersion;
 	rules: readonly LadoRule[];
 	projectId?: string;
 	onOpenChange: (open: boolean) => void;
@@ -108,7 +122,7 @@ export function LadoRuleEditorDialog({
 	const restoreFocusOnClose = useRestoreFocusOnClose(open);
 	const nameRef = useRef<HTMLInputElement>(null);
 	const [base, setBase] = useState(rule);
-	const [draft, setDraft] = useState(() => draftOf(rule));
+	const [draft, setDraft] = useState(() => draftOf(rule && from ? from : rule));
 	const [on, setOn] = useState(true);
 	const [reloading, setReloading] = useState(false);
 	const [reloadError, setReloadError] = useState<unknown>(null);
@@ -121,6 +135,7 @@ export function LadoRuleEditorDialog({
 	const onId = useId();
 
 	const busy = change.isPending || reloading;
+	const planRole = base ? ladoIsPlanRole(base) : false;
 	const dirty = base ? Object.keys(changedFields(base, draft)).length > 0 : true;
 	// A failed apply after the impact dialog's confirm shows in that dialog.
 	const error = change.pending ? null : change.error;
@@ -131,7 +146,10 @@ export function LadoRuleEditorDialog({
 	const formError = error && !field && !stale ? ladoErrorText(t, error) : null;
 	const candidates = rules.filter(
 		(candidate) =>
-			!candidate.protected && candidate.id !== base?.id && (!candidate.archived || draft.conflicts.includes(candidate.id)),
+			!candidate.protected &&
+			!ladoIsPlanRole(candidate) &&
+			candidate.id !== base?.id &&
+			(!candidate.archived || draft.conflicts.includes(candidate.id)),
 	);
 	// Rules deleted since the rule named them: the rules no longer list them,
 	// but they stay offered so the developer can remove them.
@@ -250,6 +268,10 @@ export function LadoRuleEditorDialog({
 							<p className="text-caption leading-4 text-[var(--color-status-needs-you)]" role="status">
 								{t("lado.rules.editor.editsKept")}
 							</p>
+						) : base && from ? (
+							<p className="text-caption leading-4 text-settings-muted" data-testid="lado-rule-editor-from">
+								{t("lado.rules.editor.fromVersion", { number: from.number })}
+							</p>
 						) : null}
 						<EditorField id={nameId} label={t("lado.rules.editor.name")} error={fieldError("name")}>
 							<input
@@ -263,18 +285,20 @@ export function LadoRuleEditorDialog({
 								className="settings-field-control h-(--size-settings-action-height) rounded-md!"
 							/>
 						</EditorField>
-						<EditorField id={categoryId} label={t("lado.rules.editor.category")} error={fieldError("category")}>
-							<input
-								id={categoryId}
-								value={draft.category}
-								onChange={(event) => edit({ category: event.target.value })}
-								placeholder={t("lado.rules.editor.categoryPlaceholder")}
-								aria-invalid={fieldError("category") ? true : undefined}
-								aria-describedby={describedBy(categoryId, fieldError("category"))}
-								autoComplete="off"
-								className="settings-field-control h-(--size-settings-action-height) rounded-md!"
-							/>
-						</EditorField>
+						{planRole ? null : (
+							<EditorField id={categoryId} label={t("lado.rules.editor.category")} error={fieldError("category")}>
+								<input
+									id={categoryId}
+									value={draft.category}
+									onChange={(event) => edit({ category: event.target.value })}
+									placeholder={t("lado.rules.editor.categoryPlaceholder")}
+									aria-invalid={fieldError("category") ? true : undefined}
+									aria-describedby={describedBy(categoryId, fieldError("category"))}
+									autoComplete="off"
+									className="settings-field-control h-(--size-settings-action-height) rounded-md!"
+								/>
+							</EditorField>
+						)}
 						<EditorField id={instructionId} label={t("lado.rules.editor.instruction")} error={fieldError("instruction")}>
 							<textarea
 								id={instructionId}
@@ -286,16 +310,18 @@ export function LadoRuleEditorDialog({
 								className="settings-field-control min-h-(--size-textarea-min) resize-none overflow-y-auto rounded-md! py-2.5"
 							/>
 						</EditorField>
-						<EditorField id={conflictsId} label={t("lado.rules.editor.conflicts")} error={fieldError("conflicts")}>
-							<ConflictsMenu
-								id={conflictsId}
-								value={draft.conflicts}
-								candidates={candidates}
-								deleted={deleted}
-								error={fieldError("conflicts")}
-								onChange={(conflicts) => edit({ conflicts })}
-							/>
-						</EditorField>
+						{planRole ? null : (
+							<EditorField id={conflictsId} label={t("lado.rules.editor.conflicts")} error={fieldError("conflicts")}>
+								<ConflictsMenu
+									id={conflictsId}
+									value={draft.conflicts}
+									candidates={candidates}
+									deleted={deleted}
+									error={fieldError("conflicts")}
+									onChange={(conflicts) => edit({ conflicts })}
+								/>
+							</EditorField>
+						)}
 						{base || projectId ? null : (
 							<div className="flex items-center justify-between gap-3">
 								<label htmlFor={onId} className="settings-field-label">

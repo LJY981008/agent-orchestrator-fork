@@ -1426,6 +1426,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/plan-requests/{requestId}/critique": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit a critic's findings on a plan worker's draft; only the request's running critic session may */
+        post: operations["submitLadoPlanCritique"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/plan-requests/{requestId}/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Submit a plan worker's draft or final plan; only the request's designer session may */
+        post: operations["submitLadoPlan"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/plans/{revisionId}": {
         parameters: {
             query?: never;
@@ -1852,7 +1886,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Pin the issue with its trusted comments and ask the project's orchestrator for a plan or a changed plan */
+        /** Pin the issue with its trusted comments and ask a plan worker for a plan or a changed plan */
         post: operations["requestLadoPlan"];
         delete?: never;
         options?: never;
@@ -6095,7 +6129,7 @@ export interface components {
         CreateLadoPlanRequestRequest: {
             /** @description What to change in the latest revision; makes this a change request. */
             note?: string;
-            /** @description An issue comment that holds the plan; the orchestrator converts it faithfully. */
+            /** @description An issue comment that holds the plan; the plan worker converts it faithfully. */
             sourceCommentId?: string;
         };
         CreateLadoRuleRequest: {
@@ -6591,15 +6625,19 @@ export interface components {
             provider: "github" | "gitlab";
         };
         LadoDispatchSettingsResponse: {
-            /** @description Keep queued work waiting while memory pressure is tight. */
+            /** @description Keep queued work and plan requests waiting while memory pressure is tight. */
             holdOnMemoryTight: boolean;
             /** @description How many executions run at once across projects. Each project has its own cap too. */
             maxConcurrent: number;
+            /** @description How many plan requests run their plan workers at once across projects, apart from the executions' caps; a designer and its critic count as one. */
+            maxPlanWorkers: number;
             /**
              * @description How long an execution may run before LADO stops it; 0 means no limit.
              * @enum {integer}
              */
             maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
+            /** @description When LADO skips the review of a plan worker's draft. */
+            planReview: components["schemas"]["LadoPlanReviewSettings"];
             /**
              * Format: date-time
              * @description When the settings last changed; omitted while the defaults apply.
@@ -6863,7 +6901,7 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
             id: string;
-            /** @description A plan request pins this comment for the orchestrator. */
+            /** @description A plan request pins this comment for the plan worker. */
             included: boolean;
             url?: string;
         };
@@ -6914,6 +6952,8 @@ export interface components {
             baseRef?: string;
             /** @description The Markdown after the front matter. */
             body: string;
+            /** @description The changes the plan declares: db_schema, external_api, auth or data_deletion. */
+            changeKinds: string[];
             permissionCeiling?: string;
             /** @description issue, or comment:<id> for a plan converted from an issue comment. */
             planSource?: string;
@@ -6923,17 +6963,89 @@ export interface components {
             steps: string[];
             testCommands: string[];
         };
+        LadoPlanCritiqueResponse: {
+            /** @description 1 and 2 for the critic sessions, 0 for a skipped review. */
+            attempt: number;
+            /** @description Why the critic gave no result. */
+            failureReason?: string;
+            findings: components["schemas"]["LadoPlanFindingResponse"][];
+            /** Format: date-time */
+            finishedAt?: null | string;
+            requestId: string;
+            /** @description The critic session. */
+            sessionId?: string;
+            /** @description Why LADO skipped the review. */
+            skipReason?: string;
+            /** Format: date-time */
+            startedAt: string;
+            /** @enum {string} */
+            state: "running" | "done" | "failed" | "skipped";
+        };
+        LadoPlanFindingInput: {
+            failure_scenario?: string;
+            id: string;
+            /** @enum {string} */
+            severity: "P1" | "major" | "minor";
+            suggestion?: string;
+            title: string;
+            where?: string;
+        };
+        LadoPlanFindingResponse: {
+            /**
+             * @description How the plan's review section answers the finding; omitted when it does not.
+             * @enum {string}
+             */
+            answer?: "addressed" | "not_addressed";
+            failureScenario?: string;
+            id: string;
+            /** @enum {string} */
+            severity: "P1" | "major" | "minor";
+            suggestion?: string;
+            title: string;
+            where?: string;
+        };
         LadoPlanHistoryResponse: {
             approvals: components["schemas"]["LadoPlanApprovalResponse"][];
+            critiques: components["schemas"]["LadoPlanCritiqueResponse"][];
             requests: components["schemas"]["LadoPlanRequestResponse"][];
             revisions: components["schemas"]["LadoPlanRevisionResponse"][];
         };
+        LadoPlanMetricsResponse: {
+            /** @description P1 and major findings the plan says it took. */
+            addressed: number;
+            changeKinds: string[];
+            /**
+             * Format: int64
+             * @description Over every critic session of the review.
+             */
+            critiqueMs: number;
+            /**
+             * Format: int64
+             * @description From the designer's start to its draft.
+             */
+            designMs: number;
+            major: number;
+            minor: number;
+            /** @description P1 and major findings the plan says it did not take, with a reason. */
+            notAddressed: number;
+            p1: number;
+            /** @enum {string} */
+            review: "done" | "skipped" | "failed" | "none";
+            /**
+             * Format: int64
+             * @description From the review's result to the final plan.
+             */
+            reviseMs: number;
+            sessions: components["schemas"]["LadoPlanSessionUsageResponse"][];
+            /** Format: date-time */
+            updatedAt: string;
+        };
         LadoPlanProblemResponse: {
             /**
-             * @description Stable problem code the app translates.
+             * @description Stable problem code the app translates. plan_review_missing: a plan worker's plan has no review section; plan_review_unaddressed: it does not answer the P1 and major findings that detail lists.
              * @enum {string}
              */
-            code: "too_large" | "not_text" | "missing_front_matter" | "invalid_front_matter" | "missing_field" | "invalid_field" | "wrong_task" | "wrong_issue" | "unknown_source_comment" | "wrong_source" | "unknown_base_ref";
+            code: "too_large" | "not_text" | "missing_front_matter" | "invalid_front_matter" | "missing_field" | "invalid_field" | "wrong_task" | "wrong_issue" | "unknown_source_comment" | "wrong_source" | "unknown_base_ref" | "plan_review_missing" | "plan_review_unaddressed";
             /** @description The offending value, or the parser's message. */
             detail?: string;
             /** @description The front matter key the problem is about. */
@@ -6948,30 +7060,55 @@ export interface components {
             deliveryError?: string;
             /**
              * Format: date-time
-             * @description When LADO stopped trying to deliver the request.
+             * @description When the request failed: LADO stopped delivering it to the orchestrator, or its plan worker failed.
              */
             failedAt?: null | string;
+            /** @enum {string} */
+            failureCode?: "plan_worker_spawn_failed" | "plan_worker_no_plan" | "plan_worker_timed_out" | "plan_worker_agent_unsupported" | "replaced";
             id: string;
+            /**
+             * @description Who writes the plan: a plan worker, or, for a request made before plan workers, the orchestrator.
+             * @enum {string}
+             */
+            kind: "orchestrator" | "worker";
             /** @description What the developer asked to change. */
             note?: string;
+            /**
+             * @description Where a plan worker request is; omitted for a request to an orchestrator.
+             * @enum {string}
+             */
+            phase?: "waiting" | "designing" | "critiquing" | "revising" | "submitted" | "fixing" | "done" | "failed" | "replaced";
             /** Format: date-time */
             requestedAt: string;
-            /** @description The orchestrator session asked for the plan. */
+            /** @description The session that writes the plan: the orchestrator asked, or the plan worker's designer; empty while a plan worker waits to start. */
             sessionId: string;
             /** @description The issue comment the developer named as the plan. */
             sourceCommentId?: string;
             taskId: string;
+            /** @enum {string} */
+            waitingReason?: "plan_worker_capacity" | "memory_tight";
         };
         LadoPlanResponse: {
             /** @description A valid approval covers this revision. */
             approved: boolean;
             /** @description The pinned plan file; empty when the pin is missing. */
             content: string;
+            critique?: components["schemas"]["LadoPlanCritiqueResponse"];
             /** @description This is the task's newest revision. */
             latest: boolean;
             plan: components["schemas"]["LadoPlanContentResponse"];
             revision: components["schemas"]["LadoPlanRevisionResponse"];
             task: components["schemas"]["LadoTaskResponse"];
+        };
+        LadoPlanReviewSettings: {
+            /** @description The most affected paths a plan may name and skip the review. */
+            maxPaths: number;
+            /** @description Globs that infer a change kind (db_schema, external_api, auth, data_deletion) from a plan's affected paths. */
+            patterns: {
+                [key: string]: string[];
+            } | null;
+            /** @description Skip the review of small plans; off reviews every draft. */
+            skip: boolean;
         };
         LadoPlanRevisionResponse: {
             baseRef?: string;
@@ -6982,6 +7119,7 @@ export interface components {
             id: string;
             /** @description The pinned issue snapshot the plan was made from. */
             issueSnapshotSha256: string;
+            metrics?: components["schemas"]["LadoPlanMetricsResponse"];
             number: number;
             problems: components["schemas"]["LadoPlanProblemResponse"][];
             requestId: string;
@@ -7006,6 +7144,62 @@ export interface components {
             source: "agent" | "user";
             /** @description False when the plan has problems; such a plan cannot be approved. */
             valid: boolean;
+        };
+        LadoPlanSessionUsageResponse: {
+            /**
+             * Format: int64
+             * @description The part of inputTokens read from the provider's cache.
+             */
+            cacheReadTokens: number;
+            /**
+             * Format: int64
+             * @description The part of inputTokens written to the provider's cache.
+             */
+            cacheWriteTokens: number;
+            /** @description AO's cost estimate in nano dollars; omitted when AO priced none of the session's events. */
+            costNanos?: null | number;
+            /**
+             * Format: int64
+             * @description All input, as AO counts it: cache reads and writes included.
+             */
+            inputTokens: number;
+            /** Format: int64 */
+            outputTokens: number;
+            /** @enum {string} */
+            role: "design" | "critique";
+            sessionId: string;
+        };
+        LadoPlanWorkerResponse: {
+            /** @description The newest critic session of the draft's review, once one started. */
+            criticSessionId?: string;
+            /** @description The designer session, once it started. */
+            designerSessionId?: string;
+            /**
+             * @description Why the request failed, for the app to translate.
+             * @enum {string}
+             */
+            failureCode?: "plan_worker_spawn_failed" | "plan_worker_no_plan" | "plan_worker_timed_out" | "plan_worker_agent_unsupported" | "replaced";
+            /**
+             * @description waiting: for a plan worker slot or for memory; designing: the designer drafts the plan; critiquing: a critic reviews the draft, or LADO decides to skip the review; revising: the designer answers the review; submitted: LADO pins the final plan; fixing: the designer fixes the pinned plan's problems, once; done: the plan is pinned and the sessions stopped; failed and replaced end the request.
+             * @enum {string}
+             */
+            phase: "waiting" | "designing" | "critiquing" | "revising" | "submitted" | "fixing" | "done" | "failed" | "replaced";
+            requestId: string;
+            /**
+             * @description How the newest review of the draft went; omitted before one.
+             * @enum {string}
+             */
+            review?: "running" | "done" | "failed" | "skipped";
+            /**
+             * Format: date-time
+             * @description When the designer started.
+             */
+            startedAt?: null | string;
+            /**
+             * @description Why the request waits: every plan worker slot of the Runs settings is taken, or memory is tight.
+             * @enum {string}
+             */
+            waitingReason?: "plan_worker_capacity" | "memory_tight";
         };
         LadoPolicyProblemResponse: {
             /** @description Stable problem code the app translates. */
@@ -7154,7 +7348,7 @@ export interface components {
             conflictsWith: string[];
             /** Format: date-time */
             createdAt: string;
-            /** @description How LADO applies the rule: prompt, validator, tool_policy or workflow_gate. */
+            /** @description How LADO applies the rule: prompt, validator, tool_policy or workflow_gate; plan_role for a plan worker role's instructions, which reach plan workers only. */
             enforcement: string[];
             /**
              * @description The Global binding, which applies to every LADO project.
@@ -7758,15 +7952,16 @@ export interface components {
             /** @description The latest revision's id while a valid approval covers it. */
             approvedRevisionId?: string;
             latest?: components["schemas"]["LadoPlanRevisionSummaryResponse"];
-            /** @description Why LADO stopped delivering the newest request, when it did. */
+            /** @description Why the newest request failed, when it did: the details behind its failure code. */
             requestError?: string;
-            /** @description A plan request waits for the orchestrator's plan. */
+            /** @description The newest plan request still waits for its plan. */
             requestPending: boolean;
             /**
              * Format: date-time
              * @description When the newest plan request was made.
              */
             requestedAt?: null | string;
+            worker?: components["schemas"]["LadoPlanWorkerResponse"];
         };
         LadoTaskQueueResponse: {
             /** @description Attempts to start the worker so far; LADO gives up after three. */
@@ -9357,6 +9552,19 @@ export interface components {
             /** @description Source invocation generation that authored this handoff. */
             sourceGenerationId: string;
         };
+        SubmitLadoCritiqueRequest: {
+            findings: components["schemas"]["LadoPlanFindingInput"][];
+            /** @description The submitting session; it must be the request's running critic. */
+            sessionId: string;
+        };
+        SubmitLadoPlanRequest: {
+            /** @description The whole plan file. */
+            content: string;
+            /** @description The draft LADO reviews; without it the plan is final and LADO pins it. */
+            draft?: boolean;
+            /** @description The submitting session; it must be the request's designer. */
+            sessionId: string;
+        };
         SubmitReviewInput: {
             /** @description Review body recorded by AO. Required for changes_requested. */
             body?: string;
@@ -9507,8 +9715,10 @@ export interface components {
         UpdateLadoDispatchSettingsRequest: {
             holdOnMemoryTight: boolean;
             maxConcurrent: number;
+            maxPlanWorkers?: null | number;
             /** @enum {integer} */
             maxRunMinutes: 0 | 60 | 120 | 240 | 480 | 720 | 1440;
+            planReview?: components["schemas"]["LadoPlanReviewSettings"];
         };
         UpdateLadoProjectSettingsRequest: {
             /** @description Replace the check commands, 0 to 10. A change needs a human-presence proof, because the daemon runs them outside any agent sandbox, and checkCommandsBase; an invalid list refuses with LADO_CHECK_COMMANDS_INVALID and its index, field and reason (a command with a control character, such as a line break, or a bidirectional control also with its position and the character as U+XXXX); a list that moved on since checkCommandsBase refuses with 409 LADO_CHECK_COMMANDS_CHANGED and the current checkCommandsSha256. */
@@ -14535,6 +14745,150 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LadoIntegrationApprovalResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    submitLadoPlanCritique: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO plan request id. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitLadoCritiqueRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoPlanCritiqueResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    submitLadoPlan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO plan request id. */
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitLadoPlanRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoPlanRequestResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */

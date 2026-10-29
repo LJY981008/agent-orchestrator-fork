@@ -369,6 +369,74 @@ describe("RulesSection", () => {
 		expect(within(await findRow(review.id)).getByRole("switch")).toBeInTheDocument();
 	});
 
+	// LADO fork: what LADO tells its plan workers (docs/LJY-PRD/TDD.md §5.1).
+	it("keeps the plan worker roles in a Planning card, always used, edited and restored from their history", async () => {
+		const user = userEvent.setup();
+		const designer = rule({
+			id: "plan.role.designer",
+			name: "Plan designer",
+			builtin: true,
+			category: "planning",
+			enforcement: ["plan_role"],
+			instruction: "Design the plan, then answer the review.",
+			version: 2,
+		});
+		const critic = rule({ id: "plan.role.critic", name: "Plan critic", builtin: true, category: "planning", enforcement: ["plan_role"], instruction: "Review the draft." });
+		const version = (number: number, instruction: string): lado.LadoRuleVersion => ({
+			id: `plan.role.designer-v${number}`,
+			number,
+			name: "Plan designer",
+			category: "planning",
+			instruction,
+			enforcement: ["plan_role"],
+			conflictsWith: [],
+			sha256: String(number).repeat(64),
+			actor: number === 1 ? "lado" : "human",
+			createdAt: `2026-10-22T0${number}:00:00Z`,
+		});
+		vi.mocked(lado.fetchLadoRules).mockResolvedValue([planApproval, ceiling, korean, review, designer, critic]);
+		vi.mocked(lado.fetchLadoRule).mockResolvedValue({ rule: designer, versions: [version(1, "Design the plan."), version(2, designer.instruction)] });
+		vi.mocked(lado.updateLadoRule).mockImplementation(async (_ruleId, input) => ({ applied: !input.dryRun, impact: noImpact, rule: { ...designer, version: 3 } }));
+		renderSection();
+
+		const designerRow = await findRow(designer.id);
+		const card = designerRow.closest("section")!;
+		expect(within(card).getByRole("heading", { name: "Planning" })).toBeInTheDocument();
+		expect(card).toContainElement(row(critic.id));
+		expect(within(designerRow).getByText("Plan designer")).toBeInTheDocument();
+		expect(within(designerRow).getByText("What the plan worker that writes each plan is told.")).toBeInTheDocument();
+		// Always used: no switch, no strength, no archive.
+		expect(within(designerRow).getByText("Always used")).toBeInTheDocument();
+		expect(within(designerRow).queryByRole("switch")).not.toBeInTheDocument();
+		expect(designerRow).not.toHaveTextContent("Advisory");
+		await user.click(within(designerRow).getByRole("button", { name: "Actions for Plan designer" }));
+		const menu = await screen.findByRole("menu");
+		expect(within(menu).getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Edit", "History"]);
+		await user.click(within(menu).getByRole("menuitem", { name: "History" }));
+
+		const history = await screen.findByRole("dialog", { name: "History of Plan designer" });
+		await within(history).findByText("Version 1");
+		// The current version has nothing to restore.
+		expect(within(history).queryByRole("button", { name: "Restore this version…" })).not.toBeInTheDocument();
+		await user.click(within(history).getByRole("button", { name: /^Version 1/ }));
+		await user.click(within(history).getByRole("button", { name: "Restore this version…" }));
+
+		const editor = await screen.findByTestId("lado-rule-editor");
+		expect(within(editor).getByTestId("lado-rule-editor-from")).toHaveTextContent("This is the text of version 1.");
+		expect(within(editor).getByLabelText("Instruction")).toHaveValue("Design the plan.");
+		// A plan worker role keeps its category and takes no conflicts.
+		expect(within(editor).queryByLabelText("Category")).not.toBeInTheDocument();
+		expect(within(editor).queryByText("Conflicts with")).not.toBeInTheDocument();
+		await user.click(within(editor).getByRole("button", { name: "Save" }));
+
+		await waitFor(() => expect(lado.updateLadoRule).toHaveBeenCalledTimes(2));
+		expect(vi.mocked(lado.updateLadoRule).mock.calls).toEqual([
+			[designer.id, { baseVersion: 2, instruction: "Design the plan.", dryRun: true }],
+			[designer.id, { baseVersion: 2, instruction: "Design the plan." }],
+		]);
+		await waitFor(() => expect(screen.queryByTestId("lado-rule-editor")).not.toBeInTheDocument());
+	});
+
 	it("deletes an unused rule after confirmation", async () => {
 		const user = userEvent.setup();
 		vi.mocked(lado.fetchLadoRules)

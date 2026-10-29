@@ -620,6 +620,11 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if shouldEmitSessionStartContext(agent, event) {
 		c.emitSessionStartContext(agent, event, sessionID)
 	}
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && ladoPlanWorkerSession() { // LADO fork: plan workers are read-only
+		if done, err := answerLadoPlanWorker(c.deps.Out, event, payload); err != nil || done {
+			return err
+		}
+	}
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}

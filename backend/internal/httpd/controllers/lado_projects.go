@@ -63,6 +63,8 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/tasks/{taskId}/plans", c.listPlans)
 	r.Get("/lado/plans/{revisionId}", c.getPlan)
 	r.Post("/lado/plans/{revisionId}/approve", c.approvePlan)
+	r.Post("/lado/plan-requests/{requestId}/submit", c.submitPlan)
+	r.Post("/lado/plan-requests/{requestId}/critique", c.submitCritique)
 	r.Get("/lado/rules", c.listRules)
 	r.Post("/lado/rules", c.createRule)
 	r.Get("/lado/rules/{ruleId}", c.getRule)
