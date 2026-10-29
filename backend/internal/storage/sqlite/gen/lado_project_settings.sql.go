@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"database/sql"
 	"time"
 )
 
@@ -29,7 +30,8 @@ func (q *Queries) GetLadoProjectChecks(ctx context.Context, projectID string) (G
 }
 
 const getLadoProjectSettings = `-- name: GetLadoProjectSettings :one
-SELECT project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes
+SELECT project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes,
+    overlap_wait, overlap_ignore_json
 FROM lado_project_settings
 WHERE project_id = ?
 `
@@ -44,6 +46,8 @@ func (q *Queries) GetLadoProjectSettings(ctx context.Context, projectID string) 
 		&i.MaxConcurrent,
 		&i.CheckCommands,
 		&i.CheckTimeoutMinutes,
+		&i.OverlapWait,
+		&i.OverlapIgnoreJson,
 	)
 	return i, err
 }
@@ -84,13 +88,41 @@ func (q *Queries) UpsertLadoProjectCheckTimeout(ctx context.Context, arg UpsertL
 	return err
 }
 
+const upsertLadoProjectOverlap = `-- name: UpsertLadoProjectOverlap :exec
+INSERT INTO lado_project_settings (project_id, lado_mode, overlap_wait, overlap_ignore_json, updated_at)
+VALUES (?, 0, ?, ?, ?)
+ON CONFLICT (project_id) DO UPDATE SET
+    overlap_wait = excluded.overlap_wait,
+    overlap_ignore_json = excluded.overlap_ignore_json,
+    updated_at = excluded.updated_at
+`
+
+type UpsertLadoProjectOverlapParams struct {
+	ProjectID         string
+	OverlapWait       int64
+	OverlapIgnoreJson sql.NullString
+	UpdatedAt         time.Time
+}
+
+// A project without a settings row gets one with LADO mode off.
+func (q *Queries) UpsertLadoProjectOverlap(ctx context.Context, arg UpsertLadoProjectOverlapParams) error {
+	_, err := q.db.ExecContext(ctx, upsertLadoProjectOverlap,
+		arg.ProjectID,
+		arg.OverlapWait,
+		arg.OverlapIgnoreJson,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const upsertLadoProjectSettings = `-- name: UpsertLadoProjectSettings :one
 INSERT INTO lado_project_settings (project_id, lado_mode, updated_at)
 VALUES (?, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET
     lado_mode = excluded.lado_mode,
     updated_at = excluded.updated_at
-RETURNING project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes
+RETURNING project_id, lado_mode, updated_at, max_concurrent, check_commands, check_timeout_minutes,
+    overlap_wait, overlap_ignore_json
 `
 
 type UpsertLadoProjectSettingsParams struct {
@@ -109,6 +141,8 @@ func (q *Queries) UpsertLadoProjectSettings(ctx context.Context, arg UpsertLadoP
 		&i.MaxConcurrent,
 		&i.CheckCommands,
 		&i.CheckTimeoutMinutes,
+		&i.OverlapWait,
+		&i.OverlapIgnoreJson,
 	)
 	return i, err
 }

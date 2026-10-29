@@ -26,6 +26,7 @@ func (s *Store) LadoProjectSettings(ctx context.Context, projectID domain.Projec
 			MaxConcurrent:       domain.LadoDefaultProjectMaxConcurrent,
 			CheckCommands:       []domain.LadoCheckCommand{},
 			CheckTimeoutMinutes: domain.LadoCheckTimeoutDefault,
+			OverlapWait:         true,
 		}, nil
 	}
 	if err != nil {
@@ -145,14 +146,55 @@ func ladoProjectSettingsFromGen(row gen.LadoProjectSetting) (domain.LadoProjectS
 	if err != nil {
 		return domain.LadoProjectSettings{}, err
 	}
+	var ignore []string
+	if row.OverlapIgnoreJson.Valid {
+		ignore = []string{}
+		if err := json.Unmarshal([]byte(row.OverlapIgnoreJson.String), &ignore); err != nil {
+			return domain.LadoProjectSettings{}, fmt.Errorf("decode LADO overlap ignore globs: %w", err)
+		}
+	}
 	return domain.LadoProjectSettings{
 		ProjectID:           domain.ProjectID(row.ProjectID),
 		LadoMode:            row.LadoMode == 1,
 		MaxConcurrent:       int(row.MaxConcurrent),
 		CheckCommands:       commands,
 		CheckTimeoutMinutes: int(row.CheckTimeoutMinutes),
+		OverlapWait:         row.OverlapWait == 1,
+		OverlapIgnore:       ignore,
 		UpdatedAt:           row.UpdatedAt,
 	}, nil
+}
+
+// SetLadoProjectOverlap stores whether a project holds tasks whose paths
+// overlap another task's live run, and the globs whose overlap does not count
+// (nil for the defaults), with the audit event, in one transaction; the
+// change takes the event's time. A project without LADO settings gets them
+// with LADO mode off.
+func (s *Store) SetLadoProjectOverlap(ctx context.Context, projectID domain.ProjectID, wait bool, ignore []string, event domain.LadoAuditEvent) error {
+	var stored sql.NullString
+	if ignore != nil {
+		data, err := json.Marshal(ignore)
+		if err != nil {
+			return fmt.Errorf("encode LADO overlap ignore globs: %w", err)
+		}
+		stored = sql.NullString{String: string(data), Valid: true}
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "set LADO project overlap", func(q *gen.Queries) error {
+		if err := q.UpsertLadoProjectOverlap(ctx, gen.UpsertLadoProjectOverlapParams{
+			ProjectID:         string(projectID),
+			OverlapWait:       boolInt(wait),
+			OverlapIgnoreJson: stored,
+			UpdatedAt:         event.At.UTC(),
+		}); err != nil {
+			return err
+		}
+		_, err := appendLadoAuditEventTx(ctx, q, event)
+		return err
+	})
 }
 
 // ladoCheckCommandsFromJSON decodes a project's stored check commands; none

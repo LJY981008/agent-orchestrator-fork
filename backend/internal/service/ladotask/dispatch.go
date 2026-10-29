@@ -88,3 +88,22 @@ func (s *Service) RunInput(ctx context.Context, task domain.LadoTask) (RunInput,
 		Snapshot:     snapshot,
 	}, nil
 }
+
+// RevisionPaths returns the affected_paths of a pinned plan revision, read
+// from its pinned file: what the dispatcher compares a queued task's paths
+// with when another task's run of that revision is live.
+func (s *Service) RevisionPaths(ctx context.Context, id domain.LadoPlanRevisionID) ([]string, error) {
+	rev, ok, err := s.deps.Store.LadoPlanRevision(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("read plan revision %s: %w", id, err)
+	}
+	if !ok {
+		return nil, fmt.Errorf("plan revision %s not found", id)
+	}
+	content, err := s.deps.Blobs.Get(rev.SHA256, domain.LadoPlanMaxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("read the pinned plan of revision %s: %w", id, err)
+	}
+	plan, _ := domain.ParseLadoPlan(content, domain.LadoPlanExpectations{})
+	return plan.AffectedPaths, nil
+}

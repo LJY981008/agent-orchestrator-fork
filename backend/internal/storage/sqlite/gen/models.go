@@ -465,6 +465,9 @@ type LadoDispatchSetting struct {
 	PlanReviewSkip         int64
 	PlanReviewSkipMaxPaths int64
 	PlanReviewPatterns     string
+	MaxWorkers             int64
+	HoldOnDiskLow          int64
+	MinFreeDiskGb          int64
 }
 
 type LadoEvidenceLink struct {
@@ -500,6 +503,10 @@ type LadoExecution struct {
 	SettledAt            sql.NullTime
 	SettledPRURL         string
 	SettledPRState       string
+	Role                 string
+	PartID               string
+	Branch               string
+	StartSha             string
 }
 
 type LadoExecutionReview struct {
@@ -543,6 +550,24 @@ type LadoOrchestratorNotice struct {
 	SentAt     sql.NullTime
 	SentTo     string
 	DroppedAt  sql.NullTime
+}
+
+type LadoPartRun struct {
+	QueueEntryID         string
+	TaskID               string
+	ProjectID            string
+	PlanRevisionID       string
+	RepoDir              string
+	Branch               string
+	BaseSha              string
+	HeadSha              string
+	PlanBaseSha          string
+	BaseCommitsAhead     sql.NullInt64
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSha string
+	StartedAt            time.Time
+	IntegrationAttempts  int64
 }
 
 type LadoPlanApproval struct {
@@ -665,6 +690,8 @@ type LadoProjectSetting struct {
 	MaxConcurrent       int64
 	CheckCommands       string
 	CheckTimeoutMinutes int64
+	OverlapWait         int64
+	OverlapIgnoreJson   sql.NullString
 }
 
 type LadoQueueEntry struct {
@@ -687,6 +714,10 @@ type LadoQueueEntry struct {
 	FailedAt             sql.NullTime
 	SupersededAt         sql.NullTime
 	CancelledAt          sql.NullTime
+	PartsStartedAt       sql.NullTime
+	PartSpawnRequest     string
+	PartSpawnExpiresAt   sql.NullTime
+	WaitingDetail        string
 }
 
 type LadoRule struct {
@@ -780,6 +811,34 @@ type LadoTask struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	CancelledAt         sql.NullTime
+}
+
+type LadoTaskPart struct {
+	QueueEntryID   string
+	PartID         string
+	TaskID         string
+	Title          string
+	Position       int64
+	Phase          int64
+	StepsJson      string
+	PathsJson      string
+	DependsOnJson  string
+	State          string
+	Attempts       int64
+	MergeAttempts  int64
+	WaitingReason  string
+	WaitingDetail  string
+	SessionID      string
+	Branch         string
+	StartSha       string
+	MergeFromSha   string
+	MergeTipSha    string
+	MergedSha      string
+	MergeSessionID string
+	MergeBranch    string
+	Summary        string
+	ErrorMessage   string
+	UpdatedAt      time.Time
 }
 
 type LadoVerification struct {

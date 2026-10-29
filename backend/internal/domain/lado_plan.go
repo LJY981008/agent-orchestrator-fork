@@ -333,6 +333,10 @@ type LadoPlan struct {
 	// LadoChangeKinds the work makes. It decides, with the paths, whether a
 	// plan worker's draft is reviewed.
 	ChangeKinds []string
+	// Parts is the optional parts list: the steps split into parts that
+	// LADO runs in parallel workers (docs/LJY-PRD/TDD.md §5.4). Without it
+	// one worker runs the whole plan.
+	Parts []LadoPlanPart
 	// Body is the Markdown after the front matter.
 	Body string
 }
@@ -382,6 +386,7 @@ func ParseLadoPlan(content []byte, want LadoPlanExpectations) (LadoPlan, []LadoP
 	plan.ReviewRequired, plan.Reviewer = r.review()
 	plan.PlanSource = r.text("plan_source")
 	plan.ChangeKinds = r.changeKinds()
+	plan.Parts = r.parts()
 
 	if plan.Task != "" && plan.Task != string(want.Task) {
 		r.add(LadoPlanWrongTask, "task", plan.Task)
@@ -397,6 +402,7 @@ func ParseLadoPlan(content []byte, want LadoPlanExpectations) (LadoPlan, []LadoP
 			r.add(LadoPlanInvalidField, "affected_paths", glob)
 		}
 	}
+	r.checkParts(plan)
 	switch plan.Risk {
 	case "", LadoPlanRiskLow, LadoPlanRiskMedium, LadoPlanRiskHigh:
 	default:

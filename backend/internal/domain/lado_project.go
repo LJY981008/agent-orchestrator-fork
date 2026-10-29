@@ -20,5 +20,20 @@ type LadoProjectSettings struct {
 	// until it sets one).
 	CheckCommands       []LadoCheckCommand
 	CheckTimeoutMinutes int
-	UpdatedAt           time.Time
+	// OverlapWait holds a task back while a live run of another task of the
+	// project may touch the same files (docs/LJY-PRD/TDD.md §5.4), and
+	// OverlapIgnore lists the globs whose overlap does not count; nil means
+	// LadoDefaultOverlapIgnore.
+	OverlapWait   bool
+	OverlapIgnore []string
+	UpdatedAt     time.Time
+}
+
+// OverlapIgnoreOrDefault returns the project's ignore globs, or the defaults
+// while it set none.
+func (s LadoProjectSettings) OverlapIgnoreOrDefault() []string {
+	if s.OverlapIgnore == nil {
+		return LadoDefaultOverlapIgnore
+	}
+	return s.OverlapIgnore
 }

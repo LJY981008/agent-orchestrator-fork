@@ -95,7 +95,7 @@ func TestLadoMigrate0009KeepsEarlierRequestsAndRoundTrips(t *testing.T) {
 	if got, want := appliedVersion(t, db, ladoVersionTable), latestLadoMigration(t); got != want {
 		t.Fatalf("%s = %d, want %d", ladoVersionTable, got, want)
 	}
-	if got := tableColumns(t, db, "lado_dispatch_settings"); !slices.Equal(got[len(got)-len(ladoPlanWorkerSettingsColumns):], ladoPlanWorkerSettingsColumns) {
+	if got := tableColumns(t, db, "lado_dispatch_settings"); !hasColumnRun(got, ladoPlanWorkerSettingsColumns) {
 		t.Fatalf("lado_dispatch_settings columns = %v", got)
 	}
 }

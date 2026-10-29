@@ -37,6 +37,9 @@ func (s *Service) recover(ctx context.Context, now time.Time, settings *domain.L
 			problems = append(problems, fmt.Errorf("recover queue entry %s: %w", entry.ID, err))
 		}
 	}
+	if err := s.recoverPartSpawns(ctx, now, settings); err != nil {
+		problems = append(problems, err)
+	}
 	return errors.Join(problems...)
 }
 

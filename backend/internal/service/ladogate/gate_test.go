@@ -51,7 +51,20 @@ type fakeLease struct {
 // lease holds it for the attempt asked about, and an unknown entry has none.
 type fakeGrants struct {
 	leases map[domain.LadoQueueEntryID]fakeLease
-	err    error
+	// parts are the parts run starts in progress, by client request id.
+	parts map[string]fakeLease
+	err   error
+}
+
+func (f fakeGrants) LadoPartSpawnGrant(_ context.Context, request string, now time.Time) (domain.LadoDispatchGrant, error) {
+	if f.err != nil {
+		return domain.LadoDispatchGrant{}, f.err
+	}
+	lease, ok := f.parts[request]
+	if !ok {
+		return domain.LadoDispatchGrant{}, nil
+	}
+	return domain.LadoDispatchGrant{ProjectID: lease.project, Hash: lease.hash, Active: now.Before(lease.leaseUntil)}, nil
 }
 
 func (f fakeGrants) LadoDispatchGrant(_ context.Context, entryID domain.LadoQueueEntryID, attempt int, now time.Time) (domain.LadoDispatchGrant, error) {
@@ -516,5 +529,33 @@ func TestAuthorizeRestoreRefusesStoppedRuns(t *testing.T) {
 	unreadable := ladogate.New(ladoProject(), fakeSessions{}, fakeGrants{}, fakePolicies{}, fakeExecutions{err: readErr})
 	if err := unreadable.AuthorizeRestore(context.Background(), "lado-1"); !errors.Is(err, readErr) {
 		t.Fatalf("AuthorizeRestore when the execution cannot be read = %v, want the read error", err)
+	}
+}
+
+func TestAuthorizeSpawnGrantsOnlyThePartsRunStartInProgress(t *testing.T) {
+	now := time.Now()
+	grants := fakeGrants{parts: map[string]fakeLease{
+		"lado:entry-1/api/1":         {project: "lado", hash: "hash-1", leaseUntil: now.Add(time.Hour)},
+		"lado:entry-1/merge-api/2":   {project: "lado", hash: "hash-1", leaseUntil: now.Add(time.Hour)},
+		"lado:entry-1/integration/1": {project: "lado", hash: "hash-1", leaseUntil: now.Add(time.Hour)},
+		"lado:entry-2/web/1":         {project: "lado", hash: "hash-2", leaseUntil: now.Add(-time.Minute)},
+	}}
+	gate := ladogate.New(ladoProject(), fakeSessions{}, grants, fakePolicies{}, fakeExecutions{})
+	worker := func(id, hash string) ports.SpawnConfig {
+		return ports.SpawnConfig{ProjectID: "lado", Kind: domain.KindWorker, Prompt: "part", ClientRequestID: id, ClientRequestHash: hash}
+	}
+	for _, id := range []string{"lado:entry-1/api/1", "lado:entry-1/merge-api/2", "lado:entry-1/integration/1"} {
+		if err := gate.AuthorizeSpawn(context.Background(), worker(id, "hash-1")); err != nil {
+			t.Fatalf("AuthorizeSpawn(%s) = %v, want the start in progress granted", id, err)
+		}
+	}
+	for _, cfg := range []ports.SpawnConfig{
+		worker("lado:entry-1/api/2", "hash-1"),
+		worker("lado:entry-1/web/1", "hash-1"),
+		worker("lado:entry-2/web/1", "hash-2"),
+		worker("lado:entry-1/api/1", "hash-2"),
+		{Kind: domain.KindWorker, ClientRequestID: "lado:entry-9/api/1", ClientRequestHash: "hash-1"},
+	} {
+		requireRefusal(t, gate.AuthorizeSpawn(context.Background(), cfg), "LADO_TASK_REQUIRED")
 	}
 }

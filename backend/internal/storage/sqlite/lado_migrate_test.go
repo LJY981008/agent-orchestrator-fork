@@ -710,8 +710,8 @@ func TestLadoMigrateCreatesVerifyTables(t *testing.T) {
 	}
 	for _, added := range ladoVerifyColumns {
 		got := tableColumns(t, db, added.table)
-		if len(got) < len(added.columns) || !slices.Equal(got[len(got)-len(added.columns):], added.columns) {
-			t.Fatalf("%s columns = %v, want them to end with %v", added.table, got, added.columns)
+		if !hasColumnRun(got, added.columns) {
+			t.Fatalf("%s columns = %v, want them to hold %v in order", added.table, got, added.columns)
 		}
 	}
 
@@ -972,8 +972,8 @@ func TestLadoMigrate0008DownRemovesWhatItAdded(t *testing.T) {
 	}
 	for _, added := range ladoVerifyColumns {
 		got := tableColumns(t, db, added.table)
-		if len(got) < len(added.columns) || !slices.Equal(got[len(got)-len(added.columns):], added.columns) {
-			t.Fatalf("%s columns after migrating up again = %v, want them to end with %v", added.table, got, added.columns)
+		if !hasColumnRun(got, added.columns) {
+			t.Fatalf("%s columns after migrating up again = %v, want them to hold %v in order", added.table, got, added.columns)
 		}
 	}
 	expectEarlierRows("after migrating up again")
@@ -1076,4 +1076,14 @@ func TestLadoMigrate0008SettlesEarlierExecutions(t *testing.T) {
 			}
 		})
 	}
+}
+
+// hasColumnRun reports whether columns holds want as one run in order: what a
+// migration added, whatever later migrations added after it.
+func hasColumnRun(columns, want []string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	i := slices.Index(columns, want[0])
+	return i >= 0 && len(columns)-i >= len(want) && slices.Equal(columns[i:i+len(want)], want)
 }

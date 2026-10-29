@@ -49,8 +49,11 @@ type LadoQueueEntry struct {
 	LeaseToken     string
 	ClaimedAt      time.Time
 	LeaseExpiresAt time.Time
-	// WaitingReason says why an open entry waits (LadoWaiting*).
+	// WaitingReason says why an open entry waits (LadoWaiting*), and
+	// WaitingDetail what it waits for where the reason names something: the
+	// issue of the other task for LadoWaitingPathsOverlap.
 	WaitingReason string
+	WaitingDetail string
 	// ReviewRequiredReason (LadoReview*) and BlockedReason (LadoBlocked*)
 	// stop the entry: the task needs a new approval.
 	ReviewRequiredReason string
@@ -63,6 +66,16 @@ type LadoQueueEntry struct {
 	FailedAt     time.Time
 	SupersededAt time.Time
 	CancelledAt  time.Time
+	// PartsStartedAt is when the dispatcher started the entry's parts run
+	// (docs/LJY-PRD/TDD.md §5.4): from then on the parts' workers run and the
+	// entry is no longer claimed. DispatchedSessionID is set once the
+	// integration worker starts.
+	PartsStartedAt time.Time
+	// PartSpawnRequest is the client request id of the parts run worker the
+	// dispatcher starts now, until PartSpawnExpiresAt: the worker gate grants
+	// that spawn only.
+	PartSpawnRequest   string
+	PartSpawnExpiresAt time.Time
 }
 
 // LadoQueueItem is one row of the queue view: an open entry with its task's
@@ -86,6 +99,7 @@ const (
 	LadoQueueReviewRequired LadoQueueState = "review_required"
 	LadoQueueBlocked        LadoQueueState = "blocked"
 	LadoQueueDispatching    LadoQueueState = "dispatching"
+	LadoQueueRunningParts   LadoQueueState = "running_parts"
 	LadoQueueWaiting        LadoQueueState = "waiting"
 	LadoQueueQueued         LadoQueueState = "queued"
 )
@@ -106,6 +120,8 @@ func (e LadoQueueEntry) State(now time.Time) LadoQueueState {
 		return LadoQueueDispatched
 	case !e.FailedAt.IsZero():
 		return LadoQueueFailed
+	case !e.PartsStartedAt.IsZero():
+		return LadoQueueRunningParts
 	case e.ReviewRequiredReason != "":
 		return LadoQueueReviewRequired
 	case e.BlockedReason != "":
@@ -223,6 +239,15 @@ type LadoExecution struct {
 	// SettledAt is when verification settled the execution's merged or
 	// closed PR, zero while it still verifies.
 	SettledAt time.Time
+	// Role is what the execution does in its task (LadoRole*): "" for the
+	// one worker of a task without parts. PartID names the part of a part or
+	// merge worker. Branch is the branch LADO started the worker on, and
+	// StartSHA the commit it pointed at then; both are empty for a worker
+	// whose branch AO named.
+	Role     string
+	PartID   string
+	Branch   string
+	StartSHA string
 	// IntegrationGated says that LADO dispatched the execution while it
 	// gated integrations (build step 8 on): only then does a merge without
 	// an integration approval count as one. Executions dispatched before
@@ -288,12 +313,34 @@ type LadoDispatchSettings struct {
 	MaxPlanWorkers int
 	// PlanReview decides when a draft's review is skipped.
 	PlanReview LadoPlanReviewSettings
-	UpdatedAt  time.Time
+	// MaxWorkers caps the LADO worker sessions that run at once across
+	// projects: single, part, merge and integration workers, apart from plan
+	// workers (docs/LJY-PRD/TDD.md §5.4). MaxConcurrent and the projects'
+	// caps count tasks.
+	MaxWorkers int
+	// HoldOnDiskLow keeps new runs and parts waiting while the free disk
+	// space is under MinFreeDiskGB gigabytes.
+	HoldOnDiskLow bool
+	MinFreeDiskGB int
+	UpdatedAt     time.Time
 }
 
-// LadoMaxConcurrent is the highest cap on running executions, overall and per
+// LadoMaxConcurrent is the highest cap on running tasks, overall and per
 // project. The lowest is 1.
 const LadoMaxConcurrent = 8
+
+// LadoMaxWorkers is the highest cap on running LADO workers, and
+// LadoDefaultMaxWorkers the cap until the developer sets one.
+const (
+	LadoMaxWorkers        = 12
+	LadoDefaultMaxWorkers = 6
+)
+
+// The free disk space threshold, in gigabytes: the default and its range.
+const (
+	LadoDefaultMinFreeDiskGB = 10
+	LadoMinFreeDiskGBMax     = 1000
+)
 
 // LadoDefaultProjectMaxConcurrent is a project's cap on running executions
 // until it sets one.
@@ -312,7 +359,8 @@ var ErrLadoDispatchSettingsInvalid = errors.New("invalid dispatch settings")
 // plan requests at once, and no review of a small plan.
 func DefaultLadoDispatchSettings() LadoDispatchSettings {
 	return LadoDispatchSettings{MaxConcurrent: 2, MaxRunMinutes: 480, HoldOnMemoryTight: true,
-		MaxPlanWorkers: LadoDefaultMaxPlanWorkers, PlanReview: DefaultLadoPlanReviewSettings()}
+		MaxPlanWorkers: LadoDefaultMaxPlanWorkers, PlanReview: DefaultLadoPlanReviewSettings(),
+		MaxWorkers: LadoDefaultMaxWorkers, HoldOnDiskLow: true, MinFreeDiskGB: LadoDefaultMinFreeDiskGB}
 }
 
 // LadoDefaultMaxPlanWorkers is how many plan requests run at once until the
@@ -331,6 +379,12 @@ func (s LadoDispatchSettings) Validate() error {
 	}
 	if s.MaxPlanWorkers < 1 || s.MaxPlanWorkers > LadoMaxConcurrent {
 		return fmt.Errorf("%w: maxPlanWorkers must be 1 to %d, got %d", ErrLadoDispatchSettingsInvalid, LadoMaxConcurrent, s.MaxPlanWorkers)
+	}
+	if s.MaxWorkers < 1 || s.MaxWorkers > LadoMaxWorkers {
+		return fmt.Errorf("%w: maxWorkers must be 1 to %d, got %d", ErrLadoDispatchSettingsInvalid, LadoMaxWorkers, s.MaxWorkers)
+	}
+	if s.MinFreeDiskGB < 1 || s.MinFreeDiskGB > LadoMinFreeDiskGBMax {
+		return fmt.Errorf("%w: minFreeDiskGb must be 1 to %d, got %d", ErrLadoDispatchSettingsInvalid, LadoMinFreeDiskGBMax, s.MinFreeDiskGB)
 	}
 	if err := s.PlanReview.Validate(); err != nil {
 		return fmt.Errorf("%w: %w", ErrLadoDispatchSettingsInvalid, err)

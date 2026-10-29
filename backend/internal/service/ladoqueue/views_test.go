@@ -96,6 +96,7 @@ func TestSetSettingsAuditsTheChangeAsTheAPI(t *testing.T) {
 	stored, err := f.svc.SetSettings(ctx, want)
 	// The plan request settings the change leaves out keep their values.
 	want.MaxPlanWorkers, want.PlanReview = domain.LadoDefaultMaxPlanWorkers, domain.DefaultLadoPlanReviewSettings()
+	want.MaxWorkers, want.HoldOnDiskLow, want.MinFreeDiskGB = domain.LadoDefaultMaxWorkers, true, domain.LadoDefaultMinFreeDiskGB
 	want.UpdatedAt = t0
 	if err != nil || !reflect.DeepEqual(stored, want) {
 		t.Fatalf("SetSettings = %+v, %v; want %+v", stored, err, want)
@@ -109,8 +110,10 @@ func TestSetSettingsAuditsTheChangeAsTheAPI(t *testing.T) {
 		t.Fatalf("payload %s: %v", event.Payload, err)
 	}
 	wantPayload := map[string]map[string]any{
-		"from": {"maxConcurrent": 2.0, "maxRunMinutes": 480.0, "holdOnMemoryTight": true, "maxPlanWorkers": 2.0, "planReviewSkip": true, "planReviewSkipMaxPaths": 3.0},
-		"to":   {"maxConcurrent": 3.0, "maxRunMinutes": 120.0, "holdOnMemoryTight": false, "maxPlanWorkers": 2.0, "planReviewSkip": true, "planReviewSkipMaxPaths": 3.0},
+		"from": {"maxConcurrent": 2.0, "maxRunMinutes": 480.0, "holdOnMemoryTight": true, "maxPlanWorkers": 2.0, "planReviewSkip": true, "planReviewSkipMaxPaths": 3.0,
+			"maxWorkers": 6.0, "holdOnDiskLow": true, "minFreeDiskGb": 10.0},
+		"to": {"maxConcurrent": 3.0, "maxRunMinutes": 120.0, "holdOnMemoryTight": false, "maxPlanWorkers": 2.0, "planReviewSkip": true, "planReviewSkipMaxPaths": 3.0,
+			"maxWorkers": 6.0, "holdOnDiskLow": true, "minFreeDiskGb": 10.0},
 	}
 	for side := range payload {
 		delete(payload[side], "planReviewPatterns")

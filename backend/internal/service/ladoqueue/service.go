@@ -40,11 +40,13 @@ type Store interface {
 	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
 	LadoDispatchSettings(ctx context.Context) (domain.LadoDispatchSettings, error)
 	LadoProjectMaxConcurrent(ctx context.Context, projectID domain.ProjectID) (int, error)
-	CountLiveLadoExecutions(ctx context.Context, now time.Time) (int, map[domain.ProjectID]int, error)
+	LadoRunLoad(ctx context.Context, now time.Time) (domain.LadoRunLoad, error)
+	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 	SetLadoQueueWaiting(ctx context.Context, reason string, projectID *domain.ProjectID) (int64, error)
 	ClaimLadoQueueEntries(ctx context.Context, now, leaseUntil time.Time, limit int, fullProjects []domain.ProjectID, newToken func() string) ([]domain.LadoQueueEntry, error)
 	ReleaseLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token string, nextAttempt time.Time, waiting string) (bool, error)
 	HoldLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, waiting string, nextAttempt time.Time) (bool, error)
+	HoldLadoQueueEntryFor(ctx context.Context, id domain.LadoQueueEntryID, token, waiting, detail string, nextAttempt time.Time) (bool, error)
 	MarkLadoQueueEntryReviewRequired(ctx context.Context, id domain.LadoQueueEntryID, token, reason string) (bool, error)
 	MarkLadoQueueEntryBlocked(ctx context.Context, id domain.LadoQueueEntryID, token, reason string) (bool, error)
 	FailLadoQueueEntry(ctx context.Context, id domain.LadoQueueEntryID, token, message string, at time.Time) (bool, error)
@@ -64,6 +66,27 @@ type Store interface {
 	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
 	SetLadoDispatchSettings(ctx context.Context, settings domain.LadoDispatchSettings, event domain.LadoAuditEvent) (domain.LadoDispatchSettings, error)
 	LadoProjectChecks(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoCheckCommand, int, error)
+	PartStore
+}
+
+// PartStore keeps parts runs (parts.go).
+type PartStore interface {
+	StartLadoPartRun(ctx context.Context, token string, run domain.LadoPartRun, parts []domain.LadoTaskPart, event domain.LadoAuditEvent) error
+	ActiveLadoPartRuns(ctx context.Context) ([]domain.LadoActivePartRun, error)
+	LadoPartRun(ctx context.Context, entryID domain.LadoQueueEntryID) (domain.LadoPartRun, bool, error)
+	LadoTaskParts(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoTaskPart, error)
+	UpdateLadoTaskPart(ctx context.Context, part domain.LadoTaskPart, oldState domain.LadoPartState) (bool, error)
+	MergeLadoTaskPart(ctx context.Context, part domain.LadoTaskPart, oldState domain.LadoPartState, oldHead string, event domain.LadoAuditEvent) (bool, error)
+	FailLadoPartRun(ctx context.Context, entryID domain.LadoQueueEntryID, message string, event domain.LadoAuditEvent) (bool, error)
+	EndLadoPartRun(ctx context.Context, entryID domain.LadoQueueEntryID, superseded bool, at time.Time) (bool, error)
+	SetLadoPartSpawnRequest(ctx context.Context, entryID domain.LadoQueueEntryID, request string, expires time.Time) (bool, error)
+	ClearLadoPartSpawnRequest(ctx context.Context, entryID domain.LadoQueueEntryID, request string) (bool, error)
+	LadoPartSpawnRequests(ctx context.Context) ([]domain.LadoQueueEntry, error)
+	LadoPartSpawnGrant(ctx context.Context, clientRequestID string, now time.Time) (domain.LadoDispatchGrant, error)
+	LinkLadoPartExecution(ctx context.Context, request string, exec domain.LadoExecution, part *domain.LadoTaskPart, oldState domain.LadoPartState) error
+	BumpLadoPartRunIntegrationAttempts(ctx context.Context, entryID domain.LadoQueueEntryID, old int) (bool, error)
+	LadoExecutionsForEntry(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoExecution, error)
+	LatestSessionReport(ctx context.Context, sessionID domain.SessionID) (domain.ReportState, string, bool, error)
 }
 
 // Tasks reads a task's issue now and the inputs its worker starts from.
@@ -71,6 +94,9 @@ type Store interface {
 type Tasks interface {
 	IssueCheck(ctx context.Context, task domain.LadoTask) (ladotask.IssueCheck, error)
 	RunInput(ctx context.Context, task domain.LadoTask) (ladotask.RunInput, error)
+	// RevisionPaths returns the affected_paths of a pinned plan revision,
+	// for the overlap of two tasks' runs.
+	RevisionPaths(ctx context.Context, id domain.LadoPlanRevisionID) ([]string, error)
 }
 
 // Policy gives the snapshot hash the rules give a task's approved revision
@@ -122,6 +148,13 @@ type Deps struct {
 	// Git records how far a worker's base moved since its plan was made; nil
 	// uses the system git.
 	Git Git
+	// PartGit writes the branches of parts runs; nil uses the system git.
+	PartGit PartGit
+	// FreeDisk returns the free bytes of the file system that holds a path;
+	// nil never holds work for disk. DataDir is AO's data folder, whose file
+	// system it reads with each project's.
+	FreeDisk func(path string) (uint64, error)
+	DataDir  string
 	// Clock stamps changes; nil uses time.Now.
 	Clock func() time.Time
 	// NewID returns a new unique id, used for lease tokens; nil uses
@@ -138,8 +171,10 @@ type Deps struct {
 // Service dispatches LADO's queue.
 type Service struct {
 	deps Deps
-	// memoryUnreadable is set once a memory reading failed and was logged.
+	// memoryUnreadable is set once a memory reading failed and was logged,
+	// diskUnreadable once a disk reading did.
 	memoryUnreadable atomic.Bool
+	diskUnreadable   atomic.Bool
 
 	mu sync.Mutex
 	// issueMisses counts, by entry, the reads of its issue that failed in a
@@ -162,6 +197,9 @@ func New(deps Deps) *Service {
 	}
 	if deps.Git == nil {
 		deps.Git = execGit{}
+	}
+	if deps.PartGit == nil {
+		deps.PartGit = execPartGit{}
 	}
 	if deps.Interval <= 0 {
 		deps.Interval = defaultInterval
@@ -196,8 +234,9 @@ func (s *Service) Start(ctx context.Context) <-chan struct{} {
 
 // Tick runs one dispatch pass at now. It first settles the claims of a
 // dispatch that stopped midway, stops the runs past their deadline and the
-// runs their task no longer wants; then, while run slots are free and memory
-// allows, it claims entries one at a time, oldest first, and dispatches each.
+// runs their task no longer wants; then it moves the parts runs on, and,
+// while task and worker slots are free and memory and disk allow, it claims
+// entries one at a time, oldest first, and dispatches each.
 // No entry is claimed while a lease could not be settled, because the lease
 // may hide a worker, nor while the dispatch settings cannot be read; the
 // rest of the pass does not wait for them. What an entry waits for or why it
@@ -223,7 +262,15 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error {
 		problems = append(problems, err)
 	}
 	if recovered == nil && known != nil {
+		// Running tasks' parts take worker slots before new tasks do, and a
+		// task the pass admits starts its parts in the same pass.
+		if err := s.partsPass(ctx, now, settings); err != nil {
+			problems = append(problems, err)
+		}
 		if err := s.admit(ctx, now, settings); err != nil {
+			problems = append(problems, err)
+		}
+		if err := s.partsPass(ctx, now, settings); err != nil {
 			problems = append(problems, err)
 		}
 	}

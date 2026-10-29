@@ -140,7 +140,8 @@ SELECT sqlc.embed(e),
 FROM lado_executions e
 JOIN pr p ON p.session_id = e.session_id
 LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
-WHERE NOT EXISTS (
+WHERE e.role IN ('', 'integration')
+  AND NOT EXISTS (
         SELECT 1 FROM pr newer
         WHERE newer.session_id = p.session_id
           AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))

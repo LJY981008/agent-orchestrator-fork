@@ -129,6 +129,14 @@ func (s *Service) SetSettings(ctx context.Context, settings domain.LadoDispatchS
 	} else if settings.PlanReview.Patterns == nil {
 		settings.PlanReview.Patterns = current.PlanReview.Patterns
 	}
+	// The worker cap and the disk threshold keep their values when the
+	// change leaves them out.
+	if settings.MaxWorkers == 0 {
+		settings.MaxWorkers = current.MaxWorkers
+	}
+	if settings.MinFreeDiskGB == 0 {
+		settings.HoldOnDiskLow, settings.MinFreeDiskGB = current.HoldOnDiskLow, current.MinFreeDiskGB
+	}
 	if err := settings.Validate(); err != nil {
 		return domain.LadoDispatchSettings{}, InvalidSettings(strings.TrimPrefix(err.Error(), domain.ErrLadoDispatchSettingsInvalid.Error()+": "))
 	}
@@ -163,7 +171,8 @@ func InvalidSettings(message string) error {
 func sameSettings(a, b domain.LadoDispatchSettings) bool {
 	return a.MaxConcurrent == b.MaxConcurrent && a.MaxRunMinutes == b.MaxRunMinutes && a.HoldOnMemoryTight == b.HoldOnMemoryTight &&
 		a.MaxPlanWorkers == b.MaxPlanWorkers && a.PlanReview.Skip == b.PlanReview.Skip && a.PlanReview.MaxPaths == b.PlanReview.MaxPaths &&
-		reflect.DeepEqual(a.PlanReview.Patterns, b.PlanReview.Patterns)
+		reflect.DeepEqual(a.PlanReview.Patterns, b.PlanReview.Patterns) &&
+		a.MaxWorkers == b.MaxWorkers && a.HoldOnDiskLow == b.HoldOnDiskLow && a.MinFreeDiskGB == b.MinFreeDiskGB
 }
 
 func settingsPayload(s domain.LadoDispatchSettings) map[string]any {
@@ -171,5 +180,6 @@ func settingsPayload(s domain.LadoDispatchSettings) map[string]any {
 		"maxConcurrent": s.MaxConcurrent, "maxRunMinutes": s.MaxRunMinutes, "holdOnMemoryTight": s.HoldOnMemoryTight,
 		"maxPlanWorkers": s.MaxPlanWorkers, "planReviewSkip": s.PlanReview.Skip, "planReviewSkipMaxPaths": s.PlanReview.MaxPaths,
 		"planReviewPatterns": s.PlanReview.Patterns,
+		"maxWorkers":         s.MaxWorkers, "holdOnDiskLow": s.HoldOnDiskLow, "minFreeDiskGb": s.MinFreeDiskGB,
 	}
 }
