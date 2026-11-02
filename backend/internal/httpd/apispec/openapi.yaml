@@ -9199,6 +9199,51 @@ paths:
       summary: Resume a durable conversation branch without sending
       tags:
       - conversations
+  /api/v1/sessions/{sessionId}/conversation/clear:
+    post:
+      operationId: clearSessionConversation
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClearConversationResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Start a fresh agent context in a chat session, keeping the timeline
+      tags:
+      - conversations
   /api/v1/sessions/{sessionId}/conversation/compact:
     post:
       operationId: compactSessionConversation
@@ -16478,6 +16523,20 @@ components:
       required:
       - sessionId
       - reason
+      type: object
+    ClearConversationResponse:
+      properties:
+        activeBranchId:
+          type: string
+        cleared:
+          type: boolean
+        clearedAt:
+          format: date-time
+          type: string
+      required:
+      - activeBranchId
+      - clearedAt
+      - cleared
       type: object
     ClearNotificationsResponse:
       properties:

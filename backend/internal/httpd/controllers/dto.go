@@ -2807,6 +2807,15 @@ type CompactConversationResponse struct {
 	TokensAfter int64 `json:"tokensAfter,omitempty"`
 }
 
+// ClearConversationResponse reports AO's /clear. Cleared is false when the
+// conversation had no history and nothing changed.
+type ClearConversationResponse struct {
+	// ActiveBranchID is the branch the session continues on.
+	ActiveBranchID string    `json:"activeBranchId"`
+	ClearedAt      time.Time `json:"clearedAt"`
+	Cleared        bool      `json:"cleared"`
+}
+
 // ConversationTurnResponse is one request and the work that followed it.
 type ConversationTurnResponse struct {
 	ID             string `json:"id"`
