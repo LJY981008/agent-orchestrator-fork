@@ -7,7 +7,11 @@ import {
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
 	fetchLadoExecution,
+	fetchLadoTaskTimings,
+	fetchLadoTimings,
 	LadoApiError,
+	ladoTaskTimingsQueryKey,
+	ladoTaskViewQueryKey,
 	setLadoMode,
 	updateLadoDispatchSettings,
 	updateLadoProjectSettings,
@@ -258,5 +262,46 @@ describe("setLadoMode", () => {
 			params: { path: { projectId: "demo" } },
 			body: { ladoMode: false },
 		});
+	});
+});
+
+// Issue #34: the task's stage times and its sessions' investigation, and a
+// project's baseline over its newest tasks.
+describe("LADO timings", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("reads a task's timings under the task view's key", async () => {
+		const timings = {
+			taskId: "lado-task-1",
+			title: "Add login",
+			timeline: { points: [], totalMs: 0, planRequests: 0, revisions: 0, approvals: 0, runs: 0 },
+			sessions: [],
+		};
+		get.mockResolvedValueOnce({ data: timings, error: undefined });
+		await expect(fetchLadoTaskTimings("lado-task-1")).resolves.toEqual(timings);
+		expect(get).toHaveBeenCalledWith("/api/v1/lado/tasks/{taskId}/timings", { params: { path: { taskId: "lado-task-1" } } });
+		// Whatever refreshes the task view refreshes its timings.
+		expect(ladoTaskTimingsQueryKey("lado-task-1").slice(0, 3)).toEqual([...ladoTaskViewQueryKey("lado-task-1")]);
+
+		get.mockResolvedValueOnce({ data: undefined, error: { code: "LADO_TASK_NOT_FOUND", message: "No such task" } });
+		const error = await fetchLadoTaskTimings("lado-task-9").catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(LadoApiError);
+		expect((error as LadoApiError).code).toBe("LADO_TASK_NOT_FOUND");
+	});
+
+	it("reads a project's baseline, sending the limit only when given", async () => {
+		const summary = { projectId: "demo", tasks: [], gaps: [], investigation: [] };
+		get.mockResolvedValue({ data: summary, error: undefined });
+		await expect(fetchLadoTimings("demo")).resolves.toEqual(summary);
+		expect(get).toHaveBeenLastCalledWith("/api/v1/lado/timings", { params: { query: { projectId: "demo" } } });
+		await fetchLadoTimings("demo", 50);
+		expect(get).toHaveBeenLastCalledWith("/api/v1/lado/timings", { params: { query: { projectId: "demo", limit: 50 } } });
+
+		get.mockResolvedValue({ data: undefined, error: { code: "LADO_INVALID_REQUEST", message: "limit must be 1 to 100" } });
+		const error = await fetchLadoTimings("demo", 500).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(LadoApiError);
+		expect((error as LadoApiError).message).toBe("limit must be 1 to 100");
 	});
 });

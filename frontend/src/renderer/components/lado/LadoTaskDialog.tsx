@@ -7,6 +7,7 @@
 // Once approved, the footer follows the queue and the run: what the queued
 // plan waits for, then the worker's session and PR, or why the run failed,
 // and once LADO verified the PR's head, its integration approval and merge.
+// The Timings tab shows how long each stage took.
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
@@ -47,6 +48,7 @@ import { LadoPartsProgress, LadoPlanParts } from "./LadoParts";
 import { LadoPlanReview } from "./LadoPlanReview";
 import { LadoPlanWorkerStatus } from "./LadoPlanWorkerStatus";
 import { LadoTaskRules } from "./LadoTaskRules";
+import { LadoTaskTimings } from "./LadoTaskTimings";
 import { LadoIntegrationAction, LadoRepostStatus } from "./LadoVerificationSection";
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
@@ -240,6 +242,9 @@ function TaskViewBody({
 								<TabsTrigger value="rules">
 									<span className="text-xs font-medium">{t("lado.rules.title")}</span>
 								</TabsTrigger>
+								<TabsTrigger value="timings">
+									<span className="text-xs font-medium">{t("lado.timings.title")}</span>
+								</TabsTrigger>
 							</TabsList>
 							{tab !== "plan" ? null : revisions.length > 1 ? (
 								<Select value={selected ?? undefined} onValueChange={setSelected}>
@@ -310,6 +315,9 @@ function TaskViewBody({
 						</TabsContent>
 						<TabsContent value="rules" className="flex-none">
 							<LadoTaskRules projectId={projectId} task={task} />
+						</TabsContent>
+						<TabsContent value="timings" className="flex-none">
+							<LadoTaskTimings taskId={taskId} />
 						</TabsContent>
 					</section>
 				</Tabs>
