@@ -44,6 +44,15 @@ Chat controls depend on the provider. Where supported, choose a model, reasoning
 
 **Run a cue** sends a saved project instruction or opens a shell command in a fresh terminal. See [Project settings](#project-settings).
 
+### Claude commands in Chat
+
+Chat reaches Claude Code through its ACP adapter, which leaves out the commands that only work in the interactive terminal. Orchestrator fills the gaps that matter most in Chat:
+
+- **`/clear`** appears in the `/` menu as an Orchestrator command. It starts a fresh agent context: the agent forgets the earlier messages, which stay on the timeline above a "Context cleared" divider. It is refused while a turn runs or messages are queued; finish or stop the turn first. A hibernated session wakes up for it. After a clear, an earlier message can no longer be edited, and branches from before it cannot be activated, because they belong to the old provider conversation.
+- **`@browser`** in the `@` menu uses Claude in Chrome, Claude Code's Chrome extension, in a Claude Code chat on this computer. `@browser` alone, or one of its actions: `@browser:new_tab`, `@browser:screenshot` and `@browser:gif` (both saved into the session's artifacts folder) and `@browser:read_page`. The chip sends the agent an instruction that names the Claude in Chrome tools and the steps; if Chrome or the extension is not connected, the agent stops and says how to connect them (Chrome open with the Claude extension signed in to the same claude.ai account, then `https://clau.de/chrome/reconnect`). When the chat started without Claude in Chrome, the composer says how to turn it on instead of inserting the chip. A restored draft or a sent message shows the chip's instruction as plain text.
+- **Settings › General › Claude in Chrome** has two switches: **Chat sessions** (on by default) and **LADO workers** (off by default), the sessions LADO starts on its own. Turning either on asks you to confirm in the desktop app. A change applies when a session's agent next starts: a new chat, `/clear`, a message edit or a wake from hibernation. Sessions that sign in with a setup token (`CLAUDE_CODE_OAUTH_TOKEN`) cannot use Claude in Chrome, and a `CLAUDE_CODE_ENABLE_CFC` value in your Claude `settings.json` overrides the switch.
+- **Terminal-only commands** such as `/cost`, `/login`, `/model`, `/permissions` or `/chrome`, sent as a whole message, are not sent to the agent. The composer says where they work and keeps the draft. A command the agent itself reports is sent as usual.
+
 ## Work in Terminal UI
 
 Terminal UI sessions keep the selected agent's native terminal experience available through Orchestrator. New macOS/Linux sessions use Orchestrator's native terminal host. Older sessions and fallback launches can use tmux. Windows uses ConPTY.
