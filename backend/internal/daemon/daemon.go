@@ -1031,6 +1031,7 @@ func Run() error {
 		LadoQueue:          ladoQueue,
 		LadoSetup:          ladoSetup,
 		LadoVerify:         ladoVerify,
+		LadoClaudeChrome:   lado.chrome,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

@@ -37,7 +37,7 @@ type Store interface {
 
 // Presence verifies the request's human-presence proof for an action. The
 // service calls it only when a change turns something on.
-type Presence func(action, subject string) (domain.LadoPresenceProof, error)
+type Presence = func(action, subject string) (domain.LadoPresenceProof, error)
 
 // Options builds a Service.
 type Options struct {

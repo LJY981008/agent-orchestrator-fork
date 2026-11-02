@@ -3076,6 +3076,83 @@ paths:
         or show what that reaches with dryRun
       tags:
       - lado
+  /api/v1/lado/claude-chrome:
+    get:
+      operationId: getLadoClaudeChrome
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoClaudeChromeSettingsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get which Claude Code Chat sessions start with Claude in Chrome
+      tags:
+      - lado
+    put:
+      operationId: updateLadoClaudeChrome
+      parameters:
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoClaudeChromeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoClaudeChromeSettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the Claude in Chrome setting; turning anything on needs a human-presence
+        proof, and it applies from each session's next controller start
+      tags:
+      - lado
   /api/v1/lado/connections:
     post:
       operationId: createLadoConnection
@@ -4413,6 +4490,46 @@ paths:
       summary: Edit, archive or unarchive a rule, or show what the change reaches
         with dryRun; the permission ceiling's mode and the protected paths' globs
         need a human-presence proof
+      tags:
+      - lado
+  /api/v1/lado/sessions/{sessionId}/claude-chrome:
+    get:
+      operationId: getLadoSessionClaudeChrome
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoSessionClaudeChromeResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get whether a session has Claude in Chrome: the value its running
+        controller started with, or what its next start gets'
       tags:
       - lado
   /api/v1/lado/setup/adoptions:
@@ -19625,6 +19742,16 @@ components:
       - name
       - command
       type: object
+    LadoClaudeChromeSettingsResponse:
+      properties:
+        chatSessions:
+          type: boolean
+        ladoWorkers:
+          type: boolean
+      required:
+      - chatSessions
+      - ladoWorkers
+      type: object
     LadoConnectionCheckResponse:
       properties:
         host:
@@ -21712,6 +21839,32 @@ components:
           type: string
       required:
       - ok
+      type: object
+    LadoSessionClaudeChromeResponse:
+      properties:
+        basis:
+          enum:
+          - launch
+          - setting
+          type: string
+        enabled:
+          type: boolean
+        kind:
+          enum:
+          - chat
+          - lado_worker
+          type: string
+        sessionId:
+          type: string
+        settingOn:
+          type: boolean
+        supported:
+          type: boolean
+      required:
+      - sessionId
+      - supported
+      - enabled
+      - settingOn
       type: object
     LadoSessionMetricsResponse:
       properties:
@@ -27922,6 +28075,16 @@ components:
           - array
       required:
       - disabledModels
+      type: object
+    UpdateLadoClaudeChromeRequest:
+      properties:
+        chatSessions:
+          type: boolean
+        ladoWorkers:
+          type: boolean
+      required:
+      - chatSessions
+      - ladoWorkers
       type: object
     UpdateLadoDispatchSettingsRequest:
       properties:

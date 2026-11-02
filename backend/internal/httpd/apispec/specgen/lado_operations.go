@@ -123,6 +123,9 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoExecutionBaseResponse":         "LadoExecutionBaseResponse",
 	"ControllersLadoExecutionResponse":             "LadoExecutionResponse",
 	"ControllersLadoDispatchSettingsResponse":      "LadoDispatchSettingsResponse",
+	"ControllersLadoClaudeChromeSettingsResponse":  "LadoClaudeChromeSettingsResponse",
+	"ControllersUpdateLadoClaudeChromeRequest":     "UpdateLadoClaudeChromeRequest",
+	"ControllersLadoSessionClaudeChromeResponse":   "LadoSessionClaudeChromeResponse",
 	"ControllersUpdateLadoDispatchSettingsRequest": "UpdateLadoDispatchSettingsRequest",
 	"ControllersLadoSetupItemIDParam":              "LadoSetupItemIDParam",
 	"ControllersLadoSetupAdoptionIDParam":          "LadoSetupAdoptionIDParam",
@@ -462,6 +465,24 @@ func ladoOperations() []operation {
 			summary: "Replace the dispatch settings; needs no human-presence proof",
 			reqBody: controllers.UpdateLadoDispatchSettingsRequest{},
 			resps:   ladoResps(http.StatusOK, controllers.LadoDispatchSettingsResponse{}, http.StatusBadRequest),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/claude-chrome", id: "getLadoClaudeChrome", tag: "lado",
+			summary: "Get which Claude Code Chat sessions start with Claude in Chrome",
+			resps:   ladoResps(http.StatusOK, controllers.LadoClaudeChromeSettingsResponse{}),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/claude-chrome", id: "updateLadoClaudeChrome", tag: "lado",
+			summary:    "Replace the Claude in Chrome setting; turning anything on needs a human-presence proof, and it applies from each session's next controller start",
+			pathParams: []any{controllers.LadoPresenceHeaderParam{}},
+			reqBody:    controllers.UpdateLadoClaudeChromeRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoClaudeChromeSettingsResponse{}, http.StatusBadRequest, http.StatusForbidden),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/sessions/{sessionId}/claude-chrome", id: "getLadoSessionClaudeChrome", tag: "lado",
+			summary:    "Get whether a session has Claude in Chrome: the value its running controller started with, or what its next start gets",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoSessionClaudeChromeResponse{}, http.StatusNotFound),
 		},
 	}, ladoSetupOperations()...)
 }
