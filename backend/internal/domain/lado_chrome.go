@@ -38,6 +38,7 @@ const (
 // LadoChromeSessionKind says which setting covers a session.
 type LadoChromeSessionKind string
 
+// The session kinds: a person's Chat session, or a worker LADO started.
 const (
 	LadoChromeKindChat       LadoChromeSessionKind = "chat"
 	LadoChromeKindLadoWorker LadoChromeSessionKind = "lado_worker"
