@@ -159,7 +159,7 @@ func TestTaskAndProjectTimings(t *testing.T) {
 	if err != nil || len(timings.Sessions) != 2 {
 		t.Fatalf("TaskTimings = %+v, %v", timings.Sessions, err)
 	}
-	if d := timings.Sessions[0]; d.Stored || d.Role != domain.LadoSessionDesigner || d.ToolCalls != 3 || d.Investigate != 3*time.Minute {
+	if d := timings.Sessions[0]; d.Stored || !d.UpdatedAt.IsZero() || d.Role != domain.LadoSessionDesigner || d.ToolCalls != 3 || d.Investigate != 3*time.Minute {
 		t.Errorf("designer without a row = %+v", d)
 	}
 	if n := pf.count(t, "lado_session_metrics"); n != 0 {

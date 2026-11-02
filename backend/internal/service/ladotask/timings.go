@@ -100,14 +100,16 @@ func (s *Service) taskSessionMetrics(ctx context.Context, facts domain.LadoTaskT
 }
 
 // sessionMetrics counts a session's investigation from its activities, not
-// stored; found is false for a session without any.
+// stored; found is false for a session without any. UpdatedAt stays zero: it
+// is when a stored row was written, and the API omits it for computed
+// metrics.
 func (s *Service) sessionMetrics(ctx context.Context, task domain.LadoTaskID, session domain.LadoTimingSession) (domain.LadoSessionMetrics, bool, error) {
 	facts, err := s.deps.Store.LadoSessionActivityFacts(ctx, session.SessionID)
 	if err != nil || len(facts) == 0 {
 		return domain.LadoSessionMetrics{}, false, err
 	}
 	m := domain.SummarizeLadoActivities(facts)
-	m.SessionID, m.TaskID, m.Role, m.UpdatedAt = session.SessionID, task, session.Role, s.deps.Clock().UTC()
+	m.SessionID, m.TaskID, m.Role = session.SessionID, task, session.Role
 	return m, true, nil
 }
 
