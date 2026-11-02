@@ -32,14 +32,27 @@ func (m *Manager) SetLadoSetupHome(home ports.LadoSetupHome) {
 // launch rather than start the session without its managed setup. A LADO
 // plan worker's environment is marked too (domain.LadoPlanWorkerEnv): AO's
 // hook command then decides each of its tool calls, and the Chat driver passes
-// its tool lists (docs/LJY-PRD/TDD.md §5.1).
+// its tool lists (docs/LJY-PRD/TDD.md §5.1). LADO's other launch values
+// (applyLadoLaunchEnv) go on first, for the agent being started: during a
+// switch to Claude Code the stored harness still names the old agent.
 func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id domain.SessionID, env map[string]string) error {
-	if m.ladoSetupHome == nil || env == nil || !m.isClaudeCodeAgent(agent) {
+	if env == nil || !m.isClaudeCodeAgent(agent) {
+		return nil
+	}
+	if m.ladoSetupHome == nil && m.ladoClaudeChrome == nil {
 		return nil
 	}
 	rec, err := m.getRecord(ctx, id)
 	if err != nil {
+		if m.ladoSetupHome == nil {
+			// Launch values alone never fail a launch.
+			return nil
+		}
 		return fmt.Errorf("LADO setup home: %w", err)
+	}
+	m.applyLadoLaunchEnv(rec, domain.HarnessClaudeCode, env)
+	if m.ladoSetupHome == nil {
+		return nil
 	}
 	if domain.IsLadoPlanWorkerClientRequestID(rec.ClientRequestID) {
 		setProtectedEnv(env, domain.LadoPlanWorkerEnv, "1", envKeysCaseInsensitive)
