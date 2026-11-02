@@ -66,6 +66,7 @@ type Store interface {
 	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
 
 	PlanWorkerStore
+	TimingStore
 }
 
 // PlanWorkerStore keeps plan worker requests, their reviews and what making

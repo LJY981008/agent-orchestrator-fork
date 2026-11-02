@@ -43,6 +43,7 @@ func (s *Service) settle(ctx context.Context, exec domain.LadoExecution) error {
 	if err := s.deps.Store.SettleLadoExecution(ctx, exec.SessionID, exec.PR.URL, state, now, audit); err != nil {
 		return fmt.Errorf("settle the execution: %w", err)
 	}
+	s.storeEntryMetrics(ctx, exec)
 	if audit != nil {
 		s.deps.Log.Warn("LADO saw a pull request merged without an integration approval", "task", exec.TaskID, "session", exec.SessionID, "pr", exec.PR.URL, "head", exec.PR.HeadSHA)
 	}
