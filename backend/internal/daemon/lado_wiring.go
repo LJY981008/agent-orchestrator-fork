@@ -9,6 +9,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladochrome"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoconnect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladogate"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladonotify"
@@ -60,6 +61,7 @@ type ladoWork struct {
 	queue       *ladoqueue.Service
 	setup       *ladosetup.Service
 	verify      *ladoverify.Service
+	chrome      *ladochrome.Service
 }
 
 // wireLadoWork builds LADO's repository connections, the local setup it
@@ -123,7 +125,8 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	}
 	tasks.SetPlanQueue(queue)
 	verify := wireLadoVerify(store, blobs, clients, work, log)
-	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify}
+	chrome := wireLadoClaudeChrome(cfg, store, work.setup.sessions, log)
+	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome}
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.
