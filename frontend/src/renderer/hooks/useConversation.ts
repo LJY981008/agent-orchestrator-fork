@@ -26,6 +26,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { ladoClaudeChromeSessionQueryKey } from "./useLadoClaudeChrome";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
@@ -708,6 +709,31 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		onSuccess: invalidate,
 	});
 
+	/**
+	 * Start a fresh agent context, AO's own `/clear`. The daemon opens a new
+	 * provider conversation and stamps a boundary on the timeline; nothing is
+	 * deleted, so success is answered by a refetch.
+	 *
+	 * The new controller started with the Claude in Chrome setting of this moment,
+	 * so the session's @browser state is read again too.
+	 */
+	const clear = useMutation({
+		mutationFn: async () => {
+			const { data, error } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/conversation/clear",
+				{
+					params: { path: { sessionId: sessionId as string } },
+				},
+			);
+			if (error) throw new Error(apiErrorMessage(error, "The agent's context could not be cleared. Try again."));
+			return data;
+		},
+		onSuccess: () => {
+			invalidate();
+			if (sessionId) void queryClient.invalidateQueries({ queryKey: ladoClaudeChromeSessionQueryKey(sessionId) });
+		},
+	});
+
 	const chooseSettings = useMutation({
 		mutationFn: async ({ targetSessionId, settings }: { targetSessionId: string; settings: TurnSettings }) => {
 			const { data, error } = await clientForSessionHost(hostId).PATCH(
@@ -1023,6 +1049,9 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		resumingAgent,
 		resumeError: resume.error ? apiErrorMessage(resume.error) : undefined,
 		compact: () => compact.mutateAsync(),
+		clear: () => clear.mutateAsync(),
+		/** A `/clear` is replacing the controller; the daemon refuses a second one meanwhile. */
+		clearing: clear.isPending,
 		choosingSettings: chooseSettings.isPending && chooseSettings.variables?.targetSessionId === sessionId,
 		chooseSettings: (settings: TurnSettings) => chooseSettings.mutate({ targetSessionId: sessionId as string, settings }),
 		/** A compaction is in flight provider-side and takes seconds, so it reads as
