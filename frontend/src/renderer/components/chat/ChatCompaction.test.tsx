@@ -200,3 +200,74 @@ describe("the compact control", () => {
 		);
 	});
 });
+
+function contextReset(reason?: string): ConversationActivity {
+	return {
+		kind: "activity",
+		id: "reset-1",
+		sequence: 2,
+		revision: 0,
+		activityKind: "system",
+		status: "completed",
+		summary: "Context reset",
+		detail: { event: "context.reset", ...(reason ? { reason } : {}) },
+		createdAt: "2026-11-02T10:00:00Z",
+	};
+}
+
+describe("/clear in the timeline", () => {
+	// A clear keeps the transcript: the divider says the agent starts over from
+	// here, the same way a compaction marks what it no longer sees verbatim.
+	it("draws the user's clear as a divider", () => {
+		render(<ChatWorkspace snapshot={snapshot([assistantSaid, contextReset("user_clear")])} />);
+
+		expect(screen.getByText("Context cleared")).toBeInTheDocument();
+		expect(
+			screen.getByText("earlier messages stay visible, but the agent no longer remembers them"),
+		).toBeInTheDocument();
+		expect(screen.getByText("Earlier work.")).toBeInTheDocument();
+	});
+
+	it("keeps other context resets off the divider", () => {
+		render(<ChatWorkspace snapshot={snapshot([assistantSaid, contextReset()])} />);
+
+		expect(screen.queryByText("Context cleared")).not.toBeInTheDocument();
+	});
+});
+
+describe("the clear command", () => {
+	it("is offered in the slash menu and runs instead of sending", async () => {
+		const user = userEvent.setup();
+		const onClear = vi.fn().mockResolvedValue(undefined);
+		const onSend = vi.fn();
+		render(<ChatWorkspace snapshot={snapshot([assistantSaid])} onClear={onClear} onSend={onSend} />);
+
+		const field = screen.getByLabelText("Message the agent");
+		await typeInLexicalEditor(field, "/");
+		expect(screen.getByRole("option", { name: /clear/i })).toBeInTheDocument();
+		await typeInLexicalEditor(field, "clear");
+		await user.keyboard("{Enter}");
+		await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	// The daemon wakes a hibernated session for a clear, unlike a compaction.
+	it("stays available while the session is hibernated", async () => {
+		render(
+			<ChatWorkspace
+				snapshot={snapshot([assistantSaid], [], { controller: { state: "hibernated" } })}
+				onClear={vi.fn()}
+			/>,
+		);
+
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "/");
+		expect(screen.getByRole("option", { name: /clear/i })).toBeInTheDocument();
+	});
+
+	it("is not offered while new work is disabled", async () => {
+		render(<ChatWorkspace snapshot={snapshot([assistantSaid])} onClear={vi.fn()} onCompact={vi.fn()} newWorkDisabled />);
+
+		await typeInLexicalEditor(screen.getByLabelText("Message the agent"), "/");
+		expect(screen.queryByRole("option", { name: /clear/i })).not.toBeInTheDocument();
+	});
+});

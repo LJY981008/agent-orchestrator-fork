@@ -439,6 +439,8 @@ export interface SystemEventDetail {
 		| "artifact"
 		| "workspace.setup"
 		| "account.switched";
+	/** context.reset: why the agent's context restarted; `user_clear` is the `/clear` command. */
+	reason?: "user_clear" | (string & {});
 	/** account.switched: the account a stopped turn's conversation continues on. */
 	accountId?: string;
 	/** workspace.setup: how the project's Setup commands ended (exitCode, durationMs and output carry the rest). */
@@ -511,6 +513,17 @@ export interface CompactionDetail {
  */
 export function isCompaction(item: ConversationItem): boolean {
 	return item.kind === "activity" && item.detail?.event === "compaction";
+}
+
+/**
+ * Whether a timeline item marks a `/clear`: the agent started a fresh context, and
+ * everything above it stays on the timeline but is no longer what the agent knows.
+ *
+ * Only the user's own clear draws the divider. Other context resets keep their
+ * ordinary notice. Not a type predicate, for the same reason as `isCompaction`.
+ */
+export function isContextClear(item: ConversationItem): boolean {
+	return item.kind === "activity" && item.detail?.event === "context.reset" && item.detail.reason === "user_clear";
 }
 
 /**

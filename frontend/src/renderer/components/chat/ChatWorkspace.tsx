@@ -115,6 +115,7 @@ import {
 	ApprovalCard,
 	AssistantMessage,
 	CompactionMarker,
+	ContextClearedMarker,
 	ContinuedMarker,
 	HumanMessage,
 	humanVisibleText,
@@ -137,6 +138,7 @@ import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { SessionStartup } from "./SessionStartup";
 import { ActivityRun } from "./ActivityRun";
 import { TurnPlan } from "./TurnPlan";
+import type { BrowserMentionState } from "./browserMention";
 import { TurnSettingsBar } from "./TurnSettingsBar";
 import { ElicitationDock } from "./ElicitationDock";
 import { McpServerBanner, ReauthBanner, ThreadStateBanner } from "./ChatStatusBanners";
@@ -146,6 +148,7 @@ import {
 	brokenMcpServers,
 	can,
 	isCompaction,
+	isContextClear,
 	isSteer,
 	hiddenTimelineTurnIds,
 	queuedTurnIds,
@@ -469,6 +472,12 @@ export interface ChatWorkspaceProps {
 	compacting?: boolean;
 	/** Why compaction is not available right now, from the daemon's typed refusal. */
 	compactUnavailable?: string;
+	/** Start a fresh agent context (`/clear`), keeping the timeline. */
+	onClear?: () => void | Promise<unknown>;
+	/** A `/clear` is replacing the agent's context. */
+	clearing?: boolean;
+	/** The main chat's @browser state (Claude in Chrome); absent means no mention rows. */
+	browserMention?: BrowserMentionState;
 	/**
 	 * Discard a turn and everything after it. Absent means the agent cannot undo,
 	 * and the affordance is not drawn at all rather than shown and then refused.
@@ -698,6 +707,9 @@ function ChatWorkspaceContent({
 	onCompact,
 	compacting,
 	compactUnavailable,
+	onClear,
+	clearing,
+	browserMention,
 	onRollback,
 	rollbackPending,
 	rollbackError,
@@ -1864,6 +1876,11 @@ function ChatWorkspaceContent({
 										compacting={compacting}
 										compactUnavailable={compactUnavailable}
 										compactBlocked={Boolean(turn)}
+										// The daemon wakes a hibernated session for a clear, so only
+										// blocked new work hides it.
+										onClear={newWorkDisabled ? undefined : onClear}
+										clearing={clearing}
+										browserMention={browserMention}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
 										assetBaseUrl={assetBaseUrl}
@@ -4549,6 +4566,11 @@ function TimelineItem({
 	if (isCompaction(item)) {
 		return <CompactionMarker activity={item} />;
 	}
+	// A `/clear` is a boundary like a compaction: the transcript above it stays,
+	// but the agent starts over from here.
+	if (isContextClear(item)) {
+		return <ContextClearedMarker />;
+	}
 	// Read by the event, not the kind: a steer is stored as a `system` activity
 	// because that is AO's only durable write that can attach to a turn in flight,
 	// but it is the user speaking and the timeline shows it that way.
@@ -4919,7 +4941,7 @@ function isNoticeRun(run: TimelineRun): boolean {
 	const item = run.items[0];
 	if (run.kind !== "single" || item?.kind !== "activity") return false;
 	if (item.activityKind === "error") return true;
-	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && item.activityKind !== "plan";
+	return item.detail?.event !== undefined && !isSteer(item) && !isCompaction(item) && !isContextClear(item) && item.activityKind !== "plan";
 }
 
 /** Mirrors the items `TimelineItem` draws nothing for, so they cannot fill an empty accordion. */

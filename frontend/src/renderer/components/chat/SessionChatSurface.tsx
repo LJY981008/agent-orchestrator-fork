@@ -38,6 +38,7 @@ import {
 import { useAgentSwitchProviderCatalogs } from "../../hooks/useAgentSwitchProviderCatalogs";
 import { useConversationPromptSuggestion } from "../../hooks/useConversationPromptSuggestion";
 import { useRememberProjectPermissions } from "../../hooks/useRememberProjectPermissions";
+import { useLadoClaudeChrome } from "../../hooks/useLadoClaudeChrome";
 import { useSessionBrowserLink } from "../../hooks/useSessionBrowserLink";
 import { claudeChoiceModel } from "../../lib/agent-model-choices";
 import { isWebLink, isWorkspaceHtmlLink } from "../../lib/external-link-policy";
@@ -217,6 +218,10 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
 	const commands = useConversationCommands(session.id, hostId);
+	// LADO fork: Claude in Chrome backs @browser, and only a Claude Code agent has
+	// it. The state lives on this machine's daemon, so a remote host's session gets
+	// no mention rows.
+	const browserMention = useLadoClaudeChrome(session.id, session.provider === "claude-code" && !hostId);
 	const projectPermissions = useRememberProjectPermissions(session.workspaceId, snapshot?.harness, hostId);
 	const {
 		acknowledgeAcceptedTurn,
@@ -540,7 +545,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	);
 	const promptSuggestion = useConversationPromptSuggestion(snapshot, Boolean(
 		targetChatControllerReady && !controllerBusy && !localEchos.length &&
-		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting &&
+		!commands.rollbackPending && !commands.editMessagePending && !commands.activateBranchPending && !commands.compacting && !commands.clearing &&
 		!session.isTerminated && session.provisionState !== "failed" && session.provisionState !== "provisioning" &&
 		!isLoading && !error && !refreshError && !unavailable &&
 		!agentSwitching && !switchLocksChat && !handoffDialogOpen &&
@@ -751,6 +756,9 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				onCompact={commands.compact}
 				compacting={commands.compacting}
 				compactUnavailable={commands.compactUnavailable}
+				onClear={commands.clear}
+				clearing={commands.clearing}
+				browserMention={browserMention}
 				onRollback={commands.rollback}
 				rollbackPending={commands.rollbackPending}
 				rollbackError={commands.rollbackError}

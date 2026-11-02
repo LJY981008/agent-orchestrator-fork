@@ -223,6 +223,8 @@ export const ChatComposer = memo(function ChatComposer({
 	compacting,
 	compactUnavailable,
 	compactBlocked,
+	onClear,
+	clearing,
 	autoFocusKey,
 	autoFocus = true,
 	draftSessionId,
@@ -339,6 +341,10 @@ export const ChatComposer = memo(function ChatComposer({
 	compactUnavailable?: string;
 	/** A running turn must be stopped before its history can be compacted. */
 	compactBlocked?: boolean;
+	/** Run AO's built-in `/clear`: a fresh agent context, with the timeline kept. */
+	onClear?: () => void | Promise<unknown>;
+	/** A `/clear` is already replacing the agent's context. */
+	clearing?: boolean;
 	/** Changes when the owning chat surface should reclaim composer focus. */
 	autoFocusKey?: string;
 	/** Whether this composer is currently visible and should take focus. */
@@ -556,17 +562,27 @@ export const ChatComposer = memo(function ChatComposer({
 	const canAttach = Boolean(onStageAttachments) && !queuedEditRecovery;
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
-		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
-		return [
-			{
+		const aoCommands: ChatSkill[] = [];
+		if (onCompact && compactUnavailable !== "This agent cannot compact its history") {
+			aoCommands.push({
 				name: "compact",
 				displayName: "compact",
 				description: "Summarize earlier history to reclaim context",
 				source: "AO",
-			},
-			...skills.filter((skill) => skill.name !== "compact"),
-		];
-	}, [compactUnavailable, onCompact, skills]);
+			});
+		}
+		if (onClear) {
+			aoCommands.push({
+				name: "clear",
+				displayName: "clear",
+				description: "Start a fresh agent context; the timeline stays",
+				source: "AO",
+			});
+		}
+		if (aoCommands.length === 0) return skills;
+		const owned = new Set(aoCommands.map((command) => command.name));
+		return [...aoCommands, ...skills.filter((skill) => !owned.has(skill.name))];
+	}, [compactUnavailable, onClear, onCompact, skills]);
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
@@ -1208,6 +1224,11 @@ export const ChatComposer = memo(function ChatComposer({
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
 				return undefined;
 			}
+			// Enter on an exact `/clear` runs it, even while a longer skill such as
+			// `clear-cache` keeps the menu open.
+			if (key === "Enter" && snapshot.text.trim() === "/clear" && onClear) {
+				return undefined;
+			}
 			const matches = suggestionsFor(currentTrigger);
 			const chosen = matches[Math.min(highlightedRef.current, matches.length - 1)];
 			if (!chosen) return undefined;
@@ -1221,7 +1242,7 @@ export const ChatComposer = memo(function ChatComposer({
 			}
 			return chosen;
 		},
-		[onCompact, skills, suggestionsFor, unusableMention],
+		[onClear, onCompact, skills, suggestionsFor, unusableMention],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
@@ -1295,6 +1316,32 @@ export const ChatComposer = memo(function ChatComposer({
 				setHighlighted(0);
 			} catch {
 				setSendError("Conversation history could not be compacted. Try again.");
+			} finally {
+				if (draftScope && mutationToken && !mutationFinished) {
+					cancelChatComposerMutation(draftScope, mutationToken);
+				}
+				setSubmitting(false);
+			}
+			return;
+		}
+
+		if (!recoveringDelivery && !savingQueuedEdit && body === "/clear" && onClear) {
+			if (draftScope && !mutationToken) return;
+			let mutationFinished = false;
+			setSubmitting(true);
+			try {
+				if (clearing) {
+					setSendError("The agent's context is already being cleared.");
+					return;
+				}
+				await onClear();
+				clearAcceptedDraft(composerRevision.current, mutationToken);
+				mutationFinished = true;
+				setDismissedKey(null);
+				setHighlighted(0);
+			} catch (error) {
+				// The daemon says why: a running turn, or a controller that is not ready.
+				setSendError(apiErrorMessage(error, "The agent's context could not be cleared. Try again."));
 			} finally {
 				if (draftScope && mutationToken && !mutationFinished) {
 					cancelChatComposerMutation(draftScope, mutationToken);
@@ -1611,6 +1658,10 @@ export const ChatComposer = memo(function ChatComposer({
 					void submit();
 					return true;
 				}
+				if (textRef.current.trim() === "/clear" && onClear) {
+					void submit();
+					return true;
+				}
 				triggerRef.current = liveTrigger;
 				const chosen = liveSuggestions[Math.min(highlightedRef.current, liveSuggestions.length - 1)];
 				if (chosen) pick(chosen.value, chosen);
@@ -1625,7 +1676,7 @@ export const ChatComposer = memo(function ChatComposer({
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, fileAttachments, onClear, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {

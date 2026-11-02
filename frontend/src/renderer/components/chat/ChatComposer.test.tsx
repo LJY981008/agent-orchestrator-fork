@@ -3096,3 +3096,75 @@ describe("terminal-only commands", () => {
 		}
 	});
 });
+
+/* ---- /clear --------------------------------------------------------------- */
+
+describe("/clear", () => {
+	it("offers clear as an AO command when the chat can clear", async () => {
+		const { field } = renderComposer({ onClear: vi.fn() });
+		await typeInComposer(field, "/");
+		const option = screen.getByRole("option", { name: /clear/i });
+		expect(option).toHaveTextContent("AO");
+	});
+
+	it("does not offer clear without onClear and explains it like any terminal-only command", async () => {
+		const { onSend, field } = renderComposer({ skills: SKILLS });
+		await typeInComposer(field, "/cl");
+		expect(screen.queryByRole("option", { name: /clear/i })).toBeNull();
+		await typeInComposer(field, "ear");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.getByRole("status")).toHaveTextContent("/clear");
+	});
+
+	it("runs onClear instead of sending, then empties the draft", async () => {
+		const onClear = vi.fn().mockResolvedValue(undefined);
+		const { onSend, field } = renderComposer({ onClear });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+		expect(onSend).not.toHaveBeenCalled();
+		await waitFor(() => expect(composerWireText(field).trim()).toBe(""));
+	});
+
+	it("keeps the draft and shows the daemon's refusal when clearing fails", async () => {
+		const onClear = vi.fn().mockRejectedValue(new Error("finish or stop the current turn before clearing"));
+		const { onSend, field } = renderComposer({ onClear });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() =>
+			expect(screen.getByRole("alert")).toHaveTextContent("finish or stop the current turn before clearing"),
+		);
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field).trim()).toBe("/clear");
+	});
+
+	it("runs on Enter while a longer skill keeps the menu open", async () => {
+		const onClear = vi.fn().mockResolvedValue(undefined);
+		const skills: ChatSkill[] = [{ name: "clear-cache", displayName: "clear-cache", description: "Drop caches", source: "repo" }];
+		const { onSend, field } = renderComposer({ onClear, skills });
+		await typeInComposer(field, "/clear");
+		expect(screen.getByRole("listbox")).toBeTruthy();
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("does not start a second clear while one is running", async () => {
+		const onClear = vi.fn();
+		const { field } = renderComposer({ onClear, clearing: true });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		expect(onClear).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("already being cleared"));
+	});
+
+	it("saves a queued edit of /clear as text", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onClear = vi.fn();
+		render(<ChatComposer onSend={onSend} onClear={onClear} editingQueuedTurnId="queued-clear" draftSeed={{ id: "queued-clear", text: "/clear" }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/clear", undefined, undefined, []));
+		expect(onClear).not.toHaveBeenCalled();
+	});
+});

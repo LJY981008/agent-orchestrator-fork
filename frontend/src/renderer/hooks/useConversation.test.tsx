@@ -1266,3 +1266,65 @@ describe("toSnapshot", () => {
 		expect(message).toMatchObject({ id: "m1", clientMessageId: "client-1" });
 	});
 });
+
+describe("/clear", () => {
+	function hookWithClient() {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+		const invalidate = vi.spyOn(queryClient, "invalidateQueries").mockResolvedValue(undefined);
+		const HookWrapper = ({ children }: { children: ReactNode }) => (
+			<QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+		);
+		const hook = renderHook(() => useConversationCommands("ao-clear"), { wrapper: HookWrapper });
+		return { ...hook, invalidate };
+	}
+
+	it("posts the clear route, then refetches the conversation and the session's Chrome state", async () => {
+		postMock.mockResolvedValue({
+			data: { activeBranchId: "branch-2", cleared: true, clearedAt: "2026-11-02T00:00:00Z" },
+			error: undefined,
+		});
+		const { result, invalidate } = hookWithClient();
+
+		await act(async () => {
+			await expect(result.current.clear()).resolves.toMatchObject({ activeBranchId: "branch-2" });
+		});
+
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation/clear", {
+			params: { path: { sessionId: "ao-clear" } },
+		});
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["conversation", "ao-clear"] });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["lado", "claude-chrome", "session", "ao-clear"] });
+		expect(result.current.clearing).toBe(false);
+	});
+
+	it("rejects with the daemon's own words and leaves the Chrome state alone", async () => {
+		const refusal = { code: "CHAT_TURN_RUNNING", message: "finish or stop the current turn before clearing" };
+		postMock.mockResolvedValue({ data: undefined, error: refusal });
+		apiErrorMessageMock.mockImplementation((error: { message?: string }) => error.message ?? "failed");
+		const { result, invalidate } = hookWithClient();
+
+		await act(async () => {
+			await expect(result.current.clear()).rejects.toThrow("finish or stop the current turn before clearing");
+		});
+		expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["lado", "claude-chrome", "session", "ao-clear"] });
+	});
+
+	it("reports clearing while the request is in flight", async () => {
+		const response = deferred<{ data: { activeBranchId: string; cleared: boolean; clearedAt: string }; error: undefined }>();
+		postMock.mockReturnValue(response.promise);
+		const { result } = hookWithClient();
+
+		let request!: Promise<unknown>;
+		act(() => {
+			request = result.current.clear();
+		});
+		await waitFor(() => expect(result.current.clearing).toBe(true));
+		response.resolve({ data: { activeBranchId: "b", cleared: true, clearedAt: "2026-11-02T00:00:00Z" }, error: undefined });
+		await act(async () => {
+			await request;
+		});
+		await waitFor(() => expect(result.current.clearing).toBe(false));
+	});
+});
