@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ArrowDownUp, CornerDownLeft } from "lucide-react";
+import { ArrowDownUp, CornerDownLeft, Globe } from "lucide-react";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
 import type { Suggestion, TriggerKind } from "./composerSuggest";
@@ -31,7 +31,8 @@ export function ComposerSuggestMenu({
 	kind: TriggerKind;
 	items: Suggestion[];
 	highlighted: number;
-	onPick: (value: string) => void;
+	/** The row's value, and the row itself for callers that need its kind. */
+	onPick: (value: string, item: Suggestion) => void;
 	/** The candidate list was capped by the daemon, so it is not exhaustive. */
 	truncated?: boolean;
 }) {
@@ -101,7 +102,7 @@ export function ComposerSuggestMenu({
 		>
 			<div className="flex items-start justify-between gap-2 px-2 py-1">
 				<span className="text-micro text-muted-foreground">
-					{kind === "skill" ? "Skills" : "Files in this worktree"}
+					{menuHeading(kind, items)}
 				</span>
 				<ArrowDownUp
 					aria-label="Use the up and down arrow keys to navigate"
@@ -118,14 +119,14 @@ export function ComposerSuggestMenu({
 					className="scrollbar-none flex max-h-64 flex-col gap-px overflow-y-auto"
 				>
 					{items.map((item, index) => (
-						<li key={item.value} data-index={index}>
+						<li key={`${item.kind}:${item.value}`} data-index={index}>
 							<button
 								type="button"
 								tabIndex={-1}
 								role="option"
 								id={`${id}-option-${index}`}
 								aria-selected={index === highlighted}
-								onClick={() => onPick(item.value)}
+								onClick={() => onPick(item.value, item)}
 								className={cn(
 									"flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm text-muted-foreground outline-none !transition-none",
 									index === highlighted
@@ -133,7 +134,14 @@ export function ComposerSuggestMenu({
 										: "bg-transparent hover:bg-interactive-hover hover:text-foreground",
 								)}
 							>
-								{kind === "file"
+								{item.kind === "mention" ? (
+									<span
+										aria-hidden="true"
+										className="flex h-4 shrink-0 items-center text-muted-foreground"
+									>
+										<Globe className="size-3.5" />
+									</span>
+								) : item.kind === "file"
 									? (() => {
 											const Icon = composerFileIcon(item.value);
 											return (
@@ -153,7 +161,7 @@ export function ComposerSuggestMenu({
 											index === highlighted ? "text-foreground" : "text-muted-foreground",
 										)}
 									>
-										{kind === "skill" ? `/${item.label}` : item.label}
+										{item.kind === "skill" ? `/${item.label}` : item.label}
 									</span>
 									{item.detail ? (
 										<span className="block truncate text-caption leading-snug text-muted-foreground">
@@ -205,6 +213,14 @@ export function ComposerSuggestMenu({
 			) : null}
 		</div>
 	);
+}
+
+function menuHeading(kind: TriggerKind, items: Suggestion[]): string {
+	if (kind === "skill") return "Skills";
+	const mentions = items.some((item) => item.kind === "mention");
+	const files = items.some((item) => item.kind === "file");
+	if (mentions && files) return "Mentions and files";
+	return mentions ? "Mentions" : "Files in this worktree";
 }
 
 function displayBadge(badge?: string): string | undefined {
