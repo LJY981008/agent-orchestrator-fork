@@ -60,6 +60,13 @@ export type LadoTaskPart = components["schemas"]["LadoTaskPartResponse"];
 export type LadoTaskPartState = LadoTaskPart["state"];
 export type LadoTaskPartWaitingReason = NonNullable<LadoTaskPart["waitingReason"]>;
 export type LadoPlanPart = components["schemas"]["LadoPlanPartResponse"];
+export type LadoTaskTimings = components["schemas"]["LadoTaskTimingsResponse"];
+export type LadoTaskTimeline = components["schemas"]["LadoTaskTimelineResponse"];
+export type LadoTimingPoint = components["schemas"]["LadoTimingPointResponse"];
+export type LadoTimingStage = LadoTimingPoint["stage"];
+export type LadoSessionMetrics = components["schemas"]["LadoSessionMetricsResponse"];
+export type LadoSessionRole = LadoSessionMetrics["role"];
+export type LadoTimingsSummary = components["schemas"]["LadoTimingsSummaryResponse"];
 export type LadoQueueItem = components["schemas"]["LadoQueueItemResponse"];
 export type LadoQueueState = LadoQueueItem["state"];
 export type LadoQueueReason = NonNullable<LadoQueueItem["reason"]>;
@@ -130,6 +137,9 @@ export const ladoProjectRepositoriesQueryKey = (projectId: string) => ["lado", "
 export const ladoTaskViewQueryKey = (taskId: string) => ["lado", "task", taskId] as const;
 /** Under the task view's key, so whatever refreshes the task refreshes its parts. */
 export const ladoTaskPartsQueryKey = (taskId: string) => ["lado", "task", taskId, "parts"] as const;
+/** Under the task view's key too, so a task event refreshes the times it recorded. */
+export const ladoTaskTimingsQueryKey = (taskId: string) => ["lado", "task", taskId, "timings"] as const;
+export const ladoTimingsQueryKey = (projectId: string, limit?: number) => ["lado", "timings", projectId, limit ?? null] as const;
 /** Plan revisions are pinned, but whether one is the latest or approved changes. */
 export const ladoPlanQueryRoot = ["lado", "plan"] as const;
 export const ladoPlanQueryKey = (revisionId: string) => ["lado", "plan", revisionId] as const;
@@ -357,6 +367,31 @@ export async function fetchLadoTaskParts(taskId: string): Promise<LadoTaskParts>
 		params: { path: { taskId } },
 	});
 	if (error) throw ladoError(error, "Could not load the task's parts");
+	return data;
+}
+
+/**
+ * How long the task spent between its stages, and what each of its plan and
+ * run sessions spent reading and searching before its first edit.
+ */
+export async function fetchLadoTaskTimings(taskId: string): Promise<LadoTaskTimings> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/tasks/{taskId}/timings", {
+		params: { path: { taskId } },
+	});
+	if (error) throw ladoError(error, "Could not load the task's timings");
+	return data;
+}
+
+/**
+ * A project's baseline: its newest tasks' timings, the median and longest
+ * time between adjacent stages, and each session role's median investigation.
+ * Without a limit the daemon sums up its default number of tasks.
+ */
+export async function fetchLadoTimings(projectId: string, limit?: number): Promise<LadoTimingsSummary> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/timings", {
+		params: { query: limit === undefined ? { projectId } : { projectId, limit } },
+	});
+	if (error) throw ladoError(error, "Could not load the project's timings");
 	return data;
 }
 
