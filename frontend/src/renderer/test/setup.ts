@@ -452,6 +452,7 @@ if (typeof window !== "undefined") {
 				changeSetup: async () => null,
 				approveIntegration: async () => null,
 				changeProjectChecks: async () => null,
+				changeClaudeChrome: async () => null,
 			},
 		},
 	};

@@ -4311,5 +4311,16 @@
 	"lado.timings.duration.seconds": "{{seconds}} 秒",
 	"lado.timings.duration.minutes": "{{minutes}} 分",
 	"lado.timings.duration.hours": "{{hours}} 時間 {{minutes}} 分",
-	"lado.timings.duration.days": "{{days}} 日 {{hours}} 時間"
+	"lado.timings.duration.days": "{{days}} 日 {{hours}} 時間",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "変更は、その後に開始するセッションから適用されます。実行中のチャットには /clear の後に適用されます。",
+	"lado.settings.claudeChrome.chatSessions": "チャットセッション",
+	"lado.settings.claudeChrome.chatSessionsHint": "Claude Code のチャットが、サインイン中の Chrome を操作できます。チャットで @browser と入力してください。",
+	"lado.settings.claudeChrome.ladoWorkers": "LADO ワーカー",
+	"lado.settings.claudeChrome.ladoWorkersHint": "LADO が開始するワーカーが、確認なしでサインイン中の Chrome を操作できます。",
+	"lado.presence.claudeChromeTitle": "Claude in Chrome をオンにしますか？",
+	"lado.presence.claudeChromeChatSessions": "チャットセッション: Claude Code のチャットが、サインイン中の Chrome を操作できます。",
+	"lado.presence.claudeChromeLadoWorkers": "LADO ワーカー: LADO が自動で開始するワーカーが、確認なしでサインイン中の Chrome を操作できます。",
+	"lado.presence.claudeChromeDetail": "その後に開始するセッションから適用されます。Claude 拡張機能のサイトごとの権限はそのまま適用されます。",
+	"lado.presence.claudeChromeTurnOn": "オンにする"
 }

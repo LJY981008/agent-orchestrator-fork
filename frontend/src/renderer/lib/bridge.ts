@@ -387,6 +387,7 @@ export const aoBridge: AoBridge =
 				changeSetup: async () => null,
 				approveIntegration: async () => null,
 				changeProjectChecks: async () => null,
+				changeClaudeChrome: async () => null,
 			},
 		},
 	} satisfies AoBridge);
