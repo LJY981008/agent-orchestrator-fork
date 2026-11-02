@@ -46,11 +46,11 @@ import {
 	type JSX,
 	type KeyboardEvent,
 } from "react";
-import { Box, Image as ImageIcon } from "lucide-react";
+import { Box, Globe, Image as ImageIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { composerFileIcon } from "./composerFileIcon";
-import { findActiveTrigger, type TriggerKind } from "./composerSuggest";
+import { findActiveTrigger, type Suggestion, type SuggestionKind, type TriggerKind } from "./composerSuggest";
 import { splitInlineImagePaths } from "./messageAttachments";
 
 export type ComposerTrigger = {
@@ -70,6 +70,20 @@ export type ComposerEditorSnapshot = {
 
 export type ComposerPromptSuggestion = { id: string; text: string; onDismiss?: () => void };
 
+/**
+ * A chip to insert for the active trigger. A bare string is a value of the
+ * trigger's own kind (`/` → skill, `@` → file); a row says its kind itself, and
+ * may carry the exact text its chip sends.
+ */
+export type ComposerToken = string | Pick<Suggestion, "kind" | "value" | "wire">;
+
+/**
+ * What a completion key does: insert a chip, or `{ drop: true }` to remove the
+ * typed trigger (for a row that cannot be used right now) without inserting
+ * anything.
+ */
+export type ComposerCompletion = ComposerToken | { drop: true };
+
 export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
@@ -77,7 +91,9 @@ export type ComposerEditorHandle = {
 	setText(text: string, caret?: "start" | "end"): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
-	insertToken(trigger: ComposerTrigger, value: string): void;
+	insertToken(trigger: ComposerTrigger, token: ComposerToken): void;
+	/** Removes the typed trigger (`@que`) and leaves the caret where it started. */
+	removeTrigger(trigger: ComposerTrigger): void;
 	/** Inserts a file reference chip at the caret (or the end) that sends `wire`. */
 	insertReference(path: string, display: string, wire: string): void;
 	/**
@@ -142,7 +158,7 @@ function ComposerImageChip({ path }: { path: string }) {
 	);
 }
 
-type TokenKind = "skill" | "file" | "image";
+type TokenKind = SuggestionKind | "image";
 
 const completionHandledEvents = new WeakSet<Event>();
 const PROGRAMMATIC_TEXT_UPDATE_TAG = "ao:composer-programmatic-text";
@@ -228,7 +244,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 
 	decorate(): JSX.Element {
 		if (this.__kind === "image") return <ComposerImageChip path={this.__value} />;
-		const Icon = this.__kind === "skill" ? Box : composerFileIcon(this.__value);
+		const Icon = this.__kind === "skill" ? Box : this.__kind === "mention" ? Globe : composerFileIcon(this.__value);
 		return (
 			<span
 				data-composer-token={this.__kind}
@@ -236,7 +252,7 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 				contentEditable={false}
 				className={cn(
 					"mx-0.5 inline-flex items-center gap-1 rounded-md border border-border-strong bg-interactive-hover px-1.5 py-0.5 align-middle text-[0.9em] leading-none select-none",
-					this.__kind === "skill"
+					this.__kind === "skill" || this.__kind === "mention"
 						? "text-logo-accent"
 						: "text-foreground",
 				)}
@@ -248,8 +264,10 @@ class ComposerTokenNode extends DecoratorNode<JSX.Element> {
 	}
 }
 
-function $createComposerTokenNode(kind: TokenKind, value: string): ComposerTokenNode {
+function $createComposerTokenNode(kind: TokenKind, value: string, sends?: string): ComposerTokenNode {
 	if (kind === "image") return new ComposerTokenNode(kind, value, value, value);
+	// A mention shows `@value` and sends the sentence its row carries.
+	if (kind === "mention") return new ComposerTokenNode(kind, value, `@${value}`, sends ?? `@${value}`);
 	const wire = kind === "skill" ? `/${value}` : /\s/.test(value) ? `"${value}"` : value;
 	const slash = value.lastIndexOf("/");
 	const display = kind === "skill" ? wire : slash >= 0 ? value.slice(slash + 1) : value;
@@ -273,16 +291,31 @@ function $serializeComposer(): string {
 		.join("\n");
 }
 
-function $insertComposerToken(trigger: ComposerTrigger, value: string): boolean {
+/** The text node holding the trigger, if it still reads as the trigger typed. */
+function $triggerNode(trigger: ComposerTrigger) {
 	const node = $getNodeByKey<LexicalNode>(trigger.nodeKey);
-	if (!$isTextNode(node)) return false;
-	const text = node.getTextContent();
+	if (!$isTextNode(node)) return undefined;
 	const expected = `${trigger.kind === "skill" ? "/" : "@"}${trigger.query}`;
-	if (text.slice(trigger.start, trigger.end) !== expected) return false;
+	return node.getTextContent().slice(trigger.start, trigger.end) === expected ? node : undefined;
+}
+
+function $removeComposerTrigger(trigger: ComposerTrigger): boolean {
+	const node = $triggerNode(trigger);
+	if (!node) return false;
+	node.spliceText(trigger.start, trigger.end - trigger.start, "", true);
+	return true;
+}
+
+function $insertComposerToken(trigger: ComposerTrigger, chosen: ComposerToken): boolean {
+	const node = $triggerNode(trigger);
+	if (!node) return false;
+	const text = node.getTextContent();
 
 	const before = text.slice(0, trigger.start);
 	const after = text.slice(trigger.end);
-	const token = $createComposerTokenNode(trigger.kind, value);
+	const token = typeof chosen === "string"
+		? $createComposerTokenNode(trigger.kind, chosen)
+		: $createComposerTokenNode(chosen.kind, chosen.value, chosen.wire);
 	const tail = $createTextNode(/^\s/.test(after) ? after : ` ${after}`);
 	if (before) {
 		const head = $createTextNode(before);
@@ -450,7 +483,7 @@ const EditorBridge = forwardRef<
 		/** Staged paths of the images attached right now. */
 		attachedImages: () => string[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => ComposerCompletion | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 	}
 >(function EditorBridge({ disabled, promptSuggestion, onDismissSuggestion, attachedImages, onChange, onComplete, onEnter }, ref) {
@@ -480,9 +513,14 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			insertToken: (trigger, value) => {
+			insertToken: (trigger, token) => {
 				editor.update(() => {
-					$insertComposerToken(trigger, value);
+					$insertComposerToken(trigger, token);
+				}, { discrete: true });
+			},
+			removeTrigger: (trigger) => {
+				editor.update(() => {
+					$removeComposerTrigger(trigger);
 				}, { discrete: true });
 			},
 			insertReference: (path, display, wire) => {
@@ -550,9 +588,12 @@ const EditorBridge = forwardRef<
 				}
 				return true;
 			}
-			const value = onComplete(snapshot, key);
-			if (snapshot.trigger && value) {
-				if (!$insertComposerToken(snapshot.trigger, value)) return false;
+			const completion = onComplete(snapshot, key);
+			if (snapshot.trigger && completion) {
+				const applied = typeof completion === "object" && "drop" in completion
+					? $removeComposerTrigger(snapshot.trigger)
+					: $insertComposerToken(snapshot.trigger, completion);
+				if (!applied) return false;
 				if (event) {
 					completionHandledEvents.add(event);
 					event.preventDefault();
@@ -636,7 +677,7 @@ export const ComposerEditor = forwardRef<
 		activeIndex: number;
 		images?: ComposerImage[];
 		onChange: (snapshot: ComposerEditorSnapshot) => void;
-		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => string | undefined;
+		onComplete: (snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab") => ComposerCompletion | undefined;
 		onEnter: (snapshot: ComposerEditorSnapshot, event: globalThis.KeyboardEvent) => boolean;
 		onCompositionChange: (isComposing: boolean) => void;
 		onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;

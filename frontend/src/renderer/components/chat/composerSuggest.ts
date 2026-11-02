@@ -72,7 +72,7 @@ export function findActiveTrigger(text: string, caret: number): ActiveTrigger | 
  * `code-review`, and both above something that only mentions review in its
  * description.
  */
-function score(value: string, query: string, base: number): number | null {
+export function scoreMatch(value: string, query: string, base: number): number | null {
 	const haystack = value.toLowerCase();
 	if (query === "") return base;
 	if (haystack === query) return base;
@@ -87,9 +87,17 @@ function score(value: string, query: string, base: number): number | null {
 	return null;
 }
 
+/**
+ * What a row inserts: a `/skill` chip, a worktree path chip, or an `@browser`
+ * mention chip. The row decides, not the trigger: an `@` menu holds both files
+ * and mentions, and a mention value can equal a file path.
+ */
+export type SuggestionKind = "skill" | "file" | "mention";
+
 /** One row in the suggestion menu. */
 export interface Suggestion {
-	/** Stable key, and the value a selection inserts. */
+	kind: SuggestionKind;
+	/** The value a selection inserts; unique within its kind. */
 	value: string;
 	/** The label shown. */
 	label: string;
@@ -97,6 +105,8 @@ export interface Suggestion {
 	detail?: string;
 	/** Right-aligned provenance, e.g. a skill's scope. */
 	badge?: string;
+	/** The text the chip sends, when it is not the kind's default. */
+	wire?: string;
 }
 
 /**
@@ -123,12 +133,12 @@ export function rankSkills(skills: readonly ChatSkill[], query: string): Suggest
 	for (const skill of skills) {
 		if (!skill.name) continue;
 		const candidates = [
-			score(skill.name, needle, 0),
-			score(skill.displayName || skill.name, needle, 10),
+			scoreMatch(skill.name, needle, 0),
+			scoreMatch(skill.displayName || skill.name, needle, 10),
 			// Only searched when the user typed something; an empty query must not be
 			// ranked by description text.
-			needle === "" ? null : score(skill.description ?? "", needle, 40),
-			needle === "" ? null : score(skill.inputHint ?? "", needle, 50),
+			needle === "" ? null : scoreMatch(skill.description ?? "", needle, 40),
+			needle === "" ? null : scoreMatch(skill.inputHint ?? "", needle, 50),
 		].filter((value): value is number => value !== null);
 		if (candidates.length === 0) continue;
 
@@ -136,6 +146,7 @@ export function rankSkills(skills: readonly ChatSkill[], query: string): Suggest
 			score: Math.min(...candidates),
 			name: skill.name,
 			suggestion: {
+				kind: "skill",
 				value: skill.name,
 				label: skill.displayName || skill.name,
 				detail: skillDetail(skill),
@@ -177,7 +188,7 @@ export function rankFiles(paths: readonly string[], query: string): Suggestion[]
 		const base = slash < 0 ? path : path.slice(slash + 1);
 		const parent = slash < 0 ? "" : path.slice(0, slash);
 
-		const candidates = [score(base, needle, 0), score(path, needle, 10)].filter(
+		const candidates = [scoreMatch(base, needle, 0), scoreMatch(path, needle, 10)].filter(
 			(value): value is number => value !== null,
 		);
 		if (candidates.length === 0) continue;
@@ -187,7 +198,7 @@ export function rankFiles(paths: readonly string[], query: string): Suggestion[]
 			path,
 			// The row reads as "name, then where it lives", but the value inserted is
 			// always the whole path — the label is never what the agent resolves.
-			suggestion: { value: path, label: base, detail: parent || undefined },
+			suggestion: { kind: "file", value: path, label: base, detail: parent || undefined },
 		});
 	}
 
