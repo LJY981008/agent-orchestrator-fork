@@ -10,12 +10,8 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 	apiClient: { GET: getMock },
 }));
 
-import {
-	browserMentionState,
-	ladoClaudeChromeQueryRoot,
-	ladoClaudeChromeSessionQueryKey,
-	useLadoClaudeChrome,
-} from "./useLadoClaudeChrome";
+import { ladoClaudeChromeQueryRoot, ladoClaudeChromeSessionQueryKey } from "../lib/lado-chrome";
+import { browserMentionState, useLadoClaudeChrome } from "./useLadoClaudeChrome";
 
 const PATH = "/api/v1/lado/sessions/{sessionId}/claude-chrome";
 

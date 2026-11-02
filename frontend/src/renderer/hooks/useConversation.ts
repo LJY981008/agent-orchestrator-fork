@@ -26,7 +26,7 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
-import { ladoClaudeChromeSessionQueryKey } from "./useLadoClaudeChrome";
+import { ladoClaudeChromeSessionQueryKey } from "../lib/lado-chrome";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {

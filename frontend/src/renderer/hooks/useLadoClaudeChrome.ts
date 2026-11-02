@@ -4,17 +4,10 @@
 import { useQuery } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
+import { ladoClaudeChromeSessionQueryKey } from "../lib/lado-chrome";
 import type { BrowserMentionState } from "../components/chat/browserMention";
 
 export type LadoSessionClaudeChrome = components["schemas"]["LadoSessionClaudeChromeResponse"];
-
-/** Every Claude in Chrome query starts with this; the settings screen invalidates it after a change. */
-export const ladoClaudeChromeQueryRoot = ["lado", "claude-chrome"] as const;
-
-/** One session's Claude in Chrome state. `/clear` invalidates it, since the new controller starts with the current setting. */
-export function ladoClaudeChromeSessionQueryKey(sessionId: string) {
-	return [...ladoClaudeChromeQueryRoot, "session", sessionId] as const;
-}
 
 export async function fetchLadoSessionClaudeChrome(sessionId: string): Promise<LadoSessionClaudeChrome> {
 	const { data, error } = await apiClient.GET("/api/v1/lado/sessions/{sessionId}/claude-chrome", {

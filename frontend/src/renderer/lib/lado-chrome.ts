@@ -9,10 +9,16 @@ import { LadoApiError, ladoError } from "./lado";
 
 export type LadoClaudeChromeSettings = components["schemas"]["LadoClaudeChromeSettingsResponse"];
 
-/** The setting and every session's Claude in Chrome state share this prefix. */
+/**
+ * The setting and every session's Claude in Chrome state share this prefix;
+ * the settings screen invalidates it after a change. These are the only
+ * definitions of the Claude in Chrome query keys.
+ */
 export const ladoClaudeChromeQueryRoot = ["lado", "claude-chrome"] as const;
-export const ladoClaudeChromeSettingsQueryKey = ["lado", "claude-chrome", "settings"] as const;
-export const ladoClaudeChromeSessionQueryKey = (sessionId: string) => ["lado", "claude-chrome", "session", sessionId] as const;
+export const ladoClaudeChromeSettingsQueryKey = [...ladoClaudeChromeQueryRoot, "settings"] as const;
+/** One session's Claude in Chrome state. `/clear` invalidates it, since the new controller starts with the current setting. */
+export const ladoClaudeChromeSessionQueryKey = (sessionId: string) =>
+	[...ladoClaudeChromeQueryRoot, "session", sessionId] as const;
 
 export async function fetchLadoClaudeChrome(): Promise<LadoClaudeChromeSettings> {
 	const { data, error } = await apiClient.GET("/api/v1/lado/claude-chrome");
