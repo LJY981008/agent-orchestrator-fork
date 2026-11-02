@@ -4311,5 +4311,16 @@
 	"lado.timings.duration.seconds": "{{seconds}}초",
 	"lado.timings.duration.minutes": "{{minutes}}분",
 	"lado.timings.duration.hours": "{{hours}}시간 {{minutes}}분",
-	"lado.timings.duration.days": "{{days}}일 {{hours}}시간"
+	"lado.timings.duration.days": "{{days}}일 {{hours}}시간",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "바꾼 값은 그 뒤에 시작하는 세션부터 적용됩니다. 실행 중인 채팅은 /clear 뒤에 적용됩니다.",
+	"lado.settings.claudeChrome.chatSessions": "채팅 세션",
+	"lado.settings.claudeChrome.chatSessionsHint": "Claude Code 채팅이 로그인된 Chrome을 조작할 수 있습니다. 채팅에서 @browser를 입력하세요.",
+	"lado.settings.claudeChrome.ladoWorkers": "LADO 워커",
+	"lado.settings.claudeChrome.ladoWorkersHint": "LADO가 시작하는 워커가 묻지 않고 로그인된 Chrome을 조작할 수 있습니다.",
+	"lado.presence.claudeChromeTitle": "Claude in Chrome을 켤까요?",
+	"lado.presence.claudeChromeChatSessions": "채팅 세션: Claude Code 채팅이 로그인된 Chrome을 조작할 수 있습니다.",
+	"lado.presence.claudeChromeLadoWorkers": "LADO 워커: LADO가 스스로 시작하는 워커가 묻지 않고 로그인된 Chrome을 조작할 수 있습니다.",
+	"lado.presence.claudeChromeDetail": "그 뒤에 시작하는 세션부터 적용됩니다. Claude 확장 프로그램의 사이트별 권한은 그대로 적용됩니다.",
+	"lado.presence.claudeChromeTurnOn": "켜기"
 }

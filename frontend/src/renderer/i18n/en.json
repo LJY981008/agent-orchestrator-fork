@@ -4292,5 +4292,16 @@
 	"lado.timings.duration.seconds": "{{seconds}} s",
 	"lado.timings.duration.minutes": "{{minutes}} min",
 	"lado.timings.duration.hours": "{{hours}} h {{minutes}} min",
-	"lado.timings.duration.days": "{{days}} d {{hours}} h"
+	"lado.timings.duration.days": "{{days}} d {{hours}} h",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "A change applies to sessions that start afterwards. A running chat picks it up after /clear.",
+	"lado.settings.claudeChrome.chatSessions": "Chat sessions",
+	"lado.settings.claudeChrome.chatSessionsHint": "Claude Code chats can control the Chrome you are signed in to. Type @browser in a chat.",
+	"lado.settings.claudeChrome.ladoWorkers": "LADO workers",
+	"lado.settings.claudeChrome.ladoWorkersHint": "Workers LADO starts can control the Chrome you are signed in to without asking.",
+	"lado.presence.claudeChromeTitle": "Turn on Claude in Chrome?",
+	"lado.presence.claudeChromeChatSessions": "Chat sessions: Claude Code chats can control the Chrome you are signed in to.",
+	"lado.presence.claudeChromeLadoWorkers": "LADO workers: workers LADO starts on its own can control the Chrome you are signed in to, without asking you.",
+	"lado.presence.claudeChromeDetail": "It applies to sessions that start afterwards. The Claude extension's site permissions still apply.",
+	"lado.presence.claudeChromeTurnOn": "Turn on"
 }

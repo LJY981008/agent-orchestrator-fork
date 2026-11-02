@@ -2,8 +2,8 @@
 // renderer (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md). The
 // renderer names the plan revision, the rule and mode or protected paths, the
 // project and its mode or check commands, the setup entries to adopt, the
-// adoption to restore, the setup change, or the run whose integration to
-// approve, and nothing else.
+// adoption to restore, the setup change, the run whose integration to
+// approve, or the Claude in Chrome setting, and nothing else.
 // Main reads the subject from the daemon, asks the human in a native dialog,
 // and signs the request itself, so the renderer never holds the key.
 import type { components } from "../api/schema";
@@ -16,6 +16,7 @@ export const LADO_PRESENCE_RESTORE_SETUP_CHANNEL = "lado:presence:restoreSetup";
 export const LADO_PRESENCE_CHANGE_SETUP_CHANNEL = "lado:presence:changeSetup";
 export const LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL = "lado:presence:approveIntegration";
 export const LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL = "lado:presence:changeProjectChecks";
+export const LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL = "lado:presence:changeClaudeChrome";
 
 export type LadoPresenceApproveRequest = { revisionId: string };
 
@@ -130,3 +131,18 @@ export type LadoPresenceCheckCommand = components["schemas"]["LadoCheckCommandBo
 export type LadoPresenceChecksRequest = { projectId: string; commands: LadoPresenceCheckCommand[] };
 
 export type LadoPresenceChecksResult = LadoPresenceModeResult;
+
+/**
+ * The Claude in Chrome setting as it should be (issue #40). Turning either
+ * part on lets agents control the Chrome the developer is signed in to, so it
+ * needs the human; turning parts off does not, and the renderer sends that to
+ * the daemon itself.
+ */
+export type LadoPresenceClaudeChromeRequest = { chatSessions: boolean; ladoWorkers: boolean };
+
+export type LadoPresenceClaudeChromeSettings = components["schemas"]["LadoClaudeChromeSettingsResponse"];
+
+export type LadoPresenceClaudeChromeResult =
+	| { status: "changed"; settings: LadoPresenceClaudeChromeSettings }
+	| { status: "cancelled" }
+	| LadoPresenceFailure;

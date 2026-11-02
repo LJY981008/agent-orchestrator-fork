@@ -22,6 +22,7 @@ import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
 import { LadoBackgroundSection } from "../lado/LadoBackgroundSection";
+import { LadoClaudeChromeSection } from "../lado/LadoClaudeChromeSection";
 
 /**
  * Default interface for new sessions. Daemon-owned so `ao spawn` and mobile
@@ -237,6 +238,8 @@ export function GeneralSettingsSection({
 			</SettingsSection>
 
 			<LadoBackgroundSection />
+
+			<LadoClaudeChromeSection />
 
 			<DefaultCloudSandboxSection />
 
