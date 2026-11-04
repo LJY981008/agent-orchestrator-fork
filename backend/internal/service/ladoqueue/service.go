@@ -69,7 +69,23 @@ type Store interface {
 	// AddLadoAlert raises the alert of a worker held because its agent
 	// cannot start (launch_hold.go).
 	AddLadoAlert(ctx context.Context, a domain.LadoAlert) (domain.LadoAlertID, bool, error)
+	// LadoOverlapHolders and ListLadoQueuedOverlapCandidates are the runs and
+	// the earlier approved entries whose paths a new run waits for
+	// (overlapping).
+	LadoOverlapHolders(ctx context.Context, now time.Time) ([]domain.LadoLiveRunTask, error)
+	ListLadoQueuedOverlapCandidates(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoLiveRunTask, error)
 	PartStore
+	ResolveStore
+}
+
+// ResolveStore keeps the resolve workers of executions' PRs (resolve.go).
+type ResolveStore interface {
+	ListLadoExecutionsToResolve(ctx context.Context, limit int) ([]domain.LadoResolveCandidate, error)
+	UpsertLadoPRResolve(ctx context.Context, r domain.LadoPRResolve) (bool, error)
+	SetLadoResolveSpawnRequest(ctx context.Context, executionSessionID domain.SessionID, now, expires time.Time) (string, bool, error)
+	ClearLadoResolveSpawnRequest(ctx context.Context, executionSessionID domain.SessionID, request string) (bool, error)
+	ListExpiredLadoResolveSpawns(ctx context.Context, now time.Time) ([]domain.LadoPRResolve, error)
+	LinkLadoResolveExecution(ctx context.Context, request string, exec domain.LadoExecution) error
 }
 
 // PartStore keeps parts runs (parts.go).
@@ -115,6 +131,12 @@ type Sessions interface {
 	RequestKill(ctx context.Context, id domain.SessionID) (sessionmanager.KillResult, error)
 }
 
+// Sender sends a message to a running session through AO, the way AO sends
+// its own reactions. The session manager implements it.
+type Sender interface {
+	Send(ctx context.Context, id domain.SessionID, message string) error
+}
+
 // Projects reads AO's project registry.
 type Projects interface {
 	GetProject(ctx context.Context, id string) (domain.ProjectRecord, bool, error)
@@ -158,6 +180,12 @@ type Deps struct {
 	Git Git
 	// PartGit writes the branches of parts runs; nil uses the system git.
 	PartGit PartGit
+	// Remote reads the tips of a PR's source and base branches on their
+	// remote for the resolve workers; nil uses the system git.
+	Remote RemoteGit
+	// Sender tells a running resolve worker about a new conflict; without it
+	// the worker is not told.
+	Sender Sender
 	// FreeDisk returns the free bytes of the file system that holds a path;
 	// nil never holds work for disk. DataDir is AO's data folder, whose file
 	// system it reads with each project's.
@@ -190,6 +218,9 @@ type Service struct {
 	// the daemon does; an entry that leaves the queue while it waits for its
 	// issue keeps its count until then.
 	issueMisses map[domain.LadoQueueEntryID]int
+	// resolveRecheck is, by execution, when the resolver looks at its PR's
+	// branches again after a look that found nothing to do yet.
+	resolveRecheck map[domain.SessionID]time.Time
 }
 
 // New returns a Service.
@@ -209,13 +240,16 @@ func New(deps Deps) *Service {
 	if deps.PartGit == nil {
 		deps.PartGit = execPartGit{}
 	}
+	if deps.Remote == nil {
+		deps.Remote = execRemoteGit{}
+	}
 	if deps.Interval <= 0 {
 		deps.Interval = defaultInterval
 	}
 	if deps.Lease <= 0 {
 		deps.Lease = defaultLease
 	}
-	return &Service{deps: deps, issueMisses: map[domain.LadoQueueEntryID]int{}}
+	return &Service{deps: deps, issueMisses: map[domain.LadoQueueEntryID]int{}, resolveRecheck: map[domain.SessionID]time.Time{}}
 }
 
 // Start dispatches at once and then every Interval until ctx is done. The
@@ -273,6 +307,10 @@ func (s *Service) Tick(ctx context.Context, now time.Time) error {
 		// Running tasks' parts take worker slots before new tasks do, and a
 		// task the pass admits starts its parts in the same pass.
 		if err := s.partsPass(ctx, now, settings); err != nil {
+			problems = append(problems, err)
+		}
+		// Resolve workers of PRs no session works on come next.
+		if err := s.resolvePass(ctx, now, settings); err != nil {
 			problems = append(problems, err)
 		}
 		if err := s.admit(ctx, now, settings); err != nil {

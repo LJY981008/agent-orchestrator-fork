@@ -62,7 +62,7 @@ var issueRecheckAfter = []time.Duration{time.Minute, 2 * time.Minute, 5 * time.M
 // spending its attempt. A pass that stops before the spawn hands the entry
 // back as it was. It reports whether a worker started, which takes a run
 // slot, and returns only the writes that failed.
-func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, load domain.LadoRunLoad, now time.Time) (bool, error) {
+func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, settings domain.LadoDispatchSettings, now time.Time) (bool, error) {
 	// 1. The entry's approval is the task's newest and still covers the
 	// latest revision, and the task runs no worker of another approval.
 	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
@@ -180,7 +180,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		// do not must not run as a single worker by mistake.
 		return false, s.attemptFailed(ctx, entry, "the approved plan could not be read")
 	}
-	if other, waits, err := s.overlapping(ctx, task, plan.AffectedPaths, load); err != nil {
+	if other, waits, err := s.overlapping(ctx, task, entry, plan.AffectedPaths, now); err != nil {
 		if ctx.Err() != nil {
 			return false, s.handBack(ctx, entry)
 		}
@@ -538,11 +538,17 @@ func (s *Service) holdFor(ctx context.Context, entry domain.LadoQueueEntry, wait
 	return s.settled(entry, "waiting: "+waiting, ok, err, slog.LevelDebug)
 }
 
-// overlapping returns the issue of another task of the project whose live run
-// may touch a file the task's plan names, while the project holds such tasks
-// back; the globs the project lets overlap do not count. A task without
-// paths overlaps nothing.
-func (s *Service) overlapping(ctx context.Context, task domain.LadoTask, paths []string, load domain.LadoRunLoad) (domain.IssueID, bool, error) {
+// overlapping returns the issue of another task of the project that may
+// touch a file the task's plan names, while the project holds such tasks
+// back; the globs the project lets overlap do not count. Another task holds
+// the entry while its run holds paths (Store.LadoOverlapHolders: a run whose
+// PR merged or closed, that timed out or was cancelled does not, even while
+// its session runs) or while it was approved before the entry and still waits
+// in the queue (Store.ListLadoQueuedOverlapCandidates: a blocked one, one
+// that needs a review or failed does not, so no two entries wait for each
+// other). A task without paths overlaps nothing. The run slots count the
+// running sessions apart from this (LadoRunLoad).
+func (s *Service) overlapping(ctx context.Context, task domain.LadoTask, entry domain.LadoQueueEntry, paths []string, now time.Time) (domain.IssueID, bool, error) {
 	if len(paths) == 0 {
 		return "", false, nil
 	}
@@ -553,8 +559,16 @@ func (s *Service) overlapping(ctx context.Context, task domain.LadoTask, paths [
 	if !settings.OverlapWait {
 		return "", false, nil
 	}
+	holders, err := s.deps.Store.LadoOverlapHolders(ctx, now)
+	if err != nil {
+		return "", false, err
+	}
+	earlier, err := s.deps.Store.ListLadoQueuedOverlapCandidates(ctx, entry.ID)
+	if err != nil {
+		return "", false, err
+	}
 	ignore := settings.OverlapIgnoreOrDefault()
-	for _, other := range load.Tasks {
+	for _, other := range slices.Concat(holders, earlier) {
 		if other.ProjectID != task.ProjectID || other.TaskID == task.ID {
 			continue
 		}
