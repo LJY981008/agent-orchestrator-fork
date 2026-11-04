@@ -684,7 +684,8 @@ func Run() error {
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
 	lado := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
-		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}, reviews: reviewSvc, ladoModes: ladoProjects}, log)
+		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}, reviews: reviewSvc, ladoModes: ladoProjects,
+		accounts: agentAccountSvc, preflight: agentSvc}, log)
 	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup, ladoVerify := lado.connections, lado.tasks, lado.rules, lado.queue, lado.setup, lado.verify
 	ladoTasksDone := ladoTasks.Start(ctx)
 	ladoSetupDone := startLadoSetup(ctx, ladoSetup, log)
@@ -888,6 +889,8 @@ func Run() error {
 	// it starts after the startup reconcile above has settled the sessions.
 	ladoQueueDone := ladoQueue.Start(ctx)
 	ladoVerify.Start(ctx) // LADO fork: verifies the workers' PRs, which may message them
+	// LADO fork: the worker watch may message workers too (issue #42).
+	ladoWatchDone := startLadoWatch(ctx, lado.watch, ladoWatchInterval, log)
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
 	// Push-device registry: persisted phones that receive OS push notifications.
@@ -1032,6 +1035,9 @@ func Run() error {
 		LadoSetup:          ladoSetup,
 		LadoVerify:         ladoVerify,
 		LadoClaudeChrome:   lado.chrome,
+		LadoUsage:          lado.watch.usage,
+		LadoWatch:          lado.watch.alerts,
+		LadoCompact:        lado.watch.launch,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1232,6 +1238,7 @@ func Run() error {
 	<-ladoTasksDone // LADO fork
 	<-ladoQueueDone // LADO fork
 	<-ladoSetupDone // LADO fork
+	<-ladoWatchDone // LADO fork
 	// LADO fork: the verification loop and the check commands it started.
 	ladoVerify.Wait()
 	// Detach chat controllers before stopping the lifecycle stack. Persistent

@@ -62,6 +62,9 @@ type ladoWork struct {
 	setup       *ladosetup.Service
 	verify      *ladoverify.Service
 	chrome      *ladochrome.Service
+	// watch is the worker watch (issue #42), whose loop the daemon starts
+	// with startLadoWatch.
+	watch ladoWatchServices
 }
 
 // wireLadoWork builds LADO's repository connections, the local setup it
@@ -89,6 +92,13 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	})
 	blobs := ladoblob.New(cfg.StateDir)
 	setup := wireLadoSetup(cfg, store, blobs, work.setup, log)
+	// The worker watch's hooks go in with the setup's, before anything
+	// spawns; its account limits hold the new workers below.
+	var sessionHooks any
+	if work.setup.sessions != nil {
+		sessionHooks = work.setup.sessions
+	}
+	watch := wireLadoWatch(cfg, store, ladoWatchHooks{sessions: sessionHooks, agents: work.setup.agents, reviewerEnv: work.setup.reviewerEnv}, work.accounts, work.sender, log)
 	rules := ladopolicy.New(ladopolicy.Deps{Store: store, Projects: store, Blobs: blobs, AOBuild: cfg.Telemetry.AppVersion, Setup: setup, Log: log})
 	setup.SetPolicy(rules)
 	// A failed seed leaves the permission ceiling missing, which resolves to
@@ -96,7 +106,10 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	if err := rules.EnsureBuiltins(ctx); err != nil {
 		log.Error("LADO could not seed its built-in rules", "err", err)
 	}
-	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: blobs, Policy: rules, DataDir: cfg.DataDir}
+	deps := ladotask.Deps{Store: store, Projects: store, Clients: clients, Log: log, Blobs: blobs, Policy: rules, DataDir: cfg.DataDir, AccountLimits: watch.watch}
+	if work.preflight != nil {
+		deps.Preflight = work.preflight
+	}
 	if work.sender != nil {
 		deps.Orchestrators = ladoOrchestrators{sender: work.sender, store: store, dataDir: cfg.DataDir}
 		deps.Notices = ladonotify.New(ladonotify.Deps{Store: store, Orchestrators: ladoNoticeOrchestrators{store: store, sender: work.sender}, Log: log})
@@ -119,6 +132,10 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 		FreeDisk: ladoqueue.FreeDiskBytes,
 		DataDir:  cfg.DataDir,
 		Log:      log,
+		// The worker watch's account limits and the agent check hold new
+		// workers without spending an attempt (issue #42).
+		AccountLimits: watch.watch,
+		Preflight:     work.preflight,
 	})
 	if work.sessions != nil {
 		tasks.SetKiller(queue)
@@ -126,7 +143,7 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	tasks.SetPlanQueue(queue)
 	verify := wireLadoVerify(store, blobs, clients, work, log)
 	chrome := wireLadoClaudeChrome(cfg, store, work.setup.sessions, log)
-	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome}
+	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch}
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.
