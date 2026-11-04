@@ -79,29 +79,34 @@ type Deps struct {
 	// DoctorGitLabRESTBase lets tests point the doctor GitLab token probe at
 	// httptest without mutating package-global state.
 	DoctorGitLabRESTBase string
-	Now                  func() time.Time
-	Sleep                func(time.Duration)
+	// DoctorGitLabHostRESTBase returns the REST base doctor probes for a
+	// self-managed GitLab host with a LADO stored token (LADO fork). Tests
+	// point it at httptest.
+	DoctorGitLabHostRESTBase func(host string) string
+	Now                      func() time.Time
+	Sleep                    func(time.Duration)
 }
 
 // DefaultDeps returns production dependencies.
 func DefaultDeps() Deps {
 	return Deps{
-		In:                    os.Stdin,
-		Out:                   os.Stdout,
-		Err:                   os.Stderr,
-		HTTPClient:            &http.Client{Timeout: 2 * time.Second},
-		Executable:            os.Executable,
-		StartProcess:          startProcess,
-		ProcessAlive:          processalive.Alive,
-		LookPath:              exec.LookPath,
-		CommandOutput:         commandOutput,
-		CommandOutputInDir:    commandOutputInDir,
-		RunInteractiveCommand: runInteractiveCommand,
-		ReadSecret:            readSecret,
-		DoctorGitHubRESTBase:  defaultDoctorGitHubRESTBase,
-		DoctorGitLabRESTBase:  defaultDoctorGitLabRESTBase,
-		Now:                   time.Now,
-		Sleep:                 time.Sleep,
+		In:                       os.Stdin,
+		Out:                      os.Stdout,
+		Err:                      os.Stderr,
+		HTTPClient:               &http.Client{Timeout: 2 * time.Second},
+		Executable:               os.Executable,
+		StartProcess:             startProcess,
+		ProcessAlive:             processalive.Alive,
+		LookPath:                 exec.LookPath,
+		CommandOutput:            commandOutput,
+		CommandOutputInDir:       commandOutputInDir,
+		RunInteractiveCommand:    runInteractiveCommand,
+		ReadSecret:               readSecret,
+		DoctorGitHubRESTBase:     defaultDoctorGitHubRESTBase,
+		DoctorGitLabRESTBase:     defaultDoctorGitLabRESTBase,
+		DoctorGitLabHostRESTBase: defaultDoctorGitLabHostRESTBase,
+		Now:                      time.Now,
+		Sleep:                    time.Sleep,
 	}
 }
 
@@ -158,6 +163,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.DoctorGitLabRESTBase == "" {
 		d.DoctorGitLabRESTBase = def.DoctorGitLabRESTBase
+	}
+	if d.DoctorGitLabHostRESTBase == nil {
+		d.DoctorGitLabHostRESTBase = def.DoctorGitLabHostRESTBase
 	}
 	if d.Now == nil {
 		d.Now = def.Now
