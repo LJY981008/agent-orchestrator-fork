@@ -312,3 +312,28 @@ func TestHooksReadTheRepositoryForABarePush(t *testing.T) {
 		t.Fatalf("cd then git push on main: %+v", res.HookSpecificOutput)
 	}
 }
+
+// dirLadoGit is on main only in one folder.
+type dirLadoGit struct{ mainDir string }
+
+func (f dirLadoGit) CurrentBranch(dir string) string {
+	if dir == f.mainDir {
+		return "main"
+	}
+	return "ao/x/root"
+}
+func (dirLadoGit) Config(string) map[string][]string { return nil }
+func (dirLadoGit) RemoteHead(string, string) string  { return "" }
+
+// A ~ inside a path is no tilde expansion (Windows short names such as
+// RUNNER~1), so cd into it is followed. A leading ~ is left alone.
+func TestLadoPushGuardFollowsCdIntoAPathWithTilde(t *testing.T) {
+	repo := filepath.Join(t.TempDir(), "RUNNER~1", "repo")
+	guard := newLadoPushGuard(dirLadoGit{mainDir: repo}, nil)
+	if why := guard.decide("cd '"+repo+"' && git push", t.TempDir()); !strings.Contains(why, "main") {
+		t.Fatalf("cd into %s then git push: %q", repo, why)
+	}
+	if why := guard.decide("cd ~/repo && git push", t.TempDir()); why != "" {
+		t.Fatalf("cd ~/repo then git push: %q", why)
+	}
+}

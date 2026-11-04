@@ -227,7 +227,9 @@ func (g *ladoPushGuard) check(command, cwd string, depth int) string {
 		args := words[1:]
 		switch ladoProgram(words[0]) {
 		case "cd", "pushd":
-			if len(args) > 0 && args[0] != "-" && !strings.ContainsAny(args[0], "$~") {
+			// The shell expands $ anywhere but ~ only at the start, so a
+			// Windows short name such as C:\Users\RUNNER~1 is a plain path.
+			if len(args) > 0 && args[0] != "-" && !strings.Contains(args[0], "$") && !strings.HasPrefix(args[0], "~") {
 				dir = ladoJoinDir(dir, args[0])
 			}
 		case "git":
