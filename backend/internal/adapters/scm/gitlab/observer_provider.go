@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"regexp"
 	"sort"
@@ -40,12 +41,13 @@ const (
 // Supported remote formats:
 //
 //   - SSH:   git@gitlab.com:owner/repo.git
-//   - SSH:   ssh://git@gitlab.internal:8443/group/repo.git  (port preserved)
+//   - SSH:   ssh://git@gitlab.internal:30022/group/repo.git (SSH port dropped,
+//     see sshRemoteHost)
 //   - HTTPS: https://gitlab.com/owner/repo.git
 //   - HTTPS: https://gitlab.internal:8443/group/repo.git      (port preserved)
 //
-// ssh:// remotes parse to the same host:port as their https:// equivalents
-// (review S1).
+// ssh:// remotes parse to the same host as their https:// equivalents when
+// the web authority is allowlisted (review S1).
 func (p *Provider) ParseRepository(remote string) (ports.SCMRepo, bool) {
 	return p.parseGitLabRepo(remote)
 }
@@ -63,8 +65,8 @@ func (p *Provider) parseGitLabRepo(remote string) (ports.SCMRepo, bool) {
 		if err != nil || u.Host == "" {
 			return ports.SCMRepo{}, false
 		}
-		host := u.Host // includes port if present, e.g. "gitlab.internal:8443"
-		if !p.isHostAllowed(host) {
+		host, ok := p.sshRemoteHost(u)
+		if !ok {
 			return ports.SCMRepo{}, false
 		}
 		path := strings.TrimPrefix(u.Path, "/")
@@ -109,6 +111,40 @@ func (p *Provider) parseGitLabRepo(remote string) (ports.SCMRepo, bool) {
 }
 
 var sshRemoteRe = regexp.MustCompile(`^git@([^:]+):(.+)$`)
+
+// sshRemoteHost picks the GitLab web/API authority for an ssh:// remote. The
+// port of an ssh:// URL is the SSH port, not the web port, so it is dropped
+// when the bare host name is trusted. Otherwise the remote maps to the single
+// allowlisted host:port entry with the same host name (a web port such as
+// 8443), and finally to the literal host:port when exactly that is allowlisted.
+// Anything else is rejected so no credential reaches an untrusted host.
+func (p *Provider) sshRemoteHost(u *url.URL) (string, bool) {
+	hostname := u.Hostname()
+	if hostname == "" {
+		return "", false
+	}
+	if u.Port() == "" {
+		return u.Host, p.isHostAllowed(u.Host)
+	}
+	if p.isHostAllowed(hostname) {
+		return hostname, true
+	}
+	match, matches := "", 0
+	for allowed := range p.allowedHosts {
+		name, _, err := net.SplitHostPort(allowed)
+		if err == nil && strings.EqualFold(name, hostname) {
+			match = allowed
+			matches++
+		}
+	}
+	if matches == 1 {
+		return match, true
+	}
+	if p.isHostAllowed(u.Host) {
+		return u.Host, true
+	}
+	return "", false
+}
 
 // splitOwnerRepo splits a GitLab project path into owner (namespace, possibly
 // nested like "group/subgroup") and name (the final repo segment). A bare
