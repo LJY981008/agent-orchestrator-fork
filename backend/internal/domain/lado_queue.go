@@ -261,6 +261,9 @@ type LadoExecution struct {
 	// verification records and integration approvals.
 	Verification LadoExecutionVerification
 	Integration  LadoExecutionIntegration
+	// Resolve is what LADO's resolve workers did for the execution's PR,
+	// zero while none was needed.
+	Resolve LadoExecutionResolve
 }
 
 // LadoExecutionPR is the newest PR of an execution's session, zero while the
@@ -274,6 +277,9 @@ type LadoExecutionPR struct {
 	HeadSHA      string
 	TargetBranch string
 	Title        string
+	// Mergeability is whether the host can merge the PR into its target as
+	// AO last observed it.
+	Mergeability Mergeability
 }
 
 // LadoExecutionVerification is the verification record of an execution's PR
@@ -284,6 +290,10 @@ type LadoExecutionVerification struct {
 	HeadSHA string
 	Outcome LadoVerifyOutcome
 	Reason  string
+	// BaseOverlap says the record's base_branch item is base_overlap: the
+	// base moved under the head with a change to the same paths. Another
+	// failing item may come first in Reason.
+	BaseOverlap bool
 }
 
 // LadoExecutionIntegration is what an execution's integration approvals say:

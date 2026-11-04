@@ -105,6 +105,14 @@ const (
 	LadoCodeReflogOff     = "reflog_off"      // confirm
 	LadoCodeAlreadyOnBase = "already_on_base" // confirm
 	LadoCodeNoLocalBranch = "no_local_branch" // pass
+	// LadoCodeBaseAdvanced means the remote base branch moved past the
+	// PR head's merge base, and none of the files changed on it since is
+	// one the head changed or the plan names.
+	LadoCodeBaseAdvanced = "base_advanced" // confirm
+	// LadoCodeBaseOverlap means the remote base branch moved past the PR
+	// head's merge base with a change to a file the head changed or the plan
+	// names: the head must take in the base and be verified again.
+	LadoCodeBaseOverlap = "base_overlap" // fail
 
 	// protection
 	LadoCodeUnprotected       = "unprotected"        // confirm
@@ -297,7 +305,12 @@ type LadoPathsDetails struct {
 // remote branch does not hold, whether the head was on the remote base
 // already (docs/LJY-PRD/TDD.md §7.3), the local branch's commit when the
 // execution was dispatched (empty when it had none or LADO did not record
-// it) and whether that branch is gone now.
+// it) and whether that branch is gone now. Advanced says the remote base
+// branch moved past the head's merge base, AdvancedTip is that branch's
+// commit then, and Overlap lists the files changed on it since that the head
+// changed or the plan names, at most a page of OverlapCount. These four come
+// last and are left out while empty, so a record whose base did not move
+// keeps the hash it had before them.
 type LadoBaseBranchDetails struct {
 	Branch         string            `json:"branch"`
 	Remote         string            `json:"remote"`
@@ -305,6 +318,10 @@ type LadoBaseBranchDetails struct {
 	AlreadyOnBase  bool              `json:"alreadyOnBase"`
 	DispatchCommit string            `json:"dispatchCommit"`
 	Deleted        bool              `json:"deleted"`
+	Advanced       bool              `json:"advanced,omitempty"`
+	AdvancedTip    string            `json:"advancedTip,omitempty"`
+	Overlap        []string          `json:"overlap,omitempty"`
+	OverlapCount   int               `json:"overlapCount,omitempty"`
 }
 
 // LadoReflogEntry is one reflog entry of the local base branch.
@@ -680,7 +697,26 @@ type LadoIntegrationApproval struct {
 	StatusPostedAt     time.Time
 	// StatusError is the last failed post's error, without secrets.
 	StatusError string
+	// BaseTipSHA is the remote target branch's commit when the head was
+	// approved, empty when LADO did not read it. The merge gate verifies the
+	// head again once the target moved past it.
+	BaseTipSHA string
+	// RevokedAt is when LADO withdrew the approval because the base moved
+	// under the head with a change to the same paths, zero while it holds,
+	// and RevokedReason the record's code then (LadoCodeBaseOverlap). A
+	// revoked approval no longer counts, and the same head and target cannot
+	// be approved again: a new head can.
+	RevokedAt     time.Time
+	RevokedReason string
 }
+
+// Revoked reports whether LADO withdrew the approval.
+func (a LadoIntegrationApproval) Revoked() bool { return !a.RevokedAt.IsZero() }
+
+// ErrLadoIntegrationRevoked means the PR's head had an integration approval
+// for the target branch that LADO withdrew: only a new head can be approved.
+// The services report it as LADO_INTEGRATION_REVOKED.
+var ErrLadoIntegrationRevoked = errors.New("the head's integration approval was revoked")
 
 // ErrLadoIntegrationAlreadyApproved means the PR's head already has an
 // integration approval for the target branch. The services report it as
@@ -695,9 +731,13 @@ var ErrLadoVerificationChanged = errors.New("the head's verification record chan
 // LadoApprovalFor returns the approval of approvals that holds for target,
 // the branch the PR merges into now: the one approved for that branch,
 // compared without case as hosts compare branch names. An approval
-// recorded without a target holds for any.
+// recorded without a target holds for any. A revoked approval holds for
+// none.
 func LadoApprovalFor(approvals []LadoIntegrationApproval, target string) (LadoIntegrationApproval, bool) {
 	for _, approval := range approvals {
+		if approval.Revoked() {
+			continue
+		}
 		if approval.TargetBranch == "" || strings.EqualFold(approval.TargetBranch, target) {
 			return approval, true
 		}

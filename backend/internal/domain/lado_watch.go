@@ -321,12 +321,17 @@ const (
 	// LadoAlertAgentUnavailable: LADO holds a new worker because the agent's
 	// executable is unavailable. Its session is empty.
 	LadoAlertAgentUnavailable LadoAlertKind = "agent_unavailable"
+	// LadoAlertConflictUnresolved: LADO's resolve workers could not resolve
+	// an execution's PR (LadoResolveNeedsHuman). Its session is the
+	// execution's, Value the failed attempts in a row.
+	LadoAlertConflictUnresolved LadoAlertKind = "conflict_unresolved"
 )
 
 // LadoAlertKinds lists the alert kinds.
 var LadoAlertKinds = []LadoAlertKind{
 	LadoAlertTaskCost, LadoAlertSessionCost, LadoAlertSessionCompactions, LadoAlertLimited,
 	LadoAlertLimitResumed, LadoAlertStallNudged, LadoAlertStalled, LadoAlertAgentUnavailable,
+	LadoAlertConflictUnresolved,
 }
 
 // Valid reports whether k is a known kind.
@@ -381,6 +386,7 @@ const (
 	ladoAlertStallNudged        = "#%d 세션 %s 가 %d분 넘게 멈춰 재촉 문구를 보냄"
 	ladoAlertStalled            = "#%d 세션 %s 가 %d분 넘게 멈춤"
 	ladoAlertAgentUnavailable   = "#%d 에이전트 실행 파일을 쓸 수 없어 워커를 기다리게 함"
+	ladoAlertConflictUnresolved = "#%d 실행 %s 의 PR 충돌을 LADO가 풀지 못함 — 직접 해결하세요"
 	ladoAlertUnknown            = "#%d 세션 %s 알림 %s"
 )
 
@@ -412,6 +418,8 @@ func (a LadoAlert) Line(issue int) string {
 		return ladoNoticeLine(ladoAlertStalled, issue, session, a.Value)
 	case LadoAlertAgentUnavailable:
 		return ladoNoticeLine(ladoAlertAgentUnavailable, issue)
+	case LadoAlertConflictUnresolved:
+		return ladoNoticeLine(ladoAlertConflictUnresolved, issue, session)
 	}
 	return ladoNoticeLine(ladoAlertUnknown, issue, session, a.Kind)
 }
