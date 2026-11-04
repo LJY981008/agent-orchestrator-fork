@@ -60,6 +60,8 @@ type APIDeps struct {
 	LadoVerify      controllers.LadoVerifyService
 	// LadoClaudeChrome is the Claude in Chrome setting (issue #40).
 	LadoClaudeChrome controllers.LadoClaudeChromeService
+	// LadoUsage adds up what LADO tasks' sessions spent (issue #42).
+	LadoUsage controllers.LadoUsageService
 	// LadoPresence checks the human-presence proofs LADO's approval routes
 	// need (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 	LadoPresence controllers.LadoPresence
@@ -215,7 +217,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Presence: deps.LadoPresence},
+		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Usage: deps.LadoUsage, Presence: deps.LadoPresence},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},

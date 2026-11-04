@@ -4216,6 +4216,46 @@ paths:
         check commands need a human-presence proof
       tags:
       - lado
+  /api/v1/lado/projects/{projectId}/usage:
+    get:
+      operationId: getLadoProjectUsage
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectUsageResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get the usage totals of each of a project's tasks that is not cancelled,
+        for its board
+      tags:
+      - lado
   /api/v1/lado/queue:
     get:
       operationId: listLadoQueue
@@ -5798,6 +5838,47 @@ paths:
           description: Not Implemented
       summary: Get how long a task's stages took, from intake to merge, and what each
         of its plan and execution sessions spent on investigation
+      tags:
+      - lado
+  /api/v1/lado/tasks/{taskId}/usage:
+    get:
+      operationId: getLadoTaskUsage
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoTaskUsageResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get what a task''s sessions spent: the estimated cost at API prices,
+        tokens, the subagents'' share and the elapsed time together, and each plan
+        and execution session''s cost, tokens, context size and compactions'
       tags:
       - lado
   /api/v1/lado/tasks/imports:
@@ -21400,6 +21481,18 @@ components:
       - overlapIgnore
       - overlapIgnoreIsDefault
       type: object
+    LadoProjectUsageResponse:
+      properties:
+        projectId:
+          type: string
+        tasks:
+          items:
+            $ref: '#/components/schemas/LadoTaskUsageSummaryResponse'
+          type: array
+      required:
+      - projectId
+      - tasks
+      type: object
     LadoQueueItemResponse:
       properties:
         attempts:
@@ -21935,6 +22028,59 @@ components:
       - investigationCalls
       - investigateMs
       - stored
+      type: object
+    LadoSessionUsageResponse:
+      properties:
+        attempt:
+          description: The session's attempt from 1; 0 when it cannot be read, as
+            for a deleted session.
+          type: integer
+        compactions:
+          description: How often the session compacted, as the watch loop counted
+            it.
+          type: integer
+        contextUsed:
+          description: Tokens in the session's context now; 0 before the provider
+            reports.
+          format: int64
+          type: integer
+        contextWindow:
+          format: int64
+          type: integer
+        incomplete:
+          description: AO knows it did not collect the session's usage in full.
+          type: boolean
+        partId:
+          description: The part of a part or merge worker.
+          type: string
+        role:
+          description: The role the task's timings show for the session.
+          enum:
+          - designer
+          - critic
+          - worker
+          - part
+          - merge
+          - integration
+          type: string
+        sessionId:
+          type: string
+        totals:
+          $ref: '#/components/schemas/LadoUsageTotalsResponse'
+        usageMissing:
+          description: AO no longer has the session; its usage was deleted with it
+            and counts as nothing.
+          type: boolean
+      required:
+      - sessionId
+      - role
+      - attempt
+      - totals
+      - contextUsed
+      - contextWindow
+      - compactions
+      - usageMissing
+      - incomplete
       type: object
     LadoSetupAcceptanceResponse:
       properties:
@@ -23710,6 +23856,74 @@ components:
       - timeline
       - sessions
       type: object
+    LadoTaskUsageResponse:
+      properties:
+        sessions:
+          description: The plan sessions, the earlier plan worker attempts, then the
+            executions.
+          items:
+            $ref: '#/components/schemas/LadoSessionUsageResponse'
+          type: array
+        task:
+          $ref: '#/components/schemas/LadoTaskUsageSummaryResponse'
+      required:
+      - task
+      - sessions
+      type: object
+    LadoTaskUsageSummaryResponse:
+      properties:
+        compactions:
+          type: integer
+        elapsedMs:
+          description: From intake to the merge (the timings' total), the cancellation,
+            the close without a merge of the pull request, or now.
+          format: int64
+          type: integer
+        endReason:
+          enum:
+          - merged
+          - cancelled
+          - closed
+          - in_progress
+          type: string
+        endedAt:
+          description: 'When the elapsed time ends: now while the task is in progress.'
+          format: date-time
+          type: string
+        inProgress:
+          type: boolean
+        incomplete:
+          description: Some session's usage is incomplete.
+          type: boolean
+        issueRef:
+          type: string
+        sessionsMissing:
+          description: How many of the task's sessions AO no longer has.
+          type: integer
+        startedAt:
+          description: The task's intake.
+          format: date-time
+          type:
+          - "null"
+          - string
+        taskId:
+          type: string
+        title:
+          type: string
+        totals:
+          $ref: '#/components/schemas/LadoUsageTotalsResponse'
+      required:
+      - taskId
+      - title
+      - totals
+      - compactions
+      - endedAt
+      - elapsedMs
+      - endReason
+      - inProgress
+      - sessionsMissing
+      - incomplete
+      type: object
     LadoTaskViewResponse:
       properties:
         comments:
@@ -23863,6 +24077,41 @@ components:
       - entered
       - stored
       - permissions
+      type: object
+    LadoUsageTotalsResponse:
+      properties:
+        cachedInputTokens:
+          format: int64
+          type: integer
+        costNanos:
+          description: Estimated cost at API prices, in nanodollars. A session without
+            priced usage adds nothing.
+          format: int64
+          type: integer
+        inputTokens:
+          format: int64
+          type: integer
+        outputTokens:
+          format: int64
+          type: integer
+        subagentCostNanos:
+          description: The part of costNanos the sessions' subagents used.
+          format: int64
+          type: integer
+        subagentInputTokens:
+          format: int64
+          type: integer
+        subagentOutputTokens:
+          format: int64
+          type: integer
+      required:
+      - costNanos
+      - inputTokens
+      - cachedInputTokens
+      - outputTokens
+      - subagentCostNanos
+      - subagentInputTokens
+      - subagentOutputTokens
       type: object
     LadoVerificationResponse:
       properties:
