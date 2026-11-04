@@ -9,7 +9,7 @@ import (
 
 func TestParseLimitReadsTheRealMessages(t *testing.T) {
 	loc := seoul(t)
-	kst := func(y int, m time.Month, d, h, min int) time.Time { return time.Date(y, m, d, h, min, 0, 0, loc).UTC() }
+	kst := func(y int, m time.Month, d, h, mi int) time.Time { return time.Date(y, m, d, h, mi, 0, 0, loc).UTC() }
 	// The worker stopped at 16:33 in Seoul on 10-29.
 	seen := kst(2026, 10, 29, 16, 33)
 	guess := domain.LadoLimitGuessedReset
