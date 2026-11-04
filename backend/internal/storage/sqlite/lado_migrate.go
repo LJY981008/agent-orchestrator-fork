@@ -163,6 +163,47 @@ END`,
 	ladoBindingCDCTrigger("lado_setup", "lado_cdc_setup_bindings_delete", "AFTER DELETE ON lado_setup_bindings", "OLD"),
 	ladoBindingCDCTrigger("lado_setup", "lado_cdc_conflict_acceptances_insert", "AFTER INSERT ON lado_conflict_acceptances", "NEW"),
 	ladoBindingCDCTrigger("lado_setup", "lado_cdc_conflict_acceptances_update", "AFTER UPDATE ON lado_conflict_acceptances", "NEW"),
+	// A watch alert publishes when it is raised and when it is seen, so the
+	// desktop alert, the kanban badge and other windows follow. A session
+	// watch publishes when its limit state, stall state or compactions
+	// change; a new row and a moved read offset publish nothing.
+	ladoAlertCDCTrigger("lado_cdc_alerts_insert", "AFTER INSERT ON lado_alerts", "", "insert"),
+	ladoAlertCDCTrigger("lado_cdc_alerts_update", "AFTER UPDATE ON lado_alerts", "WHEN OLD.seen_at IS NOT NEW.seen_at", "update"),
+	`CREATE TRIGGER lado_cdc_session_watch_update
+AFTER UPDATE ON lado_session_watch
+WHEN OLD.limit_state IS NOT NEW.limit_state OR
+    OLD.stall_state IS NOT NEW.stall_state OR
+    OLD.compactions IS NOT NEW.compactions
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, (SELECT sessions.id FROM sessions WHERE sessions.id = NEW.session_id), 'session_updated',
+        json_object('kind', 'lado_watch', 'sessionId', NEW.session_id, 'taskId', lado_tasks.id, 'projectId', projects.id),
+        datetime('now')
+    FROM lado_tasks
+    JOIN projects ON projects.id = lado_tasks.project_id
+    WHERE lado_tasks.id = NEW.task_id;
+END`,
+}
+
+// ladoAlertCDCTrigger publishes an alert NEW names, with op, on its session,
+// in its task's project. change_log names only sessions that exist, so a
+// task's alert, whose session is empty, publishes without one.
+func ladoAlertCDCTrigger(name, event, when, op string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, (SELECT sessions.id FROM sessions WHERE sessions.id = NEW.session_id), 'session_updated',
+        json_object('kind', 'lado_alert', 'alertId', NEW.id, 'op', '` + op + `', 'sessionId', NEW.session_id,
+            'taskId', lado_tasks.id, 'projectId', projects.id),
+        datetime('now')
+    FROM lado_tasks
+    JOIN projects ON projects.id = lado_tasks.project_id
+    WHERE lado_tasks.id = NEW.task_id;
+END`
 }
 
 // ladoPlanCDCTrigger publishes a change of the task that NEW.task_id names,
