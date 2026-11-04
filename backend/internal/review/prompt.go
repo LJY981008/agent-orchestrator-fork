@@ -131,6 +131,9 @@ func gitLabReviewTexts(spec LaunchSpec, hasGitHub bool) (prompt, systemPrompt st
      - Leave optional or nice-to-have suggestions out of "comments"; mention them in the summary only.
      - Omit "comments" only when nothing needs to change.`
 	const submitCommand = `    printf '%%s' '{ "reviews": [ { "runId": "<run-id>", "verdict": "<approved|changes_requested>", "body": "<your full review markdown>", "comments": [ { "path": "<file>", "line": <n>, "body": "<finding>" } ] } ] }' | ao review submit --session %s --reviews -`
+	// A mixed queue shows both run shapes, so a GitHub run keeps the review
+	// id from step 1 (AO names that review to the worker).
+	const mixedSubmitCommand = `    printf '%%s' '{ "reviews": [ { "runId": "<github-run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" }, { "runId": "<gitlab-run-id>", "verdict": "<approved|changes_requested>", "body": "<your full review markdown>", "comments": [ { "path": "<file>", "line": <n>, "body": "<finding>" } ] } ] }' | ao review submit --session %s --reviews -`
 	const submitRules = `   - Keep the JSON on one line and shell-escape any single quotes in review text before passing it to printf; do not use a heredoc because reviewer panes run through an interactive PTY.
    - AO posts each GitLab run's "body" as a note and each of its "comments" as a discussion on the merge request, anchored on the reviewed head commit. State in "body" whether you are requesting changes or approving; "verdict" is the machine-readable verdict.`
 
@@ -168,9 +171,9 @@ Do these steps in order:
 
    - Substitute the PR's owner/repo/number. Always use "event": "COMMENT": reviews are posted from the PR author's own account, and GitHub rejects both APPROVE and REQUEST_CHANGES on your own PR. The printed number is the review id. If the call fails on the provider, leave the id empty.
    - For both GitHub and GitLab: `+commentRules+`
-2. Record AO's bookkeeping for every queued run using one command. Pass JSON on stdin so nothing is ever written into the worktree (a file there could be committed onto the worker's branch). Include one object per PR/run from the queue. A GitHub run carries "githubReviewId" from step 1 and no "comments"; a GitLab run carries "comments" and no "githubReviewId":
+2. Record AO's bookkeeping for every queued run using one command. Pass JSON on stdin so nothing is ever written into the worktree (a file there could be committed onto the worker's branch). Include one object per PR/run from the queue. A GitHub run carries "githubReviewId" from step 1 and no "comments"; a GitLab run carries "comments" and no "githubReviewId". Only if step 1 genuinely fails on the provider for a GitHub PR, still include that run with an empty githubReviewId so the result is recorded:
 
-`+submitCommand+`
+`+mixedSubmitCommand+`
 
 `+submitRules,
 		spec.WorkerID, reviewQueueTextWithNotes(spec, true), spec.WorkerID)

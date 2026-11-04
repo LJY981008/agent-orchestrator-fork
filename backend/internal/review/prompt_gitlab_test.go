@@ -92,6 +92,9 @@ func TestMixedQueuePromptMarksEachGitLabMergeRequest(t *testing.T) {
 		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews",
 		"Step 1 is for GitHub pull requests only",
 		`"comments": [ { "path": "<file>", "line": <n>, "body": "<finding>" } ]`,
+		`{ "runId": "<github-run-id>", "verdict": "<approved|changes_requested>", "githubReviewId": "<id-from-step-1-or-empty>", "body": "<your full review markdown>" }`,
+		`{ "runId": "<gitlab-run-id>", "verdict": "<approved|changes_requested>", "body": "<your full review markdown>", "comments": [`,
+		"| ao review submit --session mer-1 --reviews -",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("mixed prompt missing %q:\n%s", want, prompt)
