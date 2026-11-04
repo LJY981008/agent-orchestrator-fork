@@ -193,6 +193,12 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.hold(ctx, entry, domain.LadoWaitingDiskLow, now.Add(recheckAfter))
 	}
 
+	// 8. The account the worker would run on is not at its usage limit, and
+	// its agent can start (launch_hold.go). Neither spends the attempt.
+	if hold := s.launchHold(ctx, task.ID, agent.Harness, now, nil); hold.reason != "" {
+		return false, s.holdFor(ctx, entry, hold.reason, hold.detail, hold.until)
+	}
+
 	if ctx.Err() != nil {
 		return false, s.handBack(ctx, entry)
 	}
