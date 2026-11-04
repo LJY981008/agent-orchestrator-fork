@@ -90,7 +90,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		return ClaimPRResult{}, apierr.Invalid("INVALID_PROJECT_CONFIG", err.Error(), nil)
 	}
 	claimOrigin := firstNonEmpty(project.Config.CanonicalRepoURL, project.RepoOriginURL)
-	prURL, number, err := normalizePRRef(ref, claimOrigin)
+	prURL, number, err := normalizePRRefWith(ref, claimOrigin, s.originRepo)
 	if err != nil {
 		return ClaimPRResult{}, err
 	}
@@ -157,8 +157,8 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 }
 
 func (s *Service) requireProjectPRRepository(ctx context.Context, project domain.ProjectRecord, prURL string) error {
-	originErr := requireSameRepo(prURL, project.RepoOriginURL)
-	if originErr == nil || (project.Config.CanonicalRepoURL != "" && requireSameRepo(prURL, project.Config.CanonicalRepoURL) == nil) {
+	originErr := requireSameRepoWith(prURL, project.RepoOriginURL, s.originRepo)
+	if originErr == nil || (project.Config.CanonicalRepoURL != "" && requireSameRepoWith(prURL, project.Config.CanonicalRepoURL, s.originRepo) == nil) {
 		return nil
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
@@ -172,7 +172,7 @@ func (s *Service) requireProjectPRRepository(ctx context.Context, project domain
 		// A workspace root and local-only children may have no SCM identity.
 		// Only registered, parseable origins authorize a child repository;
 		// arbitrary checkout remotes never grant claim permission.
-		if requireSameRepo(prURL, repo.RepoOriginURL) == nil {
+		if requireSameRepoWith(prURL, repo.RepoOriginURL, s.originRepo) == nil {
 			return nil
 		}
 	}
@@ -400,13 +400,33 @@ func claimedFirst(prs []domain.PRFacts, prURL string) []domain.PRFacts {
 	return prs
 }
 
+// originRepoParser identifies the repository behind a project origin URL.
+type originRepoParser func(raw string) (host, owner, name string, err error)
+
+// originRepo identifies a project origin for comparison with a PR URL. The SCM
+// provider's parse comes first so the host matches the one the observer
+// persists on PR rows (a GitLab ssh:// remote's SSH port is not the web host);
+// the provider-neutral parse is the fallback when no provider claims it.
+func (s *Service) originRepo(raw string) (host, owner, name string, err error) {
+	if s.scm != nil {
+		if repo, ok := s.scm.ParseRepository(strings.TrimSpace(raw)); ok && repo.Host != "" && repo.Owner != "" && repo.Name != "" {
+			return repo.Host, repo.Owner, repo.Name, nil
+		}
+	}
+	return repoFromURL(raw)
+}
+
 func normalizePRRef(ref, repoOrigin string) (string, int, error) {
+	return normalizePRRefWith(ref, repoOrigin, repoFromURL)
+}
+
+func normalizePRRefWith(ref, repoOrigin string, parseOrigin originRepoParser) (string, int, error) {
 	ref = strings.TrimPrefix(strings.TrimSpace(ref), "#")
 	if ref == "" {
 		return "", 0, ErrInvalidPRRef
 	}
 	if n, err := strconv.Atoi(ref); err == nil && n > 0 {
-		host, owner, repo, err := repoFromURL(repoOrigin)
+		host, owner, repo, err := parseOrigin(repoOrigin)
 		if err != nil {
 			return "", 0, ErrInvalidPRRef
 		}
@@ -429,6 +449,10 @@ func prURLFromParts(host, owner, repo string, number int) string {
 }
 
 func requireSameRepo(prURL, repoOrigin string) error {
+	return requireSameRepoWith(prURL, repoOrigin, repoFromURL)
+}
+
+func requireSameRepoWith(prURL, repoOrigin string, parseOrigin originRepoParser) error {
 	if strings.TrimSpace(repoOrigin) == "" {
 		return ErrProjectMismatch
 	}
@@ -436,7 +460,7 @@ func requireSameRepo(prURL, repoOrigin string) error {
 	if err != nil {
 		return ErrInvalidPRRef
 	}
-	originHost, originOwner, originRepo, err := repoFromURL(repoOrigin)
+	originHost, originOwner, originRepo, err := parseOrigin(repoOrigin)
 	if err != nil {
 		return ErrInvalidPRRef
 	}
