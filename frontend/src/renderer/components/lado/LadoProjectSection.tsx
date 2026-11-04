@@ -1,7 +1,8 @@
 // LADO fork: Project settings → LADO (docs/LJY-PRD/TDD.md §5.3, §7.1, §8.2
 // and §9). The project's LADO mode and how many of its approved tasks run at
 // once, then whether a task waits for another task's overlapping run (§5.4),
-// its check commands and whether its base branches are protected.
+// its check commands and whether its base branches are protected, and the
+// worker watch with its overrides of the global defaults (issue #42).
 // The daemon refuses turning the mode on while tracker intake is on; turning
 // it off asks the desktop app to confirm, and a cancelled confirmation leaves
 // it on. The cap saves at once, also while the mode is off.
@@ -17,6 +18,7 @@ import { Switch } from "../ui/switch";
 import { LadoProjectChecksCard } from "./LadoProjectChecksCard";
 import { LadoProjectOverlapCard } from "./LadoProjectOverlapCard";
 import { LadoProjectProtectionCard } from "./LadoProjectProtectionCard";
+import { LadoWatchSettingsCard } from "./LadoWatchSettingsCard";
 
 export function LadoProjectSection({ projectId }: { projectId: string }) {
 	const { t } = useTranslation();
@@ -107,6 +109,7 @@ export function LadoProjectSection({ projectId }: { projectId: string }) {
 			<LadoProjectOverlapCard projectId={projectId} settings={data} />
 			<LadoProjectChecksCard projectId={projectId} settings={data} />
 			<LadoProjectProtectionCard projectId={projectId} />
+			<LadoWatchSettingsCard projectId={projectId} />
 		</div>
 	);
 }

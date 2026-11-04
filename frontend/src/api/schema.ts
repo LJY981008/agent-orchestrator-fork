@@ -1220,6 +1220,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/alerts/{alertId}/seen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark an alert seen; an alert seen before keeps its first time */
+        post: operations["markLadoAlertSeen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/bindings": {
         parameters: {
             query?: never;
@@ -1512,6 +1529,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/projects/{projectId}/alerts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's one-line worker watch alerts, newest first: cost and compaction thresholds, usage limits and stalls */
+        get: operations["listLadoProjectAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/projects/{projectId}/issues": {
         parameters: {
             query?: never;
@@ -1574,6 +1608,41 @@ export interface paths {
         get: operations["getLadoProjectSettings"];
         /** Change a project's LADO mode, its cap on running executions or its check commands and their time limit; turning LADO mode off and changing the check commands need a human-presence proof */
         put: operations["updateLadoProjectSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the usage totals of each of a project's tasks that is not cancelled, for its board */
+        get: operations["getLadoProjectUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/watch-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project's worker watch settings over the global ones */
+        get: operations["getLadoProjectWatchSettings"];
+        /** Replace a project's worker watch settings; null follows the global value, and a change applies from each session's next start */
+        put: operations["updateLadoProjectWatchSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -1980,6 +2049,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/tasks/{taskId}/usage": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get what a task's sessions spent: the estimated cost at API prices, tokens, the subagents' share and the elapsed time together, and each plan and execution session's cost, tokens, context size and compactions */
+        get: operations["getLadoTaskUsage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/tasks/imports": {
         parameters: {
             query?: never;
@@ -2007,6 +2093,24 @@ export interface paths {
         /** Get a project's timing baseline: its newest tasks' timings, the median and longest time between adjacent stages, and each session role's median investigation */
         get: operations["getLadoTimings"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/watch-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the global worker watch settings: the compact window, the cost and compaction alert thresholds, the stall time and the wake messages */
+        get: operations["getLadoWatchSettings"];
+        /** Replace the global worker watch settings; null follows the default, and a change applies from each session's next start */
+        put: operations["updateLadoWatchSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -6640,6 +6744,43 @@ export interface components {
             /** @description Hash of the trimmed text; empty when the file was not read. */
             sha256: string;
         };
+        LadoAlertListResponse: {
+            alerts: components["schemas"]["LadoAlertResponse"][];
+        };
+        LadoAlertResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: int64 */
+            id: number;
+            issueRef: string;
+            /** @enum {string} */
+            kind: "task_cost" | "session_cost" | "session_compactions" | "limited" | "limit_resumed" | "stall_nudged" | "stalled" | "agent_unavailable";
+            /** @description 1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed; otherwise 1. */
+            level: number;
+            /** @description The alert's one line, as the orchestrator gets it. */
+            line: string;
+            /** @description The desktop notification id: lado-alert:<id>. */
+            notificationId: string;
+            projectId: string;
+            /**
+             * Format: date-time
+             * @description null until someone marks it seen.
+             */
+            seenAt: null | string;
+            /** @description The session; empty for an alert of the task's total or of the task itself. */
+            sessionId: string;
+            taskId: string;
+            /**
+             * Format: int64
+             * @description The threshold the value is held against, in the value's unit; 0 when there is none.
+             */
+            threshold: number;
+            /**
+             * Format: int64
+             * @description Cents for a cost, a count for compactions, minutes for a stall, the reset's Unix seconds for limited.
+             */
+            value: number;
+        };
         LadoApprovedRulesResponse: {
             /** @description The setup warnings accepted at the approval. */
             accepted: components["schemas"]["LadoSetupAcceptedConflictResponse"][];
@@ -6707,6 +6848,17 @@ export interface components {
         LadoClaudeChromeSettingsResponse: {
             chatSessions: boolean;
             ladoWorkers: boolean;
+        };
+        LadoCompactWarningResponse: {
+            /** @description The file it was found in; omitted for an environment. */
+            path?: string;
+            /** @enum {string} */
+            setting: "autoCompactEnabled" | "DISABLE_AUTO_COMPACT" | "DISABLE_COMPACT";
+            /**
+             * @description Where it was found.
+             * @enum {string}
+             */
+            source: "project_settings" | "project_local_settings" | "user_settings" | "user_config" | "lado_settings" | "project_env" | "launch_env" | "daemon_env";
         };
         LadoConnectionCheckResponse: {
             /** @description Host the token belongs to. */
@@ -6779,6 +6931,12 @@ export interface components {
             blocking: boolean;
             /** @description What a task's rules need from its agent; empty for a project. */
             capabilities: components["schemas"]["LadoCapabilityResponse"][];
+            /** @description The project is in LADO mode, so its new sessions get compactWindow; false leaves them on the agent's own default. */
+            compactApplies: boolean;
+            /** @description Settings that turn Claude Code's auto-compact off, so compactWindow does nothing. */
+            compactWarnings: components["schemas"]["LadoCompactWarningResponse"][];
+            /** @description The token count the project's Claude Code sessions compact at: the project's watch setting over the global one over the default. */
+            compactWindow: number;
             /** @enum {string} */
             permissionCeiling: "accept-edits" | "auto" | "bypass-permissions";
             /**
@@ -7399,6 +7557,10 @@ export interface components {
             overlapWait: boolean;
             projectId: string;
         };
+        LadoProjectUsageResponse: {
+            projectId: string;
+            tasks: components["schemas"]["LadoTaskUsageSummaryResponse"][];
+        };
         LadoQueueItemResponse: {
             /** @description Attempts to start the worker so far. LADO gives up after three; waiting for a slot, memory or the issue is not an attempt. */
             attempts: number;
@@ -7622,6 +7784,32 @@ export interface components {
              * @description When the stored row was written; omitted for computed metrics.
              */
             updatedAt?: null | string;
+        };
+        LadoSessionUsageResponse: {
+            /** @description The session's attempt from 1; 0 when it cannot be read, as for a deleted session. */
+            attempt: number;
+            /** @description How often the session compacted, as the watch loop counted it. */
+            compactions: number;
+            /**
+             * Format: int64
+             * @description Tokens in the session's context now; 0 before the provider reports.
+             */
+            contextUsed: number;
+            /** Format: int64 */
+            contextWindow: number;
+            /** @description AO knows it did not collect the session's usage in full. */
+            incomplete: boolean;
+            /** @description The part of a part or merge worker. */
+            partId?: string;
+            /**
+             * @description The role the task's timings show for the session.
+             * @enum {string}
+             */
+            role: "designer" | "critic" | "worker" | "part" | "merge" | "integration";
+            sessionId: string;
+            totals: components["schemas"]["LadoUsageTotalsResponse"];
+            /** @description AO no longer has the session; its usage was deleted with it and counts as nothing. */
+            usageMissing: boolean;
         };
         LadoSetupAcceptanceResponse: {
             actor: string;
@@ -8300,6 +8488,40 @@ export interface components {
             timeline: components["schemas"]["LadoTaskTimelineResponse"];
             title: string;
         };
+        LadoTaskUsageResponse: {
+            /** @description The plan sessions, the earlier plan worker attempts, then the executions. */
+            sessions: components["schemas"]["LadoSessionUsageResponse"][];
+            task: components["schemas"]["LadoTaskUsageSummaryResponse"];
+        };
+        LadoTaskUsageSummaryResponse: {
+            compactions: number;
+            /**
+             * Format: int64
+             * @description From intake to the merge (the timings' total), the cancellation, the close without a merge of the pull request, or now.
+             */
+            elapsedMs: number;
+            /** @enum {string} */
+            endReason: "merged" | "cancelled" | "closed" | "in_progress";
+            /**
+             * Format: date-time
+             * @description When the elapsed time ends: now while the task is in progress.
+             */
+            endedAt: string;
+            inProgress: boolean;
+            /** @description Some session's usage is incomplete. */
+            incomplete: boolean;
+            issueRef?: string;
+            /** @description How many of the task's sessions AO no longer has. */
+            sessionsMissing: number;
+            /**
+             * Format: date-time
+             * @description The task's intake.
+             */
+            startedAt?: null | string;
+            taskId: string;
+            title: string;
+            totals: components["schemas"]["LadoUsageTotalsResponse"];
+        };
         LadoTaskViewResponse: {
             comments: components["schemas"]["LadoIssueCommentResponse"][];
             history: components["schemas"]["LadoPlanHistoryResponse"];
@@ -8358,6 +8580,28 @@ export interface components {
             problemDetail?: string;
             /** @description Whether LADO already keeps a token for the host. */
             stored: boolean;
+        };
+        LadoUsageTotalsResponse: {
+            /** Format: int64 */
+            cachedInputTokens: number;
+            /**
+             * Format: int64
+             * @description Estimated cost at API prices, in nanodollars. A session without priced usage adds nothing.
+             */
+            costNanos: number;
+            /** Format: int64 */
+            inputTokens: number;
+            /** Format: int64 */
+            outputTokens: number;
+            /**
+             * Format: int64
+             * @description The part of costNanos the sessions' subagents used.
+             */
+            subagentCostNanos: number;
+            /** Format: int64 */
+            subagentInputTokens: number;
+            /** Format: int64 */
+            subagentOutputTokens: number;
         };
         LadoVerificationResponse: {
             /** Format: date-time */
@@ -8496,6 +8740,47 @@ export interface components {
             /** @enum {string} */
             result: "ok" | "not_korean" | "unclear";
             text: string;
+        };
+        LadoWatchSettingsResolved: {
+            compactWindow: number;
+            sessionCompactions: number;
+            /** Format: int64 */
+            sessionCostCents: number;
+            stallMinutes: number;
+            /** Format: int64 */
+            taskCostCents: number;
+            wakeEnabled: boolean;
+        };
+        LadoWatchSettingsResponse: {
+            /** @description The built-in defaults. */
+            defaults: components["schemas"]["LadoWatchSettingsResolved"];
+            /** @description The settings the scope runs with. */
+            effective: components["schemas"]["LadoWatchSettingsResolved"];
+            /** @description What a null value follows: the global row over the defaults for a project, the defaults for the global row. */
+            inherited: components["schemas"]["LadoWatchSettingsResolved"];
+            /** @description The project; empty for the global row. */
+            projectId: string;
+            /**
+             * Format: date-time
+             * @description When the row was last saved; omitted without a row.
+             */
+            updatedAt?: null | string;
+            /** @description The row as stored; null follows inherited. */
+            values: components["schemas"]["LadoWatchSettingsValues"];
+        };
+        LadoWatchSettingsValues: {
+            /** @description The token count Claude Code sessions of a project in LADO mode compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW), and Codex sessions' compact limit. */
+            compactWindow: null | number;
+            /** @description How many times one session may compact before LADO alerts. */
+            sessionCompactions: null | number;
+            /** @description The estimated cost, in cents, of one session past which LADO alerts, and once more past twice it. */
+            sessionCostCents: null | number;
+            /** @description How long a running worker may rest without a report before LADO takes it as stalled. */
+            stallMinutes: null | number;
+            /** @description The estimated cost, in cents, of a task's sessions together past which LADO alerts, and once more past twice it. */
+            taskCostCents: null | number;
+            /** @description Let LADO send its two fixed wake messages to the workers: the limit resume and the stall nudge. */
+            wakeEnabled: null | boolean;
         };
         LinkPreviewResponse: {
             description?: string;
@@ -10089,6 +10374,20 @@ export interface components {
         UpdateLadoTaskRequest: {
             agent?: null | string;
             model?: null | string;
+        };
+        UpdateLadoWatchSettingsRequest: {
+            /** @description The token count Claude Code sessions of a project in LADO mode compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW), and Codex sessions' compact limit. */
+            compactWindow: null | number;
+            /** @description How many times one session may compact before LADO alerts. */
+            sessionCompactions: null | number;
+            /** @description The estimated cost, in cents, of one session past which LADO alerts, and once more past twice it. */
+            sessionCostCents: null | number;
+            /** @description How long a running worker may rest without a report before LADO takes it as stalled. */
+            stallMinutes: null | number;
+            /** @description The estimated cost, in cents, of a task's sessions together past which LADO alerts, and once more past twice it. */
+            taskCostCents: null | number;
+            /** @description Let LADO send its two fixed wake messages to the workers: the limit resume and the stall nudge. */
+            wakeEnabled: null | boolean;
         };
         UpdateProjectSettingsInput: {
             config: components["schemas"]["ProjectConfig"];
@@ -14294,6 +14593,56 @@ export interface operations {
             };
         };
     };
+    markLadoAlertSeen: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO alert id. */
+                alertId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoAlertResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     setLadoBinding: {
         parameters: {
             query?: never;
@@ -15492,6 +15841,72 @@ export interface operations {
             };
         };
     };
+    listLadoProjectAlerts: {
+        parameters: {
+            query?: {
+                /** @description Only this task's alerts. */
+                taskId?: string;
+                /** @description When true, only the alerts nobody marked seen. */
+                unseen?: boolean;
+                /** @description At most this many, newest first; 100 when omitted. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoAlertListResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listLadoProjectIssues: {
         parameters: {
             query?: never;
@@ -15788,6 +16203,169 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoProjectUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoProjectUsageResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoProjectWatchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoWatchSettingsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoProjectWatchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoWatchSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoWatchSettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -17821,6 +18399,56 @@ export interface operations {
             };
         };
     };
+    getLadoTaskUsage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoTaskUsageResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     importLadoTasks: {
         parameters: {
             query?: never;
@@ -17933,6 +18561,95 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoWatchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoWatchSettingsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoWatchSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoWatchSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoWatchSettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };

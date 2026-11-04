@@ -23,7 +23,18 @@ vi.mock("../../lib/lado", async (original) => ({
 	...(await original<typeof import("../../lib/lado")>()),
 	fetchLadoProjectSettings: vi.fn(),
 	fetchLadoProtection: vi.fn(),
+	fetchLadoWatchSettings: vi.fn(),
 }));
+
+/** The worker watch card below (issue #42), with nothing saved. */
+const watchDefaults = { compactWindow: 200_000, taskCostCents: 100_00, sessionCostCents: 30_00, sessionCompactions: 3, stallMinutes: 120, wakeEnabled: true };
+const watchSettings: lado.LadoWatchSettings = {
+	projectId: "",
+	defaults: watchDefaults,
+	inherited: watchDefaults,
+	effective: watchDefaults,
+	values: { compactWindow: null, taskCostCents: null, sessionCostCents: null, sessionCompactions: null, stallMinutes: null, wakeEnabled: null },
+};
 
 // The settings dialog around the page, as SettingsDialog.test.tsx stubs it.
 vi.mock("../ProjectSettingsForm", () => ({
@@ -83,6 +94,7 @@ describe("LadoProjectSection", () => {
 		vi.resetAllMocks();
 		vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue(off);
 		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({ projectId: "demo", repositories: [] });
+		vi.mocked(lado.fetchLadoWatchSettings).mockResolvedValue(watchSettings);
 		vi.spyOn(apiClient, "PUT").mockImplementation((async (_path: string, init: { body: Partial<lado.LadoProjectSettings> }) => ({
 			data: { ...off, ...init.body },
 			error: undefined,

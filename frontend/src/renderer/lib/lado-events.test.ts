@@ -1,11 +1,14 @@
 import { QueryClient, type QueryKey } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+	ladoAlertsQueryKey,
 	ladoEffectiveProjectQueryKey,
 	ladoEffectiveQueryKey,
+	ladoProjectUsageQueryKey,
 	ladoRuleQueryKey,
 	ladoRulesQueryKey,
 	ladoTasksQueryKey,
+	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
 } from "./lado";
 import { createLadoEventBatch } from "./lado-events";
@@ -105,5 +108,58 @@ describe("createLadoEventBatch and local setup", () => {
 		expect(
 			invalidatedBy([{ payload: { isTerminated: true }, event: { type: "session_updated", projectId: "demo", sessionId: "demo-7" }, lado: false }]),
 		).toEqual([]);
+	});
+});
+
+// LADO fork: the worker watch (issue #42). A session watch or alert event
+// refreshes the board's costs and badges and the task's Usage tab; an alert's
+// INSERT also hands the alert on for its desktop notification.
+describe("createLadoEventBatch and the worker watch", () => {
+	const watchViews: Record<string, QueryKey> = {
+		projectUsage: ladoProjectUsageQueryKey("demo"),
+		taskUsage: ladoTaskUsageQueryKey("lado-task-1"),
+		unseenAlerts: ladoAlertsQueryKey("demo", { unseen: true }),
+		taskAlerts: ladoAlertsQueryKey("demo", { taskId: "lado-task-1" }),
+		otherAlerts: ladoAlertsQueryKey("other", { unseen: true }),
+		tasks: ladoTasksQueryKey("demo"),
+	};
+
+	function watched(payloads: Payload[]) {
+		const queryClient = new QueryClient();
+		for (const key of Object.values(watchViews)) queryClient.setQueryData(key, []);
+		const onNewAlerts = vi.fn();
+		const batch = createLadoEventBatch(queryClient, { onNewAlerts });
+		for (const payload of payloads) expect(batch.note(payload, { type: "session_updated", projectId: "demo", sessionId: "demo-3" })).toBe(true);
+		batch.flush((queryKey) => void queryClient.invalidateQueries({ queryKey }));
+		const invalidated = Object.entries(watchViews)
+			.filter(([, key]) => queryClient.getQueryState(key)?.isInvalidated)
+			.map(([name]) => name)
+			.sort();
+		return { invalidated, onNewAlerts, batch };
+	}
+
+	it("hands a raised alert on once and refreshes the usage and alert views", () => {
+		const insert = { kind: "lado_alert", alertId: 7, op: "insert", projectId: "demo", taskId: "lado-task-1", sessionId: "demo-3" };
+		const { invalidated, onNewAlerts, batch } = watched([insert, insert]);
+		expect(invalidated).toEqual(["projectUsage", "taskAlerts", "taskUsage", "unseenAlerts"]);
+		expect(onNewAlerts).toHaveBeenCalledTimes(1);
+		expect(onNewAlerts).toHaveBeenCalledWith([{ alertId: 7, projectId: "demo", taskId: "lado-task-1" }]);
+		// A second flush hands nothing on.
+		batch.flush(() => undefined);
+		expect(onNewAlerts).toHaveBeenCalledTimes(1);
+	});
+
+	it("refreshes the badges for a seen alert without a notification", () => {
+		const { invalidated, onNewAlerts } = watched([
+			{ kind: "lado_alert", alertId: 7, op: "update", projectId: "demo", taskId: "lado-task-1", sessionId: "" },
+		]);
+		expect(invalidated).toEqual(["projectUsage", "taskAlerts", "taskUsage", "unseenAlerts"]);
+		expect(onNewAlerts).not.toHaveBeenCalled();
+	});
+
+	it("refreshes only the usage for a session watch change", () => {
+		const { invalidated, onNewAlerts } = watched([{ kind: "lado_watch", projectId: "demo", taskId: "lado-task-1", sessionId: "demo-3" }]);
+		expect(invalidated).toEqual(["projectUsage", "taskUsage"]);
+		expect(onNewAlerts).not.toHaveBeenCalled();
 	});
 });

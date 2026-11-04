@@ -7,7 +7,8 @@
 // Once approved, the footer follows the queue and the run: what the queued
 // plan waits for, then the worker's session and PR, or why the run failed,
 // and once LADO verified the PR's head, its integration approval and merge.
-// The Timings tab shows how long each stage took.
+// The Timings tab shows how long each stage took; the Usage tab what its
+// sessions spend and the alerts LADO raised (issue #42).
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
@@ -49,6 +50,7 @@ import { LadoPlanReview } from "./LadoPlanReview";
 import { LadoPlanWorkerStatus } from "./LadoPlanWorkerStatus";
 import { LadoTaskRules } from "./LadoTaskRules";
 import { LadoTaskTimings } from "./LadoTaskTimings";
+import { LadoTaskUsage } from "./LadoTaskUsage";
 import { LadoIntegrationAction, LadoRepostStatus } from "./LadoVerificationSection";
 
 const compactButtonClass = "h-8 rounded-[10px] px-4 text-sm";
@@ -61,15 +63,21 @@ function rulesChanged(error: unknown): boolean {
 	return error instanceof LadoApiError && error.code === "LADO_RULES_CHANGED";
 }
 
+/** The task view's tabs. */
+export type LadoTaskTab = "plan" | "rules" | "timings" | "usage";
+
 export function LadoTaskDialog({
 	projectId,
 	taskId,
 	repositories,
+	initialTab = "plan",
 	onOpenChange,
 }: {
 	projectId: string;
 	taskId: string | null;
 	repositories: readonly LadoRepository[];
+	/** The tab the view opens on: a LADO alert's notification opens Usage. */
+	initialTab?: LadoTaskTab;
 	onOpenChange: (open: boolean) => void;
 }) {
 	const { t } = useTranslation();
@@ -107,7 +115,14 @@ export function LadoTaskDialog({
 				) : view.isError || !data || !taskId ? (
 					<p className="p-5 text-caption leading-4 text-error" role="alert">{ladoErrorText(t, view.error)}</p>
 				) : (
-					<TaskViewBody projectId={projectId} taskId={taskId} view={data} onClose={() => onOpenChange(false)} />
+					<TaskViewBody
+						key={`${taskId}:${initialTab}`}
+						projectId={projectId}
+						taskId={taskId}
+						view={data}
+						initialTab={initialTab}
+						onClose={() => onOpenChange(false)}
+					/>
 				)}
 			</DialogContent>
 		</Dialog>
@@ -118,18 +133,20 @@ function TaskViewBody({
 	projectId,
 	taskId,
 	view,
+	initialTab,
 	onClose,
 }: {
 	projectId: string;
 	taskId: string;
 	view: LadoTaskView;
+	initialTab: LadoTaskTab;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
 	const queryClient = useQueryClient();
 	const requestPlan = useRequestLadoPlan(projectId, taskId);
 	const approve = useApproveLadoPlan(projectId, taskId);
-	const [tab, setTab] = useState("plan");
+	const [tab, setTab] = useState<string>(initialTab);
 	const [readingRules, setReadingRules] = useState(false);
 	const [rulesReadError, setRulesReadError] = useState<unknown>(null);
 	const revisions = view.history.revisions;
@@ -245,6 +262,9 @@ function TaskViewBody({
 								<TabsTrigger value="timings">
 									<span className="text-xs font-medium">{t("lado.timings.title")}</span>
 								</TabsTrigger>
+								<TabsTrigger value="usage">
+									<span className="text-xs font-medium">{t("lado.usage.title")}</span>
+								</TabsTrigger>
 							</TabsList>
 							{tab !== "plan" ? null : revisions.length > 1 ? (
 								<Select value={selected ?? undefined} onValueChange={setSelected}>
@@ -318,6 +338,9 @@ function TaskViewBody({
 						</TabsContent>
 						<TabsContent value="timings" className="flex-none">
 							<LadoTaskTimings taskId={taskId} />
+						</TabsContent>
+						<TabsContent value="usage" className="flex-none">
+							<LadoTaskUsage projectId={projectId} taskId={taskId} />
 						</TabsContent>
 					</section>
 				</Tabs>
