@@ -625,6 +625,11 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 			return err
 		}
 	}
+	if domain.AgentHarness(agent) == domain.HarnessClaudeCode && ladoExecutionWorkerSession() { // LADO fork (#44): no push to a base branch
+		if done, err := answerLadoPushGuard(c.deps.Out, event, payload); err != nil || done {
+			return err
+		}
+	}
 	if isCursorPermissionHook(agent, event) {
 		return c.runCursorPermissionHook(ctx, agent, event, sessionID, payload)
 	}
