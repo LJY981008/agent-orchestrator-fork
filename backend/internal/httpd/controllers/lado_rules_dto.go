@@ -251,4 +251,8 @@ type LadoEffectiveResponse struct {
 	SnapshotSHA256    string                      `json:"snapshotSha256" description:"Hash of the rule snapshot; an approval sends it as policySha256."`
 	Setup             LadoEffectiveSetupResponse  `json:"setup" description:"The local setup of the agent's tool, which the snapshot fixes with the rules."`
 	Approved          *LadoApprovedRulesResponse  `json:"approved,omitempty" description:"The task's valid approval next to now; missing without one, and for an approval given before LADO had rules."`
+	// LADO fork (issue #42): the compact window.
+	CompactWindow   int                          `json:"compactWindow" description:"The token count the project's Claude Code sessions compact at: the project's watch setting over the global one over the default."`
+	CompactApplies  bool                         `json:"compactApplies" description:"The project is in LADO mode, so its new sessions get compactWindow; false leaves them on the agent's own default."`
+	CompactWarnings []LadoCompactWarningResponse `json:"compactWarnings" description:"Settings that turn Claude Code's auto-compact off, so compactWindow does nothing."`
 }

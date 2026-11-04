@@ -3020,6 +3020,45 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/lado/alerts/{alertId}/seen:
+    post:
+      operationId: markLadoAlertSeen
+      parameters:
+      - description: LADO alert id.
+        in: path
+        name: alertId
+        required: true
+        schema:
+          description: LADO alert id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoAlertResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Mark an alert seen; an alert seen before keeps its first time
+      tags:
+      - lado
   /api/v1/lado/bindings:
     put:
       operationId: setLadoBinding
@@ -3958,6 +3997,72 @@ paths:
         the AO desktop app
       tags:
       - lado
+  /api/v1/lado/projects/{projectId}/alerts:
+    get:
+      operationId: listLadoProjectAlerts
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      - description: Only this task's alerts.
+        in: query
+        name: taskId
+        schema:
+          description: Only this task's alerts.
+          type: string
+      - description: When true, only the alerts nobody marked seen.
+        in: query
+        name: unseen
+        schema:
+          description: When true, only the alerts nobody marked seen.
+          type: boolean
+      - description: At most this many, newest first; 100 when omitted.
+        in: query
+        name: limit
+        schema:
+          description: At most this many, newest first; 100 when omitted.
+          maximum: 500
+          minimum: 1
+          type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoAlertListResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'List a project''s one-line worker watch alerts, newest first: cost
+        and compaction thresholds, usage limits and stalls'
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/issues:
     get:
       operationId: listLadoProjectIssues
@@ -4254,6 +4359,96 @@ paths:
           description: Not Implemented
       summary: Get the usage totals of each of a project's tasks that is not cancelled,
         for its board
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/watch-settings:
+    get:
+      operationId: getLadoProjectWatchSettings
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoWatchSettingsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a project's worker watch settings over the global ones
+      tags:
+      - lado
+    put:
+      operationId: updateLadoProjectWatchSettings
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoWatchSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoWatchSettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace a project's worker watch settings; null follows the global
+        value, and a change applies from each session's next start
       tags:
       - lado
   /api/v1/lado/queue:
@@ -5991,6 +6186,69 @@ paths:
       summary: 'Get a project''s timing baseline: its newest tasks'' timings, the
         median and longest time between adjacent stages, and each session role''s
         median investigation'
+      tags:
+      - lado
+  /api/v1/lado/watch-settings:
+    get:
+      operationId: getLadoWatchSettings
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoWatchSettingsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get the global worker watch settings: the compact window, the cost
+        and compaction alert thresholds, the stall time and the wake messages'
+      tags:
+      - lado
+    put:
+      operationId: updateLadoWatchSettings
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoWatchSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoWatchSettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the global worker watch settings; null follows the default,
+        and a change applies from each session's next start
       tags:
       - lado
   /api/v1/link-preview:
@@ -19661,6 +19919,85 @@ components:
       - chars
       - readError
       type: object
+    LadoAlertListResponse:
+      properties:
+        alerts:
+          items:
+            $ref: '#/components/schemas/LadoAlertResponse'
+          type: array
+      required:
+      - alerts
+      type: object
+    LadoAlertResponse:
+      properties:
+        createdAt:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        issueRef:
+          type: string
+        kind:
+          enum:
+          - task_cost
+          - session_cost
+          - session_compactions
+          - limited
+          - limit_resumed
+          - stall_nudged
+          - stalled
+          - agent_unavailable
+          type: string
+        level:
+          description: 1 past a cost threshold, 2 past twice it; the resume's number
+            for limit_resumed; otherwise 1.
+          type: integer
+        line:
+          description: The alert's one line, as the orchestrator gets it.
+          type: string
+        notificationId:
+          description: 'The desktop notification id: lado-alert:<id>.'
+          type: string
+        projectId:
+          type: string
+        seenAt:
+          description: null until someone marks it seen.
+          format: date-time
+          type:
+          - "null"
+          - string
+        sessionId:
+          description: The session; empty for an alert of the task's total or of the
+            task itself.
+          type: string
+        taskId:
+          type: string
+        threshold:
+          description: The threshold the value is held against, in the value's unit;
+            0 when there is none.
+          format: int64
+          type: integer
+        value:
+          description: Cents for a cost, a count for compactions, minutes for a stall,
+            the reset's Unix seconds for limited.
+          format: int64
+          type: integer
+      required:
+      - id
+      - taskId
+      - sessionId
+      - projectId
+      - issueRef
+      - kind
+      - level
+      - value
+      - threshold
+      - line
+      - notificationId
+      - createdAt
+      - seenAt
+      type: object
     LadoApprovedRulesResponse:
       properties:
         accepted:
@@ -19832,6 +20169,33 @@ components:
       required:
       - chatSessions
       - ladoWorkers
+      type: object
+    LadoCompactWarningResponse:
+      properties:
+        path:
+          description: The file it was found in; omitted for an environment.
+          type: string
+        setting:
+          enum:
+          - autoCompactEnabled
+          - DISABLE_AUTO_COMPACT
+          - DISABLE_COMPACT
+          type: string
+        source:
+          description: Where it was found.
+          enum:
+          - project_settings
+          - project_local_settings
+          - user_settings
+          - user_config
+          - lado_settings
+          - project_env
+          - launch_env
+          - daemon_env
+          type: string
+      required:
+      - source
+      - setting
       type: object
     LadoConnectionCheckResponse:
       properties:
@@ -20009,6 +20373,20 @@ components:
           items:
             $ref: '#/components/schemas/LadoCapabilityResponse'
           type: array
+        compactApplies:
+          description: The project is in LADO mode, so its new sessions get compactWindow;
+            false leaves them on the agent's own default.
+          type: boolean
+        compactWarnings:
+          description: Settings that turn Claude Code's auto-compact off, so compactWindow
+            does nothing.
+          items:
+            $ref: '#/components/schemas/LadoCompactWarningResponse'
+          type: array
+        compactWindow:
+          description: 'The token count the project''s Claude Code sessions compact
+            at: the project''s watch setting over the global one over the default.'
+          type: integer
         permissionCeiling:
           enum:
           - accept-edits
@@ -20062,6 +20440,9 @@ components:
       - blocking
       - snapshotSha256
       - setup
+      - compactWindow
+      - compactApplies
+      - compactWarnings
       type: object
     LadoEffectiveRuleResponse:
       properties:
@@ -24451,6 +24832,117 @@ components:
       - text
       - result
       type: object
+    LadoWatchSettingsResolved:
+      properties:
+        compactWindow:
+          type: integer
+        sessionCompactions:
+          type: integer
+        sessionCostCents:
+          format: int64
+          type: integer
+        stallMinutes:
+          type: integer
+        taskCostCents:
+          format: int64
+          type: integer
+        wakeEnabled:
+          type: boolean
+      required:
+      - compactWindow
+      - taskCostCents
+      - sessionCostCents
+      - sessionCompactions
+      - stallMinutes
+      - wakeEnabled
+      type: object
+    LadoWatchSettingsResponse:
+      properties:
+        defaults:
+          $ref: '#/components/schemas/LadoWatchSettingsResolved'
+          description: The built-in defaults.
+        effective:
+          $ref: '#/components/schemas/LadoWatchSettingsResolved'
+          description: The settings the scope runs with.
+        inherited:
+          $ref: '#/components/schemas/LadoWatchSettingsResolved'
+          description: 'What a null value follows: the global row over the defaults
+            for a project, the defaults for the global row.'
+        projectId:
+          description: The project; empty for the global row.
+          type: string
+        updatedAt:
+          description: When the row was last saved; omitted without a row.
+          format: date-time
+          type:
+          - "null"
+          - string
+        values:
+          $ref: '#/components/schemas/LadoWatchSettingsValues'
+          description: The row as stored; null follows inherited.
+      required:
+      - projectId
+      - values
+      - inherited
+      - effective
+      - defaults
+      type: object
+    LadoWatchSettingsValues:
+      properties:
+        compactWindow:
+          description: The token count Claude Code sessions of a project in LADO mode
+            compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW), and Codex sessions' compact
+            limit.
+          maximum: 1e+06
+          minimum: 100000
+          type:
+          - "null"
+          - integer
+        sessionCompactions:
+          description: How many times one session may compact before LADO alerts.
+          maximum: 100
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        sessionCostCents:
+          description: The estimated cost, in cents, of one session past which LADO
+            alerts, and once more past twice it.
+          maximum: 1e+07
+          minimum: 100
+          type:
+          - "null"
+          - integer
+        stallMinutes:
+          description: How long a running worker may rest without a report before
+            LADO takes it as stalled.
+          maximum: 10080
+          minimum: 10
+          type:
+          - "null"
+          - integer
+        taskCostCents:
+          description: The estimated cost, in cents, of a task's sessions together
+            past which LADO alerts, and once more past twice it.
+          maximum: 1e+07
+          minimum: 100
+          type:
+          - "null"
+          - integer
+        wakeEnabled:
+          description: 'Let LADO send its two fixed wake messages to the workers:
+            the limit resume and the stall nudge.'
+          type:
+          - "null"
+          - boolean
+      required:
+      - compactWindow
+      - taskCostCents
+      - sessionCostCents
+      - sessionCompactions
+      - stallMinutes
+      - wakeEnabled
+      type: object
     LinkPreviewResponse:
       properties:
         description:
@@ -28518,6 +29010,62 @@ components:
           type:
           - "null"
           - string
+      type: object
+    UpdateLadoWatchSettingsRequest:
+      properties:
+        compactWindow:
+          description: The token count Claude Code sessions of a project in LADO mode
+            compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW), and Codex sessions' compact
+            limit.
+          maximum: 1e+06
+          minimum: 100000
+          type:
+          - "null"
+          - integer
+        sessionCompactions:
+          description: How many times one session may compact before LADO alerts.
+          maximum: 100
+          minimum: 1
+          type:
+          - "null"
+          - integer
+        sessionCostCents:
+          description: The estimated cost, in cents, of one session past which LADO
+            alerts, and once more past twice it.
+          maximum: 1e+07
+          minimum: 100
+          type:
+          - "null"
+          - integer
+        stallMinutes:
+          description: How long a running worker may rest without a report before
+            LADO takes it as stalled.
+          maximum: 10080
+          minimum: 10
+          type:
+          - "null"
+          - integer
+        taskCostCents:
+          description: The estimated cost, in cents, of a task's sessions together
+            past which LADO alerts, and once more past twice it.
+          maximum: 1e+07
+          minimum: 100
+          type:
+          - "null"
+          - integer
+        wakeEnabled:
+          description: 'Let LADO send its two fixed wake messages to the workers:
+            the limit resume and the stall nudge.'
+          type:
+          - "null"
+          - boolean
+      required:
+      - compactWindow
+      - taskCostCents
+      - sessionCostCents
+      - sessionCompactions
+      - stallMinutes
+      - wakeEnabled
       type: object
     UpdateProjectSettingsInput:
       properties:
