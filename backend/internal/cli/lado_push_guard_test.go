@@ -302,10 +302,12 @@ func TestHooksReadTheRepositoryForABarePush(t *testing.T) {
 	if !strings.Contains(res.HookSpecificOutput.Reason, "HEAD:refs/heads/ao/x/root") {
 		t.Fatalf("reason %q does not name the work branch", res.HookSpecificOutput.Reason)
 	}
-	// cd into the repository from elsewhere is followed too.
+	// cd into the repository from elsewhere is followed too. The path is
+	// quoted as a shell user writes it: unquoted, a Windows path's
+	// backslashes are escapes in bash (Git Bash too).
 	git("config", "push.default", "simple")
 	git("symbolic-ref", "HEAD", "refs/heads/main")
-	res = decodeHookDecision(t, hookDecision(t, "pre-tool-use", "cd "+repo+" && git push", t.TempDir(), true))
+	res = decodeHookDecision(t, hookDecision(t, "pre-tool-use", "cd '"+repo+"' && git push", t.TempDir(), true))
 	if res.HookSpecificOutput.PermissionDecision != "deny" {
 		t.Fatalf("cd then git push on main: %+v", res.HookSpecificOutput)
 	}
