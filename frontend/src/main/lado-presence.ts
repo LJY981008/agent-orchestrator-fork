@@ -1535,6 +1535,11 @@ function confirmLine(t: Translate, item: VerifyItem): string {
 				branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS),
 				commit: excerpt(String(details.dispatchCommit ?? ""), MAX_EXAMPLE_CHARS).slice(0, 7),
 			});
+		case "base_advanced":
+			return t("lado.presence.integration.baseAdvanced", {
+				branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS),
+				commit: excerpt(String(details.advancedTip ?? ""), MAX_EXAMPLE_CHARS).slice(0, 7),
+			});
 		case "unprotected": {
 			// The parts by name, as the run panel names them (U1 of #15).
 			const missing = stringList(details.missing);

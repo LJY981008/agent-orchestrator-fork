@@ -68,6 +68,8 @@ export function ladoAlertText(t: TFunction, alert: LadoAlert, locale: string): s
 			return t("lado.alert.stalled", { minutes: alert.value });
 		case "agent_unavailable":
 			return t("lado.alert.agentUnavailable");
+		case "conflict_unresolved":
+			return t("lado.alert.conflictUnresolved", { count: alert.value });
 		default:
 			// A kind from a newer daemon: its own line.
 			return alert.line;
