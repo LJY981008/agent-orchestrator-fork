@@ -15,7 +15,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 )
 
-// planSection is the approved plan file, unchanged, under its heading.
+// planSection is the approved plan file, unchanged, under its heading, and
+// where the worker reads it again after its context is summarized.
 func planSection(in ladotask.RunInput) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "## Approved plan (revision %d, sha256 %s)\n\n", in.Revision.Number, shortSHA(in.Revision.SHA256))
@@ -23,6 +24,7 @@ func planSection(in ladotask.RunInput) string {
 	if !strings.HasSuffix(in.PlanText, "\n") {
 		b.WriteString("\n")
 	}
+	b.WriteString(planFileNote(in))
 	return b.String()
 }
 
