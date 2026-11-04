@@ -5754,23 +5754,28 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		return "", nil
 	}
 
+	// LADO fork: an orchestrator in a LADO project assists the developer in
+	// place of AO's delegating role, and a worker LADO dispatched gets its
+	// rules (lado_gate.go, lado_prompt.go).
+	ladoSection, err := m.ladoPromptSection(ctx, kind, projectID, sessionID)
+	if err != nil {
+		return "", err
+	}
+	cfg.LadoOrchestrator = kind == domain.KindOrchestrator && ladoSection.ReplacesOrchestratorRole
 	if projectID != "" {
 		workspacePrompt, err := m.workspaceProjectPrompt(ctx, kind, projectID)
 		if err != nil {
 			return "", err
 		}
+		if cfg.LadoOrchestrator {
+			workspacePrompt = ladoWorkspaceOrchestratorPrompt(workspacePrompt) // LADO fork
+		}
 		if workspacePrompt != "" {
 			cfg.AdditionalSections = append(cfg.AdditionalSections, workspacePrompt)
 		}
 	}
-	// LADO fork: an orchestrator in a LADO project plans instead of spawning
-	// workers, and a worker LADO dispatched gets its rules (lado_gate.go).
-	ladoSection, err := m.ladoPromptSection(ctx, kind, projectID, sessionID)
-	if err != nil {
-		return "", err
-	}
-	if ladoSection != "" {
-		cfg.AdditionalSections = append(cfg.AdditionalSections, ladoSection)
+	if ladoSection.Text != "" {
+		cfg.AdditionalSections = append(cfg.AdditionalSections, ladoSection.Text)
 	}
 	if pointer := strings.TrimSpace(m.aoSkillPointer(chat)); pointer != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, pointer)

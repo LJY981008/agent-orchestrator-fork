@@ -1,10 +1,14 @@
 package sessionmanager
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestBuildTaskPrompt_IssueContextStaysInTaskPrompt(t *testing.T) {
@@ -376,4 +380,49 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	if strings.Contains(local, "## AO Native Review") {
 		t.Fatalf("a project with no remote has no PRs to review:\n%s", local)
 	}
+}
+
+// goldenOrchestratorConfig is a fixed orchestrator configuration whose prompt
+// is pinned below.
+func goldenOrchestratorConfig() systemPromptConfig {
+	return systemPromptConfig{
+		Role: sessionPromptRoleOrchestrator,
+		Project: promptProject{
+			ID:            "mer",
+			Name:          "Mercury",
+			Repo:          "https://github.com/acme/mercury",
+			DefaultBranch: "main",
+			Path:          "/repo/mercury",
+		},
+		OrchestratorRules:  "Ask before merging.",
+		AdditionalSections: []string{"## Extra\n\nAn additional section."},
+	}
+}
+
+var goldenWorkspaceRepos = []domain.WorkspaceRepoRecord{
+	{Name: "api", RelativePath: "api"},
+	{Name: "web", RelativePath: "apps/web"},
+}
+
+// Pinned from origin/main before LADO's orchestrator role (#51): an
+// orchestrator outside LADO mode keeps AO's prompt byte for byte.
+const (
+	goldenOrchestratorPromptSHA256 = "282112f7a4c0d63e02614c47d34409fa30807d471d37b5dd662592dc2c41699c"
+	goldenWorkspaceOrchestratorSHA = "08f87c332fd0a01a456ef6ff39a74937844aab993965caa3a7f686a36642fd9c"
+)
+
+func assertGolden(t *testing.T, name, got, wantSHA string) {
+	t.Helper()
+	sum := sha256.Sum256([]byte(got))
+	if gotSHA := hex.EncodeToString(sum[:]); gotSHA != wantSHA {
+		t.Fatalf("%s changed: sha256 %s, want %s\n%s", name, gotSHA, wantSHA, got)
+	}
+}
+
+func TestOrchestratorSystemPromptMatchesTheGolden(t *testing.T) {
+	assertGolden(t, "orchestrator prompt", buildSystemPromptText(goldenOrchestratorConfig()), goldenOrchestratorPromptSHA256)
+}
+
+func TestWorkspaceOrchestratorPromptMatchesTheGolden(t *testing.T) {
+	assertGolden(t, "workspace orchestrator prompt", workspaceOrchestratorPrompt(goldenWorkspaceRepos), goldenWorkspaceOrchestratorSHA)
 }
