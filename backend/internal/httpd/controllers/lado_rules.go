@@ -214,7 +214,19 @@ func (c *LadoController) getEffective(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ladoEffectiveResponse(view))
+	resp := ladoEffectiveResponse(view)
+	// LADO fork (issue #42): the compact window the project's sessions get,
+	// and the settings that turn auto-compact off so it does nothing.
+	resp.CompactWindow, resp.CompactWarnings = domain.LadoDefaultCompactWindow, []LadoCompactWarningResponse{}
+	if c.Compact != nil {
+		info, err := c.Compact.CompactInfo(r.Context(), view.Content.ProjectID)
+		if err != nil {
+			envelope.WriteError(w, r, err)
+			return
+		}
+		resp.CompactWindow, resp.CompactApplies, resp.CompactWarnings = info.Window, info.Applies, ladoCompactWarnings(info.Warnings)
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func ladoRuleID(r *http.Request) domain.LadoRuleID {

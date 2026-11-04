@@ -6,7 +6,9 @@
 //
 // The service reads LADO's stored facts on the plan loop's timer and keeps one
 // notice per
-// event in an outbox, keyed so a fact read again adds nothing. Events from
+// event in an outbox, keyed so a fact read again adds nothing. LADO's
+// one-line watch alerts (issue #42: usage thresholds, usage limits, stalls)
+// go the same way, one notice per alert row. Events from
 // before the outbox existed are never told. Notices wait while the
 // orchestrator works, and go together in one message once it is idle; LADO
 // never starts an orchestrator for them, and a notice nobody takes within a
@@ -44,6 +46,9 @@ type Store interface {
 	ListLadoPlanRevisionNoticeFacts(ctx context.Context, since time.Time) ([]domain.LadoPlanRevisionNoticeFact, error)
 	ListLadoProjectsWithRunsSince(ctx context.Context, since time.Time) ([]domain.ProjectID, error)
 	ListLadoTasks(ctx context.Context, projectID domain.ProjectID, includeCancelled bool) ([]domain.LadoTask, error)
+	// ListLadoAlertsSince reads the watch alerts raised at or after a time,
+	// oldest first, with their tasks' projects and issues.
+	ListLadoAlertsSince(ctx context.Context, since time.Time) ([]domain.LadoAlert, error)
 }
 
 // Orchestrators finds a project's live orchestrator, without starting one, and
@@ -140,7 +145,27 @@ func (s *Service) collect(ctx context.Context, since, now time.Time) error {
 			s.collectRun(ctx, task, since, now)
 		}
 	}
+	if err := s.collectAlerts(ctx, since, now); err != nil {
+		problems = append(problems, err)
+	}
 	return errors.Join(problems...)
+}
+
+// collectAlerts adds a notice for each watch alert raised since notices
+// started and within the last LadoNoticeKeep: an older alert would only be
+// dropped, and reading from it again on every tick costs a growing read.
+func (s *Service) collectAlerts(ctx context.Context, since, now time.Time) error {
+	if from := now.Add(-domain.LadoNoticeKeep); from.After(since) {
+		since = from
+	}
+	alerts, err := s.deps.Store.ListLadoAlertsSince(ctx, since)
+	if err != nil {
+		return err
+	}
+	for _, a := range alerts {
+		s.add(ctx, a.ProjectID, fmt.Sprintf("alert:%d", a.ID), a.Line(issueNumber(a.IssueRef)), a.CreatedAt, now)
+	}
+	return nil
 }
 
 // collectRun adds the notices of a task's run: its start, its PR, and its
