@@ -83,10 +83,19 @@ type KillReviewResponse struct {
 
 // SubmitReviewItem is one review result in a batched submit request.
 type SubmitReviewItem struct {
-	RunID          string `json:"runId" description:"Review run id being completed."`
-	Verdict        string `json:"verdict" description:"Review verdict: approved or changes_requested."`
-	Body           string `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
-	GithubReviewID string `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
+	RunID          string                `json:"runId" description:"Review run id being completed."`
+	Verdict        string                `json:"verdict" description:"Review verdict: approved or changes_requested."`
+	Body           string                `json:"body,omitempty" description:"Review body recorded by AO. Required for changes_requested."`
+	GithubReviewID string                `json:"githubReviewId,omitempty" description:"Id of the GitHub PR review the reviewer posted, if any."`
+	Comments       []SubmitReviewComment `json:"comments,omitempty" description:"Required changes for a GitLab merge request. AO posts each as a discussion on the MR; ignored for GitHub PRs."`
+}
+
+// SubmitReviewComment is one required change the reviewer anchored on a line
+// of the reviewed commit (GitLab merge requests only).
+type SubmitReviewComment struct {
+	Path string `json:"path" description:"Repository-relative file path of the reviewed commit."`
+	Line int    `json:"line" description:"Line number in the new version of the file."`
+	Body string `json:"body" description:"The required change."`
 }
 
 // SubmitReviewInput is the body of POST /api/v1/sessions/{sessionId}/reviews/submit.
@@ -407,6 +416,7 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 				Verdict:        domain.ReviewVerdict(item.Verdict),
 				Body:           item.Body,
 				GithubReviewID: item.GithubReviewID,
+				Comments:       submittedReviewComments(item.Comments),
 			})
 		}
 	} else {
@@ -427,6 +437,17 @@ func (c *ReviewsController) submit(w http.ResponseWriter, r *http.Request) {
 		first = runs[0]
 	}
 	envelope.WriteJSON(w, http.StatusOK, ReviewRunResponse{Review: first, Reviews: runs})
+}
+
+func submittedReviewComments(in []SubmitReviewComment) []ports.SCMReviewComment {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ports.SCMReviewComment, 0, len(in))
+	for _, c := range in {
+		out = append(out, ports.SCMReviewComment{Path: c.Path, Line: c.Line, Body: c.Body})
+	}
+	return out
 }
 
 func writeReviewError(w http.ResponseWriter, r *http.Request, err error) {

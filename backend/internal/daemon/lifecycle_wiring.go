@@ -382,6 +382,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 		reviewOpts = append(reviewOpts,
 			reviewsvc.WithReviewRequester(scmProvider),
 			reviewsvc.WithReviewResolver(scmProvider),
+			// LADO fork: AO posts reviews on GitLab merge requests.
+			reviewsvc.WithReviewPoster(scmProvider),
 		)
 	}
 	reviewOpts = append(reviewOpts, reviewsvc.WithPRRefresher(reviewPRRefresher{sessions: sessionSvc}))

@@ -10190,6 +10190,14 @@ export interface components {
             /** @description The submitting session; it must be the request's designer. */
             sessionId: string;
         };
+        SubmitReviewComment: {
+            /** @description The required change. */
+            body: string;
+            /** @description Line number in the new version of the file. */
+            line: number;
+            /** @description Repository-relative file path of the reviewed commit. */
+            path: string;
+        };
         SubmitReviewInput: {
             /** @description Review body recorded by AO. Required for changes_requested. */
             body?: string;
@@ -10205,6 +10213,8 @@ export interface components {
         SubmitReviewItem: {
             /** @description Review body recorded by AO. Required for changes_requested. */
             body?: string;
+            /** @description Required changes for a GitLab merge request. AO posts each as a discussion on the MR; ignored for GitHub PRs. */
+            comments?: components["schemas"]["SubmitReviewComment"][];
             /** @description Id of the GitHub PR review the reviewer posted, if any. */
             githubReviewId?: string;
             /** @description Review run id being completed. */
