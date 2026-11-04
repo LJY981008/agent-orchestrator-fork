@@ -116,6 +116,9 @@ function rules(snapshotSha256: string, fields: Partial<lado.LadoEffective> = {})
 		blocking: false,
 		snapshotSha256,
 		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
+		compactApplies: true,
+		compactWindow: 200_000,
+		compactWarnings: [],
 		...fields,
 	};
 }

@@ -30,7 +30,8 @@ const stageKeys = {
 	merged: "lado.timings.stage.merged",
 } as const satisfies Record<LadoTimingStage, string>;
 
-const roleKeys = {
+/** Each session role's label; the Usage tab names sessions the same way. */
+export const roleKeys = {
 	designer: "lado.timings.role.designer",
 	critic: "lado.timings.role.critic",
 	worker: "lado.timings.role.worker",

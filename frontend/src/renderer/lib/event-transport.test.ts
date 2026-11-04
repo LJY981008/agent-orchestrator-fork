@@ -33,6 +33,7 @@ const {
 vi.mock("./bridge", () => ({
 	aoBridge: {
 		daemon: { onStatus: onStatusMock },
+		notifications: { onClick: () => () => undefined, show: async () => undefined },
 	},
 }));
 

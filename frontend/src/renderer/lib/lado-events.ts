@@ -4,19 +4,23 @@
 // carries hook lines (TDD §1.2).
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import {
+	ladoAlertsProjectQueryKey,
 	ladoCheckLogSessionQueryKey,
 	ladoEffectiveProjectQueryKey,
 	ladoEffectiveQueryKey,
 	ladoExecutionQueryKey,
+	ladoProjectUsageQueryKey,
 	ladoRuleQueryRoot,
 	ladoRulesQueryRoot,
 	ladoTaskForSession,
 	ladoTasksQueryKey,
+	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
 	ladoTaskViewQueryRoot,
 	type LadoExecution,
 	type LadoTask,
 } from "./lado";
+import type { LadoAlertEvent } from "./lado-alert-notifications";
 import { ladoSetupQueryRoot } from "./lado-setup";
 
 type LadoEventPayload =
@@ -27,6 +31,8 @@ type LadoEventPayload =
 			sessionId?: unknown;
 			isTerminated?: unknown;
 			fromSession?: unknown;
+			alertId?: unknown;
+			op?: unknown;
 	  }
 	| undefined;
 /** The change event's own routing fields: its type, and the project and session it names. */
@@ -50,13 +56,19 @@ function shownRunEnds(queryClient: Pick<QueryClient, "getQueryData">, projectId:
 	return [task?.execution?.sessionEnded, run?.sessionEnded].filter((ended) => ended !== undefined);
 }
 
+/** What a batch hands on besides invalidations. */
+export type LadoEventBatchOptions = {
+	/** The alerts raised since the last flush, from their INSERT events; a replay can name one again. */
+	onNewAlerts?: (alerts: LadoAlertEvent[]) => void;
+};
+
 /**
  * Collects LADO refreshes between flushes. note() reads one change event's
  * payload and says whether it was LADO's, which leaves the workspaces alone;
  * flush() invalidates what the noted events reach. The query client tells
  * which sessions run LADO's work as the open views show them.
  */
-export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryData">) {
+export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryData">, options: LadoEventBatchOptions = {}) {
 	// Whether rules changed, and the LADO projects the change reaches.
 	let rulesChanged = false;
 	const ruleProjects = new Set<string>();
@@ -70,8 +82,29 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 	const executions = new Set<string>();
 	const executionProjects = new Set<string>();
 	const executionTasks = new Set<string>();
+	// The worker watch (issue #42): projects and tasks whose usage, compactions
+	// or alerts moved, projects whose alerts moved, and the alerts raised.
+	const watchProjects = new Set<string>();
+	const watchTasks = new Set<string>();
+	const alertProjects = new Set<string>();
+	const newAlerts = new Map<number, LadoAlertEvent>();
 	return {
 		note(payload: LadoEventPayload, event?: LadoEventEnvelope): boolean {
+			// A session's limit, stall or compactions changed, or an alert was
+			// raised or seen: the board's costs and badges and the task's usage.
+			if ((payload?.kind === "lado_watch" || payload?.kind === "lado_alert") && typeof payload.projectId === "string" && payload.projectId) {
+				const projectId = payload.projectId;
+				const taskId = typeof payload.taskId === "string" ? payload.taskId : "";
+				watchProjects.add(projectId);
+				if (taskId) watchTasks.add(taskId);
+				if (payload.kind === "lado_alert") {
+					alertProjects.add(projectId);
+					if (payload.op === "insert" && typeof payload.alertId === "number" && taskId) {
+						newAlerts.set(payload.alertId, { alertId: payload.alertId, projectId, taskId });
+					}
+				}
+				return true;
+			}
 			if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
 				if (typeof payload.taskId === "string" && payload.taskId) {
 					tasks.set(`${payload.projectId}\0${payload.taskId}`, { projectId: payload.projectId, taskId: payload.taskId });
@@ -159,6 +192,18 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 			executionProjects.clear();
 			for (const taskId of executionTasks) invalidate(ladoTaskViewQueryKey(taskId));
 			executionTasks.clear();
+			// The worker watch's board costs and badges, and the task's open Usage tab.
+			for (const projectId of watchProjects) invalidate(ladoProjectUsageQueryKey(projectId));
+			watchProjects.clear();
+			for (const taskId of watchTasks) invalidate(ladoTaskUsageQueryKey(taskId));
+			watchTasks.clear();
+			for (const projectId of alertProjects) invalidate(ladoAlertsProjectQueryKey(projectId));
+			alertProjects.clear();
+			if (newAlerts.size > 0) {
+				const raised = [...newAlerts.values()];
+				newAlerts.clear();
+				options.onNewAlerts?.(raised);
+			}
 		},
 	};
 }

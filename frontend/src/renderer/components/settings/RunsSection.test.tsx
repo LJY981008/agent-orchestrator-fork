@@ -9,7 +9,18 @@ vi.mock("../../lib/lado", async (original) => ({
 	...(await original<typeof import("../../lib/lado")>()),
 	fetchLadoDispatchSettings: vi.fn(),
 	updateLadoDispatchSettings: vi.fn(),
+	fetchLadoWatchSettings: vi.fn(),
 }));
+
+/** The worker watch card below (issue #42), with nothing saved. */
+const watchDefaults = { compactWindow: 200_000, taskCostCents: 100_00, sessionCostCents: 30_00, sessionCompactions: 3, stallMinutes: 120, wakeEnabled: true };
+const watchSettings: lado.LadoWatchSettings = {
+	projectId: "",
+	defaults: watchDefaults,
+	inherited: watchDefaults,
+	effective: watchDefaults,
+	values: { compactWindow: null, taskCostCents: null, sessionCostCents: null, sessionCompactions: null, stallMinutes: null, wakeEnabled: null },
+};
 
 // What the daemon answers before anyone saved: 2 at once, 8 hours, hold on;
 // 2 plan requests at once, and a review skipped for up to 3 paths.
@@ -58,6 +69,7 @@ describe("RunsSection", () => {
 	beforeEach(() => {
 		vi.resetAllMocks();
 		vi.mocked(lado.fetchLadoDispatchSettings).mockResolvedValue(defaults);
+		vi.mocked(lado.fetchLadoWatchSettings).mockResolvedValue(watchSettings);
 		vi.mocked(lado.updateLadoDispatchSettings).mockImplementation(async (input) => ({
 			...input,
 			maxPlanWorkers: input.maxPlanWorkers ?? defaults.maxPlanWorkers,

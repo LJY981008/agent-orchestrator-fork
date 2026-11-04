@@ -1,6 +1,7 @@
 // LADO fork: the LADO line on a run's board card: the plan revision and the
 // rules hash its worker runs under (docs/LJY-PRD/HARNESS.md §12), then where
-// LADO's verification and integration of its PR stand. It reads the
+// LADO's verification and integration of its PR stand, and at its end the
+// task's estimated cost and unseen alerts (issue #42). It reads the
 // project's tasks the board already loads, so a project out of LADO mode and
 // a session LADO did not start show nothing.
 import type { TFunction } from "i18next";
@@ -11,6 +12,7 @@ import { ladoReasonText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { isOrchestratorSession, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import { ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoCardWatch, useLadoBoardWatch } from "./LadoCardWatch";
 
 // A product name, the same in every language.
 const LADO = "LADO";
@@ -49,6 +51,7 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 	const { ladoMode } = useLadoModeState(projectId);
 	const tasks = useLadoTasks(projectId ?? "", ladoMode);
 	const task = ladoMode && tasks.data ? ladoTaskForSession(tasks.data, session.id) : undefined;
+	const watchOf = useLadoBoardWatch(projectId ?? "", ladoMode && task !== undefined);
 	const execution = task?.execution;
 	if (!task || !execution) return null;
 	// The task list omits the revision once a newer one is pinned, and the
@@ -58,29 +61,32 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 	const rules = execution.policySha256?.slice(0, 7);
 	const word = runWord(task, t);
 	return (
-		<p className="min-w-0 truncate py-0.5 text-2xs text-muted-foreground" data-testid="lado-session-line">
-			<span className="font-medium">{LADO}</span>
-			{revision !== undefined ? ` · ${t("lado.card.plan", { number: revision })}` : null}
-			{rules ? (
-				<>
-					{` · ${t("lado.card.rules")} `}
-					<span className="font-mono">{rules}</span>
-				</>
-			) : null}
-			{word ? (
-				<>
-					{" · "}
-					{/* Only the integration approval is the human's turn; the card keeps its one status color otherwise. */}
-					{task.state === "integration_pending" ? (
-						<span
-							className={cn("mr-1 inline-block size-1.5 rounded-full align-middle", ladoTaskToneDotClass.attention)}
-							aria-hidden="true"
-							data-testid="lado-session-line-dot"
-						/>
-					) : null}
-					{word}
-				</>
-			) : null}
+		<p className="flex min-w-0 items-center gap-1.5 truncate py-0.5 text-2xs text-muted-foreground" data-testid="lado-session-line">
+			<span className="min-w-0 truncate">
+				<span className="font-medium">{LADO}</span>
+				{revision !== undefined ? ` · ${t("lado.card.plan", { number: revision })}` : null}
+				{rules ? (
+					<>
+						{` · ${t("lado.card.rules")} `}
+						<span className="font-mono">{rules}</span>
+					</>
+				) : null}
+				{word ? (
+					<>
+						{" · "}
+						{/* Only the integration approval is the human's turn; the card keeps its one status color otherwise. */}
+						{task.state === "integration_pending" ? (
+							<span
+								className={cn("mr-1 inline-block size-1.5 rounded-full align-middle", ladoTaskToneDotClass.attention)}
+								aria-hidden="true"
+								data-testid="lado-session-line-dot"
+							/>
+						) : null}
+						{word}
+					</>
+				) : null}
+			</span>
+			<LadoCardWatch watch={watchOf(task.id)} className="ml-auto" />
 		</p>
 	);
 }

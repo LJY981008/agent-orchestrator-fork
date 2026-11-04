@@ -140,6 +140,16 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_DISPATCH_SETTINGS_INVALID: "lado.error.dispatchSettingsInvalid",
 	LADO_SETTINGS_EMPTY: "lado.error.settingsEmpty",
 	LADO_TRACKER_INTAKE_ENABLED: "lado.error.trackerIntakeEnabled",
+	// The worker watch: usage, alerts and their settings (issue #42).
+	LADO_WATCH_SETTING_OUT_OF_RANGE: "lado.error.watchSettingOutOfRange",
+	LADO_WATCH_SETTINGS_LOAD_FAILED: "lado.error.internal",
+	LADO_WATCH_SETTINGS_SAVE_FAILED: "lado.error.internal",
+	LADO_ALERT_NOT_FOUND: "lado.error.alertNotFound",
+	LADO_ALERT_LIMIT_INVALID: "lado.error.internal",
+	LADO_ALERTS_LOAD_FAILED: "lado.error.internal",
+	LADO_ALERT_SEEN_FAILED: "lado.error.internal",
+	LADO_USAGE_PROJECT_REQUIRED: "lado.error.internal",
+	LADO_USAGE_LOAD_FAILED: "lado.error.internal",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_PROJECT_ID_INVALID: "lado.error.projectNotFound",
 	LADO_QUEUE_LOAD_FAILED: "lado.error.internal",
