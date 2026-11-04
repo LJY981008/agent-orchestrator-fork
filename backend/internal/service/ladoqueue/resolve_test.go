@@ -340,6 +340,34 @@ func TestAResolveWorkerAskingForADecisionNeedsAPerson(t *testing.T) {
 	}
 }
 
+// A new head whose record turned base_overlap without a conflict is not told
+// by the dispatcher: the verification loop's fix request, with the files,
+// goes to the worker (ladoverify readOwner), so it does not hear twice.
+func TestAResolveWorkerIsNotToldTwiceOfABaseOverlap(t *testing.T) {
+	rf := newResolveFixture(t)
+	rf.exitRun(t)
+	rf.tick(t, t0.Add(2*time.Minute))
+	rf.resolver(t, 1)
+
+	moved := strings.Repeat("c", 40)
+	rf.writePR(t, moved, domain.PRStateOpen, domain.MergeMergeable, t0.Add(4*time.Minute))
+	at := t0.Add(4 * time.Minute)
+	if _, err := rf.db.UpsertLadoVerification(context.Background(), domain.LadoVerification{
+		ExecutionSessionID: rf.exec, HeadSHA: moved, PRURL: "https://github.com/acme/app/pull/7", ComputedAt: at,
+		Items: []domain.LadoVerifyItem{{
+			Kind: domain.LadoVerifyBaseBranch, Outcome: domain.LadoVerifyFail, Code: domain.LadoCodeBaseOverlap,
+			Details: []byte(`{"branch":"main","remote":"origin","advanced":true,"overlap":["shared.txt"],"overlapCount":1}`),
+		}},
+	}); err != nil {
+		t.Fatalf("record base_overlap: %v", err)
+	}
+	rf.tick(t, at)
+	rf.tick(t, t0.Add(5*time.Minute))
+	if got := rf.sender.messages(); len(got) != 0 {
+		t.Fatalf("messages = %v, want none from the dispatcher for a base_overlap head", got)
+	}
+}
+
 // A running worker hears of each new conflicting head once; a PR that
 // merged stops it and clears its resolve.
 func TestAResolveWorkerHearsOfNewConflictsAndStopsWithTheMerge(t *testing.T) {

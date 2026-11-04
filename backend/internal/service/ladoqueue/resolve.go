@@ -484,10 +484,14 @@ func (s *Service) resolvedRemotely(ctx context.Context, c domain.LadoResolveCand
 }
 
 // notifyResolver tells a running resolve worker, once per head, that the
-// PR's new head conflicts again (the base moved while it worked).
+// PR's new head conflicts again (the base moved while it worked). A new head
+// whose record turned base_overlap without a conflict is not told here: the
+// verification loop sends its fix request, with the files, to the PR's
+// owner, which is this worker while the run's own session does not live.
 func (s *Service) notifyResolver(ctx context.Context, c domain.LadoResolveCandidate, now time.Time) error {
 	r, pr := c.Resolve, c.Execution.PR
-	if s.deps.Sender == nil || !c.Conflicting() || pr.HeadSHA == "" || pr.HeadSHA == r.StartHeadSHA || pr.HeadSHA == r.NotifiedHeadSHA {
+	if s.deps.Sender == nil || pr.Mergeability != domain.MergeConflicting || !c.Conflicting() ||
+		pr.HeadSHA == "" || pr.HeadSHA == r.StartHeadSHA || pr.HeadSHA == r.NotifiedHeadSHA {
 		return nil
 	}
 	message := fmt.Sprintf("The PR %s conflicts with its base branch again at its new head %s: the base moved while you worked. "+
