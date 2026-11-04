@@ -94,6 +94,10 @@ vi.mock("./CuesDialog", () => ({
 	),
 }));
 
+vi.mock("./settings/ProjectMemoSection", () => ({
+	ProjectMemoSection: ({ projectId }: { projectId: string }) => <div data-testid="project-memo-settings">{projectId}</div>,
+}));
+
 vi.mock("./ProjectScriptsSettings", () => ({
 	ProjectScriptsSettings: ({ projectId }: { projectId: string }) => <div data-testid="project-scripts-settings">{projectId}</div>,
 	CloudProjectScriptsSettings: ({ projectId, cloudOrgId }: { projectId: string; cloudOrgId: string }) => <div data-testid="cloud-project-scripts-settings">{cloudOrgId}/{projectId}</div>,
@@ -186,6 +190,16 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Cues" })).toHaveAttribute("data-active", "true");
 	});
 
+	// LADO fork (#50): every local project has the orchestrator memo, LADO mode or not.
+	it("opens a local project's orchestrator memo page, also when deep-linked from /clear", async () => {
+		useUiStore.getState().openProjectSettings("proj-1", { section: "memo" });
+		renderSettingsDialog();
+
+		expect(await screen.findByTestId("project-memo-settings")).toHaveTextContent("proj-1");
+		expect(screen.getByRole("button", { name: "Orchestrator memo" })).toHaveAttribute("data-active", "true");
+		expect(screen.queryByRole("button", { name: "Save changes" })).not.toBeInTheDocument();
+	});
+
 	it("loads a cloud project's settings from the control plane, not the local daemon", async () => {
 		cloudProjectsState.data = [{ id: "cloud-1", orgId: "org-1", displayName: "ao-landing" }];
 		useUiStore.getState().openProjectSettings("cloud-1");
@@ -197,7 +211,7 @@ describe("SettingsDialog", () => {
 		expect(screen.getByRole("button", { name: "Agents" })).toBeInTheDocument();
 		// Scripts are project settings on Cloud projects too; environment and cues stay local.
 		expect(screen.getByRole("button", { name: "Scripts" })).toBeInTheDocument();
-		for (const section of ["Environment", "Cues"]) {
+		for (const section of ["Environment", "Cues", "Orchestrator memo"]) {
 			expect(screen.queryByRole("button", { name: section })).not.toBeInTheDocument();
 		}
 		expect(screen.queryByTestId("project-scripts-settings")).not.toBeInTheDocument();
@@ -252,6 +266,7 @@ describe("SettingsDialog", () => {
 		expect(await screen.findByRole("button", { name: "Agents" })).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Scripts" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: "Environment" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Orchestrator memo" })).not.toBeInTheDocument();
 	});
 
 	it("opens the requested global settings page", async () => {

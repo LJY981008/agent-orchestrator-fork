@@ -12,7 +12,7 @@ import { useSideChatsAvailable } from "../../lib/side-chats";
  */
 
 import { AlertTriangle, CheckCircle2, Loader2, X } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import {
 	findActiveAgentSwitch,
@@ -58,7 +58,7 @@ import type { TerminalTarget } from "../../types/terminal";
 import type { AgentSwitchSummary, WorkspaceSession } from "../../types/workspace";
 import { AgentSwitchProgressTrack } from "../AgentSwitchProgressTrack";
 import { useUiStore } from "../../stores/ui-store";
-import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId } from "./ChatWorkspace";
+import { CONTINUE_STOPPED_TURN_PROMPT, ChatWorkspace, continuableTurnId, isClientMessageRow } from "./ChatWorkspace";
 import { startingConversationSnapshot } from "./OrchestratorStartingChat";
 import { hasProviderPermissionMode } from "./TurnSettingsBar";
 
@@ -254,10 +254,20 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 			),
 		);
 		const queuedTurnIds = new Set(snapshot.turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
+		// LADO fork (#50): a send queued during an orchestrator's /clear memo step
+		// moves to a new turn on the new branch; its row keeps the client id with
+		// an `:after-clear` suffix, while the original turn is hidden.
+		const carriedClientMessageIds = snapshot.items.flatMap((item) =>
+			item.kind === "message" && item.role === "user" && item.origin === "human" && item.clientMessageId?.endsWith(":after-clear")
+				? [item.clientMessageId]
+				: [],
+		);
 		for (const echo of localEchos) {
+			if (!echo.turnId) continue;
+			const carried = carriedClientMessageIds.some((id) => isClientMessageRow(id, echo.clientMessageId));
 			if (
-				echo.turnId && durableHumanTurnIds.has(echo.turnId) &&
-				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId))
+				carried || (durableHumanTurnIds.has(echo.turnId) &&
+				!(echo.backgroundWake && queuedTurnIds.has(echo.turnId)))
 			) acknowledgeLocalEcho?.(echo.turnId);
 		}
 	}, [acknowledgeLocalEcho, localEchos, snapshot]);
@@ -467,6 +477,12 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// not own; only a click earns the explanation in the file pane.
 	const autoOpenLinkInBrowser = useSessionBrowserLink(session, onOpenLinkInBrowser, paths);
 	const openSessionLink = useSessionLinkNavigation(hostId);
+	// LADO fork (#50): the memo an orchestrator's /clear saved lives in its local
+	// project's settings; a remote host's project has no such page here.
+	const memoProjectId = session.kind === "orchestrator" && !hostId ? session.workspaceId : undefined;
+	const openProjectMemo = useCallback(() => {
+		if (memoProjectId) useUiStore.getState().openProjectSettings(memoProjectId, { section: "memo" });
+	}, [memoProjectId]);
 	const conversationLinkBaselines = useRef(new Map<string, ConversationLinkBaseline>());
 	useEffect(() => {
 		if (!snapshot || isLoading) return;
@@ -758,6 +774,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				compactUnavailable={commands.compactUnavailable}
 				onClear={commands.clear}
 				clearing={commands.clearing}
+				onOpenProjectMemo={memoProjectId ? openProjectMemo : undefined}
 				browserMention={browserMention}
 				onRollback={commands.rollback}
 				rollbackPending={commands.rollbackPending}

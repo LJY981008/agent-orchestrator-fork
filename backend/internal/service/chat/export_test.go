@@ -20,3 +20,10 @@ func SetRenderMeasureTimeout(timeout time.Duration) (restore func()) {
 
 // WaitRenderMeasures waits for the background measures PublishRender started.
 func (s *Service) WaitRenderMeasures() { s.renderMeasures.Wait() }
+
+// SetClearMemoTimings shortens the /clear memo budget and the wait for an
+// interrupted memo turn, for tests.
+func (s *Service) SetClearMemoTimings(budget, interruptWait time.Duration) {
+	s.clearMemoBudget = budget
+	s.clearMemoInterruptWait = interruptWait
+}

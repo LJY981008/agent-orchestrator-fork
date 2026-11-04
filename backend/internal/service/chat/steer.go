@@ -232,7 +232,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return PromoteQueuedTurnResult{}, ErrControllerHandoff
 	}
 
@@ -399,7 +399,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return replaySteerDelivery(delivery, requestJSON)
 		}
 	}
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
 			durableSteerRefusal{
 				kind:           domain.ConversationSteerRejectedInterfaceTransition,

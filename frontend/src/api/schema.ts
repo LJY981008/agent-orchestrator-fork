@@ -2516,6 +2516,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/projects/{id}/orchestrator-memo": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the orchestrator's project memo and its kept earlier revisions */
+        get: operations["getProjectOrchestratorMemo"];
+        /** Replace the orchestrator's project memo; the old one is kept as a revision */
+        put: operations["saveProjectOrchestratorMemo"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/projects/{id}/orchestrator-memo/revisions/{revisionId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read one revision of the orchestrator's project memo */
+        get: operations["getProjectOrchestratorMemoRevision"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/projects/{id}/permissions": {
         parameters: {
             query?: never;
@@ -5665,11 +5700,21 @@ export interface components {
             reason: string;
             sessionId: string;
         };
+        ClearConversationMemoResponse: {
+            code?: string;
+            message?: string;
+            revision?: string;
+            /** @enum {string} */
+            status: "saved" | "failed" | "skipped";
+            /** Format: date-time */
+            updatedAt?: null | string;
+        };
         ClearConversationResponse: {
             activeBranchId: string;
             cleared: boolean;
             /** Format: date-time */
             clearedAt: string;
+            memo?: components["schemas"]["ClearConversationMemoResponse"];
         };
         ClearNotificationsResponse: {
             /** @description Daemon epoch for ordering notification clears across one daemon lifetime. */
@@ -9143,6 +9188,33 @@ export interface components {
             /** @enum {string} */
             status: "ok" | "degraded";
         };
+        ProjectMemoPayload: {
+            body: string;
+            chars: number;
+            revision: string;
+            /** @enum {string} */
+            source: "clear" | "user";
+            stale: boolean;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        ProjectMemoResponse: {
+            maxChars: number;
+            memo: null | components["schemas"]["ProjectMemoPayload"];
+            revisions: components["schemas"]["ProjectMemoRevisionSummary"][];
+            staleAfterDays: number;
+        };
+        ProjectMemoRevisionResponse: {
+            memo: components["schemas"]["ProjectMemoPayload"];
+        };
+        ProjectMemoRevisionSummary: {
+            chars: number;
+            revision: string;
+            /** @enum {string} */
+            source: "clear" | "user";
+            /** Format: date-time */
+            updatedAt: string;
+        };
         ProjectOrDegraded: components["schemas"]["Project"] | components["schemas"]["DegradedProject"];
         ProjectResponse: {
             project: components["schemas"]["Project"];
@@ -9399,6 +9471,11 @@ export interface components {
             killed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        SaveProjectMemoRequest: {
+            baseRevision: string;
+            /** @description New memo text, at most maxChars characters. Known secret patterns are masked before saving. */
+            body: string;
         };
         SaveRenderArtifactRequest: {
             /** @description Name for the file. Characters a file system refuses are replaced. */
@@ -20097,6 +20174,189 @@ export interface operations {
             };
             /** @description Internal Server Error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getProjectOrchestratorMemo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMemoResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    saveProjectOrchestratorMemo: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveProjectMemoRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMemoResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getProjectOrchestratorMemoRevision: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project identifier (registry key). */
+                id: string;
+                /** @description Memo revision id, as listed in the memo's revisions. */
+                revisionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProjectMemoRevisionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -134,6 +134,7 @@ vi.mock("./ChatWorkspace", async () => {
 	return {
 		CONTINUE_STOPPED_TURN_PROMPT: "Continue from where you stopped.",
 		continuableTurnId: (snapshot: ConversationSnapshot) => snapshot.continueTurnId ?? "",
+		isClientMessageRow: (row: string, sent: string) => row === sent || row === `${sent}:after-clear`,
 		ChatWorkspace: ({
 			agentInputDisabled,
 			headerActions,
@@ -626,6 +627,58 @@ describe("SessionChatSurface link routing", () => {
 				queuedTurnCount: 0,
 			});
 		});
+	});
+
+	// LADO fork (#50): /clear hides the original queued turn and records the
+	// message again on the new branch with the client id plus ":after-clear".
+	it("releases the local echo of a send that /clear moved to the new branch", async () => {
+		const acknowledgeLocalEcho = vi.fn();
+		const commands = conversationCommandState as typeof conversationCommandState & {
+			localEchos?: unknown[];
+			acknowledgeLocalEcho?: (turnId: string) => void;
+		};
+		commands.localEchos = [{
+			clientMessageId: "held-send",
+			text: "Sent during the memo step",
+			createdAt: "2026-08-25T09:00:00Z",
+			queued: true,
+			turnId: "turn-held",
+		}];
+		commands.acknowledgeLocalEcho = acknowledgeLocalEcho;
+		conversationState.snapshot = {
+			capabilities: [],
+			controller: { state: "ready" },
+			turns: [{ id: "turn-carried", state: "queued", requestedAt: "2026-08-25T09:00:05Z" }],
+			items: [{
+				kind: "message",
+				id: "carried",
+				turnId: "turn-carried",
+				sequence: 1,
+				revision: 0,
+				role: "user",
+				origin: "human",
+				text: "Sent during the memo step",
+				clientMessageId: "held-send:after-clear",
+				streaming: false,
+				createdAt: "2026-08-25T09:00:05Z",
+			}],
+		};
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+		});
+
+		try {
+			render(
+				<Wrapper client={queryClient}>
+					<SessionChatSurface session={session} />
+				</Wrapper>,
+			);
+
+			await waitFor(() => expect(acknowledgeLocalEcho).toHaveBeenCalledWith("turn-held"));
+		} finally {
+			delete commands.localEchos;
+			delete commands.acknowledgeLocalEcho;
+		}
 	});
 
 	it("opens a plain Chat link in the active worker AO Browser", async () => {

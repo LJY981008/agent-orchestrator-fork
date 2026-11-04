@@ -265,6 +265,13 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
 	"ControllersClearConversationResponse":                 "ClearConversationResponse",
+	"ControllersClearConversationMemoResponse":             "ClearConversationMemoResponse",
+	"ControllersProjectMemoRevisionIDParam":                "ProjectMemoRevisionIDParam",
+	"ControllersProjectMemoPayload":                        "ProjectMemoPayload",
+	"ControllersProjectMemoRevisionSummary":                "ProjectMemoRevisionSummary",
+	"ControllersProjectMemoResponse":                       "ProjectMemoResponse",
+	"ControllersProjectMemoRevisionResponse":               "ProjectMemoRevisionResponse",
+	"ControllersSaveProjectMemoRequest":                    "SaveProjectMemoRequest",
 	"ControllersRollbackConversationResponse":              "RollbackConversationResponse",
 	"ControllersRetryTurnResponse":                         "RetryTurnResponse",
 	"ControllersSetConversationTitleRequest":               "SetConversationTitleRequest",
@@ -709,6 +716,7 @@ func operations() []operation {
 	ops := append([]operation{}, eventOperations()...)
 	ops = append(ops, agentOperations()...)
 	ops = append(ops, projectOperations()...)
+	ops = append(ops, projectMemoOperations()...)
 	ops = append(ops, sessionOperations()...)
 	ops = append(ops, automationOperations()...)
 	ops = append(ops, prOperations()...)
@@ -733,6 +741,49 @@ func operations() []operation {
 	// LADO fork: LADO's routes (docs/LJY-PRD/TDD.md §13).
 	ops = append(ops, ladoOperations()...)
 	return ops
+}
+
+// projectMemoOperations are the orchestrator project memo routes (issue #50).
+func projectMemoOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/orchestrator-memo", id: "getProjectOrchestratorMemo", tag: "projects",
+			summary:    "Read the orchestrator's project memo and its kept earlier revisions",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectMemoResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/projects/{id}/orchestrator-memo", id: "saveProjectOrchestratorMemo", tag: "projects",
+			summary:    "Replace the orchestrator's project memo; the old one is kept as a revision",
+			pathParams: []any{controllers.ProjectIDParam{}},
+			reqBody:    controllers.SaveProjectMemoRequest{},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectMemoResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/projects/{id}/orchestrator-memo/revisions/{revisionId}", id: "getProjectOrchestratorMemoRevision", tag: "projects",
+			summary:    "Read one revision of the orchestrator's project memo",
+			pathParams: []any{controllers.ProjectIDParam{}, controllers.ProjectMemoRevisionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ProjectMemoRevisionResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+	}
 }
 
 func automationOperations() []operation {

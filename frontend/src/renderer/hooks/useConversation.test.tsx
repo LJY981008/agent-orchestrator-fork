@@ -1311,6 +1311,36 @@ describe("/clear", () => {
 		expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["lado", "claude-chrome", "session", "ao-clear"] });
 	});
 
+	// LADO fork (#50): an orchestrator's /clear saves the project memo first.
+	it("refetches the project memo after a /clear saved one, and resolves with the memo outcome", async () => {
+		const memo = { status: "saved" as const, revision: "r3", updatedAt: "2026-11-04T00:00:00Z" };
+		postMock.mockResolvedValue({
+			data: { activeBranchId: "branch-2", cleared: true, clearedAt: "2026-11-04T00:00:00Z", memo },
+			error: undefined,
+		});
+		const { result, invalidate } = hookWithClient();
+
+		await act(async () => {
+			await expect(result.current.clear()).resolves.toMatchObject({ memo });
+		});
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["project-orchestrator-memo"] });
+	});
+
+	it("resolves a /clear whose memo failed without refetching the memo", async () => {
+		const memo = { status: "failed" as const, code: "MEMO_TIMEOUT", message: "timed out" };
+		postMock.mockResolvedValue({
+			data: { activeBranchId: "branch-2", cleared: true, clearedAt: "2026-11-04T00:00:00Z", memo },
+			error: undefined,
+		});
+		const { result, invalidate } = hookWithClient();
+
+		await act(async () => {
+			await expect(result.current.clear()).resolves.toMatchObject({ cleared: true, memo });
+		});
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["conversation", "ao-clear"] });
+		expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["project-orchestrator-memo"] });
+	});
+
 	it("reports clearing while the request is in flight", async () => {
 		const response = deferred<{ data: { activeBranchId: string; cleared: boolean; clearedAt: string }; error: undefined }>();
 		postMock.mockReturnValue(response.promise);

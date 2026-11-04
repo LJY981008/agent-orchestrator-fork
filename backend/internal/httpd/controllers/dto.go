@@ -2814,6 +2814,21 @@ type ClearConversationResponse struct {
 	ActiveBranchID string    `json:"activeBranchId"`
 	ClearedAt      time.Time `json:"clearedAt"`
 	Cleared        bool      `json:"cleared"`
+	// Memo reports the orchestrator's project memo step before the clear
+	// (issue #50). Absent when the service reported no memo step.
+	Memo *ClearConversationMemoResponse `json:"memo,omitempty"`
+}
+
+// ClearConversationMemoResponse is the project memo step of one /clear.
+// failed still means the conversation was cleared; the earlier memo stays.
+type ClearConversationMemoResponse struct {
+	Status string `json:"status" enum:"saved,failed,skipped"`
+	// Code and Message say why the memo step failed.
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
+	// UpdatedAt and Revision identify the memo /clear saved.
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+	Revision  string     `json:"revision,omitempty"`
 }
 
 // ConversationTurnResponse is one request and the work that followed it.

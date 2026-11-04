@@ -394,6 +394,16 @@ type ChatMCPServerConfig struct {
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
 const ChatInternalReplayResourceURI = "ao://conversation/edit-replay"
 
+// ChatProjectMemoResourceURI is reserved for the orchestrator project memo AO
+// attaches to the first turn of a new provider conversation.
+const ChatProjectMemoResourceURI = "ao://project/orchestrator-memo"
+
+// IsInternalContextResourceURI reports whether uri names AO-owned context that
+// AO adds to a prompt, never a resource the user attached.
+func IsInternalContextResourceURI(uri string) bool {
+	return uri == ChatInternalReplayResourceURI || uri == ChatProjectMemoResourceURI
+}
+
 // ChatExcerptResourceURIPrefix identifies AO-verified transcript excerpts. The
 // daemon resolves these from durable messages; clients never supply the resource
 // text directly.

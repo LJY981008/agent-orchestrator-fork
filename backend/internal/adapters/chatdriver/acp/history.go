@@ -544,11 +544,11 @@ func isInternalReplayResource(content *acpsdk.ContentBlockResource) bool {
 	resource := content.Resource
 	if text := resource.TextResourceContents; text != nil {
 		internal, _ := text.Meta[aoInternalReplayMetaKey].(bool)
-		return internal && text.Uri == ports.ChatInternalReplayResourceURI
+		return internal && ports.IsInternalContextResourceURI(text.Uri)
 	}
 	if blob := resource.BlobResourceContents; blob != nil {
 		internal, _ := blob.Meta[aoInternalReplayMetaKey].(bool)
-		return internal && blob.Uri == ports.ChatInternalReplayResourceURI
+		return internal && ports.IsInternalContextResourceURI(blob.Uri)
 	}
 	return false
 }

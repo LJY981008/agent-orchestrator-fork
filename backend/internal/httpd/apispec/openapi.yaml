@@ -7290,6 +7290,153 @@ paths:
       summary: Replace a project's per-project config
       tags:
       - projects
+  /api/v1/projects/{id}/orchestrator-memo:
+    get:
+      operationId: getProjectOrchestratorMemo
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMemoResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the orchestrator's project memo and its kept earlier revisions
+      tags:
+      - projects
+    put:
+      operationId: saveProjectOrchestratorMemo
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaveProjectMemoRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMemoResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace the orchestrator's project memo; the old one is kept as a revision
+      tags:
+      - projects
+  /api/v1/projects/{id}/orchestrator-memo/revisions/{revisionId}:
+    get:
+      operationId: getProjectOrchestratorMemoRevision
+      parameters:
+      - description: Project identifier (registry key).
+        in: path
+        name: id
+        required: true
+        schema:
+          description: Project identifier (registry key).
+          type: string
+      - description: Memo revision id, as listed in the memo's revisions.
+        in: path
+        name: revisionId
+        required: true
+        schema:
+          description: Memo revision id, as listed in the memo's revisions.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectMemoRevisionResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read one revision of the orchestrator's project memo
+      tags:
+      - projects
   /api/v1/projects/{id}/permissions:
     patch:
       operationId: setProjectPermissions
@@ -17020,6 +17167,28 @@ components:
       - sessionId
       - reason
       type: object
+    ClearConversationMemoResponse:
+      properties:
+        code:
+          type: string
+        message:
+          type: string
+        revision:
+          type: string
+        status:
+          enum:
+          - saved
+          - failed
+          - skipped
+          type: string
+        updatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - status
+      type: object
     ClearConversationResponse:
       properties:
         activeBranchId:
@@ -17029,6 +17198,8 @@ components:
         clearedAt:
           format: date-time
           type: string
+        memo:
+          $ref: '#/components/schemas/ClearConversationMemoResponse'
       required:
       - activeBranchId
       - clearedAt
@@ -25908,6 +26079,80 @@ components:
       - status
       - project
       type: object
+    ProjectMemoPayload:
+      properties:
+        body:
+          type: string
+        chars:
+          type: integer
+        revision:
+          type: string
+        source:
+          enum:
+          - clear
+          - user
+          type: string
+        stale:
+          type: boolean
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - revision
+      - source
+      - updatedAt
+      - body
+      - chars
+      - stale
+      type: object
+    ProjectMemoResponse:
+      properties:
+        maxChars:
+          type: integer
+        memo:
+          anyOf:
+          - type: "null"
+          - $ref: '#/components/schemas/ProjectMemoPayload'
+            type: object
+        revisions:
+          items:
+            $ref: '#/components/schemas/ProjectMemoRevisionSummary'
+          type: array
+        staleAfterDays:
+          type: integer
+      required:
+      - memo
+      - revisions
+      - maxChars
+      - staleAfterDays
+      type: object
+    ProjectMemoRevisionResponse:
+      properties:
+        memo:
+          $ref: '#/components/schemas/ProjectMemoPayload'
+      required:
+      - memo
+      type: object
+    ProjectMemoRevisionSummary:
+      properties:
+        chars:
+          type: integer
+        revision:
+          type: string
+        source:
+          enum:
+          - clear
+          - user
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - revision
+      - source
+      - updatedAt
+      - chars
+      type: object
     ProjectOrDegraded:
       oneOf:
       - $ref: '#/components/schemas/Project'
@@ -26520,6 +26765,18 @@ components:
       required:
       - ok
       - sessionId
+      type: object
+    SaveProjectMemoRequest:
+      properties:
+        baseRevision:
+          type: string
+        body:
+          description: New memo text, at most maxChars characters. Known secret patterns
+            are masked before saving.
+          type: string
+      required:
+      - body
+      - baseRevision
       type: object
     SaveRenderArtifactRequest:
       properties:

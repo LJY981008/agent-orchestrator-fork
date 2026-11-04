@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/projectmemo"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
@@ -674,7 +675,27 @@ func (c *ConversationsController) clearContext(w http.ResponseWriter, r *http.Re
 		ActiveBranchID: result.ActiveBranchID,
 		ClearedAt:      result.ClearedAt,
 		Cleared:        result.Cleared,
+		Memo:           clearMemoPayload(result.Memo),
 	})
+}
+
+// clearMemoPayload renders the memo step of a /clear; a service that ran no
+// memo step leaves the field out.
+func clearMemoPayload(m projectmemo.ClearOutcome) *ClearConversationMemoResponse {
+	if m.Status == "" {
+		return nil
+	}
+	out := &ClearConversationMemoResponse{
+		Status:   string(m.Status),
+		Code:     m.Code,
+		Message:  m.Message,
+		Revision: m.Revision,
+	}
+	if !m.UpdatedAt.IsZero() {
+		at := m.UpdatedAt
+		out.UpdatedAt = &at
+	}
+	return out
 }
 
 // models serves the provider's catalog for this session plus the current choice.
