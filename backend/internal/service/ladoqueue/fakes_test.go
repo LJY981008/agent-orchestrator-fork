@@ -429,6 +429,41 @@ func (f *fakeStore) LadoRunLoad(_ context.Context, now time.Time) (domain.LadoRu
 	return load, nil
 }
 
+// LadoOverlapHolders holds the paths of what runs, as the real store does
+// for runs that are not settled.
+func (f *fakeStore) LadoOverlapHolders(ctx context.Context, now time.Time) ([]domain.LadoLiveRunTask, error) {
+	load, err := f.LadoRunLoad(ctx, now)
+	return load.Tasks, err
+}
+
+func (f *fakeStore) ListLadoQueuedOverlapCandidates(context.Context, domain.LadoQueueEntryID) ([]domain.LadoLiveRunTask, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) ListLadoExecutionsToResolve(context.Context, int) ([]domain.LadoResolveCandidate, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) UpsertLadoPRResolve(context.Context, domain.LadoPRResolve) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) SetLadoResolveSpawnRequest(context.Context, domain.SessionID, time.Time, time.Time) (string, bool, error) {
+	return "", false, nil
+}
+
+func (f *fakeStore) ClearLadoResolveSpawnRequest(context.Context, domain.SessionID, string) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) ListExpiredLadoResolveSpawns(context.Context, time.Time) ([]domain.LadoPRResolve, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LinkLadoResolveExecution(context.Context, string, domain.LadoExecution) error {
+	return nil
+}
+
 func (f *fakeStore) LadoProjectSettings(_ context.Context, project domain.ProjectID) (domain.LadoProjectSettings, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

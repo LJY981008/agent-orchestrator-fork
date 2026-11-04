@@ -40,6 +40,9 @@ func (s *Service) recover(ctx context.Context, now time.Time, settings *domain.L
 	if err := s.recoverPartSpawns(ctx, now, settings); err != nil {
 		problems = append(problems, err)
 	}
+	if err := s.recoverResolveSpawns(ctx, now, settings); err != nil {
+		problems = append(problems, err)
+	}
 	return errors.Join(problems...)
 }
 
