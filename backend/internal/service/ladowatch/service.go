@@ -267,15 +267,21 @@ func (s *Service) watch(ctx context.Context, pass *tickPass, exec domain.LadoExe
 	if reported {
 		w.report = state
 	}
-	if _, err := s.deps.Store.EnsureLadoSessionWatch(ctx, exec.SessionID, exec.TaskID, now); err != nil {
-		return err
-	}
 	watch, ok, err := s.deps.Store.LadoSessionWatch(ctx, exec.SessionID)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return errors.New("the session's watch row is gone")
+		// The row is made once; the compaction counter may have made it.
+		if _, err := s.deps.Store.EnsureLadoSessionWatch(ctx, exec.SessionID, exec.TaskID, now); err != nil {
+			return err
+		}
+		if watch, ok, err = s.deps.Store.LadoSessionWatch(ctx, exec.SessionID); err != nil {
+			return err
+		}
+		if !ok {
+			return errors.New("the session's watch row is gone")
+		}
 	}
 	w.watch = watch
 	if err := s.watchLimit(ctx, &w, now); err != nil {
