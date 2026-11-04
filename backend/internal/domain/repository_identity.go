@@ -93,8 +93,25 @@ func (c ProjectConfig) ValidateCanonicalRepository(origin string) error {
 	if err != nil {
 		return fmt.Errorf("canonicalRepoURL: project must have a valid checkout origin repository")
 	}
-	if upstream.Provider != checkout.Provider || upstream.Host != checkout.Host {
+	sameHost := upstream.Host == checkout.Host
+	if !sameHost && isSSHRemote(origin) {
+		// An ssh:// or scp-style checkout carries the SSH port, never the
+		// web port, so only the host names can be compared.
+		sameHost = hostWithoutPort(upstream.Host) == hostWithoutPort(checkout.Host)
+	}
+	if upstream.Provider != checkout.Provider || !sameHost {
 		return fmt.Errorf("canonicalRepoURL: upstream must use the checkout origin's provider and host (%s)", checkout.Host)
 	}
 	return nil
+}
+
+func isSSHRemote(raw string) bool {
+	return strings.HasPrefix(raw, "ssh://") || strings.HasPrefix(raw, "git@")
+}
+
+func hostWithoutPort(host string) string {
+	if hostname, _, err := net.SplitHostPort(host); err == nil {
+		return hostname
+	}
+	return host
 }

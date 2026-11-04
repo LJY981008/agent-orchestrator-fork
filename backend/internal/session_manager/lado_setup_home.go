@@ -32,7 +32,9 @@ func (m *Manager) SetLadoSetupHome(home ports.LadoSetupHome) {
 // launch rather than start the session without its managed setup. A LADO
 // plan worker's environment is marked too (domain.LadoPlanWorkerEnv): AO's
 // hook command then decides each of its tool calls, and the Chat driver passes
-// its tool lists (docs/LJY-PRD/TDD.md §5.1). LADO's other launch values
+// its tool lists (docs/LJY-PRD/TDD.md §5.1). An execution worker's is marked
+// with its base branches (applyLadoWorkerEnv), so the hook command refuses
+// its pushes to them. LADO's other launch values
 // (applyLadoLaunchEnv) go on first, for the agent being started: during a
 // switch to Claude Code the stored harness still names the old agent. They do
 // not wait for a config home: a project in LADO mode gets its compact window
@@ -60,6 +62,7 @@ func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id 
 		return fmt.Errorf("LADO setup home: %w", err)
 	}
 	m.applyLadoLaunchEnv(ctx, rec, domain.HarnessClaudeCode, env)
+	m.applyLadoWorkerEnv(ctx, rec, env) // issue #44: base branch push guard
 	if m.ladoSetupHome == nil {
 		return nil
 	}

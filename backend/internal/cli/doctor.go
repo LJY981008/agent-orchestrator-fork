@@ -21,6 +21,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoconnect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
 )
 
@@ -221,7 +223,8 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
 		}))
 	}
-	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx), c.checkGitLabToken(ctx))
+	checks = append(checks, c.checkCodexLaunchFlags(ctx), c.checkGitHubToken(ctx))
+	checks = append(checks, c.checkGitLabTokens(ctx, cfg)...)
 	return checks
 }
 
@@ -566,24 +569,30 @@ func (c *commandContext) githubToken(ctx context.Context) (token, source string,
 	return token, "gh", nil
 }
 
-func (c *commandContext) checkGitLabToken(ctx context.Context) doctorCheck {
-	token, source, err := c.gitlabToken(ctx)
-	if err != nil {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionGitLab, Name: "gitlab-token", Message: err.Error()}
+// probeGitLabToken calls GET <restBase>/user with token. label names the
+// token in messages ("AO_GITLAB_TOKEN token", "LADO stored token"); host, when
+// set, is added as "on <host>". Messages never carry the token itself.
+func (c *commandContext) probeGitLabToken(ctx context.Context, restBase, token, label, host string) doctorCheck {
+	check := func(level doctorLevel, msg string) doctorCheck {
+		return doctorCheck{Level: level, Section: doctorSectionGitLab, Name: "gitlab-token", Message: msg}
+	}
+	on := ""
+	if host != "" {
+		on = " on " + host
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(c.deps.DoctorGitLabRESTBase, "/")+"/user", http.NoBody)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, strings.TrimRight(restBase, "/")+"/user", http.NoBody)
 	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitLab, Name: "gitlab-token", Message: err.Error()}
+		return check(doctorFail, err.Error())
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", gitlabDoctorUserAgent)
 	req.Header.Set("PRIVATE-TOKEN", token)
 	resp, err := c.deps.HTTPClient.Do(req)
 	if err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token validation failed: %v", source, err)}
+		return check(doctorFail, fmt.Sprintf("%s validation failed%s: %v", label, on, err))
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -591,23 +600,65 @@ func (c *commandContext) checkGitLabToken(ctx context.Context) doctorCheck {
 	}()
 
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token rejected by GitLab (HTTP %d)", source, resp.StatusCode)}
+		return check(doctorFail, fmt.Sprintf("%s rejected by GitLab%s (HTTP %d)", label, on, resp.StatusCode))
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token probe returned HTTP %d", source, resp.StatusCode)}
+		return check(doctorWarn, fmt.Sprintf("%s probe returned HTTP %d%s", label, resp.StatusCode, on))
 	}
 
 	var user struct {
 		Username string `json:"username"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&user); err != nil {
-		return doctorCheck{Level: doctorFail, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token probe decode failed: %v", source, err)}
+		return check(doctorFail, fmt.Sprintf("%s probe decode failed%s: %v", label, on, err))
 	}
 	login := user.Username
 	if login == "" {
 		login = "unknown user"
 	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("%s token valid for %s", source, login)}
+	return check(doctorPass, fmt.Sprintf("%s valid for %s%s", label, login, on))
+}
+
+// LADO fork: checkGitLabTokens adds LADO's stored GitLab tokens
+// (<stateDir>/lado/credentials/gitlab-tokens.json) after the env and glab
+// tokens, as the daemon's token chains do. gitlab.com uses a stored token only
+// when env and glab have none; every stored self-managed host is probed on its
+// own API. Without any token, the upstream "no GitLab token found" warning
+// stays.
+func (c *commandContext) checkGitLabTokens(ctx context.Context, cfg config.Config) []doctorCheck {
+	creds := ladoconnect.NewCredentials(githubpat.New(cfg.DataDir), cfg.StateDir)
+	hosts, storeErr := creds.GitLabHosts(ctx)
+
+	var checks []doctorCheck
+	if token, source, err := c.gitlabToken(ctx); err == nil {
+		checks = append(checks, c.probeGitLabToken(ctx, c.deps.DoctorGitLabRESTBase, token, source+" token", ""))
+	} else if stored, ok, _ := creds.Token(ctx, "gitlab.com"); ok {
+		checks = append(checks, c.probeGitLabToken(ctx, c.deps.DoctorGitLabRESTBase, stored, ladoStoredLabel, "gitlab.com"))
+	} else if len(hosts) == 0 {
+		checks = append(checks, doctorCheck{Level: doctorWarn, Section: doctorSectionGitLab, Name: "gitlab-token", Message: err.Error()})
+	}
+
+	for _, host := range hosts {
+		token, ok, err := creds.Token(ctx, host)
+		switch {
+		case err != nil:
+			checks = append(checks, doctorCheck{Level: doctorWarn, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("could not read the LADO stored token for %s: %v", host, err)})
+		case ok:
+			checks = append(checks, c.probeGitLabToken(ctx, c.deps.DoctorGitLabHostRESTBase(host), token, ladoStoredLabel, host))
+		}
+	}
+	if storeErr != nil {
+		checks = append(checks, doctorCheck{Level: doctorWarn, Section: doctorSectionGitLab, Name: "gitlab-token", Message: fmt.Sprintf("could not read LADO's stored GitLab tokens: %v", storeErr)})
+	}
+	return checks
+}
+
+// ladoStoredLabel names a LADO stored token in doctor messages.
+const ladoStoredLabel = "LADO stored token"
+
+// defaultDoctorGitLabHostRESTBase is a self-managed GitLab host's REST API.
+func defaultDoctorGitLabHostRESTBase(host string) string {
+	return "https://" + host + "/api/v4"
 }
 
 func (c *commandContext) gitlabToken(ctx context.Context) (token, source string, err error) {

@@ -28527,6 +28527,22 @@ components:
       - sessionId
       - content
       type: object
+    SubmitReviewComment:
+      properties:
+        body:
+          description: The required change.
+          type: string
+        line:
+          description: Line number in the new version of the file.
+          type: integer
+        path:
+          description: Repository-relative file path of the reviewed commit.
+          type: string
+      required:
+      - path
+      - line
+      - body
+      type: object
     SubmitReviewInput:
       properties:
         body:
@@ -28552,6 +28568,12 @@ components:
         body:
           description: Review body recorded by AO. Required for changes_requested.
           type: string
+        comments:
+          description: Required changes for a GitLab merge request. AO posts each
+            as a discussion on the MR; ignored for GitHub PRs.
+          items:
+            $ref: '#/components/schemas/SubmitReviewComment'
+          type: array
         githubReviewId:
           description: Id of the GitHub PR review the reviewer posted, if any.
           type: string

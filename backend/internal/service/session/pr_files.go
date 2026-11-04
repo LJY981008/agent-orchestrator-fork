@@ -370,8 +370,8 @@ func (s *Service) prWorkspaceRoot(ctx context.Context, rec domain.SessionRecord,
 			if urlErr != nil {
 				continue
 			}
-			identity, parseErr := domain.ParseRepositoryIdentity(strings.TrimSpace(rawURL))
-			if parseErr != nil {
+			identity, ok := s.remoteRepositoryIdentity(strings.TrimSpace(rawURL))
+			if !ok {
 				continue
 			}
 			got := strings.ToLower(identity.Namespace + "/" + identity.Name)
@@ -381,6 +381,20 @@ func (s *Service) prWorkspaceRoot(ctx context.Context, rec domain.SessionRecord,
 		}
 	}
 	return "", "", apierr.NotFound("PR_SOURCE_REPOSITORY_NOT_FOUND", "No registered workspace repository matches the selected pull request")
+}
+
+// remoteRepositoryIdentity identifies a worktree remote the same way the SCM
+// observer identified the PR's repository, so a GitLab ssh:// remote with an
+// SSH port matches the PR's web host. Remotes no provider claims fall back to
+// the provider-neutral parse.
+func (s *Service) remoteRepositoryIdentity(rawURL string) (domain.RepositoryIdentity, bool) {
+	if s.scm != nil {
+		if repo, ok := s.scm.ParseRepository(rawURL); ok && repo.Provider != "" && repo.Host != "" && repo.Owner != "" && repo.Name != "" {
+			return domain.RepositoryIdentity{Provider: repo.Provider, Host: repo.Host, Namespace: repo.Owner, Name: repo.Name}, true
+		}
+	}
+	identity, err := domain.ParseRepositoryIdentity(rawURL)
+	return identity, err == nil
 }
 
 // ensurePRRevisionObjects fetches provider-owned review refs only when the
