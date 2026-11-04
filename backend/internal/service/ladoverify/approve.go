@@ -77,7 +77,7 @@ func (s *Service) ApproveIntegration(ctx context.Context, in ApproveInput) (Appr
 		return ApproveResult{}, err
 	}
 	exec.PR.HeadSHA = head
-	record, err := s.verifyHead(ctx, exec, verifyOptions{forceProtection: true, fetchBase: true})
+	record, inputs, err := s.verifyHeadIn(ctx, exec, verifyOptions{forceProtection: true, fetchBase: true})
 	if err != nil {
 		s.deps.Log.Error("LADO could not verify a head for its integration approval", "session", exec.SessionID, "head", head, "err", err)
 		return ApproveResult{}, verifyFailed()
@@ -95,7 +95,7 @@ func (s *Service) ApproveIntegration(ctx context.Context, in ApproveInput) (Appr
 	if err := s.approvable(ctx, in, record, target, sum, result.Confirm); err != nil {
 		return ApproveResult{}, err
 	}
-	approval, err := s.recordApproval(ctx, exec, record, sum, result.Confirm, proof)
+	approval, err := s.recordApproval(ctx, exec, record, sum, result.Confirm, proof, inputs.baseTip)
 	if err != nil {
 		return ApproveResult{}, err
 	}
@@ -192,10 +192,20 @@ func approvalTarget(exec domain.LadoExecution) string {
 	return exec.BaseBranch
 }
 
-// approvable refuses to approve a record other than the one signed, a record
-// with an item that waits or fails, acknowledgements other than the record's
-// confirm codes, and a PR head approved already into target.
+// approvable refuses to approve a PR head whose approval into target LADO
+// revoked (#53), a record other than the one signed, a record with an item
+// that waits or fails, acknowledgements other than the record's confirm
+// codes, and a PR head approved already into target.
 func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain.LadoVerification, target, sum string, confirm []string) error {
+	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, record.ExecutionSessionID, record.PRURL, record.HeadSHA)
+	if err != nil {
+		s.deps.Log.Error("LADO could not read the integration approvals of a head", "session", record.ExecutionSessionID, "head", record.HeadSHA, "err", err)
+		return verifyFailed()
+	}
+	forTarget := func(a domain.LadoIntegrationApproval) bool { return strings.EqualFold(a.TargetBranch, target) }
+	if slices.ContainsFunc(approvals, func(a domain.LadoIntegrationApproval) bool { return forTarget(a) && a.Revoked() }) {
+		return integrationRevoked()
+	}
 	if !strings.EqualFold(strings.TrimSpace(in.VerificationSHA256), sum) {
 		return verificationChanged()
 	}
@@ -209,12 +219,7 @@ func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain
 			"Confirm exactly the items of this head that need confirming.",
 			map[string]any{"required": confirm, "given": given})
 	}
-	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, record.ExecutionSessionID, record.PRURL, record.HeadSHA)
-	if err != nil {
-		s.deps.Log.Error("LADO could not read the integration approvals of a head", "session", record.ExecutionSessionID, "head", record.HeadSHA, "err", err)
-		return verifyFailed()
-	}
-	if slices.ContainsFunc(approvals, func(a domain.LadoIntegrationApproval) bool { return strings.EqualFold(a.TargetBranch, target) }) {
+	if slices.ContainsFunc(approvals, forTarget) {
 		return alreadyApproved()
 	}
 	return nil
@@ -222,8 +227,9 @@ func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain
 
 // recordApproval records the approval with its proof and audit event, then
 // posts its status once on GitHub. GitLab gets no status: its approvals are
-// not_applicable.
-func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution, record domain.LadoVerification, sum string, acknowledged []string, proof domain.LadoPresenceProof) (domain.LadoIntegrationApproval, error) {
+// not_applicable. baseTip is the remote target's commit the record was
+// computed against, which the merge gate compares with (#53).
+func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution, record domain.LadoVerification, sum string, acknowledged []string, proof domain.LadoPresenceProof, baseTip string) (domain.LadoIntegrationApproval, error) {
 	task, ok, err := s.deps.Tasks.LadoTask(ctx, exec.TaskID)
 	if err != nil || !ok {
 		s.deps.Log.Error("LADO could not read the task of an integration approval", "task", exec.TaskID, "found", ok, "err", err)
@@ -250,6 +256,7 @@ func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution,
 		Actor:              actor,
 		ApprovedAt:         now,
 		StatusState:        state,
+		BaseTipSHA:         baseTip,
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"task":         exec.TaskID,
@@ -273,6 +280,8 @@ func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution,
 	switch {
 	case errors.Is(err, domain.ErrLadoPresenceReplayed):
 		return domain.LadoIntegrationApproval{}, ladopresence.Replayed()
+	case errors.Is(err, domain.ErrLadoIntegrationRevoked):
+		return domain.LadoIntegrationApproval{}, integrationRevoked()
 	case errors.Is(err, domain.ErrLadoIntegrationAlreadyApproved):
 		return domain.LadoIntegrationApproval{}, alreadyApproved()
 	case errors.Is(err, domain.ErrLadoVerificationChanged):
