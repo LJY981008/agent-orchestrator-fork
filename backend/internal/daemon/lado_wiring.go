@@ -121,7 +121,7 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 		deps.Artifacts = ladoArtifacts{capturer: work.artifacts, store: store}
 	}
 	tasks := ladotask.New(deps)
-	queue := ladoqueue.New(ladoqueue.Deps{
+	queueDeps := ladoqueue.Deps{
 		Store:    store,
 		Tasks:    tasks,
 		Policy:   rules,
@@ -136,7 +136,11 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 		// workers without spending an attempt (issue #42).
 		AccountLimits: watch.watch,
 		Preflight:     work.preflight,
-	})
+	}
+	// A running resolve worker hears of a new conflict from the daemon
+	// (issue #53); the remote branches it reads use the system git.
+	queueDeps.Sender = ladoQueueSender(work.sender)
+	queue := ladoqueue.New(queueDeps)
 	if work.sessions != nil {
 		tasks.SetKiller(queue)
 	}
@@ -144,6 +148,17 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	verify := wireLadoVerify(store, blobs, clients, work, log)
 	chrome := wireLadoClaudeChrome(cfg, store, work.setup.sessions, log)
 	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch}
+}
+
+// ladoQueueSender is how the dispatcher tells a running resolve worker about
+// a new conflict: through the session manager as the daemon, as the
+// verification loop tells a worker what failed. Without the session manager
+// the dispatcher tells nobody.
+func ladoQueueSender(sender ladoMessageSender) ladoqueue.Sender {
+	if sender == nil {
+		return nil
+	}
+	return ladoVerifySender{sender: sender}
 }
 
 // ladoProjectCloner is AO's clone flow, with LADO's clones into a workspace.
