@@ -131,12 +131,31 @@ func (s *Service) resolveOne(ctx context.Context, c domain.LadoResolveCandidate,
 	case domain.LadoResolveNeedsHuman:
 		return s.reopenResolve(ctx, c, round.now)
 	}
-	if !c.Conflicting() || c.SessionLive || c.ResolveSessionLive {
-		// The execution's own session gets AO's conflict notice; a resolve
-		// worker still running is told by followResolve.
+	if !c.Conflicting() || c.SessionLive {
+		// The execution's own session gets AO's conflict notice.
 		return nil
 	}
+	if c.ResolveSessionLive {
+		// A resolve worker outside a resolve (one a cleared resolve left
+		// running) hears of nothing and holds a slot: it stops, and the next
+		// pass starts a new one.
+		return s.stopLeftoverResolver(ctx, c)
+	}
 	return s.startResolve(ctx, c, round)
+}
+
+// stopLeftoverResolver stops the live resolve worker of a PR whose resolve
+// holds no state; one that could not be stopped is tried again on the next
+// pass.
+func (s *Service) stopLeftoverResolver(ctx context.Context, c domain.LadoResolveCandidate) error {
+	r := c.Resolve
+	if _, err := s.deps.Sessions.RequestKill(ctx, r.SessionID); err != nil {
+		s.deps.Log.Warn("LADO could not stop a resolve worker left from a cleared resolve", "task", r.TaskID, "session", r.SessionID,
+			"problem", problem(err, "the session could not be stopped"))
+		return nil
+	}
+	s.appendAudit(ctx, s.audit("resolve.worker_stopped", r.QueueEntryID, map[string]any{"task": r.TaskID, "execution": r.ExecutionSessionID, "session": r.SessionID}))
+	return nil
 }
 
 // endResolve stops the resolve worker of a PR that merged or closed and
@@ -165,7 +184,10 @@ func (s *Service) endResolve(ctx context.Context, c domain.LadoResolveCandidate,
 }
 
 // reopenResolve clears a resolve a person took over once the PR no longer
-// conflicts: its count starts again.
+// conflicts: its count starts again. A resolve worker that asked for a
+// decision still runs for the person; it stops first, since a worker outside
+// a resolve hears of no new conflict and would hold a slot. One that could
+// not be stopped keeps the state, so that the next pass stops it again.
 func (s *Service) reopenResolve(ctx context.Context, c domain.LadoResolveCandidate, now time.Time) error {
 	switch c.Execution.PR.Mergeability {
 	case domain.MergeMergeable, domain.MergeBlocked, domain.MergeUnstable:
@@ -174,6 +196,13 @@ func (s *Service) reopenResolve(ctx context.Context, c domain.LadoResolveCandida
 	}
 	if c.Conflicting() {
 		return nil
+	}
+	if c.ResolveSessionLive {
+		if _, err := s.deps.Sessions.RequestKill(ctx, c.Resolve.SessionID); err != nil {
+			s.deps.Log.Warn("LADO could not stop the resolve worker of a resolve a person cleared", "task", c.Resolve.TaskID,
+				"session", c.Resolve.SessionID, "problem", problem(err, "the session could not be stopped"))
+			return nil
+		}
 	}
 	next := c.Resolve
 	next.State, next.Attempts, next.DoneSeenAt, next.Error = domain.LadoResolveNone, 0, time.Time{}, ""

@@ -340,6 +340,49 @@ func TestAResolveWorkerAskingForADecisionNeedsAPerson(t *testing.T) {
 	}
 }
 
+// A person resolves the PR a worker asked about: once it no longer
+// conflicts, the resolve clears and the worker that waited for the person
+// stops. When the PR conflicts again, a new resolve worker takes it.
+func TestAClearedResolveStopsItsWorkerAndANewConflictGetsANewOne(t *testing.T) {
+	rf := newResolveFixture(t)
+	rf.exitRun(t)
+	rf.tick(t, t0.Add(2*time.Minute))
+	worker := rf.resolver(t, 1).ID
+	at := t0.Add(3 * time.Minute)
+	if _, err := rf.db.CreateReport(context.Background(), domain.ReportRecord{
+		ID: "report-ask", SessionID: worker, ProjectID: "proj-1", State: domain.ReportNeedsInput, Note: "keep which side?",
+		CreatedAt: at, AvailableAt: at, RepeatCount: 1, DeliveryState: domain.ReportPending,
+	}); err != nil {
+		t.Fatalf("report needs input: %v", err)
+	}
+	rf.tick(t, at)
+	if r := rf.resolve(t); r.State != domain.LadoResolveNeedsHuman {
+		t.Fatalf("resolve = %+v, want it left to a person", r)
+	}
+
+	// The person merged the base into the PR's branch.
+	resolved := rf.pushResolved(t)
+	rf.writePR(t, resolved, domain.PRStateOpen, domain.MergeMergeable, t0.Add(4*time.Minute))
+	rf.tick(t, t0.Add(4*time.Minute))
+	if r := rf.resolve(t); r.State != domain.LadoResolveNone || r.Attempts != 0 {
+		t.Fatalf("resolve = %+v, want it cleared", r)
+	}
+	if killed := rf.sessions.killed(); len(killed) != 1 || killed[0] != worker {
+		t.Fatalf("killed = %v, want the worker that waited for the person", killed)
+	}
+
+	// The base moves again and the PR conflicts: a new worker starts.
+	rf.base = commitOn(t, rf.remote, "main", map[string]string{"shared.txt": "the base's next change\n"})
+	rf.writePR(t, resolved, domain.PRStateOpen, domain.MergeConflicting, t0.Add(10*time.Minute))
+	rf.tick(t, t0.Add(10*time.Minute))
+	if got := rf.resolveSpawns(); len(got) != 2 {
+		t.Fatalf("resolve spawns = %d, want a second worker for the new conflict", len(got))
+	}
+	if r := rf.resolve(t); r.State != domain.LadoResolveResolving || r.SessionID == worker {
+		t.Fatalf("resolve = %+v, want a new worker resolving", r)
+	}
+}
+
 // A new head whose record turned base_overlap without a conflict is not told
 // by the dispatcher: the verification loop's fix request, with the files,
 // goes to the worker (ladoverify readOwner), so it does not hear twice.
