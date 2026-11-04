@@ -19,12 +19,15 @@ func (m *Manager) SetWorkGate(gate ports.WorkGate) {
 }
 
 // LadoPromptSection returns LADO's section of a session's standing
-// instructions, or "" when LADO adds none: an orchestrator's in a project in
-// LADO mode, the rules text of a worker LADO dispatched, and the instructions
-// LADO manages for a Codex session. harness is the agent the instructions are
-// for, "" when the session's row names it. An error fails the spawn or
-// restore rather than starting the session without its section.
-type LadoPromptSection func(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error)
+// instructions, with empty Text when LADO adds none: an orchestrator's in a
+// project in LADO mode, the rules text of a worker LADO dispatched, and the
+// instructions LADO manages for a Codex session. ReplacesOrchestratorRole
+// says the section defines a LADO project's orchestrator role, so AO's
+// default orchestrator role and delegation rules are left out
+// (lado_prompt.go). harness is the agent the instructions are for, "" when
+// the session's row names it. An error fails the spawn or restore rather
+// than starting the session without its section.
+type LadoPromptSection func(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (domain.LadoStandingSection, error)
 
 // SetLadoPrompt installs LADO's section. The daemon calls it before any
 // session starts or restores; nil keeps upstream behavior.
@@ -38,9 +41,9 @@ func (m *Manager) SetLadoPrompt(section LadoPromptSection) {
 // keeps its section. harness is the agent a spawn or an agent switch builds
 // for, or "" where the session's row names it, which the source reads only
 // when its section depends on it.
-func (m *Manager) ladoPromptSection(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (string, error) {
+func (m *Manager) ladoPromptSection(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID) (domain.LadoStandingSection, error) {
 	if m.ladoPrompt == nil || projectID == "" {
-		return "", nil
+		return domain.LadoStandingSection{}, nil
 	}
 	harness, _ := ctx.Value(ladoPromptHarnessKey{}).(domain.AgentHarness)
 	return m.ladoPrompt(ctx, kind, projectID, sessionID, harness)

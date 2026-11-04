@@ -40,6 +40,9 @@ type systemPromptConfig struct {
 	ProjectRules          string
 	OrchestratorRules     string
 	AdditionalSections    []string
+	// LadoOrchestrator is set for an orchestrator in a LADO project: LADO's
+	// section defines its role in place of AO's (LADO fork, lado_prompt.go).
+	LadoOrchestrator bool
 }
 
 type projectRulesConfig struct {
@@ -75,7 +78,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	sections := make([]string, 0, 6)
 	switch cfg.Role {
 	case sessionPromptRoleOrchestrator:
-		sections = append(sections, orchestratorSystemPrompt(cfg.Project))
+		if cfg.LadoOrchestrator { // LADO fork
+			sections = append(sections, ladoOrchestratorBasePrompt(cfg.Project))
+		} else {
+			sections = append(sections, orchestratorSystemPrompt(cfg.Project))
+		}
 		if rules := strings.TrimSpace(cfg.OrchestratorRules); rules != "" {
 			sections = append(sections, "## Project-Specific Orchestrator Rules\n"+rules)
 		}
@@ -99,7 +106,11 @@ func buildSystemPromptText(cfg systemPromptConfig) string {
 	default:
 		return ""
 	}
-	sections = append(sections, publishingScopePrompt(), systemPromptGuard())
+	guard := systemPromptGuard()
+	if cfg.LadoOrchestrator { // LADO fork
+		guard = ladoSystemPromptGuard()
+	}
+	sections = append(sections, publishingScopePrompt(), guard)
 	for _, section := range cfg.AdditionalSections {
 		if section := strings.TrimSpace(section); section != "" {
 			sections = append(sections, section)
@@ -248,13 +259,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 6. Route CI failures and review comments back to the responsible worker.
 7. Summarize status and blockers for the human.
 
-## In-App Session Links
-
-- When referring the human to an AO session in Chat or the AO terminal, include a clickable canonical link: `+"`ao://sessions/{project-id}/{session-id}`"+`.
-- When referring the human to any file inside a session's artifact directory, whether reported or found by listing it, link it as `+"`ao://sessions/{project-id}/{session-id}/artifacts/{path}`"+`, where `+"`{session-id}`"+` owns that directory (`+"`artifacts/{session-id}/`"+` under the AO data directory) and `+"`{path}`"+` is relative to it. Use the file name as the link text. Worker reports give artifact paths, not links; build the link only in what you tell the human.
-- Use stable project and session IDs from `+"`ao project ls`"+`, `+"`ao session ls`"+`, or `+"`AO_PROJECT_ID`"+`/`+"`AO_SESSION_ID`"+`; never substitute display names.
-- Percent-encode each ID and artifact path segment when necessary. Do not add query strings, fragments, action routes, or path segments beyond these two forms.
-- These links navigate only inside the running AO desktop app. Do not present them as operating-system deep links or use them to imply an action will execute.
+%s
 
 ## Review and CI Workflow
 
@@ -263,7 +268,19 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - If work is green and approved, report that state to the human. Do not merge unless explicitly asked and supported by project rules.
 - An AO review approval is internal. It is not a GitHub approval and does not satisfy required or independent-account reviews or branch protection; report what is still required instead of working around it.
 
-%s`, projectName(project), project.ID, project.ID, project.ID, projectContextSection(project))
+%s`, projectName(project), project.ID, project.ID, project.ID, orchestratorSessionLinksSection(), projectContextSection(project))
+}
+
+// orchestratorSessionLinksSection teaches an orchestrator AO's in-app links.
+// AO's orchestrator role and a LADO project's (lado_prompt.go) both use it.
+func orchestratorSessionLinksSection() string {
+	return `## In-App Session Links
+
+- When referring the human to an AO session in Chat or the AO terminal, include a clickable canonical link: ` + "`ao://sessions/{project-id}/{session-id}`" + `.
+- When referring the human to any file inside a session's artifact directory, whether reported or found by listing it, link it as ` + "`ao://sessions/{project-id}/{session-id}/artifacts/{path}`" + `, where ` + "`{session-id}`" + ` owns that directory (` + "`artifacts/{session-id}/`" + ` under the AO data directory) and ` + "`{path}`" + ` is relative to it. Use the file name as the link text. Worker reports give artifact paths, not links; build the link only in what you tell the human.
+- Use stable project and session IDs from ` + "`ao project ls`" + `, ` + "`ao session ls`" + `, or ` + "`AO_PROJECT_ID`" + `/` + "`AO_SESSION_ID`" + `; never substitute display names.
+- Percent-encode each ID and artifact path segment when necessary. Do not add query strings, fragments, action routes, or path segments beyond these two forms.
+- These links navigate only inside the running AO desktop app. Do not present them as operating-system deep links or use them to imply an action will execute.`
 }
 
 func workerSystemPrompt(project promptProject, hasOrchestrator bool) string {

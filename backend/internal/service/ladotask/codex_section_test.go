@@ -83,6 +83,16 @@ func TestPromptSectionCarriesAdoptedAgentsMd(t *testing.T) {
 	if got, want := section(t, domain.KindOrchestrator, "demo", "demo-orchestrator-1", domain.HarnessCodex), heading+"current codex rules\n\n"+orchestratorSection; got != want {
 		t.Fatalf("Codex orchestrator's section = %q, want %q", got, want)
 	}
+	// The Codex text before LADO's orchestrator section still replaces AO's
+	// orchestrator role; the Codex text alone, outside LADO, does not.
+	if got, err := source.Standing(ctx, domain.KindOrchestrator, "demo", "demo-orchestrator-1", domain.HarnessCodex); err != nil ||
+		got != (domain.LadoStandingSection{Text: heading + "current codex rules\n\n" + orchestratorSection, ReplacesOrchestratorRole: true}) {
+		t.Fatalf("Codex LADO orchestrator's standing section = %+v, %v", got, err)
+	}
+	if got, err := source.Standing(ctx, domain.KindOrchestrator, "other", "other-orchestrator-1", domain.HarnessCodex); err != nil ||
+		got != (domain.LadoStandingSection{Text: heading + "current codex rules"}) {
+		t.Fatalf("Codex orchestrator's standing section outside LADO = %+v, %v", got, err)
+	}
 	for _, project := range []domain.ProjectID{"other", ""} {
 		if got := section(t, domain.KindWorker, project, "scratch-1", domain.HarnessCodex); got != heading+"current codex rules" {
 			t.Fatalf("Codex worker in %q gets %q, want the current text", project, got)

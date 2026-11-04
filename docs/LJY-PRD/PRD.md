@@ -33,7 +33,7 @@ AO already uses several of LADO's words with other meanings. These docs use the 
 | review | AO code review of a PR (`review/`) | Same thing; VER-002 uses it |
 | approval | A Chat tool-permission request (`conversation_activities`, kind approval) | Human approval of a plan revision or an integration, through the human-presence channel |
 | execution | — | One AO session linked to a task, a plan revision and a rule snapshot (`lado_executions`) |
-| orchestrator | Project coordinator session that spawns workers with `ao spawn` (`session_manager/prompt.go:197-267`) | Same session. In LADO projects it relays LADO's one-line notices to the developer and writes the knowledge snapshot; from #27 it writes no plans |
+| orchestrator | Project coordinator session that spawns workers with `ao spawn` (`session_manager/prompt.go:197-267`) | Same session. In LADO projects it is the developer's work assistant in place of AO's delegating role: it investigates, keeps the tracker and LADO cards in order, requests plans, carries out operations the developer asks for, relays LADO's one-line notices and writes the knowledge snapshot. It does not change source code, spawn or message workers, or start unapproved work; from #27 it writes no plans (TDD §5.1) |
 | plan worker | — | A read-only AO worker session LADO starts for one plan request: the designer writes the plan, and a separate critic reviews the draft unless the plan is small ([adr/0007](adr/0007-plan-workers.md)) |
 
 ### 1.2 Goals

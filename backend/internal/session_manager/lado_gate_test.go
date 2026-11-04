@@ -190,10 +190,12 @@ type ladoSectionCall struct {
 }
 
 // recordingLadoSource answers like LADO's prompt source: an orchestrator gets
-// the project's section, a worker the rules text of its execution.
+// the project's section, which replaces AO's orchestrator role unless
+// keepAORole is set, and a worker the rules text of its execution.
 type recordingLadoSource struct {
-	mu    sync.Mutex
-	calls []ladoSectionCall
+	mu         sync.Mutex
+	calls      []ladoSectionCall
+	keepAORole bool
 }
 
 const (
@@ -201,14 +203,14 @@ const (
 	ladoWorkerSection       = "## LADO rules\n\nWrite commit messages in Korean."
 )
 
-func (s *recordingLadoSource) section(_ context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
+func (s *recordingLadoSource) section(_ context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (domain.LadoStandingSection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls = append(s.calls, ladoSectionCall{kind: kind, projectID: projectID, sessionID: sessionID, harness: harness})
 	if kind == domain.KindOrchestrator {
-		return ladoOrchestratorSection, nil
+		return domain.LadoStandingSection{Text: ladoOrchestratorSection, ReplacesOrchestratorRole: !s.keepAORole}, nil
 	}
-	return ladoWorkerSection, nil
+	return domain.LadoStandingSection{Text: ladoWorkerSection}, nil
 }
 
 func (s *recordingLadoSource) asked() []ladoSectionCall {
@@ -246,8 +248,8 @@ func TestLadoPromptSectionComesFromTheSource(t *testing.T) {
 	if got := source.asked(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("asked %+v, want %+v", got, want)
 	}
-	m.SetLadoPrompt(func(context.Context, domain.SessionKind, domain.ProjectID, domain.SessionID, domain.AgentHarness) (string, error) {
-		return "", errors.New("settings unreadable")
+	m.SetLadoPrompt(func(context.Context, domain.SessionKind, domain.ProjectID, domain.SessionID, domain.AgentHarness) (domain.LadoStandingSection, error) {
+		return domain.LadoStandingSection{}, errors.New("settings unreadable")
 	})
 	for _, kind := range []domain.SessionKind{domain.KindOrchestrator, domain.KindWorker} {
 		if _, err := m.buildSystemPrompt(context.Background(), kind, "mer", "mer-1", "", false); err == nil {
@@ -298,6 +300,77 @@ func TestWorkerSystemPromptAsksForTheLadoSection(t *testing.T) {
 	if want := []ladoSectionCall{{domain.KindWorker, "mer", "mer-7", ""}}; !reflect.DeepEqual(restored.asked(), want) {
 		t.Fatalf("restore asked %+v, want %+v", restored.asked(), want)
 	}
+}
+
+// TestOrchestratorSystemPromptKeepsTheLadoRole covers the paths that build a
+// LADO project's orchestrator prompt: the Chat spawn, the Chat restore and
+// resume-agent of its provider conversation, and the terminal restore. Each gets LADO's role and
+// section, never AO's delegation rules (#51).
+func TestOrchestratorSystemPromptKeepsTheLadoRole(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	source := &recordingLadoSource{}
+	m.SetLadoPrompt(source.section)
+
+	if _, _, _, err := m.Spawn(context.Background(), ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindOrchestrator, Harness: domain.HarnessClaudeCode,
+		RequestedMode: domain.SessionModeChat,
+	}); err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	if len(launcher.started) != 1 {
+		t.Fatalf("Chat orchestrator started %d controllers, want 1", len(launcher.started))
+	}
+	assertLadoOrchestratorPrompt(t, launcher.started[0].SystemPrompt)
+
+	// The Chat resume of a stopped orchestrator's provider conversation.
+	resume := domain.SessionRecord{
+		ID: "mer-176", ProjectID: chatTestProject, Kind: domain.KindOrchestrator,
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		IsTerminated: true, Activity: domain.Activity{State: domain.ActivityExited},
+		Metadata: domain.SessionMetadata{
+			Branch: "main", WorkspacePath: "/ws/mer-176",
+			ProviderConversationID: "lado-orchestrator-conversation-1",
+		},
+	}
+	st.sessions[resume.ID] = resume
+	if _, err := m.RestoreWithMode(context.Background(), resume.ID); err != nil {
+		t.Fatalf("RestoreWithMode (Chat): %v", err)
+	}
+	resumed := launcher.started[len(launcher.started)-1]
+	if resumed.ProviderConversationID != resume.Metadata.ProviderConversationID {
+		t.Fatalf("Chat restore started provider %q, want the stored conversation", resumed.ProviderConversationID)
+	}
+	assertLadoOrchestratorPrompt(t, resumed.SystemPrompt)
+
+	// A person's resume of the agent (POST .../resume-agent), the path that
+	// loaded the 2026-11-04 recovery conversation.
+	resume.ID, resume.Metadata.WorkspacePath, resume.IsTerminated = "mer-177", "/ws/mer-177", false
+	st.sessions[resume.ID] = resume
+	started := len(launcher.started)
+	if _, err := m.ResumeAgentWithMode(context.Background(), resume.ID); err != nil {
+		t.Fatalf("ResumeAgentWithMode (Chat): %v", err)
+	}
+	if len(launcher.started) != started+1 || launcher.started[started].ProviderConversationID != resume.Metadata.ProviderConversationID {
+		t.Fatalf("resume-agent started %d controllers, want one for the stored conversation", len(launcher.started)-started)
+	}
+	assertLadoOrchestratorPrompt(t, launcher.started[started].SystemPrompt)
+
+	// The terminal restore of a stopped orchestrator.
+	terminal := newFakeStore()
+	terminal.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	terminal.sessions["mer-9"] = domain.SessionRecord{
+		ID: "mer-9", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-9", Branch: "main", AgentSessionID: "agent-x"},
+	}
+	agent := &recordingAgent{}
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	restorer := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: terminal, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: terminal}, DataDir: t.TempDir(), LookPath: lookPath})
+	restorer.SetLadoPrompt((&recordingLadoSource{}).section)
+	if _, err := restorer.RestoreWithMode(context.Background(), "mer-9"); err != nil {
+		t.Fatalf("RestoreWithMode (terminal): %v", err)
+	}
+	assertLadoOrchestratorPrompt(t, agent.lastRestore.SystemPrompt)
 }
 
 func TestSwitchAgentAsksTheLadoGate(t *testing.T) {

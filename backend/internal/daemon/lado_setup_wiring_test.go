@@ -149,8 +149,8 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 		t.Fatalf("Codex Chat servers = %+v, %v", servers, err)
 	}
 	section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID, domain.HarnessCodex)
-	if err != nil || !strings.Contains(section, "## User instructions (managed by LADO)") || !strings.Contains(section, "Answer in Korean.") {
-		t.Fatalf("standing instructions for the Codex worker = %q, %v", section, err)
+	if err != nil || !strings.Contains(section.Text, "## User instructions (managed by LADO)") || !strings.Contains(section.Text, "Answer in Korean.") || section.ReplacesOrchestratorRole {
+		t.Fatalf("standing instructions for the Codex worker = %+v, %v", section, err)
 	}
 	// A plan worker's role instructions come through this source too, which
 	// replaces wireLado's (found in the lab of #27: they were left out).
@@ -167,8 +167,8 @@ func TestWireLadoInstallsTheSetupHooks(t *testing.T) {
 		t.Fatalf("the Plan critic rule = %+v, %v, %v", role, ok, err)
 	}
 	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", critic.ID, domain.HarnessClaudeCode); err != nil ||
-		!strings.Contains(section, "## LADO plan critic") || !strings.Contains(section, role.Version.Content.Instruction) {
-		t.Fatalf("standing instructions for a plan critic = %q, %v", section, err)
+		!strings.Contains(section.Text, "## LADO plan critic") || !strings.Contains(section.Text, role.Version.Content.Instruction) {
+		t.Fatalf("standing instructions for a plan critic = %+v, %v", section, err)
 	}
 	claude, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, CreatedAt: at, UpdatedAt: at})
 	if err != nil {

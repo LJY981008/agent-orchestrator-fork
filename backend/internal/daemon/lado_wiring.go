@@ -49,7 +49,7 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 	gate.SetPlanWorkers(store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
-	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store}.Section)
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store}.Standing)
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 
