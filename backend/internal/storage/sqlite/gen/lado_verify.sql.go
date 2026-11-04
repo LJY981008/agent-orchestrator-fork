@@ -263,8 +263,8 @@ func (q *Queries) InsertLadoExecutionReview(ctx context.Context, arg InsertLadoE
 const insertLadoIntegrationApproval = `-- name: InsertLadoIntegrationApproval :exec
 INSERT INTO lado_integration_approvals (
     id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error, approved_base_sha
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertLadoIntegrationApprovalParams struct {
@@ -282,6 +282,7 @@ type InsertLadoIntegrationApprovalParams struct {
 	StatusAttempts     int64
 	StatusPostedAt     sql.NullTime
 	StatusError        string
+	ApprovedBaseSha    string
 }
 
 func (q *Queries) InsertLadoIntegrationApproval(ctx context.Context, arg InsertLadoIntegrationApprovalParams) error {
@@ -300,6 +301,7 @@ func (q *Queries) InsertLadoIntegrationApproval(ctx context.Context, arg InsertL
 		arg.StatusAttempts,
 		arg.StatusPostedAt,
 		arg.StatusError,
+		arg.ApprovedBaseSha,
 	)
 	return err
 }
@@ -445,7 +447,7 @@ func (q *Queries) ListLadoEvidenceLinksForHead(ctx context.Context, arg ListLado
 }
 
 const listLadoExecutionPRs = `-- name: ListLadoExecutionPRs :many
-SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title
+SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title, pr.mergeability
 FROM pr
 WHERE pr.session_id IN (/*SLICE:session_ids*/?)
 ORDER BY pr.session_id, pr.updated_at DESC, pr.url DESC
@@ -459,6 +461,7 @@ type ListLadoExecutionPRsRow struct {
 	HeadSha      string
 	TargetBranch string
 	Title        string
+	Mergeability domain.Mergeability
 }
 
 // The PRs of the given sessions, newest first within each session: by update
@@ -490,6 +493,7 @@ func (q *Queries) ListLadoExecutionPRs(ctx context.Context, sessionIds []domain.
 			&i.HeadSha,
 			&i.TargetBranch,
 			&i.Title,
+			&i.Mergeability,
 		); err != nil {
 			return nil, err
 		}
@@ -544,7 +548,7 @@ func (q *Queries) ListLadoExecutionReviews(ctx context.Context, executionSession
 const listLadoExecutionsToVerify = `-- name: ListLadoExecutionsToVerify :many
 SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
-    p.target_branch AS pr_target_branch, p.title AS pr_title,
+    p.target_branch AS pr_target_branch, p.title AS pr_title, p.mergeability AS pr_mergeability,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
@@ -573,6 +577,7 @@ type ListLadoExecutionsToVerifyRow struct {
 	PRHeadSha         string
 	PRTargetBranch    string
 	PRTitle           string
+	PRMergeability    domain.Mergeability
 	SessionTerminated bool
 }
 
@@ -621,6 +626,7 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 			&i.PRHeadSha,
 			&i.PRTargetBranch,
 			&i.PRTitle,
+			&i.PRMergeability,
 			&i.SessionTerminated,
 		); err != nil {
 			return nil, err
@@ -641,6 +647,7 @@ SELECT execution_session_id, pr_url, head_sha, target_branch, status_state
 FROM lado_integration_approvals
 WHERE execution_session_id IN (/*SLICE:session_ids*/?)
   AND head_sha IN (/*SLICE:head_shas*/?)
+  AND revoked_at IS NULL
 `
 
 type ListLadoIntegrationApprovalStatesParams struct {
@@ -657,8 +664,8 @@ type ListLadoIntegrationApprovalStatesRow struct {
 }
 
 // The PR, target branch and status state of the approvals of the given
-// executions and heads. The caller keeps the (execution, PR, head, target)
-// it asked for.
+// executions and heads, revoked ones left out: they no longer count. The
+// caller keeps the (execution, PR, head, target) it asked for.
 func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg ListLadoIntegrationApprovalStatesParams) ([]ListLadoIntegrationApprovalStatesRow, error) {
 	query := listLadoIntegrationApprovalStates
 	var queryParams []interface{}
@@ -708,7 +715,8 @@ func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg Lis
 
 const listLadoIntegrationApprovalsForHead = `-- name: ListLadoIntegrationApprovalsForHead :many
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
+    approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE execution_session_id = ? AND pr_url = ? AND head_sha = ?
 ORDER BY approved_at, id
@@ -746,6 +754,9 @@ func (q *Queries) ListLadoIntegrationApprovalsForHead(ctx context.Context, arg L
 			&i.StatusAttempts,
 			&i.StatusPostedAt,
 			&i.StatusError,
+			&i.ApprovedBaseSha,
+			&i.RevokedAt,
+			&i.RevokedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -762,7 +773,8 @@ func (q *Queries) ListLadoIntegrationApprovalsForHead(ctx context.Context, arg L
 
 const listLadoIntegrationApprovalsForPRHead = `-- name: ListLadoIntegrationApprovalsForPRHead :many
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
+    approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE pr_url = ? AND head_sha = ?
 ORDER BY approved_at, id
@@ -798,6 +810,9 @@ func (q *Queries) ListLadoIntegrationApprovalsForPRHead(ctx context.Context, arg
 			&i.StatusAttempts,
 			&i.StatusPostedAt,
 			&i.StatusError,
+			&i.ApprovedBaseSha,
+			&i.RevokedAt,
+			&i.RevokedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -814,7 +829,8 @@ func (q *Queries) ListLadoIntegrationApprovalsForPRHead(ctx context.Context, arg
 
 const listLadoIntegrationStatusRetries = `-- name: ListLadoIntegrationStatusRetries :many
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
+    approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE status_state IN ('pending', 'failed') AND status_attempts < ?1
 ORDER BY approved_at, id
@@ -852,6 +868,9 @@ func (q *Queries) ListLadoIntegrationStatusRetries(ctx context.Context, arg List
 			&i.StatusAttempts,
 			&i.StatusPostedAt,
 			&i.StatusError,
+			&i.ApprovedBaseSha,
+			&i.RevokedAt,
+			&i.RevokedReason,
 		); err != nil {
 			return nil, err
 		}
@@ -898,7 +917,8 @@ func (q *Queries) ListLadoSessionsNamingPR(ctx context.Context, prUrl string) ([
 }
 
 const listLadoVerificationOutcomes = `-- name: ListLadoVerificationOutcomes :many
-SELECT execution_session_id, head_sha, pr_url, outcome, reason
+SELECT execution_session_id, head_sha, pr_url, outcome, reason,
+    CAST(content_json LIKE '%"code":"base_overlap"%' AS INTEGER) AS base_overlap
 FROM lado_verifications
 WHERE execution_session_id IN (/*SLICE:session_ids*/?)
   AND head_sha IN (/*SLICE:head_shas*/?)
@@ -915,11 +935,13 @@ type ListLadoVerificationOutcomesRow struct {
 	PRURL              string
 	Outcome            string
 	Reason             string
+	BaseOverlap        int64
 }
 
 // The outcome and reason of the records of the given executions and heads,
-// with the PR each record verified. The caller keeps the (execution, head)
-// pairs it asked for, of the PR it reads.
+// with the PR each record verified and whether its base_branch item failed
+// with base_overlap (no other kind has that code). The caller keeps the
+// (execution, head) pairs it asked for, of the PR it reads.
 func (q *Queries) ListLadoVerificationOutcomes(ctx context.Context, arg ListLadoVerificationOutcomesParams) ([]ListLadoVerificationOutcomesRow, error) {
 	query := listLadoVerificationOutcomes
 	var queryParams []interface{}
@@ -953,6 +975,7 @@ func (q *Queries) ListLadoVerificationOutcomes(ctx context.Context, arg ListLado
 			&i.PRURL,
 			&i.Outcome,
 			&i.Reason,
+			&i.BaseOverlap,
 		); err != nil {
 			return nil, err
 		}
@@ -996,6 +1019,34 @@ WHERE lado_integration_approvals.id = ?1
 // Starts posting an approval's status over, its attempts at 0.
 func (q *Queries) ResetLadoIntegrationStatus(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, resetLadoIntegrationStatus, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokeLadoIntegrationApproval = `-- name: RevokeLadoIntegrationApproval :execrows
+UPDATE lado_integration_approvals
+SET revoked_at = ?1,
+    revoked_reason = ?2,
+    status_state = CASE WHEN lado_integration_approvals.status_state = 'not_applicable' THEN 'not_applicable' ELSE 'pending' END,
+    status_attempts = CASE WHEN lado_integration_approvals.status_state = 'not_applicable' THEN lado_integration_approvals.status_attempts ELSE 0 END,
+    status_error = CASE WHEN lado_integration_approvals.status_state = 'not_applicable' THEN lado_integration_approvals.status_error ELSE '' END
+WHERE lado_integration_approvals.id = ?3
+  AND lado_integration_approvals.revoked_at IS NULL
+`
+
+type RevokeLadoIntegrationApprovalParams struct {
+	RevokedAt     sql.NullTime
+	RevokedReason string
+	ID            string
+}
+
+// Withdraws an approval that still holds. A posted commit status starts over
+// as pending with no attempts, so the loop posts pending over success; an
+// approval without a status to post (not_applicable) keeps it.
+func (q *Queries) RevokeLadoIntegrationApproval(ctx context.Context, arg RevokeLadoIntegrationApprovalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeLadoIntegrationApproval, arg.RevokedAt, arg.RevokedReason, arg.ID)
 	if err != nil {
 		return 0, err
 	}

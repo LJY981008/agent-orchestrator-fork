@@ -386,8 +386,8 @@ func (s *Store) ListLadoCommitChecks(ctx context.Context, prURL, commit string) 
 // observed, and those whose newest PR merged or closed and is not settled in
 // that state yet. Heads without a record come first, then the records
 // computed longest ago, so that each execution takes its turn however many
-// wait. Each carries that PR, whether its session ended and the verification
-// facts of the PR's head, as task reads give them.
+// wait. Each carries that PR, whether its session ended, the verification
+// facts of the PR's head and its PR's resolve, as task reads give them.
 func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]domain.LadoExecution, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -400,10 +400,13 @@ func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]do
 	for _, row := range rows {
 		execution := ladoExecutionFromGen(row.LadoExecution)
 		execution.SessionTerminated = row.SessionTerminated
-		execution.PR = ladoExecutionPR(row.PRURL, row.PRNumber, row.PRState, row.PRHeadSha, row.PRTargetBranch, row.PRTitle)
+		execution.PR = ladoExecutionPR(row.PRURL, row.PRNumber, row.PRState, row.PRHeadSha, row.PRTargetBranch, row.PRTitle, row.PRMergeability)
 		executions = append(executions, execution)
 	}
 	if err := s.fillLadoVerification(ctx, executions); err != nil {
+		return nil, err
+	}
+	if _, err := s.fillLadoResolves(ctx, executions); err != nil {
 		return nil, err
 	}
 	return executions, nil
@@ -442,8 +445,9 @@ func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionI
 // proof it used and its audit event in one transaction (docs/LJY-PRD/TDD.md
 // §7.1); the approval takes the proof's nonce. A proof used before is refused
 // with domain.ErrLadoPresenceReplayed, a PR head that has an approval for
-// a's target branch already with domain.ErrLadoIntegrationAlreadyApproved,
-// and an approval whose
+// a's target branch already with domain.ErrLadoIntegrationAlreadyApproved
+// (domain.ErrLadoIntegrationRevoked when LADO revoked that one), and an
+// approval whose
 // verification sha256 is not the one of the head's stored record with
 // domain.ErrLadoVerificationChanged: the caller stores the record it
 // recomputed first. When any part fails, nothing is kept.
@@ -471,6 +475,9 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 		}
 		for _, row := range rows {
 			if strings.EqualFold(row.TargetBranch, a.TargetBranch) {
+				if row.RevokedAt.Valid {
+					return domain.ErrLadoIntegrationRevoked
+				}
 				return domain.ErrLadoIntegrationAlreadyApproved
 			}
 		}
@@ -496,6 +503,7 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 			StatusAttempts:     int64(a.StatusAttempts),
 			StatusPostedAt:     ladoNullTime(a.StatusPostedAt),
 			StatusError:        a.StatusError,
+			ApprovedBaseSha:    a.BaseTipSHA,
 		})
 		if isSQLiteUnique(err) {
 			// The proof's nonce is new (inserted above), so the PR, head and
@@ -509,6 +517,40 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 		return err
 	})
 	return unwrapLadoSentinel(err)
+}
+
+// RevokeLadoIntegrationApproval withdraws the integration approval id at at
+// with reason (the record's code, domain.LadoCodeBaseOverlap), with its
+// audit event (domain.LadoAuditIntegrationRevoked) in one transaction. The
+// approval's commit status starts over as pending with no attempts, so the
+// loop posts pending over the success it posted; an approval without a
+// status to post (not_applicable, GitLab) keeps it. It reports false,
+// writing neither, for an unknown approval or one revoked before, whose
+// first revocation stays.
+func (s *Store) RevokeLadoIntegrationApproval(ctx context.Context, id, reason string, at time.Time, audit domain.LadoAuditEvent) (bool, error) {
+	if id == "" || at.IsZero() {
+		return false, errors.New("revoke LADO integration approval: an approval and a time are required")
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.writeMu.Unlock()
+	revoked := false
+	err := s.inTx(ctx, "revoke LADO integration approval", func(q *gen.Queries) error {
+		n, err := q.RevokeLadoIntegrationApproval(ctx, gen.RevokeLadoIntegrationApprovalParams{
+			RevokedAt: ladoNullTime(at), RevokedReason: reason, ID: id,
+		})
+		if err != nil || n == 0 {
+			return err
+		}
+		revoked = true
+		_, err = appendLadoAuditEventTx(ctx, q, audit)
+		return err
+	})
+	if err != nil {
+		return false, err
+	}
+	return revoked, nil
 }
 
 // SetLadoIntegrationStatus records how posting an approval's commit status
@@ -680,5 +722,8 @@ func ladoIntegrationApprovalFromGen(row gen.LadoIntegrationApproval) (domain.Lad
 		StatusAttempts:     int(row.StatusAttempts),
 		StatusPostedAt:     ladoTimeFromNull(row.StatusPostedAt),
 		StatusError:        row.StatusError,
+		BaseTipSHA:         row.ApprovedBaseSha,
+		RevokedAt:          ladoTimeFromNull(row.RevokedAt),
+		RevokedReason:      row.RevokedReason,
 	}, nil
 }

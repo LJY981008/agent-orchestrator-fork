@@ -232,7 +232,9 @@ func (s *Store) LadoPartSpawnRequests(ctx context.Context) ([]domain.LadoQueueEn
 
 // LadoPartSpawnGrant reads what the worker gate checks before a parts run
 // worker spawns: the entry's project, its dispatch hash, and whether the
-// entry's current spawn request is clientRequestID and unexpired at now.
+// entry's current spawn request is clientRequestID and unexpired at now. A
+// resolve worker's id ("lado:<entry>/_resolve/<n>") is granted the same way
+// by the spawn request of the resolve row of the entry's execution.
 func (s *Store) LadoPartSpawnGrant(ctx context.Context, clientRequestID string, now time.Time) (domain.LadoDispatchGrant, error) {
 	run, ok := domain.ParseLadoRunClientRequestID(clientRequestID)
 	if !ok || run.Role == domain.LadoRoleSingle {
@@ -246,12 +248,35 @@ func (s *Store) LadoPartSpawnGrant(ctx context.Context, clientRequestID string, 
 		return domain.LadoDispatchGrant{}, fmt.Errorf("read LADO part spawn grant: %w", err)
 	}
 	entry := ladoQueueEntryFromGen(row.LadoQueueEntry)
+	if run.Resolve() {
+		return s.ladoResolveSpawnGrant(ctx, clientRequestID, entry, row, now)
+	}
 	return domain.LadoDispatchGrant{
 		ProjectID: entry.ProjectID,
 		Hash:      domain.LadoDispatchHash(row.PlanSha256, row.SnapshotSha256),
 		Active: entry.PartSpawnRequest == clientRequestID && entry.PartSpawnExpiresAt.After(now) &&
 			entry.FailedAt.IsZero() && entry.SupersededAt.IsZero() && entry.CancelledAt.IsZero() && entry.DispatchedSessionID == "",
 	}, nil
+}
+
+// ladoResolveSpawnGrant grants a resolve worker's spawn while
+// clientRequestID is the unexpired spawn request of a resolve row of the
+// entry, whose entry was not cancelled.
+func (s *Store) ladoResolveSpawnGrant(ctx context.Context, clientRequestID string, entry domain.LadoQueueEntry, row gen.GetLadoPartSpawnGrantRow, now time.Time) (domain.LadoDispatchGrant, error) {
+	grant := domain.LadoDispatchGrant{
+		ProjectID: entry.ProjectID,
+		Hash:      domain.LadoDispatchHash(row.PlanSha256, row.SnapshotSha256),
+	}
+	resolve, err := s.qr.GetLadoPRResolveBySpawnRequest(ctx, clientRequestID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return grant, nil
+	}
+	if err != nil {
+		return domain.LadoDispatchGrant{}, fmt.Errorf("read LADO resolve spawn grant: %w", err)
+	}
+	grant.Active = resolve.QueueEntryID == string(entry.ID) &&
+		ladoTimeFromNull(resolve.SpawnExpiresAt).After(now) && entry.CancelledAt.IsZero()
+	return grant, nil
 }
 
 // LinkLadoPartExecution records that session exec.SessionID runs the parts

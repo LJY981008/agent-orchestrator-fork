@@ -109,7 +109,8 @@ func mustLadoSession(t *testing.T, s *sqlite.Store, project string, terminated b
 
 func mustWriteLadoPR(t *testing.T, s *sqlite.Store, session domain.SessionID, number int, merged, closed bool, at time.Time) domain.LadoExecutionPR {
 	t.Helper()
-	pr := domain.LadoExecutionPR{URL: fmt.Sprintf("https://github.com/acme/demo/pull/%d", number), Number: number, Merged: merged, Closed: closed}
+	// AO stores a PR it did not see the mergeability of as unknown.
+	pr := domain.LadoExecutionPR{URL: fmt.Sprintf("https://github.com/acme/demo/pull/%d", number), Number: number, Merged: merged, Closed: closed, Mergeability: domain.MergeUnknown}
 	if err := s.WritePR(context.Background(), domain.PullRequest{
 		URL: pr.URL, SessionID: session, Number: number, Merged: merged, Closed: closed, UpdatedAt: at,
 	}, nil, nil); err != nil {
