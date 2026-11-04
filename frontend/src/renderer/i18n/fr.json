@@ -4381,5 +4381,16 @@
 	"lado.timings.duration.seconds": "{{seconds}} s",
 	"lado.timings.duration.minutes": "{{minutes}} min",
 	"lado.timings.duration.hours": "{{hours}} h {{minutes}} min",
-	"lado.timings.duration.days": "{{days}} j {{hours}} h"
+	"lado.timings.duration.days": "{{days}} j {{hours}} h",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "Un changement s'applique aux sessions qui démarrent ensuite. Un chat en cours le prend en compte après /clear.",
+	"lado.settings.claudeChrome.chatSessions": "Sessions de chat",
+	"lado.settings.claudeChrome.chatSessionsHint": "Les chats Claude Code peuvent piloter le Chrome auquel vous êtes connecté. Tapez @browser dans un chat.",
+	"lado.settings.claudeChrome.ladoWorkers": "Workers LADO",
+	"lado.settings.claudeChrome.ladoWorkersHint": "Les workers que LADO démarre peuvent piloter le Chrome auquel vous êtes connecté sans vous demander.",
+	"lado.presence.claudeChromeTitle": "Activer Claude in Chrome ?",
+	"lado.presence.claudeChromeChatSessions": "Sessions de chat : les chats Claude Code peuvent piloter le Chrome auquel vous êtes connecté.",
+	"lado.presence.claudeChromeLadoWorkers": "Workers LADO : les workers que LADO démarre de lui-même peuvent piloter le Chrome auquel vous êtes connecté, sans vous demander.",
+	"lado.presence.claudeChromeDetail": "Cela s'applique aux sessions qui démarrent ensuite. Les autorisations par site de l'extension Claude s'appliquent toujours.",
+	"lado.presence.claudeChromeTurnOn": "Activer"
 }

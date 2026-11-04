@@ -1237,6 +1237,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/claude-chrome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get which Claude Code Chat sessions start with Claude in Chrome */
+        get: operations["getLadoClaudeChrome"];
+        /** Replace the Claude in Chrome setting; turning anything on needs a human-presence proof, and it applies from each session's next controller start */
+        put: operations["updateLadoClaudeChrome"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/connections": {
         parameters: {
             query?: never;
@@ -1615,6 +1633,23 @@ export interface paths {
         head?: never;
         /** Edit, archive or unarchive a rule, or show what the change reaches with dryRun; the permission ceiling's mode and the protected paths' globs need a human-presence proof */
         patch: operations["updateLadoRule"];
+        trace?: never;
+    };
+    "/api/v1/lado/sessions/{sessionId}/claude-chrome": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get whether a session has Claude in Chrome: the value its running controller started with, or what its next start gets */
+        get: operations["getLadoSessionClaudeChrome"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/lado/setup/adoptions": {
@@ -3109,6 +3144,23 @@ export interface paths {
         put?: never;
         /** Resume a durable conversation branch without sending */
         post: operations["activateSessionConversationBranch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/conversation/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start a fresh agent context in a chat session, keeping the timeline */
+        post: operations["clearSessionConversation"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5492,6 +5544,12 @@ export interface components {
             reason: string;
             sessionId: string;
         };
+        ClearConversationResponse: {
+            activeBranchId: string;
+            cleared: boolean;
+            /** Format: date-time */
+            clearedAt: string;
+        };
         ClearNotificationsResponse: {
             /** @description Daemon epoch for ordering notification clears across one daemon lifetime. */
             clearEpoch: string;
@@ -6646,6 +6704,10 @@ export interface components {
             /** @description Unique within the project; evidence names a command by it. */
             name: string;
         };
+        LadoClaudeChromeSettingsResponse: {
+            chatSessions: boolean;
+            ladoWorkers: boolean;
+        };
         LadoConnectionCheckResponse: {
             /** @description Host the token belongs to. */
             host: string;
@@ -7518,6 +7580,16 @@ export interface components {
             problemCode?: "key_home_unknown" | "key_path_relative" | "key_missing" | "key_not_a_file" | "host_key_untrusted" | "key_refused" | "ssh_failed";
             /** @description What git or ssh printed, when there is one to show. */
             problemDetail?: string;
+        };
+        LadoSessionClaudeChromeResponse: {
+            /** @enum {string} */
+            basis?: "launch" | "setting";
+            enabled: boolean;
+            /** @enum {string} */
+            kind?: "chat" | "lado_worker";
+            sessionId: string;
+            settingOn: boolean;
+            supported: boolean;
         };
         LadoSessionMetricsResponse: {
             /** @description Commands that neither read nor search. */
@@ -9954,6 +10026,10 @@ export interface components {
         };
         UpdateHarnessDefaultRequest: {
             disabledModels: null | string[];
+        };
+        UpdateLadoClaudeChromeRequest: {
+            chatSessions: boolean;
+            ladoWorkers: boolean;
         };
         UpdateLadoDispatchSettingsRequest: {
             holdOnDiskLow?: null | boolean;
@@ -14296,6 +14372,107 @@ export interface operations {
             };
         };
     };
+    getLadoClaudeChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoClaudeChromeSettingsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoClaudeChrome: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoClaudeChromeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoClaudeChromeSettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     createLadoConnection: {
         parameters: {
             query?: never;
@@ -15971,6 +16148,56 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoSessionClaudeChrome: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoSessionClaudeChromeResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -21985,6 +22212,65 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ActivateConversationBranchResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    clearSessionConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ClearConversationResponse"];
                 };
             };
             /** @description Not Found */

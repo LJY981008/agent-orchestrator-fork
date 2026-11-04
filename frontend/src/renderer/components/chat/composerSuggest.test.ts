@@ -165,6 +165,15 @@ describe("rankFiles", () => {
 		expect(row?.detail).toBeUndefined();
 	});
 
+	it("marks every row with the kind of chip it inserts", () => {
+		expect(rankFiles(["AGENTS.md"], "")[0]?.kind).toBe("file");
+		expect(rankSkills([skill("review")], "")[0]?.kind).toBe("skill");
+	});
+
+	it("opens an at-sign trigger on a colon-qualified mention", () => {
+		expect(findActiveTrigger("@browser:gif", 12)).toEqual({ kind: "file", start: 0, query: "browser:gif" });
+	});
+
 	it("prefers a shallower path among equal matches", () => {
 		const ranked = rankFiles(["a/b/c/notes.md", "notes.md"], "notes");
 		expect(ranked[0]?.value).toBe("notes.md");

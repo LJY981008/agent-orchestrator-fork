@@ -264,6 +264,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersConversationMCPServerPayload":              "ConversationMCPServerPayload",
 	"ControllersReloadConversationMCPServersResponse":      "ReloadConversationMCPServersResponse",
 	"ControllersCompactConversationResponse":               "CompactConversationResponse",
+	"ControllersClearConversationResponse":                 "ClearConversationResponse",
 	"ControllersRollbackConversationResponse":              "RollbackConversationResponse",
 	"ControllersRetryTurnResponse":                         "RetryTurnResponse",
 	"ControllersSetConversationTitleRequest":               "SetConversationTitleRequest",
@@ -1263,6 +1264,18 @@ func shellTerminalOperations() []operation {
 			pathParams: []any{controllers.SessionIDParam{}},
 			resps: []respUnit{
 				{http.StatusAccepted, controllers.CompactConversationResponse{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/conversation/clear", id: "clearSessionConversation", tag: "conversations",
+			summary:    "Start a fresh agent context in a chat session, keeping the timeline",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusOK, controllers.ClearConversationResponse{}},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},

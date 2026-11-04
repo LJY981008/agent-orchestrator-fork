@@ -393,6 +393,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						changeSetup: async () => null,
 						approveIntegration: async () => null,
 						changeProjectChecks: async () => null,
+						changeClaudeChrome: async () => null,
 					},
 				},
 			} satisfies AoBridge;
@@ -1273,6 +1274,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						changeSetup: async () => null,
 						approveIntegration: async () => null,
 						changeProjectChecks: async () => null,
+						changeClaudeChrome: async () => null,
 					},
 				},
 			} satisfies AoBridge;

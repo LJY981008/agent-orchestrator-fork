@@ -6,6 +6,7 @@ import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
 	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL,
 	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
@@ -15,6 +16,7 @@ import {
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
 	type LadoPresenceChecksResult,
+	type LadoPresenceClaudeChromeResult,
 	type LadoPresenceIntegration,
 	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeResult,
@@ -462,6 +464,8 @@ type Routes = {
 	execution?: Route;
 	integrationPreview?: Route;
 	integration?: Route;
+	chrome?: Route;
+	chromePut?: Route;
 };
 
 function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
@@ -473,6 +477,10 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	const fetch = vi.fn(async (url: string, init: RequestInit) => {
 		calls.push({ url, init });
 		const { pathname } = new URL(url);
+		if (pathname === "/api/v1/lado/claude-chrome") {
+			if (init.method === "GET") return routes.chrome ? routes.chrome() : json(200, { chatSessions: true, ladoWorkers: false });
+			return routes.chromePut ? routes.chromePut() : json(200, JSON.parse(String(init.body)));
+		}
 		if (pathname.startsWith("/api/v1/lado/setup/")) {
 			// A delete asks for its dry run in the query.
 			const dryRun =
@@ -539,6 +547,7 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	const changeSetupHandler = handlers.get(LADO_PRESENCE_CHANGE_SETUP_CHANNEL);
 	const integrationHandler = handlers.get(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL);
 	const checksHandler = handlers.get(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL);
+	const chromeHandler = handlers.get(LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL);
 	if (
 		!approveHandler ||
 		!changeRuleHandler ||
@@ -547,7 +556,8 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 		!restoreSetupHandler ||
 		!changeSetupHandler ||
 		!integrationHandler ||
-		!checksHandler
+		!checksHandler ||
+		!chromeHandler
 	) {
 		throw new Error("a presence channel is not registered");
 	}
@@ -568,6 +578,8 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 			integrationHandler({ sender }, input) as Promise<LadoPresenceIntegrationResult>,
 		changeChecks: (input: unknown, sender: unknown = shell) =>
 			checksHandler({ sender }, input) as Promise<LadoPresenceChecksResult>,
+		changeChrome: (input: unknown, sender: unknown = shell) =>
+			chromeHandler({ sender }, input) as Promise<LadoPresenceClaudeChromeResult>,
 		calls,
 		dialog,
 		fetch,
@@ -2215,5 +2227,129 @@ describe("changing protected paths", () => {
 		});
 		expect(dialog.showMessageBox).not.toHaveBeenCalled();
 		expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+});
+
+// LADO fork: Claude in Chrome lets agents control the developer's signed-in
+// Chrome, so only the human may turn it on (issue #40).
+describe("turning Claude in Chrome on", () => {
+	const chromePath = "/api/v1/lado/claude-chrome";
+
+	it("reads the setting from the daemon, names what turns on, then signs the whole setting", async () => {
+		const { changeChrome, calls, dialog, window } = setup();
+		// The renderer cannot add fields or headers.
+		const result = await changeChrome({
+			chatSessions: true,
+			ladoWorkers: true,
+			extra: "ignored",
+			headers: { [LADO_PRESENCE_HEADER]: "v1.forged" },
+		});
+
+		expect(result).toEqual({ status: "changed", settings: { chatSessions: true, ladoWorkers: true } });
+		const en = trayCatalogs.en;
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({
+				type: "question",
+				message: en["lado.presence.claudeChromeTitle"],
+				// Only LADO workers turn on; chat sessions were already on.
+				detail: `${en["lado.presence.claudeChromeLadoWorkers"]}\n\n${en["lado.presence.claudeChromeDetail"]}`,
+				buttons: ["Cancel", "Turn on"],
+				defaultId: 0,
+				cancelId: 0,
+				noLink: true,
+			}),
+		);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${chromePath}`],
+			["PUT", `${BASE}${chromePath}`],
+		]);
+		expectSigned(calls[1]!, "PUT", `{"chatSessions":true,"ladoWorkers":true}`);
+	});
+
+	it("names both parts when both turn on, in the current language", async () => {
+		const { changeChrome, dialog } = setup({ locale: () => "ko" }, { chrome: () => json(200, { chatSessions: false, ladoWorkers: false }) });
+		await changeChrome({ chatSessions: true, ladoWorkers: true });
+		const ko = trayCatalogs.ko;
+		expect(dialogOptions(dialog)).toMatchObject({
+			message: ko["lado.presence.claudeChromeTitle"],
+			detail: [ko["lado.presence.claudeChromeChatSessions"], ko["lado.presence.claudeChromeLadoWorkers"], ko["lado.presence.claudeChromeDetail"]].join("\n\n"),
+			buttons: [ko["lado.presence.cancel"], ko["lado.presence.claudeChromeTurnOn"]],
+		});
+		expect(ko["lado.presence.claudeChromeTitle"]).not.toBe(trayCatalogs.en["lado.presence.claudeChromeTitle"]);
+	});
+
+	it("returns the setting without asking when nothing turns on", async () => {
+		for (const input of [
+			{ chatSessions: true, ladoWorkers: false },
+			{ chatSessions: false, ladoWorkers: false },
+		]) {
+			const { changeChrome, calls, dialog } = setup();
+			await expect(changeChrome(input), JSON.stringify(input)).resolves.toEqual({
+				status: "changed",
+				settings: { chatSessions: true, ladoWorkers: false },
+			});
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+			expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
+		}
+	});
+
+	it("sends nothing when the human cancels", async () => {
+		const { changeChrome, calls, dialog } = setup();
+		dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(changeChrome({ chatSessions: true, ladoWorkers: true })).resolves.toEqual({ status: "cancelled" });
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+
+	it("refuses an untrusted sender and anything but the two switches", async () => {
+		const untrusted = setup();
+		await expect(untrusted.changeChrome({ chatSessions: true, ladoWorkers: true }, { id: 99 })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_PRESENCE_UNTRUSTED_SENDER",
+		});
+		expect(untrusted.fetch).not.toHaveBeenCalled();
+		expect(untrusted.dialog.showMessageBox).not.toHaveBeenCalled();
+
+		for (const input of [null, "on", {}, { chatSessions: true }, { chatSessions: "true", ladoWorkers: true }, { chatSessions: true, ladoWorkers: 1 }]) {
+			const { changeChrome, dialog, fetch } = setup();
+			await expect(changeChrome(input), JSON.stringify(input)).resolves.toMatchObject({
+				status: "error",
+				code: "LADO_CLAUDE_CHROME_INVALID",
+			});
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+
+	it("does not ask when the daemon's setting cannot be read", async () => {
+		const unreadable: [string, Routes, string | undefined][] = [
+			["an unreadable setting", { chrome: () => json(200, { chatSessions: "yes" }) }, UNREADABLE],
+			["a daemon without the route", { chrome: () => json(501, { error: "not_implemented", code: "NOT_IMPLEMENTED", message: "Not implemented" }) }, "NOT_IMPLEMENTED"],
+			["an unreachable daemon", { chrome: () => Promise.reject(new TypeError("fetch failed")) }, "SERVICE_UNAVAILABLE"],
+		];
+		for (const [name, routes, code] of unreadable) {
+			const { changeChrome, calls, dialog } = setup({}, routes);
+			const result = await changeChrome({ chatSessions: true, ladoWorkers: true });
+			expect(result, name).toMatchObject({ status: "error" });
+			expect(result.status === "error" ? result.code : "", name).toBe(code);
+			expect(dialog.showMessageBox, name).not.toHaveBeenCalled();
+			expect(calls.every(({ init }) => init.method === "GET"), name).toBe(true);
+		}
+	});
+
+	it("returns the daemon's refusal of the change", async () => {
+		const { changeChrome } = setup({}, {
+			chromePut: () =>
+				json(403, {
+					error: "forbidden",
+					code: "LADO_PRESENCE_REPLAYED",
+					message: "This confirmation was already used. Confirm again in the AO desktop app.",
+				}),
+		});
+		await expect(changeChrome({ chatSessions: true, ladoWorkers: true })).resolves.toEqual({
+			status: "error",
+			code: "LADO_PRESENCE_REPLAYED",
+			message: "This confirmation was already used. Confirm again in the AO desktop app.",
+		});
 	});
 });

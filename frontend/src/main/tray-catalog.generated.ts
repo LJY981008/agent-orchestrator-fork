@@ -94,7 +94,12 @@ export const TRAY_MESSAGE_KEYS = [
 	"lado.presence.paths.title",
 	"lado.presence.paths.detail",
 	"lado.presence.paths.added",
-	"lado.presence.paths.removed"
+	"lado.presence.paths.removed",
+	"lado.presence.claudeChromeTitle",
+	"lado.presence.claudeChromeChatSessions",
+	"lado.presence.claudeChromeLadoWorkers",
+	"lado.presence.claudeChromeDetail",
+	"lado.presence.claudeChromeTurnOn"
 ] as const;
 
 export type TrayMessageKey = (typeof TRAY_MESSAGE_KEYS)[number];
@@ -193,7 +198,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "Change the protected paths?",
 		"lado.presence.paths.detail": "Workers may not change protected paths unless the approved plan names them. Tasks approved under the current rules need a new approval.",
 		"lado.presence.paths.added": "Protect: {{globs}}",
-		"lado.presence.paths.removed": "No longer protect: {{globs}}"
+		"lado.presence.paths.removed": "No longer protect: {{globs}}",
+		"lado.presence.claudeChromeTitle": "Turn on Claude in Chrome?",
+		"lado.presence.claudeChromeChatSessions": "Chat sessions: Claude Code chats can control the Chrome you are signed in to.",
+		"lado.presence.claudeChromeLadoWorkers": "LADO workers: workers LADO starts on its own can control the Chrome you are signed in to, without asking you.",
+		"lado.presence.claudeChromeDetail": "It applies to sessions that start afterwards. The Claude extension's site permissions still apply.",
+		"lado.presence.claudeChromeTurnOn": "Turn on"
 	},
 	"zh-CN": {
 		"tray.untitledSession": "未命名会话",
@@ -288,7 +298,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "更改受保护路径？",
 		"lado.presence.paths.detail": "除非已批准的计划点名，否则 worker 不能更改受保护路径。按当前规则批准的任务需要重新批准。",
 		"lado.presence.paths.added": "保护：{{globs}}",
-		"lado.presence.paths.removed": "不再保护：{{globs}}"
+		"lado.presence.paths.removed": "不再保护：{{globs}}",
+		"lado.presence.claudeChromeTitle": "要开启 Claude in Chrome 吗？",
+		"lado.presence.claudeChromeChatSessions": "聊天会话:Claude Code 聊天可以操作你已登录的 Chrome。",
+		"lado.presence.claudeChromeLadoWorkers": "LADO 工作进程:LADO 自行启动的工作进程可以在不询问你的情况下操作你已登录的 Chrome。",
+		"lado.presence.claudeChromeDetail": "从之后启动的会话开始生效。Claude 扩展程序的网站权限仍然适用。",
+		"lado.presence.claudeChromeTurnOn": "开启"
 	},
 	"ja": {
 		"tray.untitledSession": "無題のセッション",
@@ -383,7 +398,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "保護パスを変更しますか？",
 		"lado.presence.paths.detail": "承認された計画が名前を挙げない限り、ワーカーは保護パスを変更できません。現在のルールで承認されたタスクは、再承認が必要です。",
 		"lado.presence.paths.added": "保護を追加: {{globs}}",
-		"lado.presence.paths.removed": "保護を解除: {{globs}}"
+		"lado.presence.paths.removed": "保護を解除: {{globs}}",
+		"lado.presence.claudeChromeTitle": "Claude in Chrome をオンにしますか？",
+		"lado.presence.claudeChromeChatSessions": "チャットセッション: Claude Code のチャットが、サインイン中の Chrome を操作できます。",
+		"lado.presence.claudeChromeLadoWorkers": "LADO ワーカー: LADO が自動で開始するワーカーが、確認なしでサインイン中の Chrome を操作できます。",
+		"lado.presence.claudeChromeDetail": "その後に開始するセッションから適用されます。Claude 拡張機能のサイトごとの権限はそのまま適用されます。",
+		"lado.presence.claudeChromeTurnOn": "オンにする"
 	},
 	"ko": {
 		"tray.untitledSession": "제목 없는 세션",
@@ -478,7 +498,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "보호 경로를 바꿀까요?",
 		"lado.presence.paths.detail": "승인된 계획이 이름을 대지 않는 한 워커는 보호 경로를 바꿀 수 없습니다. 현재 규칙으로 승인된 작업은 다시 승인해야 합니다.",
 		"lado.presence.paths.added": "보호 추가: {{globs}}",
-		"lado.presence.paths.removed": "보호 해제: {{globs}}"
+		"lado.presence.paths.removed": "보호 해제: {{globs}}",
+		"lado.presence.claudeChromeTitle": "Claude in Chrome을 켤까요?",
+		"lado.presence.claudeChromeChatSessions": "채팅 세션: Claude Code 채팅이 로그인된 Chrome을 조작할 수 있습니다.",
+		"lado.presence.claudeChromeLadoWorkers": "LADO 워커: LADO가 스스로 시작하는 워커가 묻지 않고 로그인된 Chrome을 조작할 수 있습니다.",
+		"lado.presence.claudeChromeDetail": "그 뒤에 시작하는 세션부터 적용됩니다. Claude 확장 프로그램의 사이트별 권한은 그대로 적용됩니다.",
+		"lado.presence.claudeChromeTurnOn": "켜기"
 	},
 	"es": {
 		"tray.untitledSession": "Sesión sin título",
@@ -573,7 +598,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "¿Cambiar las rutas protegidas?",
 		"lado.presence.paths.detail": "Los workers no pueden cambiar rutas protegidas salvo que el plan aprobado las nombre. Las tareas aprobadas con las reglas actuales necesitan una nueva aprobación.",
 		"lado.presence.paths.added": "Proteger: {{globs}}",
-		"lado.presence.paths.removed": "Dejar de proteger: {{globs}}"
+		"lado.presence.paths.removed": "Dejar de proteger: {{globs}}",
+		"lado.presence.claudeChromeTitle": "¿Activar Claude in Chrome?",
+		"lado.presence.claudeChromeChatSessions": "Sesiones de chat: los chats de Claude Code pueden controlar el Chrome en el que has iniciado sesión.",
+		"lado.presence.claudeChromeLadoWorkers": "Workers de LADO: los workers que LADO inicia por su cuenta pueden controlar el Chrome en el que has iniciado sesión, sin preguntarte.",
+		"lado.presence.claudeChromeDetail": "Se aplica a las sesiones que empiezan después. Los permisos por sitio de la extensión de Claude siguen aplicándose.",
+		"lado.presence.claudeChromeTurnOn": "Activar"
 	},
 	"fr": {
 		"tray.untitledSession": "Session sans titre",
@@ -668,7 +698,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "Modifier les chemins protégés ?",
 		"lado.presence.paths.detail": "Les workers ne peuvent pas modifier les chemins protégés sauf si le plan approuvé les nomme. Les tâches approuvées avec les règles actuelles doivent être approuvées à nouveau.",
 		"lado.presence.paths.added": "Protéger : {{globs}}",
-		"lado.presence.paths.removed": "Ne plus protéger : {{globs}}"
+		"lado.presence.paths.removed": "Ne plus protéger : {{globs}}",
+		"lado.presence.claudeChromeTitle": "Activer Claude in Chrome ?",
+		"lado.presence.claudeChromeChatSessions": "Sessions de chat : les chats Claude Code peuvent piloter le Chrome auquel vous êtes connecté.",
+		"lado.presence.claudeChromeLadoWorkers": "Workers LADO : les workers que LADO démarre de lui-même peuvent piloter le Chrome auquel vous êtes connecté, sans vous demander.",
+		"lado.presence.claudeChromeDetail": "Cela s'applique aux sessions qui démarrent ensuite. Les autorisations par site de l'extension Claude s'appliquent toujours.",
+		"lado.presence.claudeChromeTurnOn": "Activer"
 	},
 	"de": {
 		"tray.untitledSession": "Unbenannte Sitzung",
@@ -763,7 +798,12 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "Geschützte Pfade ändern?",
 		"lado.presence.paths.detail": "Worker dürfen geschützte Pfade nur ändern, wenn der freigegebene Plan sie nennt. Unter den aktuellen Regeln freigegebene Aufgaben brauchen eine neue Freigabe.",
 		"lado.presence.paths.added": "Schützen: {{globs}}",
-		"lado.presence.paths.removed": "Nicht mehr schützen: {{globs}}"
+		"lado.presence.paths.removed": "Nicht mehr schützen: {{globs}}",
+		"lado.presence.claudeChromeTitle": "Claude in Chrome einschalten?",
+		"lado.presence.claudeChromeChatSessions": "Chat-Sitzungen: Claude-Code-Chats können das Chrome steuern, in dem du angemeldet bist.",
+		"lado.presence.claudeChromeLadoWorkers": "LADO-Worker: Worker, die LADO selbst startet, können das Chrome, in dem du angemeldet bist, ohne Rückfrage steuern.",
+		"lado.presence.claudeChromeDetail": "Das gilt für Sitzungen, die danach starten. Die Website-Berechtigungen der Claude-Erweiterung gelten weiterhin.",
+		"lado.presence.claudeChromeTurnOn": "Einschalten"
 	},
 	"pt-BR": {
 		"tray.untitledSession": "Sessão sem título",
@@ -858,6 +898,11 @@ export const trayCatalogs: Record<AppLocale, Record<TrayMessageKey, string>> = {
 		"lado.presence.paths.title": "Alterar os caminhos protegidos?",
 		"lado.presence.paths.detail": "Os workers não podem alterar caminhos protegidos, a menos que o plano aprovado os nomeie. As tarefas aprovadas com as regras atuais precisam de uma nova aprovação.",
 		"lado.presence.paths.added": "Proteger: {{globs}}",
-		"lado.presence.paths.removed": "Deixar de proteger: {{globs}}"
+		"lado.presence.paths.removed": "Deixar de proteger: {{globs}}",
+		"lado.presence.claudeChromeTitle": "Ativar o Claude in Chrome?",
+		"lado.presence.claudeChromeChatSessions": "Sessões de chat: os chats do Claude Code podem controlar o Chrome em que você está conectado.",
+		"lado.presence.claudeChromeLadoWorkers": "Workers do LADO: os workers que o LADO inicia por conta própria podem controlar o Chrome em que você está conectado, sem perguntar.",
+		"lado.presence.claudeChromeDetail": "Vale para as sessões que começam depois. As permissões por site da extensão do Claude continuam valendo.",
+		"lado.presence.claudeChromeTurnOn": "Ativar"
 	}
 };

@@ -91,6 +91,19 @@ func TestClaudeACPLaunchEnvPreservesInvalidModelConfiguration(t *testing.T) {
 	}
 }
 
+// LADO fork: the session manager sets CLAUDE_CODE_ENABLE_CFC for Claude in
+// Chrome; the driver must hand it to the adapter, which passes its own
+// environment to the Claude CLI.
+func TestClaudeACPLaunchEnvKeepsTheClaudeInChromeSwitch(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	for _, value := range []string{"1", "0"} {
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ENABLE_CFC": value}, "/opt/claude", "", nil)
+		if env["CLAUDE_CODE_ENABLE_CFC"] != value {
+			t.Fatalf("CLAUDE_CODE_ENABLE_CFC = %q, want %q passed through", env["CLAUDE_CODE_ENABLE_CFC"], value)
+		}
+	}
+}
+
 func TestClaudeACPLaunchEnvAdvertisesSelectedModelWithoutProviderCatalog(t *testing.T) {
 	t.Setenv("CLAUDE_MODEL_CONFIG", "")
 	env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-opus-4-7", nil)

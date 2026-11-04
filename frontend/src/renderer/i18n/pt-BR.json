@@ -4381,5 +4381,16 @@
 	"lado.timings.duration.seconds": "{{seconds}} s",
 	"lado.timings.duration.minutes": "{{minutes}} min",
 	"lado.timings.duration.hours": "{{hours}} h {{minutes}} min",
-	"lado.timings.duration.days": "{{days}} d {{hours}} h"
+	"lado.timings.duration.days": "{{days}} d {{hours}} h",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "Uma alteração vale para as sessões que começam depois. Um chat em andamento a aplica após /clear.",
+	"lado.settings.claudeChrome.chatSessions": "Sessões de chat",
+	"lado.settings.claudeChrome.chatSessionsHint": "Os chats do Claude Code podem controlar o Chrome em que você está conectado. Digite @browser em um chat.",
+	"lado.settings.claudeChrome.ladoWorkers": "Workers do LADO",
+	"lado.settings.claudeChrome.ladoWorkersHint": "Os workers que o LADO inicia podem controlar o Chrome em que você está conectado sem perguntar.",
+	"lado.presence.claudeChromeTitle": "Ativar o Claude in Chrome?",
+	"lado.presence.claudeChromeChatSessions": "Sessões de chat: os chats do Claude Code podem controlar o Chrome em que você está conectado.",
+	"lado.presence.claudeChromeLadoWorkers": "Workers do LADO: os workers que o LADO inicia por conta própria podem controlar o Chrome em que você está conectado, sem perguntar.",
+	"lado.presence.claudeChromeDetail": "Vale para as sessões que começam depois. As permissões por site da extensão do Claude continuam valendo.",
+	"lado.presence.claudeChromeTurnOn": "Ativar"
 }

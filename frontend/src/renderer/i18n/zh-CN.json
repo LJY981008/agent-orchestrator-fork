@@ -4293,5 +4293,16 @@
 	"lado.timings.duration.seconds": "{{seconds}} 秒",
 	"lado.timings.duration.minutes": "{{minutes}} 分钟",
 	"lado.timings.duration.hours": "{{hours}} 小时 {{minutes}} 分钟",
-	"lado.timings.duration.days": "{{days}} 天 {{hours}} 小时"
+	"lado.timings.duration.days": "{{days}} 天 {{hours}} 小时",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "更改从之后启动的会话开始生效。正在运行的聊天在 /clear 之后生效。",
+	"lado.settings.claudeChrome.chatSessions": "聊天会话",
+	"lado.settings.claudeChrome.chatSessionsHint": "Claude Code 聊天可以操作你已登录的 Chrome。在聊天中输入 @browser。",
+	"lado.settings.claudeChrome.ladoWorkers": "LADO 工作进程",
+	"lado.settings.claudeChrome.ladoWorkersHint": "LADO 启动的工作进程可以在不询问的情况下操作你已登录的 Chrome。",
+	"lado.presence.claudeChromeTitle": "要开启 Claude in Chrome 吗？",
+	"lado.presence.claudeChromeChatSessions": "聊天会话:Claude Code 聊天可以操作你已登录的 Chrome。",
+	"lado.presence.claudeChromeLadoWorkers": "LADO 工作进程:LADO 自行启动的工作进程可以在不询问你的情况下操作你已登录的 Chrome。",
+	"lado.presence.claudeChromeDetail": "从之后启动的会话开始生效。Claude 扩展程序的网站权限仍然适用。",
+	"lado.presence.claudeChromeTurnOn": "开启"
 }

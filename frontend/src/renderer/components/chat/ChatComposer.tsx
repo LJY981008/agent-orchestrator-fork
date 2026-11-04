@@ -15,9 +15,11 @@ import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
  * next message and never restarts the agent.
  *
  * Three completions live in the editor — `/` for AO commands and the agent's own
- * skills, `@` for worktree files, and pasted or dropped files. Completed skills
- * and paths are atomic inline chips but serialize to the plain text the agent
- * expects. The original keyboard contract remains: Enter sends, Shift+Enter makes
+ * skills, `@` for worktree files (and `@browser` when Claude in Chrome is known
+ * for this chat), and pasted or dropped files. Completed skills, paths and
+ * mentions are atomic inline chips but serialize to the plain text the agent
+ * expects. A message that is only a terminal-only Claude Code command is not
+ * sent: the composer says where it works instead. The original keyboard contract remains: Enter sends, Shift+Enter makes
  * a newline, and ordinary typing stays local to the editor instead of rerendering
  * the surrounding chat surface.
  *
@@ -57,6 +59,7 @@ import { apiErrorCode, apiErrorMessage, getApiBaseUrl } from "../../lib/api-clie
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import {
 	ComposerEditor,
+	type ComposerCompletion,
 	type ComposerEditorHandle,
 	type ComposerImage,
 	type ComposerEditorSnapshot,
@@ -64,6 +67,8 @@ import {
 	type ComposerTrigger,
 } from "./ComposerEditor";
 import { moveHighlight, rankFiles, rankSkills, type Suggestion } from "./composerSuggest";
+import { browserOffNotice, rankBrowserMentions, type BrowserMentionState } from "./browserMention";
+import { chatUnavailableCommandNotice } from "./chatCommands";
 import {
 	isSupportedImageAttachment,
 	useFileAttachments,
@@ -190,6 +195,7 @@ export const ChatComposer = memo(function ChatComposer({
 	skills = [],
 	filePaths = [],
 	filePathsTruncated,
+	browserMention,
 	onStageAttachments,
 	nativeImages,
 	onSteer,
@@ -217,6 +223,8 @@ export const ChatComposer = memo(function ChatComposer({
 	compacting,
 	compactUnavailable,
 	compactBlocked,
+	onClear,
+	clearing,
 	autoFocusKey,
 	autoFocus = true,
 	draftSessionId,
@@ -269,6 +277,11 @@ export const ChatComposer = memo(function ChatComposer({
 	filePaths?: string[];
 	/** The path list was capped, so the menu says so rather than implying it is all. */
 	filePathsTruncated?: boolean;
+	/**
+	 * Claude in Chrome for this chat. Present offers `@browser` and its actions in
+	 * the `@` menu; absent leaves the menu to worktree files.
+	 */
+	browserMention?: BrowserMentionState;
 	/**
 	 * Writes staged files into the worktree and answers with the paths the agent
 	 * can open. Absent means files cannot be delivered, and no attach control is
@@ -328,6 +341,10 @@ export const ChatComposer = memo(function ChatComposer({
 	compactUnavailable?: string;
 	/** A running turn must be stopped before its history can be compacted. */
 	compactBlocked?: boolean;
+	/** Run AO's built-in `/clear`: a fresh agent context, with the timeline kept. */
+	onClear?: () => void | Promise<unknown>;
+	/** A `/clear` is already replacing the agent's context. */
+	clearing?: boolean;
 	/** Changes when the owning chat surface should reclaim composer focus. */
 	autoFocusKey?: string;
 	/** Whether this composer is currently visible and should take focus. */
@@ -378,6 +395,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const [dragging, setDragging] = useState(false);
 	const [sendError, setSendError] = useState<string | null>(null);
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
+	/** Guidance instead of a send or a chip: a terminal-only command, Chrome off. */
+	const [composerNotice, setComposerNotice] = useState<string | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
@@ -527,6 +546,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setAppliedAcceptanceSequence(0);
 		setSendError(null);
 		setSteerOutcomeNotice(null);
+		setComposerNotice(null);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(restoredDeliveryNotice(currentDraft?.composer.delivery));
 		setDeliveryUncertain(currentDraft?.composer.delivery?.state === "dispatching");
@@ -542,17 +562,27 @@ export const ChatComposer = memo(function ChatComposer({
 	const canAttach = Boolean(onStageAttachments) && !queuedEditRecovery;
 
 	const slashCommands = useMemo<ChatSkill[]>(() => {
-		if (!onCompact || compactUnavailable === "This agent cannot compact its history") return skills;
-		return [
-			{
+		const aoCommands: ChatSkill[] = [];
+		if (onCompact && compactUnavailable !== "This agent cannot compact its history") {
+			aoCommands.push({
 				name: "compact",
 				displayName: "compact",
 				description: "Summarize earlier history to reclaim context",
 				source: "AO",
-			},
-			...skills.filter((skill) => skill.name !== "compact"),
-		];
-	}, [compactUnavailable, onCompact, skills]);
+			});
+		}
+		if (onClear) {
+			aoCommands.push({
+				name: "clear",
+				displayName: "clear",
+				description: "Start a fresh agent context; the timeline stays",
+				source: "AO",
+			});
+		}
+		if (aoCommands.length === 0) return skills;
+		const owned = new Set(aoCommands.map((command) => command.name));
+		return [...aoCommands, ...skills.filter((skill) => !owned.has(skill.name))];
+	}, [compactUnavailable, onClear, onCompact, skills]);
 
 	const suggestionsFor = useCallback((currentTrigger?: ComposerTrigger): Suggestion[] => {
 		if (!currentTrigger || currentTrigger.key === dismissedKeyRef.current) return [];
@@ -561,8 +591,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (currentTrigger.kind === "skill") {
 			return rankSkills(slashCommands, currentTrigger.query);
 		}
-		return rankFiles(filePaths, currentTrigger.query);
-	}, [slashCommands, filePaths]);
+		// Mentions lead: there are at most five, and a long file list would bury them.
+		const mentions = browserMention ? rankBrowserMentions(currentTrigger.query) : [];
+		return [...mentions, ...rankFiles(filePaths, currentTrigger.query)];
+	}, [slashCommands, filePaths, browserMention]);
 
 	const suggestions: Suggestion[] = useMemo(
 		() => suggestionsFor(trigger),
@@ -1126,10 +1158,25 @@ export const ChatComposer = memo(function ChatComposer({
 		[focusEditor, hasDraft, onEditorChange],
 	);
 
-	const pick = useCallback((value: string) => {
+	/** The notice that replaces a mention chip this chat cannot use, if any. */
+	const unusableMention = useCallback(
+		(item: Suggestion | undefined): string | undefined =>
+			item?.kind === "mention" && browserMention ? browserOffNotice(browserMention) : undefined,
+		[browserMention],
+	);
+
+	const pick = useCallback((value: string, item?: Suggestion) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
-		editor.current?.insertToken(currentTrigger, value);
+		const notice = unusableMention(item);
+		if (notice) {
+			// No chip for a tool this controller does not have: the typed `@que`
+			// goes, and the composer says how to turn it on.
+			editor.current?.removeTrigger(currentTrigger);
+			setComposerNotice(notice);
+		} else {
+			editor.current?.insertToken(currentTrigger, item ?? value);
+		}
 		triggerRef.current = undefined;
 		previousTrigger.current = undefined;
 		setTrigger(undefined);
@@ -1137,7 +1184,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setHighlighted(0);
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
-	}, []);
+	}, [unusableMention]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1170,11 +1217,16 @@ export const ChatComposer = memo(function ChatComposer({
 	}, [submitting]);
 
 	const completeFromEditor = useCallback(
-		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): string | undefined => {
+		(snapshot: ComposerEditorSnapshot, key: "Enter" | "Tab"): ComposerCompletion | undefined => {
 			const currentTrigger = snapshot.trigger;
 			if (!currentTrigger) return undefined;
 			if (key === "Enter" && /^\/(btw|side)$/.test(snapshot.text.trim()) && skills.some((skill) => skill.name === snapshot.text.trim().slice(1) && skill.source === "AO")) return undefined;
 			if (key === "Enter" && snapshot.text.trim() === "/compact" && onCompact) {
+				return undefined;
+			}
+			// Enter on an exact `/clear` runs it, even while a longer skill such as
+			// `clear-cache` keeps the menu open.
+			if (key === "Enter" && snapshot.text.trim() === "/clear" && onClear) {
 				return undefined;
 			}
 			const matches = suggestionsFor(currentTrigger);
@@ -1183,9 +1235,14 @@ export const ChatComposer = memo(function ChatComposer({
 			triggerRef.current = currentTrigger;
 			highlightedRef.current = 0;
 			dismissedKeyRef.current = null;
-			return chosen.value;
+			const notice = unusableMention(chosen);
+			if (notice) {
+				setComposerNotice(notice);
+				return { drop: true };
+			}
+			return chosen;
 		},
-		[onCompact, skills, suggestionsFor],
+		[onClear, onCompact, skills, suggestionsFor, unusableMention],
 	);
 
 	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
@@ -1233,6 +1290,7 @@ export const ChatComposer = memo(function ChatComposer({
 		const sendNativeImages = recoveringDelivery?.nativeImages ?? Boolean(nativeImages);
 		setSendError(null);
 		setSteerOutcomeNotice(null);
+		setComposerNotice(null);
 
 		if (!recoveringDelivery && !savingQueuedEdit && body === "/compact" && onCompact) {
 			if (draftScope && !mutationToken) return;
@@ -1265,6 +1323,43 @@ export const ChatComposer = memo(function ChatComposer({
 				setSubmitting(false);
 			}
 			return;
+		}
+
+		if (!recoveringDelivery && !savingQueuedEdit && body === "/clear" && onClear) {
+			if (draftScope && !mutationToken) return;
+			let mutationFinished = false;
+			setSubmitting(true);
+			try {
+				if (clearing) {
+					setSendError("The agent's context is already being cleared.");
+					return;
+				}
+				await onClear();
+				clearAcceptedDraft(composerRevision.current, mutationToken);
+				mutationFinished = true;
+				setDismissedKey(null);
+				setHighlighted(0);
+			} catch (error) {
+				// The daemon says why: a running turn, or a controller that is not ready.
+				setSendError(apiErrorMessage(error, "The agent's context could not be cleared. Try again."));
+			} finally {
+				if (draftScope && mutationToken && !mutationFinished) {
+					cancelChatComposerMutation(draftScope, mutationToken);
+				}
+				setSubmitting(false);
+			}
+			return;
+		}
+
+		// A terminal-only command would reach the model as plain text. Say where it
+		// works and keep the draft. A queued edit or a delivery being recovered was
+		// already accepted as a message, so it is never held back here.
+		if (!recoveringDelivery && !savingQueuedEdit) {
+			const notice = chatUnavailableCommandNotice(body, skills);
+			if (notice) {
+				setComposerNotice(notice);
+				return;
+			}
 		}
 
 		await fileAttachments.toSettledPayload();
@@ -1563,9 +1658,13 @@ export const ChatComposer = memo(function ChatComposer({
 					void submit();
 					return true;
 				}
+				if (textRef.current.trim() === "/clear" && onClear) {
+					void submit();
+					return true;
+				}
 				triggerRef.current = liveTrigger;
 				const chosen = liveSuggestions[Math.min(highlightedRef.current, liveSuggestions.length - 1)];
-				if (chosen) pick(chosen.value);
+				if (chosen) pick(chosen.value, chosen);
 				return true;
 			}
 
@@ -1577,7 +1676,7 @@ export const ChatComposer = memo(function ChatComposer({
 			void submit(undefined, wantsSteer);
 			return true;
 		},
-		[canSteerDraft, canSteerNext, fileAttachments, onCompact, pick, suggestionsFor],
+		[canSteerDraft, canSteerNext, fileAttachments, onClear, onCompact, pick, suggestionsFor],
 	);
 
 	function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -1934,6 +2033,11 @@ export const ChatComposer = memo(function ChatComposer({
 							{translateDraft("chat.draft.abandon")}
 						</Button>
 					</div>
+				) : null}
+				{composerNotice ? (
+					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
+						{composerNotice}
+					</p>
 				) : null}
 				{fileAttachments.preparing ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">

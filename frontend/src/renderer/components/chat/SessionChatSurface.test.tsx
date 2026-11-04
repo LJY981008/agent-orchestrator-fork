@@ -150,8 +150,12 @@ vi.mock("./ChatWorkspace", async () => {
 			snapshot,
 			shellTarget,
 			onSend,
+			browserMention,
+			onClear,
 		}: {
 			onSend: typeof sideMocks.workspaceSend;
+			browserMention?: unknown;
+			onClear?: unknown;
 			agentInputDisabled?: boolean;
 			headerActions?: ReactNode;
 			sessionTabAction?: ReactNode;
@@ -191,6 +195,8 @@ vi.mock("./ChatWorkspace", async () => {
 					))}
 					{snapshot.harness === "claude-code" && <TurnSettingsBar models={models} settings={snapshot.settings} harness={snapshot.harness} configOptions={configOptions} onChangeConfigOption={() => {}} />}
 					<div data-testid="prompt-suggestion">{promptSuggestion?.text}</div>
+					<div data-testid="browser-mention">{browserMention ? JSON.stringify(browserMention) : ""}</div>
+					<div data-testid="clear-available">{String(Boolean(onClear))}</div>
 					<button type="button" onClick={() => { void Promise.resolve(onContinueTurn?.()).catch(() => {}); }}>Continue test turn</button>
 					{headerActions}
 					{sessionTabAction}
@@ -1492,5 +1498,87 @@ describe("side command routing", () => {
 		expect(sideMocks.create).not.toHaveBeenCalled();
 		expect(mainSend).toHaveBeenCalledWith(expect.objectContaining({ text: `/${command} question` }));
 		delete (conversationCommandState as { send?: unknown }).send;
+	});
+});
+
+describe("SessionChatSurface Claude in Chrome", () => {
+	const CHROME_PATH = "/api/v1/lado/sessions/{sessionId}/claude-chrome";
+
+	function serveChrome(response: Record<string, unknown> | { error: unknown }) {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === CHROME_PATH) {
+				return "error" in response
+					? { data: undefined, error: response.error, response: { status: 500 } }
+					: { data: response, error: undefined, response: { status: 200 } };
+			}
+			return { data: { switches: agentSwitchState.data }, error: undefined, response: { status: 200 } };
+		});
+	}
+
+	const claudeSession = { ...session, provider: "claude-code" as const };
+
+	it("hands a Claude Code chat's Chrome state to the composer as its @browser mention", async () => {
+		serveChrome({ sessionId: claudeSession.id, supported: true, enabled: false, settingOn: true, basis: "launch", kind: "chat" });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={claudeSession} /></Wrapper>);
+
+		await waitFor(() =>
+			expect(JSON.parse(screen.getByTestId("browser-mention").textContent ?? "{}")).toEqual({
+				enabled: false,
+				settingOn: true,
+				kind: "chat",
+			}),
+		);
+		expect(getMock).toHaveBeenCalledWith(CHROME_PATH, { params: { path: { sessionId: claudeSession.id } } });
+	});
+
+	it("passes a LADO worker's kind through", async () => {
+		serveChrome({ sessionId: claudeSession.id, supported: true, enabled: true, settingOn: true, basis: "launch", kind: "lado_worker" });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={claudeSession} /></Wrapper>);
+
+		await waitFor(() => expect(screen.getByTestId("browser-mention")).toHaveTextContent('"kind":"lado_worker"'));
+	});
+
+	it("gives a session the daemon does not support no mention", async () => {
+		serveChrome({ sessionId: claudeSession.id, supported: false, enabled: false, settingOn: false });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={claudeSession} /></Wrapper>);
+
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith(CHROME_PATH, expect.anything()));
+		expect(screen.getByTestId("browser-mention")).toBeEmptyDOMElement();
+	});
+
+	it("gives no mention when the state cannot be read", async () => {
+		serveChrome({ error: { code: "INTERNAL", message: "boom" } });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={claudeSession} /></Wrapper>);
+
+		await waitFor(() => expect(getMock).toHaveBeenCalledWith(CHROME_PATH, expect.anything()));
+		expect(screen.getByTestId("browser-mention")).toBeEmptyDOMElement();
+	});
+
+	it("does not ask for a Codex session's Chrome state", async () => {
+		serveChrome({ sessionId: session.id, supported: true, enabled: true, settingOn: true, basis: "launch", kind: "chat" });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(getMock).not.toHaveBeenCalledWith(CHROME_PATH, expect.anything());
+		expect(screen.getByTestId("browser-mention")).toBeEmptyDOMElement();
+	});
+
+	it("does not ask a remote host's session on this machine's daemon", () => {
+		serveChrome({ sessionId: claudeSession.id, supported: true, enabled: true, settingOn: true, basis: "launch", kind: "chat" });
+		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={claudeSession} hostId="host-2" /></Wrapper>);
+
+		expect(getMock).not.toHaveBeenCalledWith(CHROME_PATH, expect.anything());
+		expect(screen.getByTestId("browser-mention")).toBeEmptyDOMElement();
+	});
+
+	it("wires /clear from the conversation commands", () => {
+		const clear = vi.fn();
+		Object.assign(conversationCommandState, { clear });
+		try {
+			render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
+			expect(screen.getByTestId("clear-available")).toHaveTextContent("true");
+		} finally {
+			delete (conversationCommandState as { clear?: unknown }).clear;
+		}
 	});
 });

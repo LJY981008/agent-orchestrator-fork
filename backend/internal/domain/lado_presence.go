@@ -31,7 +31,8 @@ type LadoPresenceProof struct {
 // LadoPresenceIntegrationApprove approves the integration of one PR head,
 // its subject "<session>@<head>", and LadoPresenceCheckCommands changes a
 // project's check commands, which the daemon runs outside any agent
-// sandbox.
+// sandbox. LadoPresenceClaudeChromeOn turns Claude in Chrome on for a group
+// of sessions; its subject names the settings turned on.
 const (
 	LadoPresencePlanApprove        = "plan.approve"
 	LadoPresenceModeOff            = "project.lado_mode_off"
@@ -41,6 +42,7 @@ const (
 	LadoPresenceSetupChange        = "setup.change"
 	LadoPresenceIntegrationApprove = "integration.approve"
 	LadoPresenceCheckCommands      = "project.check_commands"
+	LadoPresenceClaudeChromeOn     = "claude_chrome.on"
 )
 
 // ErrLadoPresenceReplayed means the proof's nonce was already used.

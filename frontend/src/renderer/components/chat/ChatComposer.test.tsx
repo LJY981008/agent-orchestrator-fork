@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatComposer } from "./ChatComposer";
+import { BROWSER_MENTIONS } from "./browserMention";
 import { sendReferenceToChat } from "../../lib/chat-context-bus";
 import { attachmentURL } from "./messageAttachments";
 import { getApiBaseUrl } from "../../lib/api-client";
@@ -2923,4 +2924,247 @@ it.each([
 	expect(screen.getByRole("list", { name: "Attached files" }).querySelector("img"))
 		.toHaveAttribute("src", attachmentURL(assetBaseUrl ?? getApiBaseUrl(), assetSessionId ?? draftSessionId, path));
 	expect(props.onStageAttachments).toHaveBeenCalledOnce();
+});
+
+/* ---- @browser mentions ---------------------------------------------------- */
+
+describe("browser mentions", () => {
+	const ON = { enabled: true, settingOn: true, kind: "chat" as const };
+
+	it("lists the browser rows first, browser leading, ahead of matching files", async () => {
+		const { field } = renderComposer({
+			filePaths: ["docs/browser-notes.md", ...FILES],
+			browserMention: ON,
+		});
+		await typeInComposer(field, "@br");
+		const options = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+		expect(options.slice(0, 5).map((text) => text.match(/^@browser(:[a-z_]+)?/)?.[0])).toEqual([
+			"@browser",
+			"@browser:new_tab",
+			"@browser:screenshot",
+			"@browser:gif",
+			"@browser:read_page",
+		]);
+		expect(options[5]).toContain("browser-notes.md");
+		expect(screen.getByText("Mentions and files")).toBeInTheDocument();
+	});
+
+	it("offers only @browser for a bare at-sign", async () => {
+		const { field } = renderComposer({ filePaths: FILES, browserMention: ON });
+		await typeInComposer(field, "@");
+		const options = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+		expect(options.filter((text) => text.startsWith("@browser"))).toHaveLength(1);
+		expect(options).toHaveLength(1 + FILES.length);
+	});
+
+	it.each(BROWSER_MENTIONS.map((mention) => [mention.value, mention] as const))(
+		"sends the %s row's sentence through its chip",
+		async (_value, mention) => {
+			const { onSend, field } = renderComposer({ browserMention: ON });
+			await typeInComposer(field, `open @${mention.value}`);
+			const row = screen
+				.getAllByRole("option")
+				.find((option) => option.textContent?.startsWith(`${mention.chip}`) && option.textContent.includes(mention.detail));
+			if (!row) throw new Error(`no row for ${mention.value}`);
+			await userEvent.click(row);
+			const chip = field.querySelector('[data-composer-token="mention"]');
+			expect(chip).toHaveTextContent(mention.chip);
+			expect(chip).toHaveAttribute("data-value", mention.value);
+			await userEvent.keyboard("{Enter}");
+			expect(onSend).toHaveBeenCalledWith(`open ${mention.text}`);
+		},
+	);
+
+	it("keeps a file named browser and the mention apart", async () => {
+		const warn = vi.spyOn(console, "error").mockImplementation(() => undefined);
+		try {
+			const { onSend, field } = renderComposer({ filePaths: ["browser"], browserMention: ON });
+			await typeInComposer(field, "@browser");
+			const options = screen.getAllByRole("option");
+			// Five mention rows and the file row, each with its own key.
+			expect(options).toHaveLength(6);
+			expect(options[0]).toHaveTextContent(/^@browserClaude in Chrome/);
+			expect(options[5]).toHaveTextContent(/^browser$/);
+			expect(warn.mock.calls.some((call) => String(call[0]).includes("same key"))).toBe(false);
+
+			await userEvent.click(options[5]!);
+			expect(field.querySelector('[data-composer-token="file"]')).toHaveAttribute("data-value", "browser");
+			expect(field.querySelector('[data-composer-token="mention"]')).toBeNull();
+			await userEvent.keyboard("{Enter}");
+			expect(onSend).toHaveBeenLastCalledWith("browser");
+
+			await typeInComposer(field, "@browser");
+			await userEvent.click(screen.getAllByRole("option")[0]!);
+			expect(field.querySelector('[data-composer-token="mention"]')).toHaveAttribute("data-value", "browser");
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it("offers no browser rows without a Chrome state", async () => {
+		const { field } = renderComposer({ filePaths: FILES });
+		await typeInComposer(field, "@br");
+		expect(screen.queryByRole("listbox")).toBeNull();
+	});
+
+	it.each([
+		[{ enabled: false, settingOn: false, kind: "chat" as const }, /Settings.*\/clear/],
+		[{ enabled: false, settingOn: true, kind: "chat" as const }, /started before/],
+		[{ enabled: false, settingOn: false, kind: "lado_worker" as const }, /LADO workers/],
+	])("explains instead of inserting a chip when Chrome is off (%o)", async (state, notice) => {
+		const { onSend, field } = renderComposer({ browserMention: state });
+		await typeInComposer(field, "open @browser");
+		await userEvent.keyboard("{Enter}");
+		expect(field.querySelector('[data-composer-token="mention"]')).toBeNull();
+		expect(composerWireText(field)).toBe("open ");
+		expect(screen.getByRole("status")).toHaveTextContent(notice);
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("explains on click as well when Chrome is off", async () => {
+		const { field } = renderComposer({ browserMention: { enabled: false, settingOn: true, kind: "chat" } });
+		await typeInComposer(field, "@browser:gif");
+		await userEvent.click(screen.getByRole("option"));
+		expect(field.querySelector('[data-composer-token="mention"]')).toBeNull();
+		expect(composerWireText(field)).toBe("");
+		expect(screen.getByRole("status")).toHaveTextContent(/started before/);
+	});
+});
+
+/* ---- terminal-only commands --------------------------------------------- */
+
+describe("terminal-only commands", () => {
+	it("explains /cost instead of sending it and keeps the draft", async () => {
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "/cost");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.getByRole("status")).toHaveTextContent("/cost runs only in the agent's terminal view, not in Chat.");
+		expect(composerWireText(field)).toBe("/cost");
+	});
+
+	it("explains a command with arguments and /chrome", async () => {
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "/chrome on");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.getByRole("status")).toHaveTextContent(/Settings › General › Claude in Chrome; type @browser/);
+	});
+
+	it("sends a command the provider reports", async () => {
+		const skills: ChatSkill[] = [{ name: "cost", displayName: "cost", description: "Show cost", source: "agent" }];
+		const { onSend, field } = renderComposer({ skills });
+		await typeInComposer(field, "/cost");
+		// The first Enter accepts the `/cost` chip from the menu, the second sends.
+		await userEvent.keyboard("{Enter}");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith("/cost");
+		expect(screen.queryByRole("status")).toBeNull();
+	});
+
+	it("sends a command mentioned inside prose", async () => {
+		const { onSend, field } = renderComposer();
+		await typeInComposer(field, "what does /cost show");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith("what does /cost show");
+	});
+
+	it("saves a queued edit of /cost", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		render(<ChatComposer onSend={onSend} editingQueuedTurnId="queued-cost" draftSeed={{ id: "queued-cost", text: "/cost" }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/cost", undefined, undefined, []));
+	});
+
+	it("recovers a delivery of /cost", async () => {
+		const sessionId = "composer-terminal-only-recovery";
+		prepareChatComposerDelivery(sessionId, {
+			kind: "send",
+			composerText: "/cost",
+			attachments: [],
+			requestText: "/cost",
+			clientMessageId: "terminal-only-recovery",
+		});
+		const onSend = vi.fn(async (_text: string) => undefined);
+		const view = render(<ChatComposer onSend={onSend} draftSessionId={sessionId} />);
+		try {
+			await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+			await waitFor(() => expect(onSend).toHaveBeenCalled());
+			expect(onSend.mock.calls[0]?.[0]).toBe("/cost");
+		} finally {
+			view.unmount();
+		}
+	});
+});
+
+/* ---- /clear --------------------------------------------------------------- */
+
+describe("/clear", () => {
+	it("offers clear as an AO command when the chat can clear", async () => {
+		const { field } = renderComposer({ onClear: vi.fn() });
+		await typeInComposer(field, "/");
+		const option = screen.getByRole("option", { name: /clear/i });
+		expect(option).toHaveTextContent("AO");
+	});
+
+	it("does not offer clear without onClear and explains it like any terminal-only command", async () => {
+		const { onSend, field } = renderComposer({ skills: SKILLS });
+		await typeInComposer(field, "/cl");
+		expect(screen.queryByRole("option", { name: /clear/i })).toBeNull();
+		await typeInComposer(field, "ear");
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).not.toHaveBeenCalled();
+		expect(screen.getByRole("status")).toHaveTextContent("/clear");
+	});
+
+	it("runs onClear instead of sending, then empties the draft", async () => {
+		const onClear = vi.fn().mockResolvedValue(undefined);
+		const { onSend, field } = renderComposer({ onClear });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+		expect(onSend).not.toHaveBeenCalled();
+		await waitFor(() => expect(composerWireText(field).trim()).toBe(""));
+	});
+
+	it("keeps the draft and shows the daemon's refusal when clearing fails", async () => {
+		const onClear = vi.fn().mockRejectedValue(new Error("finish or stop the current turn before clearing"));
+		const { onSend, field } = renderComposer({ onClear });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() =>
+			expect(screen.getByRole("alert")).toHaveTextContent("finish or stop the current turn before clearing"),
+		);
+		expect(onSend).not.toHaveBeenCalled();
+		expect(composerWireText(field).trim()).toBe("/clear");
+	});
+
+	it("runs on Enter while a longer skill keeps the menu open", async () => {
+		const onClear = vi.fn().mockResolvedValue(undefined);
+		const skills: ChatSkill[] = [{ name: "clear-cache", displayName: "clear-cache", description: "Drop caches", source: "repo" }];
+		const { onSend, field } = renderComposer({ onClear, skills });
+		await typeInComposer(field, "/clear");
+		expect(screen.getByRole("listbox")).toBeTruthy();
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+		expect(onSend).not.toHaveBeenCalled();
+	});
+
+	it("does not start a second clear while one is running", async () => {
+		const onClear = vi.fn();
+		const { field } = renderComposer({ onClear, clearing: true });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		expect(onClear).not.toHaveBeenCalled();
+		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("already being cleared"));
+	});
+
+	it("saves a queued edit of /clear as text", async () => {
+		const onSend = vi.fn().mockResolvedValue(undefined);
+		const onClear = vi.fn();
+		render(<ChatComposer onSend={onSend} onClear={onClear} editingQueuedTurnId="queued-clear" draftSeed={{ id: "queued-clear", text: "/clear" }} />);
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(onSend).toHaveBeenCalledWith("/clear", undefined, undefined, []));
+		expect(onClear).not.toHaveBeenCalled();
+	});
 });

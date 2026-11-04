@@ -111,6 +111,12 @@ const KEYS = [
 	"lado.presence.paths.detail",
 	"lado.presence.paths.added",
 	"lado.presence.paths.removed",
+	// LADO fork: turning Claude in Chrome on (issue #40).
+	"lado.presence.claudeChromeTitle",
+	"lado.presence.claudeChromeChatSessions",
+	"lado.presence.claudeChromeLadoWorkers",
+	"lado.presence.claudeChromeDetail",
+	"lado.presence.claudeChromeTurnOn",
 ];
 
 const catalogs = {};

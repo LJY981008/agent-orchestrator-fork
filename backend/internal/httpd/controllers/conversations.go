@@ -75,6 +75,12 @@ type reviewerConversationService interface {
 	InterruptForOwner(ctx context.Context, owner domain.ConversationOwner) error
 }
 
+// conversationClearService is AO's /clear. It is optional so the Chat
+// contract and its test doubles do not have to grow for one LADO route.
+type conversationClearService interface {
+	ClearContext(ctx context.Context, session domain.SessionID) (chatsvc.ClearContextResult, error)
+}
+
 type chatViewService interface {
 	SetChatView(context.Context, domain.SessionID, string, bool) error
 }
@@ -128,6 +134,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/queue/edit", c.editQueuedTurn)
 	r.Post("/sessions/{sessionId}/conversation/queue/reorder", c.reorderQueuedTurns)
 	r.Post("/sessions/{sessionId}/conversation/compact", c.compact)
+	r.Post("/sessions/{sessionId}/conversation/clear", c.clearContext)
 	r.Get("/sessions/{sessionId}/conversation/models", c.models)
 	r.Get("/sessions/{sessionId}/conversation/config-options", c.configOptions)
 	r.Patch("/sessions/{sessionId}/conversation/config-options/{configId}", c.setConfigOption)
@@ -641,6 +648,32 @@ func (c *ConversationsController) compact(w http.ResponseWriter, r *http.Request
 	envelope.WriteJSON(w, http.StatusAccepted, CompactConversationResponse{
 		TokensBefore: result.TokensBefore,
 		TokensAfter:  result.TokensAfter,
+	})
+}
+
+// clearContext is AO's /clear: the agent starts a fresh provider conversation
+// and forgets earlier messages, which stay on AO's timeline behind a divider.
+func (c *ConversationsController) clearContext(w http.ResponseWriter, r *http.Request) {
+	clearer, ok := c.Svc.(conversationClearService)
+	if c.Svc == nil || !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/conversation/clear")
+		return
+	}
+	result, err := clearer.ClearContext(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId")))
+	if errors.Is(err, chatsvc.ErrTurnRunning) {
+		// The shared mapping talks about rolling back; say what this refusal is.
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict",
+			"CHAT_TURN_RUNNING", "finish or stop the current turn before clearing", nil)
+		return
+	}
+	if err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	envelope.WriteJSON(w, http.StatusOK, ClearConversationResponse{
+		ActiveBranchID: result.ActiveBranchID,
+		ClearedAt:      result.ClearedAt,
+		Cleared:        result.Cleared,
 	})
 }
 

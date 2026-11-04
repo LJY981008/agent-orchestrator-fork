@@ -1,7 +1,7 @@
 // LADO fork: plan approval, permission ceiling and protected path changes,
 // turning LADO mode off, changing a project's check commands, adopting,
-// restoring and changing local setup, and approving a run's integration,
-// through the human at the desktop app
+// restoring and changing local setup, approving a run's integration, and
+// turning Claude in Chrome on, through the human at the desktop app
 // (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 // Any local process can call the daemon's loopback API, so these must come
 // from here. The renderer names a plan revision, the ceiling and a mode or the
@@ -21,6 +21,7 @@ import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
 	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL,
 	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
@@ -32,6 +33,8 @@ import {
 	type LadoPresenceApproveResult,
 	type LadoPresenceCheckCommand,
 	type LadoPresenceChecksResult,
+	type LadoPresenceClaudeChromeResult,
+	type LadoPresenceClaudeChromeSettings,
 	type LadoPresenceFailure,
 	type LadoPresenceIntegration,
 	type LadoPresenceIntegrationResult,
@@ -88,6 +91,7 @@ const UNSAFE_TEXT = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u
 // One such character, for refusing a value outright.
 const UNSAFE_CHAR = new RegExp(UNSAFE_TEXT.source);
 const SETUP_ADOPTIONS_PATH = "/api/v1/lado/setup/adoptions";
+const CLAUDE_CHROME_PATH = "/api/v1/lado/claude-chrome";
 const SETUP_ITEMS_PATH = "/api/v1/lado/setup/items";
 const SETUP_BINDINGS_PATH = "/api/v1/lado/setup/bindings";
 const SETUP_ITEM_PATH = /^\/api\/v1\/lado\/setup\/items\/([A-Za-z0-9_-]{1,128})$/;
@@ -311,6 +315,7 @@ export function registerLadoPresenceIpc(deps: LadoPresenceDeps): void {
 	handle(LADO_PRESENCE_CHANGE_SETUP_CHANNEL, changeSetup, "The setup change failed.");
 	handle(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL, approveIntegration, "The integration approval failed.");
 	handle(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL, changeProjectChecks, "The check commands change failed.");
+	handle(LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL, changeClaudeChrome, "Turning on Claude in Chrome failed.");
 }
 
 async function approvePlan(
@@ -854,6 +859,51 @@ async function changeProjectChecks(
 	return { status: "changed", settings: changed };
 }
 
+// Claude in Chrome lets agents control the Chrome the developer is signed in
+// to (issue #40), and any local process can call the daemon, so only the
+// human may turn it on. Main reads the setting from the daemon, names what
+// turns on, then signs the whole setting. Turning parts off needs no
+// confirmation: the renderer sends that to the daemon itself, and when
+// nothing turns on this channel sends nothing.
+async function changeClaudeChrome(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceClaudeChromeResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can turn on Claude in Chrome.");
+	}
+	// The two switches are all the renderer gives; anything else it sends is ignored.
+	const request = record(input);
+	const chatSessions = request?.chatSessions;
+	const ladoWorkers = request?.ladoWorkers;
+	if (typeof chatSessions !== "boolean" || typeof ladoWorkers !== "boolean") {
+		return failure("LADO_CLAUDE_CHROME_INVALID", "Send chatSessions and ladoWorkers.");
+	}
+	const read = await callDaemon(deps, CLAUDE_CHROME_PATH, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const settings = claudeChromeSettings(read.body);
+	if (!settings) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about the Claude in Chrome setting could not be read.");
+	const turningOn: PresenceMessageKey[] = [];
+	if (chatSessions && !settings.chatSessions) turningOn.push("lado.presence.claudeChromeChatSessions");
+	if (ladoWorkers && !settings.ladoWorkers) turningOn.push("lado.presence.claudeChromeLadoWorkers");
+	// Nothing turns on, so there is nothing to confirm.
+	if (turningOn.length === 0) return { status: "changed", settings };
+	const t = await translator(deps);
+	const detail = [...turningOn.map((key) => t(key)), t("lado.presence.claudeChromeDetail")].join("\n\n");
+	if (!(await confirm(deps, t, t("lado.presence.claudeChromeTitle"), detail, t("lado.presence.claudeChromeTurnOn")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon checks the proof against exactly these bytes.
+	const body = JSON.stringify({ chatSessions, ladoWorkers });
+	const sent = await callDaemon(deps, CLAUDE_CHROME_PATH, signed(deps, "PUT", CLAUDE_CHROME_PATH, body));
+	if (!sent.ok) return sent.failure;
+	const changed = claudeChromeSettings(sent.body);
+	if (!changed) return failure(ANSWER_UNREADABLE, "Claude in Chrome was turned on, but the AO daemon's answer could not be read.");
+	return { status: "changed", settings: changed };
+}
+
 // A request carrying a fresh proof. Signed after the confirmation, which can
 // stay open longer than a proof lives.
 function signed(deps: LadoPresenceDeps, method: string, path: string, body: string): RequestInit {
@@ -1007,6 +1057,13 @@ function projectSettings(body: unknown, projectId: string): LadoPresenceProjectS
 		return null;
 	}
 	return settings as LadoPresenceProjectSettings;
+}
+
+// The Claude in Chrome setting, from LadoClaudeChromeSettingsResponse.
+function claudeChromeSettings(body: unknown): LadoPresenceClaudeChromeSettings | null {
+	const settings = record(body);
+	if (typeof settings?.chatSessions !== "boolean" || typeof settings.ladoWorkers !== "boolean") return null;
+	return { chatSessions: settings.chatSessions, ladoWorkers: settings.ladoWorkers };
 }
 
 // The name the dialog shows, from ProjectGetResponse; a project without one

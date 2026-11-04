@@ -30,6 +30,7 @@ type LadoController struct {
 	Queue       LadoQueueService
 	Setup       LadoSetupService
 	Verify      LadoVerifyService
+	Chrome      LadoClaudeChromeService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
@@ -79,6 +80,9 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/timings", c.getTimings)
 	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
 	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
+	r.Get("/lado/claude-chrome", c.getClaudeChrome)
+	r.Put("/lado/claude-chrome", c.putClaudeChrome)
+	r.Get("/lado/sessions/{sessionId}/claude-chrome", c.getSessionClaudeChrome)
 	c.registerSetup(r)
 	c.registerVerify(r)
 }

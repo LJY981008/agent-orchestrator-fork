@@ -4311,5 +4311,16 @@
 	"lado.timings.duration.seconds": "{{seconds}} s",
 	"lado.timings.duration.minutes": "{{minutes}} Min.",
 	"lado.timings.duration.hours": "{{hours}} Std. {{minutes}} Min.",
-	"lado.timings.duration.days": "{{days}} T. {{hours}} Std."
+	"lado.timings.duration.days": "{{days}} T. {{hours}} Std.",
+	"lado.settings.claudeChrome.title": "Claude in Chrome",
+	"lado.settings.claudeChrome.note": "Eine Änderung gilt für Sitzungen, die danach starten. Ein laufender Chat übernimmt sie nach /clear.",
+	"lado.settings.claudeChrome.chatSessions": "Chat-Sitzungen",
+	"lado.settings.claudeChrome.chatSessionsHint": "Claude-Code-Chats können das Chrome steuern, in dem du angemeldet bist. Gib im Chat @browser ein.",
+	"lado.settings.claudeChrome.ladoWorkers": "LADO-Worker",
+	"lado.settings.claudeChrome.ladoWorkersHint": "Worker, die LADO startet, können das Chrome, in dem du angemeldet bist, ohne Rückfrage steuern.",
+	"lado.presence.claudeChromeTitle": "Claude in Chrome einschalten?",
+	"lado.presence.claudeChromeChatSessions": "Chat-Sitzungen: Claude-Code-Chats können das Chrome steuern, in dem du angemeldet bist.",
+	"lado.presence.claudeChromeLadoWorkers": "LADO-Worker: Worker, die LADO selbst startet, können das Chrome, in dem du angemeldet bist, ohne Rückfrage steuern.",
+	"lado.presence.claudeChromeDetail": "Das gilt für Sitzungen, die danach starten. Die Website-Berechtigungen der Claude-Erweiterung gelten weiterhin.",
+	"lado.presence.claudeChromeTurnOn": "Einschalten"
 }

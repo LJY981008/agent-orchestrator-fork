@@ -4,6 +4,7 @@ import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
 	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
+	LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL,
 	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
@@ -15,6 +16,8 @@ import {
 	type LadoPresenceApproveResult,
 	type LadoPresenceCheckCommand,
 	type LadoPresenceChecksResult,
+	type LadoPresenceClaudeChromeRequest,
+	type LadoPresenceClaudeChromeResult,
 	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeRequest,
 	type LadoPresenceModeResult,
@@ -862,6 +865,12 @@ const api = {
 				ipcRenderer.invoke(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL, { sessionId }) as Promise<LadoPresenceIntegrationResult | null>,
 			changeProjectChecks: (projectId: string, commands: LadoPresenceCheckCommand[]) =>
 				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL, { projectId, commands }) as Promise<LadoPresenceChecksResult | null>,
+			// Turning Claude in Chrome on (issue #40); only the two switches cross.
+			changeClaudeChrome: (settings: LadoPresenceClaudeChromeRequest) =>
+				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL, {
+					chatSessions: settings.chatSessions,
+					ladoWorkers: settings.ladoWorkers,
+				} satisfies LadoPresenceClaudeChromeRequest) as Promise<LadoPresenceClaudeChromeResult | null>,
 		},
 	},
 };

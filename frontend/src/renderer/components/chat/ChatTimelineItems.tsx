@@ -336,6 +336,17 @@ export function CompactionMarker({ activity }: { activity: ConversationActivity 
 	);
 }
 
+/** Where `/clear` started a fresh agent context. The history above it stays readable. */
+export function ContextClearedMarker() {
+	return (
+		<TwoRowTimelineMarker
+			message="Context cleared"
+			detail="earlier messages stay visible, but the agent no longer remembers them"
+			wrapDetail
+		/>
+	);
+}
+
 export interface TurnOutcomeRetryControl {
 	onRetry: () => void;
 	pending?: boolean;
