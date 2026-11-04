@@ -476,6 +476,10 @@ type Manager struct {
 	ladoChatMCP   LadoChatServers // see lado_setup_codex.go
 	// LADO fork: Claude in Chrome launch value, see lado_launch_env.go.
 	ladoClaudeChrome LadoClaudeChrome
+	// LADO fork: worker watch launch values and plan folders, see
+	// lado_launch_env.go.
+	ladoLaunchValues LadoLaunchValues
+	ladoReadDirs     LadoReadDirectories
 	// lookPath is exec.LookPath in production; tests substitute a stub so
 	// they don't need real binaries on PATH. Returns ports.ErrAgentBinaryNotFound
 	// when the binary is missing so the sentinel propagates through toAPIError.

@@ -210,6 +210,8 @@ func (m *Manager) executeChatAgentSwitch(
 	if err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: workspace roots: %w", id, err)
 	}
+	// LADO fork: a LADO run's session reads its pinned plan file without asking.
+	additionalDirectories = m.ladoChatDirectories(ctx, rec, additionalDirectories)
 	recorder.boundary(domain.AgentSwitchFailureHandoffDirectoryPrepare)
 	if _, _, err := m.prepareAgentHandoffPaths(ctx, id, string(result.ID)); err != nil {
 		return result, fmt.Errorf("switch Chat agent %s: prepare handoff directory: %w", id, err)

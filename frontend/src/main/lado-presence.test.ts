@@ -127,6 +127,9 @@ function effectiveResponse(overrides: EffectiveOverrides = {}): components["sche
 		snapshotSha256: POLICY_SHA,
 		taskId: "lado-task-1",
 		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
+		compactApplies: true,
+		compactWindow: 200_000,
+		compactWarnings: [],
 		...overrides,
 	};
 }

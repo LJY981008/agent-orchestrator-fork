@@ -20,6 +20,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopresence"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladowatch"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
@@ -75,6 +76,12 @@ type ladoWorkDeps struct {
 	// ladoModes is LADO's project settings service, whose turn-on of LADO
 	// mode reads the protection of the project's base branches again.
 	ladoModes ladoModeHook
+	// accounts tells which agent account a session runs on, for the worker
+	// watch's usage limits (issue #42): AO's agent accounts service.
+	accounts ladowatch.Accounts
+	// preflight checks that an agent can start before LADO starts a worker
+	// on it (issue #42): AO's agent service.
+	preflight ladoqueue.Preflight
 }
 
 // ladoMessageSender is AO's session manager.

@@ -77,7 +77,7 @@ type LadoPlanRequestResponse struct {
 	Kind             string     `json:"kind" enum:"orchestrator,worker" description:"Who writes the plan: a plan worker, or, for a request made before plan workers, the orchestrator."`
 	SessionID        string     `json:"sessionId" description:"The session that writes the plan: the orchestrator asked, or the plan worker's designer; empty while a plan worker waits to start."`
 	Phase            string     `json:"phase,omitempty" enum:"waiting,designing,critiquing,revising,submitted,fixing,done,failed,replaced" description:"Where a plan worker request is; omitted for a request to an orchestrator."`
-	WaitingReason    string     `json:"waitingReason,omitempty" enum:"plan_worker_capacity,memory_tight"`
+	WaitingReason    string     `json:"waitingReason,omitempty" enum:"plan_worker_capacity,memory_tight,account_limited,agent_unavailable"`
 	FailureCode      string     `json:"failureCode,omitempty" enum:"plan_worker_spawn_failed,plan_worker_no_plan,plan_worker_timed_out,plan_worker_agent_unsupported,replaced"`
 	SourceCommentID  string     `json:"sourceCommentId,omitempty" description:"The issue comment the developer named as the plan."`
 	Note             string     `json:"note,omitempty" description:"What the developer asked to change."`

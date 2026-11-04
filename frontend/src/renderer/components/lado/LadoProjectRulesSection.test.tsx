@@ -135,6 +135,9 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 		blocking: false,
 		snapshotSha256: "e".repeat(64),
 		setup: { items: [], aoSystemSha256: "", conflicts: [], accepted: [] },
+		compactApplies: true,
+		compactWindow: 200_000,
+		compactWarnings: [],
 		...fields,
 	};
 }

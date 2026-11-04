@@ -66,6 +66,9 @@ type Store interface {
 	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
 	SetLadoDispatchSettings(ctx context.Context, settings domain.LadoDispatchSettings, event domain.LadoAuditEvent) (domain.LadoDispatchSettings, error)
 	LadoProjectChecks(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoCheckCommand, int, error)
+	// AddLadoAlert raises the alert of a worker held because its agent
+	// cannot start (launch_hold.go).
+	AddLadoAlert(ctx context.Context, a domain.LadoAlert) (domain.LadoAlertID, bool, error)
 	PartStore
 }
 
@@ -145,6 +148,11 @@ type Deps struct {
 	// Memory tells whether memory pressure is tight. Without it entries never
 	// wait for memory.
 	Memory Memory
+	// AccountLimits holds new workers while their account is at its usage
+	// limit, and Preflight while their agent cannot start (launch_hold.go).
+	// Without them no worker waits for either.
+	AccountLimits AccountLimits
+	Preflight     Preflight
 	// Git records how far a worker's base moved since its plan was made; nil
 	// uses the system git.
 	Git Git

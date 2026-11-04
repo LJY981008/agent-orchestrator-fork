@@ -38,6 +38,10 @@ type RunInput struct {
 	// PlanText is the approved revision's pinned plan file, front matter and
 	// body, byte for byte.
 	PlanText string
+	// PlanFile is the read-only copy of PlanText that workers read again
+	// after their context is summarized, <DataDir>/lado/runs/<revision>/plan.md
+	// (plan_file.go); empty without a data dir.
+	PlanFile string
 	// IssueContext is the issue snapshot the revision was planned from,
 	// rendered as the orchestrator's issue file: every text in its own fence.
 	IssueContext string
@@ -65,6 +69,16 @@ func (s *Service) RunInput(ctx context.Context, task domain.LadoTask) (RunInput,
 	if err != nil {
 		return RunInput{}, fmt.Errorf("read the pinned plan of revision %s: %w", rev.ID, err)
 	}
+	var planFile string
+	if s.deps.DataDir != "" {
+		// The file is a copy of the plan the prompt carries: one LADO cannot
+		// write leaves the prompt without its path and never holds the run.
+		if planFile, err = writePlanFile(s.deps.DataDir, rev.ID, plan); err != nil {
+			s.deps.Log.Warn("LADO could not keep the plan file a worker reads again; the worker starts without it",
+				"task", task.ID, "revision", rev.ID, "err", err)
+			planFile = ""
+		}
+	}
 	// The revision keeps the hash of its request's issue snapshot.
 	issue, err := s.pinnedIssue(rev.IssueSnapshotSHA256)
 	if err != nil {
@@ -82,6 +96,7 @@ func (s *Service) RunInput(ctx context.Context, task domain.LadoTask) (RunInput,
 	selection := domain.LadoCommentSelection{Omitted: issue.OmittedComments}
 	return RunInput{
 		PlanText:     string(plan),
+		PlanFile:     planFile,
 		IssueContext: renderIssueFile(task, issue, rev.IssueSnapshotSHA256, selection),
 		Revision:     rev,
 		Approval:     approval,

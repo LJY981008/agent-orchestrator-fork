@@ -109,3 +109,14 @@ describe("dockBounceType", () => {
 		expect(dockBounceType(undefined)).toBe("informational");
 	});
 });
+
+// LADO fork: the renderer shows a LADO alert (issue #42) with type
+// "lado_alert". It toasts like every type while the window lacks focus, and
+// bounces the dock once, without the taskbar flash of the actionable types.
+describe("a LADO alert", () => {
+	it("toasts and bounces once, without flashing the taskbar", () => {
+		expect(shouldToast({ title: "LADO alert · acme/demo#12" }, true)).toBe(true);
+		expect(shouldSignalAttention("lado_alert")).toBe(false);
+		expect(dockBounceType("lado_alert")).toBe("informational");
+	});
+});

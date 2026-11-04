@@ -1,6 +1,7 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
 // approvals, rules, runs, their verification and integration, branch
-// protection and the dispatch settings. Rule changes
+// protection, the dispatch settings, and the worker watch: usage, alerts and
+// their settings. Rule changes
 // that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -10,6 +11,8 @@ import {
 	changeLadoProtectedPaths,
 	createLadoTask,
 	deleteLadoRule,
+	fetchLadoAlerts,
+	fetchLadoUnseenAlertCounts,
 	fetchLadoCheckLog,
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
@@ -18,18 +21,25 @@ import {
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
 	fetchLadoProjectSettings,
+	fetchLadoProjectUsage,
 	fetchLadoProtection,
 	fetchLadoRule,
 	fetchLadoRules,
 	fetchLadoTasks,
 	fetchLadoTaskParts,
+	fetchLadoTaskUsage,
 	fetchLadoTaskView,
+	fetchLadoWatchSettings,
 	importLadoTasks,
 	invalidateLadoRuleQueries,
 	LadoApiError,
+	ladoAlertsProjectQueryKey,
+	ladoAlertsQueryKey,
+	ladoUnseenAlertCountsQueryKey,
 	ladoCheckLogQueryKey,
 	ladoDispatchSettingsQueryKey,
 	ladoEffectiveQueryKey,
+	ladoEffectiveQueryRoot,
 	ladoExecutionQueryKey,
 	ladoExecutionQueryRoot,
 	ladoPlanQueryKey,
@@ -37,13 +47,18 @@ import {
 	ladoProjectIssuesQueryKey,
 	ladoProjectRepositoriesQueryKey,
 	ladoProjectSettingsQueryKey,
+	ladoProjectUsageQueryKey,
 	ladoProtectionQueryKey,
 	ladoRuleQueryKey,
 	ladoRulesQueryKey,
 	ladoTasksQueryKey,
 	ladoTaskPartsQueryKey,
+	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
 	ladoTaskViewQueryRoot,
+	ladoWatchSettingsQueryKey,
+	ladoWatchSettingsQueryRoot,
+	markLadoAlertSeen,
 	mergeLadoPR,
 	repostLadoIntegrationStatus,
 	requestLadoPlan,
@@ -54,9 +69,12 @@ import {
 	updateLadoProjectChecks,
 	updateLadoProjectOverlap,
 	updateLadoProjectSettings,
+	updateLadoWatchSettings,
+	type LadoAlertFilter,
 	type LadoCheckCommand,
 	type LadoDispatchSettingsInput,
 	type LadoProjectOverlapInput,
+	type LadoWatchSettingsValues,
 } from "../lib/lado";
 import { sessionScmSummaryQueryKey } from "./useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
@@ -494,6 +512,101 @@ export function useUpdateLadoDispatchSettings() {
 	return useMutation({
 		mutationFn: (input: LadoDispatchSettingsInput) => updateLadoDispatchSettings(input),
 		onSuccess: (settings) => queryClient.setQueryData(ladoDispatchSettingsQueryKey, settings),
+		retry: false,
+	});
+}
+
+/** How often an open usage view reads again; the watch loop counts once a minute. */
+export const LADO_USAGE_REFRESH_MS = 60_000;
+
+/**
+ * A task's usage. It reads again every minute while a view shows it, and on
+ * the task's watch and alert events (lado-events.ts).
+ */
+export function useLadoTaskUsage(taskId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoTaskUsageQueryKey(taskId),
+		queryFn: () => fetchLadoTaskUsage(taskId),
+		enabled: enabled && Boolean(taskId),
+		refetchOnMount: "always",
+		refetchInterval: LADO_USAGE_REFRESH_MS,
+		retry: false,
+	});
+}
+
+/**
+ * How often the board reads its costs again. The daemon adds up every task of
+ * the project for it, so it reads less often than an open Usage tab; a raised
+ * or seen alert and a watch change refresh it at once.
+ */
+export const LADO_BOARD_USAGE_REFRESH_MS = 5 * 60_000;
+
+/** Each task's usage totals for a project's board; its watch and alert events refresh it. */
+export function useLadoProjectUsage(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoProjectUsageQueryKey(projectId),
+		queryFn: () => fetchLadoProjectUsage(projectId),
+		enabled: enabled && Boolean(projectId),
+		refetchInterval: LADO_BOARD_USAGE_REFRESH_MS,
+		retry: false,
+	});
+}
+
+/** Each task's unseen alerts, counted by the daemon over all of them, for the board's badges. */
+export function useLadoUnseenAlertCounts(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoUnseenAlertCountsQueryKey(projectId),
+		queryFn: () => fetchLadoUnseenAlertCounts(projectId),
+		enabled: enabled && Boolean(projectId),
+		retry: false,
+	});
+}
+
+/** A project's alerts: one task's, or the unseen ones. */
+export function useLadoAlerts(projectId: string, filter: LadoAlertFilter, enabled = true) {
+	return useQuery({
+		queryKey: ladoAlertsQueryKey(projectId, filter),
+		queryFn: () => fetchLadoAlerts(projectId, filter),
+		enabled: enabled && Boolean(projectId),
+		retry: false,
+	});
+}
+
+/** Marks alerts seen; the project's lists read again here and, by the seen event, in other windows. */
+export function useMarkLadoAlertsSeen(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (alertIds: readonly number[]) => {
+			for (const alertId of alertIds) await markLadoAlertSeen(alertId);
+		},
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ladoAlertsProjectQueryKey(projectId) }),
+		retry: false,
+	});
+}
+
+/** The global watch settings without a project; a project's over them with one. */
+export function useLadoWatchSettings(projectId?: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoWatchSettingsQueryKey(projectId),
+		queryFn: () => fetchLadoWatchSettings(projectId),
+		enabled,
+		retry: false,
+	});
+}
+
+/**
+ * Saves the scope's whole row. A global change moves what every project
+ * inherits, and the compact window shows in the effective views.
+ */
+export function useUpdateLadoWatchSettings(projectId?: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (values: LadoWatchSettingsValues) => updateLadoWatchSettings(projectId, values),
+		onSuccess: (settings) => {
+			if (!projectId) void queryClient.invalidateQueries({ queryKey: ladoWatchSettingsQueryRoot });
+			queryClient.setQueryData(ladoWatchSettingsQueryKey(projectId), settings);
+			void queryClient.invalidateQueries({ queryKey: ladoEffectiveQueryRoot });
+		},
 		retry: false,
 	});
 }

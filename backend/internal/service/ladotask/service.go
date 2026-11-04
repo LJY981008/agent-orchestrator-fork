@@ -95,6 +95,9 @@ type PlanWorkerStore interface {
 	LadoPlanRevisionMetrics(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevisionMetrics, bool, error)
 	ListLadoPlanRevisionMetrics(ctx context.Context, taskID domain.LadoTaskID) (map[domain.LadoPlanRevisionID]domain.LadoPlanRevisionMetrics, error)
 	LadoSessionUsage(ctx context.Context, id domain.SessionID) (domain.LadoPlanSessionUsage, error)
+	// AddLadoAlert raises the alert of a plan worker held because its agent
+	// cannot start (planworker_hold.go).
+	AddLadoAlert(ctx context.Context, a domain.LadoAlert) (domain.LadoAlertID, bool, error)
 }
 
 // Projects reads AO's project registry.
@@ -175,6 +178,11 @@ type Deps struct {
 	// Queue resolves a plan's base and reads memory pressure, as the
 	// dispatcher does. The daemon installs it with SetPlanQueue.
 	Queue PlanQueue
+	// AccountLimits holds a new plan worker while its account is at its
+	// usage limit, and Preflight while its agent cannot start
+	// (planworker_hold.go). Without them no plan worker waits for either.
+	AccountLimits AccountLimits
+	Preflight     Preflight
 	// DataDir holds LADO's own files of each plan request
 	// (<DataDir>/lado/plan-requests/<request>/), which no artifact capture
 	// reads.

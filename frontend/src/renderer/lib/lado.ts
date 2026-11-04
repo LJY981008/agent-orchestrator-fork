@@ -67,6 +67,17 @@ export type LadoTimingStage = LadoTimingPoint["stage"];
 export type LadoSessionMetrics = components["schemas"]["LadoSessionMetricsResponse"];
 export type LadoSessionRole = LadoSessionMetrics["role"];
 export type LadoTimingsSummary = components["schemas"]["LadoTimingsSummaryResponse"];
+export type LadoTaskUsage = components["schemas"]["LadoTaskUsageResponse"];
+export type LadoTaskUsageSummary = components["schemas"]["LadoTaskUsageSummaryResponse"];
+export type LadoSessionUsage = components["schemas"]["LadoSessionUsageResponse"];
+export type LadoUsageTotals = components["schemas"]["LadoUsageTotalsResponse"];
+export type LadoProjectUsage = components["schemas"]["LadoProjectUsageResponse"];
+export type LadoAlert = components["schemas"]["LadoAlertResponse"];
+export type LadoUnseenAlertCounts = components["schemas"]["LadoUnseenAlertCountsResponse"];
+export type LadoAlertKind = LadoAlert["kind"];
+export type LadoWatchSettings = components["schemas"]["LadoWatchSettingsResponse"];
+export type LadoWatchSettingsResolved = components["schemas"]["LadoWatchSettingsResolved"];
+export type LadoWatchSettingsValues = components["schemas"]["LadoWatchSettingsValues"];
 export type LadoQueueItem = components["schemas"]["LadoQueueItemResponse"];
 export type LadoQueueState = LadoQueueItem["state"];
 export type LadoQueueReason = NonNullable<LadoQueueItem["reason"]>;
@@ -160,6 +171,21 @@ export const ladoCheckLogSessionQueryKey = (sessionId: string) => ["lado", "chec
 export const ladoCheckLogQueryKey = (sessionId: string, checkRunId: string, status = "") => ["lado", "check-log", sessionId, checkRunId, status] as const;
 export const ladoProtectionQueryKey = (projectId: string) => ["lado", "protection", projectId] as const;
 export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
+/** Under the task view's key, so LADO's task events refresh it as well. */
+export const ladoTaskUsageQueryKey = (taskId: string) => ["lado", "task", taskId, "usage"] as const;
+export const ladoProjectUsageQueryKey = (projectId: string) => ["lado", "usage", projectId] as const;
+/** Every alert list of a project: the board's unseen ones and each task's. */
+export const ladoAlertsProjectQueryKey = (projectId: string) => ["lado", "alerts", projectId] as const;
+/** Under the project's alerts key, so the alert events and a seen mark refresh it. */
+export const ladoUnseenAlertCountsQueryKey = (projectId: string) => ["lado", "alerts", projectId, "unseen-counts"] as const;
+export const ladoAlertsQueryKey = (projectId: string, filter: LadoAlertFilter) =>
+	["lado", "alerts", projectId, filter.taskId ?? "", filter.unseen === true] as const;
+export const ladoWatchSettingsQueryRoot = ["lado", "watch-settings"] as const;
+/** The global row's key without a project. */
+export const ladoWatchSettingsQueryKey = (projectId?: string) => ["lado", "watch-settings", projectId ?? ""] as const;
+
+/** Which of a project's alerts a list reads. */
+export type LadoAlertFilter = { taskId?: string; unseen?: boolean };
 
 /**
  * Refreshes what a rule change can reach: the rules, every effective view,
@@ -694,5 +720,83 @@ export async function updateLadoDispatchSettings(input: LadoDispatchSettingsInpu
 		},
 	});
 	if (error) throw ladoError(error, "Could not save the run settings");
+	return data;
+}
+
+/**
+ * What a task's sessions spent: the totals with the elapsed time, and each
+ * plan and execution session's cost, tokens, context and compactions.
+ */
+export async function fetchLadoTaskUsage(taskId: string): Promise<LadoTaskUsage> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/tasks/{taskId}/usage", {
+		params: { path: { taskId } },
+	});
+	if (error) throw ladoError(error, "Could not load the task's usage");
+	return data;
+}
+
+/** The usage totals of each of a project's tasks, for its board. */
+export async function fetchLadoProjectUsage(projectId: string): Promise<LadoProjectUsage> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/usage", {
+		params: { path: { projectId } },
+	});
+	if (error) throw ladoError(error, "Could not load the project's usage");
+	return data;
+}
+
+/** How many alerts of each of a project's tasks nobody marked seen, over all of them. */
+export async function fetchLadoUnseenAlertCounts(projectId: string): Promise<LadoUnseenAlertCounts> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/alerts/unseen-counts", {
+		params: { path: { projectId } },
+	});
+	if (error) throw ladoError(error, "Could not load the alerts");
+	return data;
+}
+
+/** A project's alerts, newest first: one task's, or the ones nobody marked seen. */
+export async function fetchLadoAlerts(projectId: string, filter: LadoAlertFilter = {}, limit?: number): Promise<LadoAlert[]> {
+	const query: { taskId?: string; unseen?: boolean; limit?: number } = {};
+	if (filter.taskId) query.taskId = filter.taskId;
+	if (filter.unseen) query.unseen = true;
+	if (limit !== undefined) query.limit = limit;
+	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/alerts", {
+		params: { path: { projectId }, query },
+	});
+	if (error) throw ladoError(error, "Could not load the alerts");
+	return data.alerts;
+}
+
+/** Marks an alert seen; an alert seen before keeps its first time. */
+export async function markLadoAlertSeen(alertId: number): Promise<LadoAlert> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/alerts/{alertId}/seen", {
+		params: { path: { alertId: String(alertId) } },
+	});
+	if (error) throw ladoError(error, "Could not mark the alert seen");
+	return data;
+}
+
+/** The worker watch settings: the global row without a project, else the project's over it. */
+export async function fetchLadoWatchSettings(projectId?: string): Promise<LadoWatchSettings> {
+	const { data, error } = projectId
+		? await apiClient.GET("/api/v1/lado/projects/{projectId}/watch-settings", { params: { path: { projectId } } })
+		: await apiClient.GET("/api/v1/lado/watch-settings");
+	if (error) throw ladoError(error, "Could not load the watch settings");
+	return data;
+}
+
+/** Replaces the scope's row; a null value follows what it inherits. */
+export async function updateLadoWatchSettings(projectId: string | undefined, values: LadoWatchSettingsValues): Promise<LadoWatchSettings> {
+	const body = {
+		compactWindow: values.compactWindow,
+		taskCostCents: values.taskCostCents,
+		sessionCostCents: values.sessionCostCents,
+		sessionCompactions: values.sessionCompactions,
+		stallMinutes: values.stallMinutes,
+		wakeEnabled: values.wakeEnabled,
+	};
+	const { data, error } = projectId
+		? await apiClient.PUT("/api/v1/lado/projects/{projectId}/watch-settings", { params: { path: { projectId } }, body })
+		: await apiClient.PUT("/api/v1/lado/watch-settings", { body });
+	if (error) throw ladoError(error, "Could not save the watch settings");
 	return data;
 }

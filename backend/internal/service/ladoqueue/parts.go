@@ -98,12 +98,13 @@ func (s *Service) partsPass(ctx context.Context, now time.Time, settings domain.
 		return err
 	}
 	tight := settings.HoldOnMemoryTight && s.memoryTight(ctx)
+	holds := launchHolds{}
 	var problems []error
 	for _, active := range runs {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := s.advanceRun(ctx, active, settings, &load, tight, now); err != nil {
+		if err := s.advanceRun(ctx, active, settings, &load, tight, holds, now); err != nil {
 			problems = append(problems, fmt.Errorf("parts run %s: %w", active.Entry.ID, err))
 		}
 	}
@@ -119,9 +120,11 @@ type partRun struct {
 	execs map[domain.SessionID]domain.LadoExecution
 	// in is read once, when a worker starts.
 	in *ladotask.RunInput
+	// holds are the pass's launch holds (launch_hold.go).
+	holds launchHolds
 }
 
-func (s *Service) advanceRun(ctx context.Context, active domain.LadoActivePartRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad, tight bool, now time.Time) error {
+func (s *Service) advanceRun(ctx context.Context, active domain.LadoActivePartRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad, tight bool, holds launchHolds, now time.Time) error {
 	task, ok, err := s.deps.Store.LadoTask(ctx, active.Entry.TaskID)
 	if err != nil {
 		return fmt.Errorf("read task %s: %w", active.Entry.TaskID, err)
@@ -147,7 +150,7 @@ func (s *Service) advanceRun(ctx context.Context, active domain.LadoActivePartRu
 	if err != nil {
 		return err
 	}
-	r := &partRun{run: active.Run, entry: active.Entry, task: task, parts: parts, execs: map[domain.SessionID]domain.LadoExecution{}}
+	r := &partRun{run: active.Run, entry: active.Entry, task: task, parts: parts, execs: map[domain.SessionID]domain.LadoExecution{}, holds: holds}
 	for _, exec := range execs {
 		r.execs[exec.SessionID] = exec
 	}
@@ -468,8 +471,9 @@ func (s *Service) appendAudit(ctx context.Context, ev domain.LadoAuditEvent) {
 // the integration worker once every part is merged; otherwise a merge worker
 // for each conflict and a worker for each waiting part whose dependencies are
 // merged and whose paths no active part of the task may touch. A start needs
-// a free worker slot, memory and disk; what a part waits for is recorded on
-// it.
+// a free worker slot, memory and disk, an account that is not at its usage
+// limit and an agent that can start (launch_hold.go); what a part waits for
+// is recorded on it.
 func (s *Service) startReady(ctx context.Context, r *partRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad, tight bool, now time.Time) error {
 	if !r.entry.FailedAt.IsZero() {
 		return nil
@@ -483,6 +487,9 @@ func (s *Service) startReady(ctx context.Context, r *partRun, settings domain.La
 	diskLow := s.diskLow(settings, r.run.RepoDir)
 	if merged == len(r.parts) {
 		if load.Workers >= settings.MaxWorkers || tight || diskLow {
+			return nil
+		}
+		if hold := s.runHold(ctx, r, now); hold.reason != "" {
 			return nil
 		}
 		return s.startIntegration(ctx, r, settings, load, now)
@@ -520,6 +527,10 @@ func (s *Service) startReady(ctx context.Context, r *partRun, settings domain.La
 			reason = domain.LadoWaitingDiskLow
 		case load.Workers >= settings.MaxWorkers:
 			reason = domain.LadoWaitingSlotWorkers
+		default:
+			if hold := s.runHold(ctx, r, now); hold.reason != "" {
+				reason, detail = hold.reason, hold.detail
+			}
 		}
 		if reason != "" {
 			if part.WaitingReason != reason || part.WaitingDetail != detail {
@@ -574,6 +585,20 @@ func (r *partRun) overlapping(part domain.LadoTaskPart, ignore []string) (string
 		}
 	}
 	return "", false
+}
+
+// runHold is the launch hold of the run's next worker. A run whose inputs
+// cannot be read holds nothing here; its start fails on them.
+func (s *Service) runHold(ctx context.Context, r *partRun, now time.Time) launchHold {
+	in, err := s.input(ctx, r)
+	if err != nil {
+		return launchHold{}
+	}
+	agent, err := snapshotAgent(in.Snapshot)
+	if err != nil {
+		return launchHold{}
+	}
+	return s.launchHold(ctx, r.task.ID, agent.Harness, now, r.holds)
 }
 
 // input reads the run's approved inputs once a pass needs them.

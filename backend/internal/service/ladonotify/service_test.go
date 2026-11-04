@@ -24,6 +24,9 @@ type fakeStore struct {
 	requests  []domain.LadoPlanRequestNoticeFact
 	revisions []domain.LadoPlanRevisionNoticeFact
 	tasks     map[domain.ProjectID][]domain.LadoTask
+	alerts    []domain.LadoAlert
+	// alertsSince is the time the last alert read started from.
+	alertsSince time.Time
 }
 
 func (f *fakeStore) LadoNoticeSince(context.Context) (time.Time, error) { return f.since, nil }
@@ -93,6 +96,19 @@ func (f *fakeStore) ListLadoProjectsWithRunsSince(context.Context, time.Time) ([
 
 func (f *fakeStore) ListLadoTasks(_ context.Context, id domain.ProjectID, _ bool) ([]domain.LadoTask, error) {
 	return f.tasks[id], nil
+}
+
+func (f *fakeStore) ListLadoAlertsSince(_ context.Context, since time.Time) ([]domain.LadoAlert, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.alertsSince = since
+	var out []domain.LadoAlert
+	for _, a := range f.alerts {
+		if !a.CreatedAt.Before(since) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) texts(sent bool) []string {
@@ -269,5 +285,42 @@ func TestNoticesNobodyTakesAreDropped(t *testing.T) {
 	f.tick(t)
 	if len(f.orch.sent) != 0 {
 		t.Fatalf("dropped notices were sent: %q", f.orch.sent)
+	}
+}
+
+// Each new watch alert row becomes one notice of its one line, once; a
+// notice for it is never queued again, and an alert older than a day is not
+// read.
+func TestTickMovesWatchAlertsToTheOutboxOnce(t *testing.T) {
+	f := newFixture()
+	f.orch.live = false
+	f.now = t0.Add(48 * time.Hour)
+	ref := domain.IssueID("github:acme/demo#42")
+	f.store.alerts = []domain.LadoAlert{
+		{ID: 1, TaskID: "lado-task-1", ProjectID: "demo", IssueRef: ref, Kind: domain.LadoAlertTaskCost, Level: 1, Value: 120_00, Threshold: 100_00, CreatedAt: f.now.Add(-time.Minute)},
+		{ID: 2, TaskID: "lado-task-1", SessionID: "demo-7", ProjectID: "demo", IssueRef: ref, Kind: domain.LadoAlertSessionCompactions, Level: 1, Value: 3, Threshold: 3, CreatedAt: f.now.Add(-time.Minute)},
+		{ID: 3, TaskID: "lado-task-1", ProjectID: "demo", IssueRef: ref, Kind: domain.LadoAlertTaskCost, Level: 1, CreatedAt: f.now.Add(-30 * time.Hour)},
+	}
+	f.tick(t)
+	if want := f.now.Add(-domain.LadoNoticeKeep); !f.store.alertsSince.Equal(want) {
+		t.Fatalf("alerts read from %v, want %v", f.store.alertsSince, want)
+	}
+	adds := f.store.adds
+	f.tick(t)
+	if f.store.adds != adds {
+		t.Fatalf("the second tick queued %d alert notices again", f.store.adds-adds)
+	}
+	got := f.store.texts(false)
+	want := []string{
+		"LADO 알림: #42 작업 비용 추정 $120.00, 기준 $100.00 넘음",
+		"LADO 알림: #42 세션 demo-7 compact 3번(기준 3번) — 파트를 다시 쪼갤지 확인하세요",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("notices =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	for _, n := range f.store.notices {
+		if n.ProjectID != "demo" || !strings.HasPrefix(n.Key, "alert:") {
+			t.Fatalf("notice %+v, want project demo and an alert key", n)
+		}
 	}
 }

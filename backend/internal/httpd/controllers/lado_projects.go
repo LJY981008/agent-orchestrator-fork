@@ -31,6 +31,14 @@ type LadoController struct {
 	Setup       LadoSetupService
 	Verify      LadoVerifyService
 	Chrome      LadoClaudeChromeService
+	// Usage adds up what tasks' sessions spent (issue #42).
+	Usage LadoUsageService
+	// Watch serves the worker watch settings and alerts (issue #42).
+	Watch LadoWatchService
+	// Compact tells a project's compact window and the settings that turn
+	// auto-compact off, for the effective view (issue #42). Nil leaves the
+	// view's compact fields at the default window without warnings.
+	Compact LadoCompactService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
@@ -49,6 +57,7 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Put("/lado/projects/{projectId}/settings", c.putProjectSettings)
 	r.Get("/lado/projects/{projectId}/issues", c.listProjectIssues)
 	r.Get("/lado/projects/{projectId}/repositories", c.listProjectRepositories)
+	r.Get("/lado/projects/{projectId}/usage", c.getProjectUsage)
 	r.Post("/lado/connections/check", c.checkConnection)
 	r.Post("/lado/connections", c.createConnection)
 	r.Get("/lado/credentials", c.listCredentials)
@@ -77,6 +86,7 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/executions/{sessionId}", c.getExecution)
 	r.Get("/lado/tasks/{taskId}/parts", c.getTaskParts)
 	r.Get("/lado/tasks/{taskId}/timings", c.getTaskTimings)
+	r.Get("/lado/tasks/{taskId}/usage", c.getTaskUsage)
 	r.Get("/lado/timings", c.getTimings)
 	r.Get("/lado/dispatch-settings", c.getDispatchSettings)
 	r.Put("/lado/dispatch-settings", c.putDispatchSettings)
@@ -85,6 +95,7 @@ func (c *LadoController) Register(r chi.Router) {
 	r.Get("/lado/sessions/{sessionId}/claude-chrome", c.getSessionClaudeChrome)
 	c.registerSetup(r)
 	c.registerVerify(r)
+	c.registerWatch(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {

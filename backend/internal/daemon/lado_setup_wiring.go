@@ -90,6 +90,9 @@ type ladoSetupDeps struct {
 	// reviewers installs LADO's section of AO reviewers' system prompts;
 	// nil uses review.SetLadoSystemSection.
 	reviewers func(reviewcore.LadoSystemSection)
+	// reviewerEnv installs the worker watch's values on AO reviewers
+	// (issue #42); nil uses review.SetLadoReviewerEnv.
+	reviewerEnv func(reviewcore.LadoReviewerEnv)
 }
 
 // wireLadoSetup builds LADO's local setup service over the daemon's folders

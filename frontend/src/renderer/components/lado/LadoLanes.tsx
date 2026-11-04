@@ -5,21 +5,25 @@
 // waiting or starting. Once a worker starts, its session card on the board
 // stands for the task, so the task leaves the lanes. A task card is not a
 // session card: it stands for an issue that has no session yet. DESIGN.md's
-// decisions log records the lanes, the card and the task view.
+// decisions log records the lanes, the card and the task view. A card also
+// shows the task's estimated cost and its unseen alerts (issue #42), and a
+// click on a LADO alert's notification opens its task here.
 import { Ban } from "lucide-react";
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCancelLadoTask, useLadoRepositories, useLadoTasks } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
 import { ladoIssueLabel, type LadoRepository, type LadoTask } from "../../lib/lado";
+import { subscribeLadoTaskOpenRequests, takeLadoTaskOpenRequest } from "../../lib/lado-alert-notifications";
 import { ladoErrorText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoCardWatch, type LadoTaskWatch, useLadoBoardWatch } from "./LadoCardWatch";
 import { LadoPlanWorkerCardLink } from "./LadoPlanWorkerStatus";
-import { LadoTaskDialog } from "./LadoTaskDialog";
+import { LadoTaskDialog, type LadoTaskTab } from "./LadoTaskDialog";
 
 export function LadoLanes({ projectId }: { projectId: string }) {
 	const { t } = useTranslation();
@@ -27,14 +31,26 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 	const repositories = useLadoRepositories(projectId);
 	const cancelTask = useCancelLadoTask(projectId);
 	const [cancelling, setCancelling] = useState<LadoTask | null>(null);
-	const [openTaskId, setOpenTaskId] = useState<string | null>(null);
+	const [opened, setOpened] = useState<{ taskId: string; tab: LadoTaskTab } | null>(null);
+	const watchOf = useLadoBoardWatch(projectId);
+	// A click on a LADO alert's notification asks for its task, here or once
+	// this board shows. The task need not be in the lanes: its run's card is
+	// on the board then.
+	useEffect(() => {
+		const take = () => {
+			const request = takeLadoTaskOpenRequest(projectId);
+			if (request) setOpened({ taskId: request.taskId, tab: request.tab });
+		};
+		take();
+		return subscribeLadoTaskOpenRequests(take);
+	}, [projectId]);
 	const all = (tasks.data ?? []).filter(inLanes);
 	const queued = orderQueue(all.filter(isQueued));
 	const planned = orderTasks(all.filter((task) => !isQueued(task)));
 	const cardProps = {
 		repositories: repositories.data ?? [],
 		onCancel: setCancelling,
-		onOpen: (task: LadoTask) => setOpenTaskId(task.id),
+		onOpen: (task: LadoTask, tab: LadoTaskTab = "plan") => setOpened({ taskId: task.id, tab }),
 	};
 
 	return (
@@ -68,16 +84,17 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 						/>
 						<LadoTaskDialog
 							projectId={projectId}
-							taskId={openTaskId}
+							taskId={opened?.taskId ?? null}
+							initialTab={opened?.tab}
 							repositories={repositories.data ?? []}
 							onOpenChange={(open) => {
-								if (!open) setOpenTaskId(null);
+								if (!open) setOpened(null);
 							}}
 						/>
 					</>
 				}
 			>
-				{planned.map((task) => <LadoTaskCard key={task.id} task={task} {...cardProps} />)}
+				{planned.map((task) => <LadoTaskCard key={task.id} task={task} watch={watchOf(task.id)} {...cardProps} />)}
 			</LadoLane>
 			<LadoLane
 				label={t("lado.lane.queued")}
@@ -86,7 +103,7 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 				error={null}
 				empty={tasks.isSuccess && queued.length === 0 ? t("lado.lane.queuedEmpty") : null}
 			>
-				{queued.map((task) => <LadoTaskCard key={task.id} task={task} {...cardProps} />)}
+				{queued.map((task) => <LadoTaskCard key={task.id} task={task} watch={watchOf(task.id)} {...cardProps} />)}
 			</LadoLane>
 		</>
 	);
@@ -175,14 +192,16 @@ function orderQueue(tasks: LadoTask[]): LadoTask[] {
 
 function LadoTaskCard({
 	task,
+	watch,
 	repositories,
 	onCancel,
 	onOpen,
 }: {
 	task: LadoTask;
+	watch: LadoTaskWatch;
 	repositories: readonly LadoRepository[];
 	onCancel: (task: LadoTask) => void;
-	onOpen: (task: LadoTask) => void;
+	onOpen: (task: LadoTask, tab?: LadoTaskTab) => void;
 }) {
 	const { t, i18n } = useTranslation();
 	const status = ladoTaskStatus(task, t);
@@ -237,6 +256,7 @@ function LadoTaskCard({
 					>
 						{issueLabel}
 					</ProductExternalLink>
+					<LadoCardWatch watch={watch} className="ml-auto" onOpenAlerts={() => onOpen(task, "usage")} />
 				</div>
 			</div>
 			<div className="border-t border-border px-3.5 py-2.5">

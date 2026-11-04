@@ -416,6 +416,27 @@ type Cue struct {
 	UpdatedAt time.Time
 }
 
+type LadoAccountLimit struct {
+	AccountKey string
+	SessionID  string
+	ResetAt    time.Time
+	ResetGuess int64
+	DetectedAt time.Time
+	UpdatedAt  time.Time
+}
+
+type LadoAlert struct {
+	ID        int64
+	TaskID    string
+	SessionID string
+	Kind      string
+	Level     int64
+	Value     int64
+	Threshold int64
+	CreatedAt time.Time
+	SeenAt    sql.NullTime
+}
+
 type LadoAuditEvent struct {
 	ID          int64
 	At          time.Time
@@ -777,6 +798,28 @@ type LadoSessionMetric struct {
 	UpdatedAt       time.Time
 }
 
+type LadoSessionWatch struct {
+	SessionID       string
+	TaskID          string
+	ReadOffsetsJson string
+	Compactions     int64
+	CompactedAt     sql.NullTime
+	LimitState      string
+	LimitResetAt    sql.NullTime
+	LimitResetGuess int64
+	LimitSeenAt     sql.NullTime
+	Resumes         int64
+	ResumedAt       sql.NullTime
+	LimitStops      int64
+	StallState      string
+	StalledAt       sql.NullTime
+	Nudges          int64
+	NudgedAt        sql.NullTime
+	Stalls          int64
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
 type LadoSetupAdoption struct {
 	ID             string
 	CreatedAt      time.Time
@@ -878,6 +921,17 @@ type LadoVerification struct {
 	NotifiedJson       string
 	ProtectionError    string
 	ComputedAt         time.Time
+}
+
+type LadoWatchSetting struct {
+	ProjectID          string
+	CompactWindow      sql.NullInt64
+	TaskCostCents      sql.NullInt64
+	SessionCostCents   sql.NullInt64
+	SessionCompactions sql.NullInt64
+	StallMinutes       sql.NullInt64
+	WakeEnabled        sql.NullInt64
+	UpdatedAt          time.Time
 }
 
 type ModelUsageEvent struct {

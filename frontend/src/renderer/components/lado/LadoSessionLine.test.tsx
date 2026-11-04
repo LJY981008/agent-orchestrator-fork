@@ -1,7 +1,9 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
+import { subscribeLadoTaskOpenRequests, takeLadoTaskOpenRequest } from "../../lib/lado-alert-notifications";
 import type { WorkspaceSession } from "../../types/workspace";
 import { BoardSessionCardAdapter } from "../SessionsBoardAdapters";
 import { TooltipProvider } from "../ui/tooltip";
@@ -11,6 +13,8 @@ vi.mock("../../lib/lado", async (original) => ({
 	...await original<typeof import("../../lib/lado")>(),
 	fetchLadoProjectSettings: vi.fn(),
 	fetchLadoTasks: vi.fn(),
+	fetchLadoProjectUsage: vi.fn(),
+	fetchLadoUnseenAlertCounts: vi.fn(),
 }));
 
 // The card's PR facts come from the daemon; these cards have none.
@@ -68,6 +72,8 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: true, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true });
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task, { ...task, id: "lado-task-2", state: "queued", execution: undefined }]);
+	vi.mocked(lado.fetchLadoProjectUsage).mockResolvedValue({ projectId: "demo", tasks: [] });
+	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValue({ tasks: [] });
 });
 
 afterEach(cleanup);
@@ -158,4 +164,24 @@ test("adds where LADO's verification and integration of the PR stand, only while
 		expect(within(line).queryByTestId("lado-session-line-dot")).not.toBeInTheDocument();
 		cleanup();
 	}
+});
+
+// A running task has no lane card, so its alerts badge on the run's card is
+// the way to them: a click asks the board to open the task on its Usage tab,
+// and does not open the session too.
+test("the run's alerts badge opens its task on the Usage tab", async () => {
+	const user = userEvent.setup();
+	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValue({ tasks: [{ taskId: "lado-task-1", unseen: 3 }] });
+	const opened = vi.fn();
+	const requests: unknown[] = [];
+	const unsubscribe = subscribeLadoTaskOpenRequests(() => requests.push(takeLadoTaskOpenRequest("demo")));
+	renderWith(
+		<div role="list">
+			<BoardSessionCardAdapter onOpen={opened} onOpenArtifact={() => undefined} session={session("demo-7")} />
+		</div>,
+	);
+	await user.click(await screen.findByRole("button", { name: "Unseen alerts: 3" }));
+	unsubscribe();
+	expect(requests).toEqual([{ projectId: "demo", taskId: "lado-task-1", tab: "usage" }]);
+	expect(opened).not.toHaveBeenCalled();
 });
