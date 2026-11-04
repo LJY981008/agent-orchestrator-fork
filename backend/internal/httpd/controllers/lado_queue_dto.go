@@ -18,7 +18,7 @@ type LadoQueueItemResponse struct {
 	IssueRef  string `json:"issueRef"`
 	Title     string `json:"title" description:"The issue's title as LADO last read it."`
 	State     string `json:"state" enum:"queued,waiting,dispatching,running_parts,dispatched,failed,review_required,blocked,superseded,cancelled" description:"Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker."`
-	Reason    string `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,slot_workers,memory_tight,disk_low,paths_overlap,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the entry waits, needs review or is blocked, for the app to translate."`
+	Reason    string `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,slot_workers,memory_tight,disk_low,paths_overlap,issue_unreadable,retry,lado_mode_off,run_live,account_limited,agent_unavailable" description:"Why the entry waits, needs review or is blocked, for the app to translate."`
 	Attempts  int    `json:"attempts" description:"Attempts to start the worker so far. LADO gives up after three; waiting for a slot, memory or the issue is not an attempt."`
 	// NextAttemptAt is omitted once it is due.
 	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty" description:"When LADO looks at the entry again; omitted once that is due."`
@@ -35,7 +35,7 @@ type LadoQueueResponse struct {
 // LadoTaskQueueResponse is the queue entry of a task's newest approval.
 type LadoTaskQueueResponse struct {
 	State         string     `json:"state" enum:"queued,waiting,dispatching,running_parts,dispatched,failed,review_required,blocked,superseded,cancelled"`
-	Reason        string     `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,slot_workers,memory_tight,disk_low,paths_overlap,issue_unreadable,retry,lado_mode_off,run_live" description:"Why the entry waits, needs review or is blocked."`
+	Reason        string     `json:"reason,omitempty" enum:"rules_changed,issue_edited,plan_superseded,blocking_snapshot,base_ref_mismatch,agent_unsupported,slot_global,slot_project,slot_workers,memory_tight,disk_low,paths_overlap,issue_unreadable,retry,lado_mode_off,run_live,account_limited,agent_unavailable" description:"Why the entry waits, needs review or is blocked."`
 	Attempts      int        `json:"attempts" description:"Attempts to start the worker so far; LADO gives up after three."`
 	NextAttemptAt *time.Time `json:"nextAttemptAt,omitempty" description:"When LADO looks at the entry again; omitted once that is due."`
 	Error         string     `json:"error,omitempty" description:"Why starting the worker failed, without secrets; for a parts run that failed, which part and why."`

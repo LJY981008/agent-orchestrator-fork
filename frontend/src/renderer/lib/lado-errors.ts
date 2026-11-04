@@ -524,6 +524,9 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	retry: "lado.reason.retry",
 	lado_mode_off: "lado.reason.lado_mode_off",
 	run_live: "lado.reason.run_live",
+	// The worker watch holds a new worker without spending an attempt (issue #42).
+	account_limited: "lado.reason.account_limited",
+	agent_unavailable: "lado.reason.agent_unavailable",
 	// Validating, Integrating and Completed (step 8).
 	verifying: "lado.reason.verifying",
 	checks_pending: "lado.reason.checks_pending",
@@ -574,6 +577,8 @@ const planWorkerPhaseKeys: Record<LadoPlanWorkerPhase, LadoPlanWorkerKey> = {
 const planWaitingKeys: Record<NonNullable<LadoPlanWorker["waitingReason"]>, LadoPlanWorkerKey> = {
 	plan_worker_capacity: "lado.planWorker.waiting.plan_worker_capacity",
 	memory_tight: "lado.planWorker.waiting.memory_tight",
+	account_limited: "lado.planWorker.waiting.account_limited",
+	agent_unavailable: "lado.planWorker.waiting.agent_unavailable",
 };
 
 const planFailureKeys: Record<NonNullable<LadoPlanWorker["failureCode"]>, LadoPlanWorkerKey> = {

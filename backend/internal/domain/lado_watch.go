@@ -67,7 +67,7 @@ const (
 const (
 	LadoMinCompactWindow      = 100_000
 	LadoMaxCompactWindow      = 1_000_000
-	LadoMinCostCents          = 1_00
+	LadoMinCostCents          = 1
 	LadoMaxCostCents          = 100_000_00
 	LadoMinSessionCompactions = 1
 	LadoMaxSessionCompactions = 100

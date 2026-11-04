@@ -7398,7 +7398,7 @@ export interface components {
             sourceCommentId?: string;
             taskId: string;
             /** @enum {string} */
-            waitingReason?: "plan_worker_capacity" | "memory_tight";
+            waitingReason?: "plan_worker_capacity" | "memory_tight" | "account_limited" | "agent_unavailable";
         };
         LadoPlanResponse: {
             /** @description A valid approval covers this revision. */
@@ -7508,10 +7508,10 @@ export interface components {
              */
             startedAt?: null | string;
             /**
-             * @description Why the request waits: every plan worker slot of the Runs settings is taken, or memory is tight.
+             * @description Why the request waits: every plan worker slot of the Runs settings is taken, memory is tight, the account a new plan worker would run on is at its usage limit, or its agent cannot start.
              * @enum {string}
              */
-            waitingReason?: "plan_worker_capacity" | "memory_tight";
+            waitingReason?: "plan_worker_capacity" | "memory_tight" | "account_limited" | "agent_unavailable";
         };
         LadoPolicyProblemResponse: {
             /** @description Stable problem code the app translates. */
@@ -7583,7 +7583,7 @@ export interface components {
              * @description Why the entry waits, needs review or is blocked, for the app to translate.
              * @enum {string}
              */
-            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable";
             /**
              * @description Derived entry state. The queue lists open entries: queued, waiting (reason says why) and dispatching, while LADO starts the worker.
              * @enum {string}
@@ -8374,10 +8374,10 @@ export interface components {
             /** @description The parts it waits for (part_dependency) or the running part whose paths overlap (part_overlap). */
             waitingDetail?: string;
             /**
-             * @description Why a waiting part, or a conflict waiting for its merge worker, has not started; retry after a worker that did not start, until its next start.
+             * @description Why a waiting part, or a conflict waiting for its merge worker, has not started; retry after a worker that did not start, until its next start; account_limited while the account a new worker would run on is at its usage limit (waitingDetail is the reset time), agent_unavailable while its agent cannot start (waitingDetail is the agent).
              * @enum {string}
              */
-            waitingReason?: "part_dependency" | "part_overlap" | "slot_workers" | "memory_tight" | "disk_low" | "retry";
+            waitingReason?: "part_dependency" | "part_overlap" | "slot_workers" | "memory_tight" | "disk_low" | "retry" | "account_limited" | "agent_unavailable";
         };
         LadoTaskPartsResponse: {
             /** @description The approved base commit the integration branch started from. */
@@ -8429,7 +8429,7 @@ export interface components {
              * @description Why the entry waits, needs review or is blocked.
              * @enum {string}
              */
-            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live";
+            reason?: "rules_changed" | "issue_edited" | "plan_superseded" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable";
             /** @enum {string} */
             state: "queued" | "waiting" | "dispatching" | "running_parts" | "dispatched" | "failed" | "review_required" | "blocked" | "superseded" | "cancelled";
             /** @description The issue of the other task whose live run may touch the same files, for paths_overlap. */
@@ -8465,7 +8465,7 @@ export interface components {
              * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
         };
         LadoTaskTimelineResponse: {
             approvals: number;

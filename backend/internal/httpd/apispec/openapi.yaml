@@ -21511,6 +21511,8 @@ components:
           enum:
           - plan_worker_capacity
           - memory_tight
+          - account_limited
+          - agent_unavailable
           type: string
       required:
       - id
@@ -21742,10 +21744,13 @@ components:
           - string
         waitingReason:
           description: 'Why the request waits: every plan worker slot of the Runs
-            settings is taken, or memory is tight.'
+            settings is taken, memory is tight, the account a new plan worker would
+            run on is at its usage limit, or its agent cannot start.'
           enum:
           - plan_worker_capacity
           - memory_tight
+          - account_limited
+          - agent_unavailable
           type: string
       required:
       - requestId
@@ -21919,6 +21924,8 @@ components:
           - retry
           - lado_mode_off
           - run_live
+          - account_limited
+          - agent_unavailable
           type: string
         state:
           description: 'Derived entry state. The queue lists open entries: queued,
@@ -23923,7 +23930,9 @@ components:
         waitingReason:
           description: Why a waiting part, or a conflict waiting for its merge worker,
             has not started; retry after a worker that did not start, until its next
-            start.
+            start; account_limited while the account a new worker would run on is
+            at its usage limit (waitingDetail is the reset time), agent_unavailable
+            while its agent cannot start (waitingDetail is the agent).
           enum:
           - part_dependency
           - part_overlap
@@ -23931,6 +23940,8 @@ components:
           - memory_tight
           - disk_low
           - retry
+          - account_limited
+          - agent_unavailable
           type: string
       required:
       - id
@@ -24043,6 +24054,8 @@ components:
           - retry
           - lado_mode_off
           - run_live
+          - account_limited
+          - agent_unavailable
           type: string
         state:
           enum:
@@ -24163,6 +24176,8 @@ components:
           - retry
           - lado_mode_off
           - run_live
+          - account_limited
+          - agent_unavailable
           - verifying
           - checks_pending
           - checks_failed
@@ -24909,7 +24924,7 @@ components:
           description: The estimated cost, in cents, of one session past which LADO
             alerts, and once more past twice it.
           maximum: 1e+07
-          minimum: 100
+          minimum: 1
           type:
           - "null"
           - integer
@@ -24925,7 +24940,7 @@ components:
           description: The estimated cost, in cents, of a task's sessions together
             past which LADO alerts, and once more past twice it.
           maximum: 1e+07
-          minimum: 100
+          minimum: 1
           type:
           - "null"
           - integer
@@ -29033,7 +29048,7 @@ components:
           description: The estimated cost, in cents, of one session past which LADO
             alerts, and once more past twice it.
           maximum: 1e+07
-          minimum: 100
+          minimum: 1
           type:
           - "null"
           - integer
@@ -29049,7 +29064,7 @@ components:
           description: The estimated cost, in cents, of a task's sessions together
             past which LADO alerts, and once more past twice it.
           maximum: 1e+07
-          minimum: 100
+          minimum: 1
           type:
           - "null"
           - integer

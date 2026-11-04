@@ -16,7 +16,7 @@ type LadoPlanRequestIDParam struct {
 type LadoPlanWorkerResponse struct {
 	RequestID         string     `json:"requestId"`
 	Phase             string     `json:"phase" enum:"waiting,designing,critiquing,revising,submitted,fixing,done,failed,replaced" description:"waiting: for a plan worker slot or for memory; designing: the designer drafts the plan; critiquing: a critic reviews the draft, or LADO decides to skip the review; revising: the designer answers the review; submitted: LADO pins the final plan; fixing: the designer fixes the pinned plan's problems, once; done: the plan is pinned and the sessions stopped; failed and replaced end the request."`
-	WaitingReason     string     `json:"waitingReason,omitempty" enum:"plan_worker_capacity,memory_tight" description:"Why the request waits: every plan worker slot of the Runs settings is taken, or memory is tight."`
+	WaitingReason     string     `json:"waitingReason,omitempty" enum:"plan_worker_capacity,memory_tight,account_limited,agent_unavailable" description:"Why the request waits: every plan worker slot of the Runs settings is taken, memory is tight, the account a new plan worker would run on is at its usage limit, or its agent cannot start."`
 	FailureCode       string     `json:"failureCode,omitempty" enum:"plan_worker_spawn_failed,plan_worker_no_plan,plan_worker_timed_out,plan_worker_agent_unsupported,replaced" description:"Why the request failed, for the app to translate."`
 	DesignerSessionID string     `json:"designerSessionId,omitempty" description:"The designer session, once it started."`
 	CriticSessionID   string     `json:"criticSessionId,omitempty" description:"The newest critic session of the draft's review, once one started."`

@@ -9,8 +9,8 @@ import "time"
 // global row for a project, and the built-in default for the global row.
 type LadoWatchSettingsValues struct {
 	CompactWindow      *int   `json:"compactWindow" minimum:"100000" maximum:"1000000" description:"The token count Claude Code sessions of a project in LADO mode compact at (CLAUDE_CODE_AUTO_COMPACT_WINDOW), and Codex sessions' compact limit."`
-	TaskCostCents      *int64 `json:"taskCostCents" minimum:"100" maximum:"10000000" description:"The estimated cost, in cents, of a task's sessions together past which LADO alerts, and once more past twice it."`
-	SessionCostCents   *int64 `json:"sessionCostCents" minimum:"100" maximum:"10000000" description:"The estimated cost, in cents, of one session past which LADO alerts, and once more past twice it."`
+	TaskCostCents      *int64 `json:"taskCostCents" minimum:"1" maximum:"10000000" description:"The estimated cost, in cents, of a task's sessions together past which LADO alerts, and once more past twice it."`
+	SessionCostCents   *int64 `json:"sessionCostCents" minimum:"1" maximum:"10000000" description:"The estimated cost, in cents, of one session past which LADO alerts, and once more past twice it."`
 	SessionCompactions *int   `json:"sessionCompactions" minimum:"1" maximum:"100" description:"How many times one session may compact before LADO alerts."`
 	StallMinutes       *int   `json:"stallMinutes" minimum:"10" maximum:"10080" description:"How long a running worker may rest without a report before LADO takes it as stalled."`
 	WakeEnabled        *bool  `json:"wakeEnabled" description:"Let LADO send its two fixed wake messages to the workers: the limit resume and the stall nudge."`

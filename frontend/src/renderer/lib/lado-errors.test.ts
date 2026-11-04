@@ -5,6 +5,7 @@ import { LadoApiError } from "./lado";
 import {
 	ladoCheckCommandProblemText,
 	ladoErrorText,
+	ladoPlanWaitingText,
 	ladoPolicyProblemText,
 	ladoProtectedPathProblemText,
 	ladoQueueErrorText,
@@ -173,6 +174,9 @@ const reasons = [
 	"retry",
 	"lado_mode_off",
 	"run_live",
+	// The worker watch's holds (issue #42).
+	"account_limited",
+	"agent_unavailable",
 	// Validating, Integrating and Completed (step 8).
 	"verifying",
 	"checks_pending",
@@ -286,6 +290,10 @@ describe("LADO queue errors and reasons", () => {
 		expect(ladoReasonText(ko, "rules_changed")).toBe("승인 뒤 규칙이나 로컬 설정이 바뀜");
 		expect(ladoReasonText(en, "timed_out")).toBe("Stopped at the maximum run time");
 		expect(ladoReasonText(ko, "run_live")).toBe("이 작업의 이전 실행이 아직 돌고 있음");
+		expect(ladoReasonText(ko, "account_limited")).toBe("계정 사용 한도가 풀릴 때까지 대기");
+		// A plan worker request waits for the same two holds.
+		expect(ladoPlanWaitingText(ko, "account_limited")).toBe("계정이 사용 한도에 걸려 있습니다");
+		expect(ladoPlanWaitingText(en, "agent_unavailable")).toBe("The agent cannot start");
 		// No reason reads empty; one from a newer daemon shows as is.
 		expect(ladoReasonText(en, undefined)).toBe("");
 		expect(ladoReasonText(en, "something_new")).toBe("something_new");
