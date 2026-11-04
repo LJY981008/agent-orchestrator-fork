@@ -45,3 +45,43 @@ func TestCodexAdapterAppendsLadoOverrides(t *testing.T) {
 		t.Fatalf("without a hook: launch %q, restore %q, %v; want upstream's", launched, restored, err)
 	}
 }
+
+// The compact limit of a project in LADO mode follows LADO's setup options on
+// launch and restore (issue #42), and a failing source leaves it out rather
+// than fail the command.
+func TestCodexAdapterAppendsTheLadoCompactLimit(t *testing.T) {
+	ctx, plugin := context.Background(), &Plugin{resolvedBinary: "codex"}
+	launch := ports.LaunchConfig{SessionID: "s-1", Prompt: "go"}
+	restore := ports.RestoreConfig{Session: ports.SessionRef{ID: "s-1", Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "thread-1"}}}
+	commands := func() ([]string, []string, error) {
+		launched, err := plugin.GetLaunchCommand(ctx, launch)
+		restored, _, restoreErr := plugin.GetRestoreCommand(ctx, restore)
+		return launched, restored, errors.Join(err, restoreErr)
+	}
+	upstreamLaunch, upstreamRestore, err := commands()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	setup := []string{"-c", `mcp_servers.docs={url = "https://docs"}`}
+	compact := []string{"-c", "model_auto_compact_token_limit=200000"}
+	plugin.SetLadoOverrides(func(context.Context, string) ([]string, error) { return setup, nil })
+	plugin.SetLadoCompactOverrides(func(_ context.Context, id string) ([]string, error) {
+		if id != "s-1" {
+			t.Errorf("asked for %q", id)
+		}
+		return compact, nil
+	})
+	both := append(slices.Clone(setup), compact...)
+	wantLaunch := slices.Insert(slices.Clone(upstreamLaunch), len(upstreamLaunch)-2, both...)
+	wantRestore := slices.Insert(slices.Clone(upstreamRestore), len(upstreamRestore)-1, both...)
+	if launched, restored, err := commands(); err != nil || !reflect.DeepEqual(launched, wantLaunch) || !reflect.DeepEqual(restored, wantRestore) {
+		t.Fatalf("launch %q, restore %q, %v; want %q and %q", launched, restored, err, wantLaunch, wantRestore)
+	}
+
+	plugin.SetLadoOverrides(nil)
+	plugin.SetLadoCompactOverrides(func(context.Context, string) ([]string, error) { return nil, errors.New("db closed") })
+	if launched, restored, err := commands(); err != nil || !reflect.DeepEqual(launched, upstreamLaunch) || !reflect.DeepEqual(restored, upstreamRestore) {
+		t.Fatalf("a failing compact source: launch %q, restore %q, %v; want upstream's", launched, restored, err)
+	}
+}

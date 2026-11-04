@@ -57,6 +57,9 @@ type conversation struct {
 	// a turn without its own approval setting runs under it.
 	launchMode ports.PermissionMode
 	events     chan ports.ChatEvent
+	// ladoCompactLimit is LADO's compact limit for the thread config, zero
+	// for none (lado_compact.go).
+	ladoCompactLimit int64
 	// Effective defaults returned when Codex opened or resumed this thread.
 	threadModel, threadEffort string
 

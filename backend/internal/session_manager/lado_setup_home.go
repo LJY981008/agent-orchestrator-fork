@@ -34,12 +34,21 @@ func (m *Manager) SetLadoSetupHome(home ports.LadoSetupHome) {
 // hook command then decides each of its tool calls, and the Chat driver passes
 // its tool lists (docs/LJY-PRD/TDD.md §5.1). LADO's other launch values
 // (applyLadoLaunchEnv) go on first, for the agent being started: during a
-// switch to Claude Code the stored harness still names the old agent.
+// switch to Claude Code the stored harness still names the old agent. They do
+// not wait for a config home: a project in LADO mode gets its compact window
+// whether or not LADO manages its Claude setup. A Codex start gets its launch
+// values here too, as it has no config home.
 func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id domain.SessionID, env map[string]string) error {
-	if env == nil || !m.isClaudeCodeAgent(agent) {
+	if env == nil {
 		return nil
 	}
-	if m.ladoSetupHome == nil && m.ladoClaudeChrome == nil {
+	if !m.isClaudeCodeAgent(agent) {
+		if m.isAgentFor(agent, domain.HarnessCodex) {
+			m.applyLadoCodexLaunchEnv(ctx, id, env)
+		}
+		return nil
+	}
+	if m.ladoSetupHome == nil && m.ladoClaudeChrome == nil && m.ladoLaunchValues == nil {
 		return nil
 	}
 	rec, err := m.getRecord(ctx, id)
@@ -50,7 +59,7 @@ func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id 
 		}
 		return fmt.Errorf("LADO setup home: %w", err)
 	}
-	m.applyLadoLaunchEnv(rec, domain.HarnessClaudeCode, env)
+	m.applyLadoLaunchEnv(ctx, rec, domain.HarnessClaudeCode, env)
 	if m.ladoSetupHome == nil {
 		return nil
 	}
@@ -75,16 +84,14 @@ func (m *Manager) applyLadoSetupHome(ctx context.Context, agent ports.Agent, id 
 // isClaudeCodeAgent reports whether agent is the adapter AO resolves for
 // Claude Code.
 func (m *Manager) isClaudeCodeAgent(agent ports.Agent) bool {
-	if m.agents == nil || agent == nil {
-		return false
-	}
-	claude, ok := m.agents.Agent(domain.HarnessClaudeCode)
-	if !ok || claude == nil {
-		return false
-	}
-	// == on interfaces panics for an adapter type that is not comparable.
-	t := reflect.TypeOf(agent)
-	return t == reflect.TypeOf(claude) && t.Comparable() && agent == claude
+	return m.isAgentFor(agent, domain.HarnessClaudeCode)
+}
+
+// sameAgent reports whether two adapters are the same one. == on interfaces
+// panics for an adapter type that is not comparable.
+func sameAgent(a, b ports.Agent) bool {
+	t := reflect.TypeOf(a)
+	return t == reflect.TypeOf(b) && t.Comparable() && a == b
 }
 
 // ladoSafeNativeTranscriptPath is safeNativeTranscriptPath for a session

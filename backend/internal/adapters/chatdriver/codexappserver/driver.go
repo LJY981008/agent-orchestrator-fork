@@ -323,7 +323,7 @@ func (d *Driver) Start(ctx context.Context, cfg ports.ChatStartConfig) (ports.Ch
 	// thread/start has no top-level effort field either; carry the durable AO
 	// choice as a config override like thread/resume does, so a fresh thread
 	// does not silently fall back to the provider default.
-	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+	if config := withLadoCompactLimit(threadConfig(cfg.Effort, cfg.MCPServers), conv.ladoCompactLimit); len(config) > 0 {
 		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {
@@ -403,7 +403,7 @@ func (d *Driver) Resume(ctx context.Context, cfg ports.ChatResumeConfig) (ports.
 	// thread/resume has no top-level effort field. Codex exposes persistent
 	// reasoning effort as a config override, so carry the durable AO choice into
 	// the resumed thread instead of silently falling back to the provider default.
-	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+	if config := withLadoCompactLimit(threadConfig(cfg.Effort, cfg.MCPServers), conv.ladoCompactLimit); len(config) > 0 {
 		params["config"] = config
 	}
 	// Developer instructions are launch context, not durable conversation
@@ -495,6 +495,26 @@ func (d *Driver) connect(ctx context.Context, workdir string, env map[string]str
 }
 
 func (d *Driver) connectSession(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	dataDir, workdir string,
+	env map[string]string,
+	prepareEnv func(context.Context) (map[string]string, error),
+	providerScopeID string,
+	reconnectOnly bool,
+) (*conversation, bool, error) {
+	// LADO fork: the compact limit rides the environment to here; the thread
+	// config carries it on (lado_compact.go).
+	carrier := &ladoCompactCarrier{}
+	env, prepareEnv = carrier.take(env), carrier.wrap(prepareEnv)
+	conv, reconnected, err := d.connectSessionEnv(ctx, sessionID, dataDir, workdir, env, prepareEnv, providerScopeID, reconnectOnly)
+	if conv != nil {
+		conv.ladoCompactLimit = carrier.limit.Load()
+	}
+	return conv, reconnected, err
+}
+
+func (d *Driver) connectSessionEnv(
 	ctx context.Context,
 	sessionID domain.SessionID,
 	dataDir, workdir string,
@@ -778,7 +798,7 @@ func (d *Driver) ForkIntoHost(ctx context.Context, sourceProviderConversationID,
 	}
 	// Same overrides as thread/start and thread/resume: without the MCP servers
 	// a fresh fork has no AO tools until a restart resumes it.
-	if config := threadConfig(cfg.Effort, cfg.MCPServers); len(config) > 0 {
+	if config := withLadoCompactLimit(threadConfig(cfg.Effort, cfg.MCPServers), conv.ladoCompactLimit); len(config) > 0 {
 		params["config"] = config
 	}
 	if cfg.SystemPrompt != "" {
