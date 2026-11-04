@@ -90,10 +90,19 @@ type reviewRunResponse struct {
 
 // submitReviewItem mirrors controllers.SubmitReviewItem.
 type submitReviewItem struct {
-	RunID          string `json:"runId"`
-	Verdict        string `json:"verdict"`
-	Body           string `json:"body,omitempty"`
-	GithubReviewID string `json:"githubReviewId,omitempty"`
+	RunID          string                `json:"runId"`
+	Verdict        string                `json:"verdict"`
+	Body           string                `json:"body,omitempty"`
+	GithubReviewID string                `json:"githubReviewId,omitempty"`
+	Comments       []submitReviewComment `json:"comments,omitempty"`
+}
+
+// submitReviewComment mirrors controllers.SubmitReviewComment: a required
+// change AO posts on a GitLab merge request for the reviewer.
+type submitReviewComment struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Body string `json:"body"`
 }
 
 // submitReviewRequest mirrors controllers.SubmitReviewInput.

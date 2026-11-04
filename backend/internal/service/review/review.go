@@ -86,6 +86,7 @@ type Service struct {
 	store              Store
 	requester          ports.SCMReviewRequester
 	resolver           ports.SCMReviewResolver
+	poster             ports.SCMReviewPoster // LADO fork: posts reviews on GitLab merge requests
 	clock              func() time.Time
 	telemetry          ports.EventSink
 	codexOperationGate ports.CodexOperationGate
@@ -157,6 +158,12 @@ func WithReviewRequester(requester ports.SCMReviewRequester) Option {
 // WithReviewResolver wires provider-backed review-thread resolution.
 func WithReviewResolver(resolver ports.SCMReviewResolver) Option {
 	return func(s *Service) { s.resolver = resolver }
+}
+
+// WithReviewPoster wires daemon-side posting of reviews on GitLab merge
+// requests (LADO fork). See postGitLabReview.
+func WithReviewPoster(poster ports.SCMReviewPoster) Option {
+	return func(s *Service) { s.poster = poster }
 }
 
 // WithTelemetry records review outcomes.
@@ -725,6 +732,10 @@ type SubmittedReview struct {
 	Verdict        domain.ReviewVerdict
 	Body           string
 	GithubReviewID string
+	// Comments are the reviewer's required changes for a GitLab merge
+	// request, which AO posts on the MR for it (LADO fork). GitHub reviewers
+	// post their own inline comments, so this stays empty there.
+	Comments []ports.SCMReviewComment
 }
 
 // Submit records a reviewer's result for a specific worker review pass.
@@ -810,6 +821,11 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 	if run.SessionID != workerID {
 		return domain.ReviewRun{}, fmt.Errorf("%w: review run %q does not belong to worker %q", ErrInvalid, runID, workerID)
 	}
+	// LADO fork: a GitLab run has no GitHub review; AO posts it instead.
+	gitlabRun := isGitLabMergeRequest(run.PRURL)
+	if gitlabRun {
+		githubReviewID = ""
+	}
 
 	switch run.Status {
 	case domain.ReviewRunRunning:
@@ -832,6 +848,12 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		run.Body = body
 		run.GithubReviewID = githubReviewID
 		run.AutoInjectReview = session.AutoInjectReview
+		postedToProvider := githubReviewID != ""
+		if gitlabRun {
+			// Only here, on the real running -> complete transition, so a
+			// re-submit or a superseded run never posts twice.
+			postedToProvider = s.postGitLabReview(ctx, run, review)
+		}
 		// Only on the real running -> complete transition. Re-submitting an
 		// already-complete run returns early below, so telemetry stays idempotent
 		// the same way the store does.
@@ -839,7 +861,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			"harness":            string(run.Harness),
 			"verdict":            string(verdict),
 			"duration_ms":        s.clock().Sub(run.CreatedAt).Milliseconds(),
-			"posted_to_provider": githubReviewID != "",
+			"posted_to_provider": postedToProvider,
 			// Which pass produced this verdict. A manual and an automatic review
 			// mean different things about how the feature is being used, and the
 			// verdict split between them is the whole question.

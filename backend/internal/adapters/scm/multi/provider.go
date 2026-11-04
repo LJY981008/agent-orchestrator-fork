@@ -227,6 +227,27 @@ func (m *Provider) ResolveReviewThread(ctx context.Context, request ports.SCMRev
 	return resolver.ResolveReviewThread(ctx, request)
 }
 
+// PostReview posts an AO review through the GitLab sub-provider. GitHub
+// reviewers post their own reviews with gh, so every other provider returns
+// ErrSCMUnsupported.
+func (m *Provider) PostReview(ctx context.Context, post ports.SCMReviewPost) error {
+	if m == nil {
+		return fmt.Errorf("%w: review poster is unavailable", ports.ErrSCMUnsupported)
+	}
+	if post.PR.Repo.Provider != "gitlab" {
+		return fmt.Errorf("%w: review posting for provider %q", ports.ErrSCMUnsupported, post.PR.Repo.Provider)
+	}
+	p, err := m.resolve(post.PR.Repo.Provider)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ports.ErrSCMUnsupported, err)
+	}
+	poster, ok := p.(ports.SCMReviewPoster)
+	if !ok {
+		return fmt.Errorf("%w: review posting for provider %q", ports.ErrSCMUnsupported, post.PR.Repo.Provider)
+	}
+	return poster.PostReview(ctx, post)
+}
+
 type credentialChecker interface {
 	SCMCredentialsAvailable(ctx context.Context) (bool, error)
 }
