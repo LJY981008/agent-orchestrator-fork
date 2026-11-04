@@ -186,11 +186,33 @@ function VerifyItemRow({
 			{item.kind === "protection" && (item.details.missing ?? []).includes(LADO_PROTECTION_ANY_SOURCE) ? (
 				<p className="pl-3.5 text-xs text-muted-foreground">{t("lado.protection.anySourceGuide")}</p>
 			) : null}
+			{item.kind === "base_branch" && item.code === "base_overlap" ? <OverlapFiles item={item} /> : null}
 			{runs.length > 0 ? <CommandRuns projectId={projectId} sessionId={execution.sessionId} runs={runs} canRun={canRun} /> : null}
 			{item.kind === "evidence" && verification.evidence.length > 0 ? (
 				<EvidenceList execution={execution} verification={verification} />
 			) : null}
 		</li>
+	);
+}
+
+/**
+ * The files the remote base branch changed that this head changed too or the
+ * plan names: the first ones LADO kept, then how many more there are.
+ */
+function OverlapFiles({ item }: { item: LadoVerifyItem }) {
+	const { t } = useTranslation();
+	const files = item.details.overlap ?? [];
+	if (files.length === 0) return null;
+	const rest = Math.max(0, (item.details.overlapCount ?? 0) - files.length);
+	return (
+		<ul className="flex min-w-0 flex-col pl-3.5 text-xs text-muted-foreground" data-testid="lado-verify-overlap">
+			{files.map((file) => (
+				<li key={file} className="truncate font-mono" title={file}>
+					{file}
+				</li>
+			))}
+			{rest > 0 ? <li>{t("lado.verify.base.overlapMore", { count: rest })}</li> : null}
+		</ul>
 	);
 }
 
@@ -290,6 +312,10 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 					return t("lado.verify.base.deleted", { branch });
 				case "no_local_branch":
 					return t("lado.verify.base.noLocalBranch", { branch });
+				case "base_advanced":
+					return t("lado.verify.base.advanced", { branch });
+				case "base_overlap":
+					return t("lado.verify.base.overlap", { count: Math.max(1, details.overlapCount ?? 0, details.overlap?.length ?? 0), branch });
 			}
 			return code ? fallback : t("lado.verify.base.passed", { branch });
 		}

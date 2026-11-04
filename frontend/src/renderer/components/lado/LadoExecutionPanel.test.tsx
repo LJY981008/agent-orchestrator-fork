@@ -6,6 +6,13 @@ import * as lado from "../../lib/lado";
 import type { WorkspaceSession } from "../../types/workspace";
 import { LadoExecutionPanel } from "./LadoExecutionPanel";
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }));
+
+vi.mock("@tanstack/react-router", async (original) => ({
+	...(await original<typeof import("@tanstack/react-router")>()),
+	useNavigate: () => navigate,
+}));
+
 vi.mock("../../lib/lado", async (original) => ({
 	...await original<typeof import("../../lib/lado")>(),
 	fetchLadoExecution: vi.fn(),
@@ -275,4 +282,32 @@ test("shows what LADO verified on the PR's head under the snapshot, and nothing 
 	await screen.findByTestId("lado-execution-panel");
 	expect(screen.queryByTestId("lado-verification")).not.toBeInTheDocument();
 	expect(screen.queryByRole("button", { name: "Verification" })).not.toBeInTheDocument();
+});
+
+test("shows the resolve worker of a conflicting PR: state, failed attempts, its session and the last error", async () => {
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(
+		execution({ resolve: { state: "needs_human", attempts: 2, sessionId: "demo-9", error: "the push did not show" } }),
+	);
+	renderPanel();
+
+	const panel = await screen.findByTestId("lado-execution-panel");
+	const row = fact(panel, "Resolve worker");
+	expect(row).toHaveTextContent("Stopped: resolve the conflict yourself · 2 of 2 attempts failed");
+	expect(row).toHaveTextContent("the push did not show");
+	fireEvent.click(within(row).getByRole("button", { name: "Open session" }));
+	expect(navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-9" } });
+});
+
+test("shows a running resolve worker, and no row without one", async () => {
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution({ resolve: { state: "resolving", attempts: 0, sessionId: "demo-9" } }));
+	await act(() => appI18n.changeLanguage("ko"));
+	const { unmount } = renderPanel();
+	const panel = await screen.findByTestId("lado-execution-panel");
+	expect(fact(panel, "해결 워커")).toHaveTextContent("충돌 해결 중");
+	unmount();
+
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution());
+	renderPanel();
+	const plain = await screen.findByTestId("lado-execution-panel");
+	expect(within(plain).queryByText("해결 워커")).not.toBeInTheDocument();
 });

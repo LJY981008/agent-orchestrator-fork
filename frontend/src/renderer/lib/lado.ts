@@ -83,6 +83,7 @@ export type LadoQueueState = LadoQueueItem["state"];
 export type LadoQueueReason = NonNullable<LadoQueueItem["reason"]>;
 export type LadoExecution = components["schemas"]["LadoExecutionResponse"];
 export type LadoExecutionPR = components["schemas"]["LadoExecutionPRResponse"];
+export type LadoExecutionResolve = components["schemas"]["LadoExecutionResolveResponse"];
 export type LadoDispatchSettings = components["schemas"]["LadoDispatchSettingsResponse"];
 export type LadoDispatchSettingsInput = components["schemas"]["UpdateLadoDispatchSettingsRequest"];
 /** A maximum run time the daemon accepts, in minutes; 0 means no limit. */
@@ -349,6 +350,12 @@ export function ladoIssueLabel(number: number, repositoryRef: string, repositori
 
 /** How many times LADO tries to start a task's worker before the task fails. */
 export const LADO_MAX_ATTEMPTS = 3;
+
+/**
+ * How many resolve workers in a row may fail for one PR before LADO stops and
+ * asks the developer (backend domain.LadoMaxResolveAttempts).
+ */
+export const LADO_MAX_RESOLVE_ATTEMPTS = 2;
 
 // One map per task list, shared by every board card that reads the list.
 const tasksBySession = new WeakMap<readonly LadoTask[], Map<string, LadoTask>>();

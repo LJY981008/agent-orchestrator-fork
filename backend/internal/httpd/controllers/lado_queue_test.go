@@ -263,9 +263,35 @@ func TestLadoAPI_ExecutionDetail(t *testing.T) {
 	if !got.StartedAt.Equal(now) || got.DeadlineAt == nil || !got.DeadlineAt.Equal(now.Add(8*time.Hour)) || got.TimedOutAt != nil {
 		t.Fatalf("run started %s, deadline %v, timed out %v; want the eight-hour run", got.StartedAt, got.DeadlineAt, got.TimedOutAt)
 	}
-	wantPR := controllers.LadoExecutionPRResponse{URL: "https://github.com/acme/demo/pull/7", Number: 7}
+	wantPR := controllers.LadoExecutionPRResponse{URL: "https://github.com/acme/demo/pull/7", Number: 7, Mergeability: "unknown"}
 	if got.PR == nil || *got.PR != wantPR {
 		t.Fatalf("PR = %+v, want the open PR 7", got.PR)
+	}
+
+	if got.Resolve != nil {
+		t.Fatalf("resolve = %+v, want none while no resolve worker was needed", got.Resolve)
+	}
+
+	// The PR conflicts and LADO's resolve workers gave up: the run says how
+	// far they got and a person resolves it.
+	if err := store.WritePR(ctx, domain.PullRequest{
+		URL: "https://github.com/acme/demo/pull/7", SessionID: worker, Number: 7, Mergeability: domain.MergeConflicting, UpdatedAt: now.Add(2 * time.Minute),
+	}, nil, nil); err != nil {
+		t.Fatalf("write the conflicting PR: %v", err)
+	}
+	if ok, err := store.UpsertLadoPRResolve(ctx, domain.LadoPRResolve{
+		ExecutionSessionID: worker, State: domain.LadoResolveNeedsHuman, Attempts: 2, SessionID: "mer-9", Error: "the push did not show", UpdatedAt: now.Add(3 * time.Minute),
+	}); err != nil || !ok {
+		t.Fatalf("UpsertLadoPRResolve = %v, %v", ok, err)
+	}
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/lado/executions/"+string(worker), "")
+	got = decodeLadoJSON[controllers.LadoExecutionResponse](t, body)
+	wantResolve := controllers.LadoExecutionResolveResponse{State: "needs_human", Attempts: 2, SessionID: "mer-9", Error: "the push did not show"}
+	if got.PR == nil || got.PR.Mergeability != "conflicting" || got.Resolve == nil || *got.Resolve != wantResolve {
+		t.Fatalf("PR %+v, resolve %+v; want the conflicting PR and %+v", got.PR, got.Resolve, wantResolve)
+	}
+	if got.State != "validating" || got.StateReason != domain.LadoValidatingConflictUnresolved {
+		t.Fatalf("state = %s (%s), want validating (conflict_unresolved)", got.State, got.StateReason)
 	}
 
 	// Stopped at its deadline, the execution says when.
@@ -569,7 +595,7 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 	}
 	exec := tasks["lado-task-1"].Execution
 	if !exec.StartedAt.Equal(now) || exec.DeadlineAt == nil || !exec.DeadlineAt.Equal(now.Add(8*time.Hour)) ||
-		exec.TimedOut || exec.SessionEnded || exec.PR == nil || *exec.PR != (controllers.LadoExecutionPRResponse{URL: "https://github.com/acme/demo/pull/11", Number: 11}) {
+		exec.TimedOut || exec.SessionEnded || exec.PR == nil || *exec.PR != (controllers.LadoExecutionPRResponse{URL: "https://github.com/acme/demo/pull/11", Number: 11, Mergeability: "unknown"}) {
 		t.Fatalf("running execution %+v (PR %+v), want the live run with its open PR", exec, exec.PR)
 	}
 	if exec := tasks["lado-task-7"].Execution; !exec.SessionEnded || exec.TimedOut || exec.PR != nil {

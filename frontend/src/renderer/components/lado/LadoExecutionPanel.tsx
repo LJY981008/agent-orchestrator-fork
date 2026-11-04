@@ -3,17 +3,20 @@
 // fixed, never the rules now: the agent and the mode it started in, the
 // permission ceiling, the rules that were on and the text the worker got, the
 // local setup items its session got, the plan revision, how far the base
-// moved, and when LADO stops the run. Once the worker opened a PR, the
-// Verification section under it shows what LADO verified on the PR's head.
+// moved, when LADO stops the run, and the resolve worker LADO started for
+// the run's PR once it conflicted after the worker's session ended. Once the
+// worker opened a PR, the Verification section under it shows what LADO
+// verified on the PR's head.
 import { agentLabel, InspectorSection } from "@aoagents/product-ui";
 import { ChevronDown } from "lucide-react";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLadoExecution } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
-import { LadoApiError, type LadoExecution } from "../../lib/lado";
+import { LADO_MAX_RESOLVE_ATTEMPTS, LadoApiError, type LadoExecution, type LadoExecutionResolve } from "../../lib/lado";
 import { ladoErrorText, ladoReasonText, ladoSetupKindLabel } from "../../lib/lado-errors";
 import { ladoRuleName } from "../../lib/lado-rules";
+import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import type { WorkspaceSession } from "../../types/workspace";
 import { formatResetTime } from "../settings/CodexAccountDetails";
@@ -29,7 +32,7 @@ export function LadoExecutionPanel({ session, hostId }: { session: WorkspaceSess
 	if (execution.data?.snapshot && projectId) {
 		return (
 			<>
-				<ExecutionSnapshot execution={execution.data} />
+				<ExecutionSnapshot execution={execution.data} projectId={projectId} />
 				<LadoVerificationSection execution={execution.data} projectId={projectId} />
 			</>
 		);
@@ -49,7 +52,7 @@ export function LadoExecutionPanel({ session, hostId }: { session: WorkspaceSess
 	return null;
 }
 
-function ExecutionSnapshot({ execution }: { execution: LadoExecution }) {
+function ExecutionSnapshot({ execution, projectId }: { execution: LadoExecution; projectId: string }) {
 	const { t, i18n } = useTranslation();
 	const { snapshot, plan, base } = execution;
 	const rules = snapshot.rules.map((rule) => ladoRuleName(t, rule.id, rule.name));
@@ -96,6 +99,11 @@ function ExecutionSnapshot({ execution }: { execution: LadoExecution }) {
 					) : null}
 					{ahead > 0 ? <Fact label={t("lado.run.base")}>{t("lado.run.baseAhead", { count: ahead })}</Fact> : null}
 					{deadline ? <Fact label={t("lado.run.deadline")}>{deadline}</Fact> : null}
+					{execution.resolve ? (
+						<Fact label={t("lado.run.resolveWorker")}>
+							<ResolveWorker resolve={execution.resolve} projectId={projectId} />
+						</Fact>
+					) : null}
 				</dl>
 				<WorkerText prompt={snapshot.prompt} />
 			</div>
@@ -109,6 +117,44 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 			<dt className="text-muted-foreground">{label}</dt>
 			<dd className="min-w-0 break-words text-foreground">{children}</dd>
 		</>
+	);
+}
+
+/**
+ * The resolve worker of the run's PR: where it stands, how many workers in a
+ * row failed, a link to the newest one's session and the last failure. A
+ * resolve that gave up needs the developer, so it reads in the error color.
+ */
+function ResolveWorker({ resolve, projectId }: { resolve: LadoExecutionResolve; projectId: string }) {
+	const { t } = useTranslation();
+	const navigateToSession = useNavigateToSession();
+	const state =
+		resolve.state === "resolving"
+			? t("lado.run.resolveResolving")
+			: resolve.state === "needs_human"
+				? t("lado.run.resolveNeedsHuman")
+				: resolve.attempts === 0 && resolve.sessionId
+					? t("lado.run.resolveResolved")
+					: null;
+	return (
+		<span className="flex flex-col gap-0.5" data-testid="lado-resolve-worker">
+			<span className={cn(resolve.state === "needs_human" && "text-error")}>
+				{[state, resolve.attempts > 0 ? t("lado.run.resolveFailed", { count: resolve.attempts, max: LADO_MAX_RESOLVE_ATTEMPTS }) : null]
+					.filter(Boolean)
+					.join(" · ")}
+			</span>
+			{resolve.sessionId ? (
+				<button
+					type="button"
+					className="self-start rounded-sm text-foreground underline-offset-2 outline-none hover:underline focus-visible:outline-2 focus-visible:outline-ring"
+					onClick={() => navigateToSession(projectId, resolve.sessionId ?? "")}
+				>
+					{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
+					<span className="text-xs leading-5">{t("lado.view.openSession")}</span>
+				</button>
+			) : null}
+			{resolve.error ? <span className="break-words text-xs text-muted-foreground">{resolve.error}</span> : null}
+		</span>
 	);
 }
 
