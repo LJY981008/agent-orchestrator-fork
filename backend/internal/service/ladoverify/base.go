@@ -5,8 +5,15 @@ package ladoverify
 // remote one. An agent that moved it from its worktree, as with git
 // update-ref refs/heads/main HEAD, leaves reflog entries the remote branch
 // does not hold, and the developer confirms them before the integration.
+//
+// LADO fork (#53): the item also tells when the remote base moved past the
+// head's merge base, as when another PR merged into it. A change there to a
+// file the head changed or the plan names fails as base_overlap: the head
+// must take in the base and be verified again. Another move needs
+// confirming as base_advanced.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,10 +28,18 @@ import (
 // and remote the dispatcher resolved, the pull request's head, when the
 // execution started and the local branch's commit the dispatcher recorded
 // (empty when the branch did not exist or LADO did not record it).
+//
+// Target is the branch the PR merges into, whose remote-tracking branch the
+// base move compares with (empty: Branch). Prefix is the repository's folder
+// in a workspace project, slash-separated; Affected are the plan's
+// affected_paths and Ignore the project's overlap ignore globs, both from
+// the project root.
 type BaseInput struct {
 	Dir, Branch, Remote, HeadSHA string
 	StartedAt                    time.Time
 	DispatchLocalSHA             string
+	Target, Prefix               string
+	Affected, Ignore             []string
 }
 
 // EvaluateBase computes the base_branch item. It does not fetch: it compares
@@ -40,8 +55,14 @@ type BaseInput struct {
 // existed at dispatch and is gone, with its reflog, as base_deleted. A
 // repository without the local branch otherwise passes as no_local_branch.
 // Without the remote-tracking branch there is nothing to compare with, and
-// the item passes unless the branch was deleted. Codes rank
-// already_on_base, base_deleted, base_moved, then reflog_off.
+// the item passes unless the branch was deleted.
+//
+// When the remote-tracking target branch is past the head's merge base with
+// it, the files changed on it since that the head changed too or the plan
+// names, except those an ignore glob matches, fail the item as
+// base_overlap; without such a file the move needs confirming as
+// base_advanced. Codes rank base_overlap, already_on_base, base_deleted,
+// base_moved, reflog_off, then base_advanced.
 func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerifyItem, error) {
 	if in.Dir == "" || in.Branch == "" {
 		return domain.LadoVerifyItem{}, errors.New("evaluate the base branch: no repository or branch")
@@ -70,8 +91,13 @@ func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerify
 			}
 		}
 	}
+	if err := baseAdvance(ctx, git, in, &details); err != nil {
+		return domain.LadoVerifyItem{}, fmt.Errorf("evaluate the base branch: %w", err)
+	}
 	outcome, code := domain.LadoVerifyPass, ""
 	switch {
+	case details.OverlapCount > 0:
+		outcome, code = domain.LadoVerifyFail, domain.LadoCodeBaseOverlap
 	case details.AlreadyOnBase:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeAlreadyOnBase
 	case details.Deleted:
@@ -80,10 +106,64 @@ func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerify
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseMoved
 	case reflogOff:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeReflogOff
+	case details.Advanced:
+		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseAdvanced
 	case local == "":
 		code = domain.LadoCodeNoLocalBranch
 	}
 	return domain.NewLadoVerifyItem(domain.LadoVerifyBaseBranch, outcome, code, details)
+}
+
+// baseAdvance sets details.Advanced, AdvancedTip, Overlap and OverlapCount
+// when the remote-tracking target branch is past the head's merge base with
+// it. A repository without that branch or the head has nothing to compare,
+// and a head the branch holds nothing to take in.
+func baseAdvance(ctx context.Context, git Git, in BaseInput, details *domain.LadoBaseBranchDetails) error {
+	if in.Remote == "" || in.HeadSHA == "" {
+		return nil
+	}
+	ref := "refs/remotes/" + in.Remote + "/" + cmp.Or(in.Target, in.Branch)
+	tip, err := commitOf(ctx, git, in.Dir, ref)
+	if err != nil || tip == "" {
+		return err
+	}
+	head, err := commitOf(ctx, git, in.Dir, in.HeadSHA)
+	if err != nil || head == "" {
+		return err
+	}
+	// A head the target holds already has nothing to take in.
+	base, err := git.MergeBase(ctx, in.Dir, tip, head)
+	if err != nil || base == tip || base == head {
+		return err
+	}
+	details.Advanced, details.AdvancedTip = true, tip
+	onBase, err := git.ChangedPaths(ctx, in.Dir, base, tip)
+	if err != nil {
+		return err
+	}
+	onHead, err := git.ChangedPaths(ctx, in.Dir, base, head)
+	if err != nil {
+		return err
+	}
+	headPaths := PrefixPaths(in.Prefix, onHead)
+	var overlap []string
+	for _, p := range PrefixPaths(in.Prefix, onBase) {
+		if anyGlob(in.Ignore, p) || slices.Contains(overlap, p) {
+			continue
+		}
+		if slices.Contains(headPaths, p) || anyGlob(in.Affected, p) {
+			overlap = append(overlap, p)
+		}
+	}
+	slices.Sort(overlap)
+	details.OverlapCount = len(overlap)
+	details.Overlap = overlap[:min(len(overlap), outsidePlanMax)]
+	return nil
+}
+
+// anyGlob reports whether one of globs matches the path p.
+func anyGlob(globs []string, p string) bool {
+	return slices.ContainsFunc(globs, func(glob string) bool { return MatchPath(glob, p) })
 }
 
 // commitOf returns the commit ref names, or "" when it names none.

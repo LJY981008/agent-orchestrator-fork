@@ -526,9 +526,12 @@ func (s *verifyStore) ApproveLadoIntegration(_ context.Context, a domain.LadoInt
 	if slices.ContainsFunc(s.proofs, func(p domain.LadoPresenceProof) bool { return p.Nonce == proof.Nonce }) {
 		return domain.ErrLadoPresenceReplayed
 	}
-	if slices.ContainsFunc(s.approvals, func(x domain.LadoIntegrationApproval) bool {
+	if i := slices.IndexFunc(s.approvals, func(x domain.LadoIntegrationApproval) bool {
 		return x.ExecutionSessionID == a.ExecutionSessionID && x.PRURL == a.PRURL && x.HeadSHA == a.HeadSHA && strings.EqualFold(x.TargetBranch, a.TargetBranch)
-	}) {
+	}); i >= 0 {
+		if s.approvals[i].Revoked() {
+			return domain.ErrLadoIntegrationRevoked
+		}
 		return domain.ErrLadoIntegrationAlreadyApproved
 	}
 	record, ok := s.records[verifyKey(a.ExecutionSessionID, a.HeadSHA)]
@@ -603,6 +606,30 @@ func (s *verifyStore) ResetLadoIntegrationStatus(_ context.Context, id string) e
 		}
 	}
 	return fmt.Errorf("no integration approval %s", id)
+}
+
+// RevokeLadoIntegrationApproval keeps the store's rules: a GitHub
+// approval's status starts over as pending with no attempts, a GitLab one
+// stays not_applicable, and a revoked approval stays as it was.
+func (s *verifyStore) RevokeLadoIntegrationApproval(_ context.Context, id, reason string, at time.Time, audit domain.LadoAuditEvent) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.approvals {
+		a := &s.approvals[i]
+		if a.ID != id {
+			continue
+		}
+		if a.Revoked() {
+			return false, nil
+		}
+		a.RevokedAt, a.RevokedReason = at, reason
+		if a.StatusState != domain.LadoIntegrationStatusNotApplicable {
+			a.StatusState, a.StatusAttempts, a.StatusError = domain.LadoIntegrationStatusPending, 0, ""
+		}
+		s.audits = append(s.audits, audit)
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *verifyStore) LadoProjectSettings(_ context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {

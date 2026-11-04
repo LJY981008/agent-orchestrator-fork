@@ -9,7 +9,9 @@ package ladoverify
 // not merge through AO. Other PRs merge as before.
 
 import (
+	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -28,6 +30,12 @@ var _ ports.LadoMergeGate = (*Service)(nil)
 // branch refuses with LADO_INTEGRATION_TARGET_CHANGED (S5). Without any LADO
 // record, a PR of a session of a project in LADO mode refuses too. A read
 // that fails refuses the merge.
+//
+// #53: before it lets an approved head merge, the gate fetches the target
+// and, when the remote target moved since the approval, computes the head's
+// record again (no check command starts). A record that turned base_overlap
+// revokes the approval and refuses with LADO_INTEGRATION_REVOKED; a fetch or
+// computation that fails refuses with LADO_MERGE_GATE_FAILED.
 func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error {
 	head := strings.ToLower(strings.TrimSpace(headSHA))
 	_, isExecution, err := s.deps.Store.LadoExecution(ctx, pr.SessionID)
@@ -56,13 +64,69 @@ func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, hea
 	approvals = slices.DeleteFunc(approvals, func(a domain.LadoIntegrationApproval) bool {
 		return a.ExecutionSessionID != pr.SessionID && !slices.Contains(naming, a.ExecutionSessionID)
 	})
-	if _, ok := domain.LadoApprovalFor(approvals, pr.TargetBranch); ok {
-		return nil
+	if approval, ok := domain.LadoApprovalFor(approvals, pr.TargetBranch); ok {
+		return s.approvedBaseHolds(ctx, pr, head, approval)
 	}
-	if len(approvals) > 0 {
+	// A revoked approval does not count; one into this target says why.
+	revoked := slices.ContainsFunc(approvals, func(a domain.LadoIntegrationApproval) bool {
+		return a.Revoked() && (a.TargetBranch == "" || strings.EqualFold(a.TargetBranch, pr.TargetBranch))
+	})
+	approvals = slices.DeleteFunc(approvals, domain.LadoIntegrationApproval.Revoked)
+	switch {
+	case revoked:
+		return integrationRevoked()
+	case len(approvals) > 0:
 		return targetChanged(pr, head, approvals[len(approvals)-1].TargetBranch)
 	}
 	return approvalRequired(pr, head)
+}
+
+// approvedBaseHolds checks that the approval still holds for the remote
+// target as it is now: it fetches the target, and when its commit is not the
+// one the approval was given against, computes the head's record again and
+// revokes the approval if the record turned base_overlap.
+func (s *Service) approvedBaseHolds(ctx context.Context, pr domain.PullRequest, head string, approval domain.LadoIntegrationApproval) error {
+	exec, ok, err := s.deps.Store.LadoExecution(ctx, approval.ExecutionSessionID)
+	switch {
+	case err != nil:
+		return s.mergeGateFailed(pr, head, err)
+	case !ok:
+		return s.mergeGateFailed(pr, head, fmt.Errorf("execution %s not found", approval.ExecutionSessionID))
+	}
+	// The record is of the PR and head the approval holds for, whatever PR
+	// the execution's session has now.
+	exec.PR.URL, exec.PR.HeadSHA, exec.PR.Merged, exec.PR.Closed = approval.PRURL, head, false, false
+	exec.PR.TargetBranch = cmp.Or(approval.TargetBranch, pr.TargetBranch, exec.PR.TargetBranch)
+	if pr.Number != 0 {
+		exec.PR.Number = pr.Number
+	}
+	in, err := s.headInputs(ctx, exec)
+	if err != nil {
+		return s.mergeGateFailed(pr, head, err)
+	}
+	if err := s.fetchBranch(ctx, in.dir, in.baseRemote, in.target); err != nil {
+		return s.mergeGateFailed(pr, head, fmt.Errorf("fetch the target branch: %s", redactedErrorLine(err)))
+	}
+	s.fetchDue(fetchKey(in.dir, in.baseRemote, in.target), true)
+	tip, err := s.remoteTip(ctx, in)
+	switch {
+	case err != nil:
+		return s.mergeGateFailed(pr, head, err)
+	case strings.EqualFold(tip, approval.BaseTipSHA):
+		return nil
+	}
+	record, err := s.verifyHead(ctx, exec, verifyOptions{})
+	if err != nil {
+		return s.mergeGateFailed(pr, head, err)
+	}
+	revoked, err := s.revokeOverlapped(ctx, exec, record)
+	if err != nil {
+		return s.mergeGateFailed(pr, head, err)
+	}
+	if baseOverlapped(record) || slices.ContainsFunc(revoked, func(a domain.LadoIntegrationApproval) bool { return a.ID == approval.ID }) {
+		return integrationRevoked()
+	}
+	return nil
 }
 
 // inLadoProject reports whether the session belongs to a project in LADO

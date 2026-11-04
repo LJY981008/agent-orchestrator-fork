@@ -54,8 +54,13 @@ func TestBaseMovedFromAWorktreeNeedsConfirming(t *testing.T) {
 		r.commit(t0.Add(3*time.Minute), r.upstream, "Record a fix")
 		r.publish(t0.Add(3 * time.Minute))
 		r.git(t0.Add(4*time.Minute), r.dir, "pull", "-q", "--ff-only")
+		tip := r.git(t0, r.dir, "rev-parse", "refs/remotes/origin/main")
 
-		checkBase(t, r, "origin", head, t0, domain.LadoVerifyPass, "", domain.LadoBaseBranchDetails{Branch: "main", Remote: "origin"})
+		// The pull moved nothing LADO asks about; origin moved past the
+		// head without touching its files (#53).
+		checkBase(t, r, "origin", head, t0, domain.LadoVerifyConfirm, domain.LadoCodeBaseAdvanced, domain.LadoBaseBranchDetails{
+			Branch: "main", Remote: "origin", Advanced: true, AdvancedTip: tip,
+		})
 	})
 }
 

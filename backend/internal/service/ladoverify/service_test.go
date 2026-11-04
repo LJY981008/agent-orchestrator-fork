@@ -1466,6 +1466,50 @@ type verifyGit struct {
 	ancestors map[string]bool
 	// ops are the reads and fetches of each repository, in order.
 	ops map[string][]string
+	// refs are the commits other refs name in every repository, such as a
+	// remote-tracking base branch; fetches counts the fetches of each
+	// "remote branch" and fetchFails fails the fetches of a branch.
+	refs       map[string]string
+	fetches    map[string]int
+	fetchFails map[string]error
+}
+
+// setRef makes ref name sha in every repository.
+func (g *verifyGit) setRef(ref, sha string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.refs == nil {
+		g.refs = map[string]string{}
+	}
+	g.refs[ref] = sha
+}
+
+// moveBase moves origin's main to tip, whose merge changed the paths, and
+// makes the head commits name themselves: the head is behind the tip.
+func (g *verifyGit) moveBase(tip string, changed []string, heads ...string) {
+	g.setRef("refs/remotes/origin/main", tip)
+	g.setBranch(tip, nil, changed)
+	for _, head := range heads {
+		g.setRef(head, head)
+	}
+}
+
+// failFetch fails the fetches of remote's branch with err, or lets them
+// work again with nil.
+func (g *verifyGit) failFetch(remote, branch string, err error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.fetchFails == nil {
+		g.fetchFails = map[string]error{}
+	}
+	g.fetchFails[remote+" "+branch] = err
+}
+
+// fetchCount is how many times remote's branch was fetched.
+func (g *verifyGit) fetchCount(remote, branch string) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.fetches[remote+" "+branch]
 }
 
 func (g *verifyGit) setBranch(head string, commits []Commit, changed []string) {
@@ -1655,6 +1699,9 @@ func (g *verifyGit) RevParse(_ context.Context, dir, ref string) (string, error)
 	if err := g.read(dir, "rev-parse"); err != nil {
 		return "", err
 	}
+	if sha, ok := g.refs[ref]; ok {
+		return sha, nil
+	}
 	return "", fmt.Errorf("%s in %s: %w", ref, dir, ErrRefNotFound)
 }
 
@@ -1668,7 +1715,14 @@ func (g *verifyGit) Status(_ context.Context, dir string) (string, error) {
 func (g *verifyGit) Fetch(_ context.Context, dir, remote, branch string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return g.read(dir, "fetch "+remote+" "+branch)
+	if err := g.read(dir, "fetch "+remote+" "+branch); err != nil {
+		return err
+	}
+	if g.fetches == nil {
+		g.fetches = map[string]int{}
+	}
+	g.fetches[remote+" "+branch]++
+	return g.fetchFails[remote+" "+branch]
 }
 
 // opsOf returns the reads and fetches of the repository at dir, in order.
