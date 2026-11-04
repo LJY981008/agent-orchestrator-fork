@@ -17,8 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/procmem"
+	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladowatch"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -35,6 +37,10 @@ var (
 	_ Branches = (*router.Workspace)(nil)
 	_ Memory   = (*usage.MemoryReader)(nil)
 	_ Git      = execGit{}
+	// The watch tells the accounts at their usage limit, and AO's agent
+	// service checks an agent before a launch.
+	_ AccountLimits = (*ladowatch.Service)(nil)
+	_ Preflight     = (*agentsvc.Service)(nil)
 	// The dispatcher stops the worker of a task cancelled while it runs.
 	_ ladotask.Killer = (*Service)(nil)
 )
@@ -260,6 +266,77 @@ type fakeStore struct {
 	liveTasks    []domain.LadoLiveRunTask
 	extraWorkers int
 	overlapOff   bool
+	// alerts are the alerts raised, once each.
+	alerts []domain.LadoAlert
+}
+
+func (f *fakeStore) AddLadoAlert(_ context.Context, a domain.LadoAlert) (domain.LadoAlertID, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, old := range f.alerts {
+		if old.TaskID == a.TaskID && old.SessionID == a.SessionID && old.Kind == a.Kind && old.Level == a.Level {
+			return 0, false, nil
+		}
+	}
+	f.alerts = append(f.alerts, a)
+	return domain.LadoAlertID(len(f.alerts)), true, nil
+}
+
+func (f *fakeStore) raised() []domain.LadoAlert {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.alerts)
+}
+
+// fakeAccountLimits holds every agent's account until resetAt, while set.
+type fakeAccountLimits struct {
+	mu      sync.Mutex
+	resetAt time.Time
+	asked   int
+}
+
+func (f *fakeAccountLimits) LaunchAccountLimit(_ context.Context, harness domain.AgentHarness, now time.Time) (domain.LadoAccountLimit, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.asked++
+	if f.resetAt.IsZero() || !now.Before(f.resetAt) {
+		return domain.LadoAccountLimit{}, false, nil
+	}
+	key, _ := domain.LadoAccountKey(harness, "")
+	return domain.LadoAccountLimit{AccountKey: key, ResetAt: f.resetAt}, true, nil
+}
+
+// fakePreflight answers its checks with next, one each, and then with err;
+// it counts the checks.
+type fakePreflight struct {
+	mu     sync.Mutex
+	next   []error
+	err    error
+	checks int
+}
+
+func (f *fakePreflight) PreflightLaunch(context.Context, domain.AgentHarness) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.checks++
+	if len(f.next) > 0 {
+		err := f.next[0]
+		f.next = f.next[1:]
+		return err
+	}
+	return f.err
+}
+
+func (f *fakePreflight) set(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.err = err
+}
+
+func (f *fakePreflight) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.checks
 }
 
 func (f *fakeStore) add(entries ...domain.LadoQueueEntry) {

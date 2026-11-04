@@ -125,16 +125,19 @@ func (s *Service) closed(ctx context.Context, id domain.LadoPlanRequestID) bool 
 	return err == nil && ok && !req.Open()
 }
 
-// admitDesigner starts a waiting request's designer when a slot is free and
-// memory allows, and records why it waits otherwise. It reports whether the
-// designer started.
+// admitDesigner starts a waiting request's designer when a slot is free,
+// memory allows and its account and agent can take it (planworker_hold.go),
+// and records why it waits otherwise. It reports whether the designer
+// started.
 func (s *Service) admitDesigner(ctx context.Context, task domain.LadoTask, req domain.LadoPlanRequest, settings domain.LadoDispatchSettings, running int) bool {
-	waiting := ""
+	var waiting string
 	switch {
 	case running >= max(settings.MaxPlanWorkers, 1):
 		waiting = domain.LadoPlanWaitingCapacity
 	case settings.HoldOnMemoryTight && s.deps.Queue != nil && s.deps.Queue.MemoryTight(ctx):
 		waiting = domain.LadoPlanWaitingMemory
+	default:
+		waiting = s.planWorkerHold(ctx, task, s.deps.Clock().UTC())
 	}
 	if waiting != "" {
 		if req.WaitingReason != waiting {
@@ -457,8 +460,13 @@ func (s *Service) driveCritique(ctx context.Context, task domain.LadoTask, req d
 	}
 }
 
-// beginCritique records a critic's attempt, then starts it.
+// beginCritique records a critic's attempt, then starts it. While a new
+// plan worker would wait (planworker_hold.go), neither happens: a later pass
+// begins the review, whose time runs from then.
 func (s *Service) beginCritique(ctx context.Context, task domain.LadoTask, req domain.LadoPlanRequest, attempt int, draft []byte, now time.Time) {
+	if s.planWorkerHold(ctx, task, now) != "" {
+		return
+	}
 	c := domain.LadoPlanCritique{ID: s.newCritiqueID(), RequestID: req.ID, Attempt: attempt, State: domain.LadoCritiqueRunning, StartedAt: now}
 	if err := s.deps.Store.CreateLadoPlanCritique(ctx, c, s.planEvent(now, "plan_worker.critique_started", req, map[string]any{"attempt": attempt})); err != nil {
 		s.deps.Log.Warn("LADO could not record a review", "request", req.ID, "err", err)
@@ -503,7 +511,9 @@ func (s *Service) startCritic(ctx context.Context, task domain.LadoTask, req dom
 // turn ended twice without findings, and reminds it once.
 func (s *Service) watchCritic(ctx context.Context, task domain.LadoTask, req domain.LadoPlanRequest, c domain.LadoPlanCritique, draft []byte, now time.Time) {
 	if c.SessionID == "" {
-		s.startCritic(ctx, task, req, c, draft, now)
+		if s.planWorkerHold(ctx, task, now) == "" {
+			s.startCritic(ctx, task, req, c, draft, now)
+		}
 		return
 	}
 	critic := s.planSession(ctx, c.SessionID)
