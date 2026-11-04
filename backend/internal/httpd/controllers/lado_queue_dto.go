@@ -52,6 +52,7 @@ type LadoExecutionPRResponse struct {
 	HeadSHA      string `json:"headSha,omitempty" description:"The PR's head as AO last observed it, which LADO verifies; omitted until AO observed it."`
 	TargetBranch string `json:"targetBranch,omitempty" description:"The branch the PR merges into."`
 	Title        string `json:"title,omitempty"`
+	Mergeability string `json:"mergeability,omitempty" enum:"unknown,mergeable,conflicting,blocked,unstable" description:"Whether the host can merge the PR into its target as AO last observed it."`
 }
 
 // LadoTaskExecutionResponse is a task's newest execution: the worker session
@@ -140,11 +141,22 @@ type LadoExecutionResponse struct {
 	PartID       string                        `json:"partId,omitempty" description:"The part a part or merge worker works on."`
 	Branch       string                        `json:"branch,omitempty" description:"The branch LADO started the worker on; omitted when AO named it."`
 	State        string                        `json:"state" enum:"running,validating,integration_pending,integrating,failed,completed,closed_unmerged" description:"The state the run gives its task, as the daemon derives it: running without a PR, failed when it timed out or ended without one, and once a PR is open that PR's verification and integration."`
-	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested,status_not_posted,merged_without_approval" description:"Why the run is in its state, as the task's stateReason says it."`
+	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested,status_not_posted,merged_without_approval,base_overlap,merge_conflict,resolving,conflict_unresolved" description:"Why the run is in its state, as the task's stateReason says it."`
 	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
 	// Verification and Integration are those of the PR's current head.
 	Verification *LadoVerificationResponse        `json:"verification,omitempty" description:"What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying."`
 	Integration  *LadoIntegrationApprovalResponse `json:"integration,omitempty" description:"The integration approval of the PR's current head; omitted without one."`
+	Resolve      *LadoExecutionResolveResponse    `json:"resolve,omitempty" description:"What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed."`
+}
+
+// LadoExecutionResolveResponse is where resolving an execution's PR stands:
+// a resolve worker is a merge worker without a part that takes the base into
+// the PR's branch.
+type LadoExecutionResolveResponse struct {
+	State     string `json:"state,omitempty" enum:"resolving,needs_human" description:"resolving: a resolve worker runs, or LADO waits for its push to show; needs_human: the workers failed twice in a row, or one asked for a person. Omitted when none runs and none gave up."`
+	Attempts  int    `json:"attempts" description:"Resolve workers that failed in a row; a resolved PR starts again from 0."`
+	SessionID string `json:"sessionId,omitempty" description:"The newest resolve worker's AO session."`
+	Error     string `json:"error,omitempty" description:"The last failure, without secrets."`
 }
 
 // LadoDispatchSettingsResponse is the dispatcher's settings for every
