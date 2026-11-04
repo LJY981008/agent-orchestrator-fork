@@ -17716,29 +17716,6 @@ components:
         deleteArtifacts:
           type: boolean
       type: object
-    ControllersLadoExecutionResolveResponse:
-      properties:
-        attempts:
-          description: Resolve workers that failed in a row; a resolved PR starts
-            again from 0.
-          type: integer
-        error:
-          description: The last failure, without secrets.
-          type: string
-        sessionId:
-          description: The newest resolve worker's AO session.
-          type: string
-        state:
-          description: 'resolving: a resolve worker runs, or LADO waits for its push
-            to show; needs_human: the workers failed twice in a row, or one asked
-            for a person. Omitted when none runs and none gave up.'
-          enum:
-          - resolving
-          - needs_human
-          type: string
-      required:
-      - attempts
-      type: object
     ControllersRemoteHostAccountTokenResponse:
       properties:
         hostId:
@@ -20721,6 +20698,29 @@ components:
       - sha256
       - approvedAt
       type: object
+    LadoExecutionResolveResponse:
+      properties:
+        attempts:
+          description: Resolve workers that failed in a row; a resolved PR starts
+            again from 0.
+          type: integer
+        error:
+          description: The last failure, without secrets.
+          type: string
+        sessionId:
+          description: The newest resolve worker's AO session.
+          type: string
+        state:
+          description: 'resolving: a resolve worker runs, or LADO waits for its push
+            to show; needs_human: the workers failed twice in a row, or one asked
+            for a person. Omitted when none runs and none gave up.'
+          enum:
+          - resolving
+          - needs_human
+          type: string
+      required:
+      - attempts
+      type: object
     LadoExecutionResponse:
       properties:
         attempt:
@@ -20751,7 +20751,7 @@ components:
           $ref: '#/components/schemas/LadoExecutionPRResponse'
           description: The newest PR of the worker session; omitted while it has none.
         resolve:
-          $ref: '#/components/schemas/ControllersLadoExecutionResolveResponse'
+          $ref: '#/components/schemas/LadoExecutionResolveResponse'
           description: What LADO's resolve workers did for the PR once it conflicted,
             or its base moved under its head with a change to the same paths, while
             the run's own session no longer ran; omitted while none was needed.

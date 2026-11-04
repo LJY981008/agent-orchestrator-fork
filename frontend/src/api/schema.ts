@@ -5925,19 +5925,6 @@ export interface components {
         ControllersKillSessionRequest: {
             deleteArtifacts?: boolean;
         };
-        ControllersLadoExecutionResolveResponse: {
-            /** @description Resolve workers that failed in a row; a resolved PR starts again from 0. */
-            attempts: number;
-            /** @description The last failure, without secrets. */
-            error?: string;
-            /** @description The newest resolve worker's AO session. */
-            sessionId?: string;
-            /**
-             * @description resolving: a resolve worker runs, or LADO waits for its push to show; needs_human: the workers failed twice in a row, or one asked for a person. Omitted when none runs and none gave up.
-             * @enum {string}
-             */
-            state?: "resolving" | "needs_human";
-        };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
             token: string;
@@ -7077,6 +7064,19 @@ export interface components {
             /** @description Hash of the approved plan file. */
             sha256: string;
         };
+        LadoExecutionResolveResponse: {
+            /** @description Resolve workers that failed in a row; a resolved PR starts again from 0. */
+            attempts: number;
+            /** @description The last failure, without secrets. */
+            error?: string;
+            /** @description The newest resolve worker's AO session. */
+            sessionId?: string;
+            /**
+             * @description resolving: a resolve worker runs, or LADO waits for its push to show; needs_human: the workers failed twice in a row, or one asked for a person. Omitted when none runs and none gave up.
+             * @enum {string}
+             */
+            state?: "resolving" | "needs_human";
+        };
         LadoExecutionResponse: {
             /** @description The attempt that started the worker, from 1. */
             attempt: number;
@@ -7096,7 +7096,7 @@ export interface components {
             /** @description The newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
             /** @description What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed. */
-            resolve?: components["schemas"]["ControllersLadoExecutionResolveResponse"];
+            resolve?: components["schemas"]["LadoExecutionResolveResponse"];
             /**
              * @description What the worker does in a task split into parts: one part, the merge of one part, or the integration that opens the pull request; omitted for a task's one worker.
              * @enum {string}
