@@ -121,3 +121,36 @@ func LadoSessionLive(s SessionRecord) bool {
 func LadoSessionStateLive(terminated bool, activity ActivityState) bool {
 	return !terminated && activity != ActivityExited
 }
+
+// LadoResolveCandidate is an execution the resolver looks at: its open PR
+// conflicts with its base or its head's record failed with base_overlap, or
+// its resolve row still has a state or a spawn request (whatever the PR).
+type LadoResolveCandidate struct {
+	// Execution carries its newest PR, the verification facts of that PR's
+	// head and its resolve, as task reads give them.
+	Execution LadoExecution
+	ProjectID ProjectID
+	// PRSourceBranch is the branch the PR merges from, which a resolve worker
+	// pushes to.
+	PRSourceBranch string
+	// SessionLive reports whether the execution's own session still works
+	// (LadoSessionLive); ResolveSessionLive the same of the resolve row's
+	// newest worker, false without one.
+	SessionLive        bool
+	ResolveSessionLive bool
+	// Resolve is the execution's resolve row, zero (Version 0) while it has
+	// none.
+	Resolve LadoPRResolve
+}
+
+// Conflicting reports whether the candidate's open PR conflicts with its
+// base, or its current head's record failed with base_overlap: what a
+// resolve worker resolves.
+func (c LadoResolveCandidate) Conflicting() bool {
+	pr := c.Execution.PR
+	if pr.URL == "" || pr.Merged || pr.Closed {
+		return false
+	}
+	return pr.Mergeability == MergeConflicting ||
+		(c.Execution.Verification.BaseOverlap && c.Execution.Verification.HeadSHA == pr.HeadSHA)
+}

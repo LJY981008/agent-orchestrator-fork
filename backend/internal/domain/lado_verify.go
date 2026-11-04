@@ -710,6 +710,10 @@ type LadoIntegrationApproval struct {
 	RevokedReason string
 }
 
+// LadoAuditIntegrationRevoked is the audit action of a revoked integration
+// approval.
+const LadoAuditIntegrationRevoked = "integration.revoked"
+
 // Revoked reports whether LADO withdrew the approval.
 func (a LadoIntegrationApproval) Revoked() bool { return !a.RevokedAt.IsZero() }
 

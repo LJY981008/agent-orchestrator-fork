@@ -127,7 +127,7 @@ END`,
 	// A verification record, an integration approval and a check run publish
 	// their execution's change when they are made and when the fact the
 	// execution's state and view read changes: a record's outcome, reason or
-	// hash, an approval's status state, a run's status. Recomputing an
+	// hash, an approval's status state or revocation, a run's status. Recomputing an
 	// unchanged record touches only computed_at, and a fix request only
 	// notified_json. Evidence links and review rounds publish nothing; the
 	// record covers them.
@@ -136,10 +136,17 @@ END`,
 		"WHEN OLD.outcome IS NOT NEW.outcome OR OLD.reason IS NOT NEW.reason OR OLD.sha256 IS NOT NEW.sha256"),
 	ladoExecutionChildCDCTrigger("lado_cdc_integration_approvals_insert", "AFTER INSERT ON lado_integration_approvals", ""),
 	ladoExecutionChildCDCTrigger("lado_cdc_integration_approvals_update", "AFTER UPDATE ON lado_integration_approvals",
-		"WHEN OLD.status_state IS NOT NEW.status_state"),
+		"WHEN OLD.status_state IS NOT NEW.status_state OR OLD.revoked_at IS NOT NEW.revoked_at"),
 	ladoExecutionChildCDCTrigger("lado_cdc_check_runs_insert", "AFTER INSERT ON lado_check_runs", ""),
 	ladoExecutionChildCDCTrigger("lado_cdc_check_runs_update", "AFTER UPDATE ON lado_check_runs",
 		"WHEN OLD.status IS NOT NEW.status"),
+	// A PR resolve publishes its execution's change when it is made and when
+	// what the execution's state and view read changes: the state, the failed
+	// attempts, the resolve worker or the last error. A spawn request, a seen
+	// done report and a notified head publish nothing.
+	ladoExecutionChildCDCTrigger("lado_cdc_pr_resolves_insert", "AFTER INSERT ON lado_pr_resolves", ""),
+	ladoExecutionChildCDCTrigger("lado_cdc_pr_resolves_update", "AFTER UPDATE ON lado_pr_resolves",
+		"WHEN OLD.state IS NOT NEW.state OR OLD.attempts IS NOT NEW.attempts OR OLD.session_id IS NOT NEW.session_id OR OLD.error IS NOT NEW.error"),
 	// Rules apply in every LADO project, so a rule, a new version or a Global
 	// binding publishes a lado_rules change in each project with LADO mode on.
 	// Versions never change, and their deletes follow the rule's.
