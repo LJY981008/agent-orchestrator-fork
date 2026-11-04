@@ -4606,7 +4606,6 @@ const itemKey = (item: ConversationItem): string =>
 		? `client:${item.clientMessageId}`
 		: item.id;
 
-/** Whether a durable row is the one a local echo stands in for. */
 /**
  * LADO fork (#50): whether a durable row's client id is this send's. An
  * orchestrator's `/clear` cancels messages queued during its memo step and
@@ -4618,6 +4617,7 @@ export function isClientMessageRow(rowClientMessageId: string, sentClientMessage
 	return rowClientMessageId === sentClientMessageId || rowClientMessageId === `${sentClientMessageId}:after-clear`;
 }
 
+/** Whether a durable row is the one a local echo stands in for. */
 function echoMatchesItem(
 	echo: ConversationLocalEcho,
 	item: ConversationItem,

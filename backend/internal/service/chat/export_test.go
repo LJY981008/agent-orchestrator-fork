@@ -27,3 +27,8 @@ func (s *Service) SetClearMemoTimings(budget, interruptWait time.Duration) {
 	s.clearMemoBudget = budget
 	s.clearMemoInterruptWait = interruptWait
 }
+
+// SetClearHandoffLimit shortens the /clear close-and-start bound for tests.
+func (s *Service) SetClearHandoffLimit(limit time.Duration) {
+	s.clearHandoffLimit = limit
+}

@@ -31,8 +31,11 @@ const (
 	// clearMemoInterruptWait bounds the wait for a memo turn AO interrupted.
 	// A turn still running after it is abandoned: closing the source ends it.
 	clearMemoInterruptWait = 15 * time.Second
-	clearMemoPollInterval  = 50 * time.Millisecond
-	clearMemoReportLimit   = 5 * time.Second
+	// carriedTurnsDeliveryLimit bounds recording held messages on the
+	// controller the session continues with.
+	carriedTurnsDeliveryLimit = 15 * time.Second
+	clearMemoPollInterval     = 50 * time.Millisecond
+	clearMemoReportLimit      = 5 * time.Second
 )
 
 // Memo step failure codes, reported in ClearContextResult.Memo.Code.
@@ -232,6 +235,13 @@ func (c *Controller) beginMemoHold(ctx context.Context) error {
 	}
 	c.memoHold = true
 	return nil
+}
+
+// memoHeld reports whether a /clear memo step holds this controller's work.
+func (c *Controller) memoHeld() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.memoHold
 }
 
 // releaseMemoHold ends the hold when the clear did not happen, so the work
@@ -435,6 +445,10 @@ func (s *Service) deliverCarriedTurns(ctx context.Context, id domain.SessionID, 
 	if len(messages) == 0 {
 		return
 	}
+	// The clear's own deadline may be spent (a source close that timed out),
+	// and these messages exist nowhere else: deliver them on a fresh bound.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), carriedTurnsDeliveryLimit)
+	defer cancel()
 	controller, err := s.Controller(id)
 	if err == nil {
 		err = controller.acceptCarriedTurns(ctx, messages)

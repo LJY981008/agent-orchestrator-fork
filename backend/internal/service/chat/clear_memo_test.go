@@ -152,6 +152,9 @@ type memoHarnessOptions struct {
 	// fenceOwner makes the controller env step check the session owner the
 	// way Session Manager does before it rotates the browser capability.
 	fenceOwner bool
+	// sourceCloseFails makes the first provider conversation refuse to close
+	// while its stream stays live.
+	sourceCloseFails bool
 }
 
 func newMemoHarness(t *testing.T, opts memoHarnessOptions) *memoHarness {
@@ -165,6 +168,14 @@ func newMemoHarness(t *testing.T, opts memoHarnessOptions) *memoHarness {
 	if opts.interruptStops {
 		drv.wrap = func(conv *fakeConversation) ports.ChatConversation {
 			return &interruptingConversation{fakeConversation: conv}
+		}
+	}
+	if opts.sourceCloseFails {
+		drv.wrap = func(conv *fakeConversation) ports.ChatConversation {
+			if conv.providerConversationID == "thread-1" && len(drv.convs) == 1 {
+				return &stuckConversation{fakeConversation: conv, closeErr: errors.New("provider close failed")}
+			}
+			return conv
 		}
 	}
 	h := &memoHarness{
@@ -663,6 +674,137 @@ func TestClearContextTwiceKeepsTheControllerOwnerCurrent(t *testing.T) {
 	// The session still answers after the second clear.
 	after := h.send(t, "C", domain.MessageOriginHuman)
 	h.awaitTurnState(t, after.ID, domain.TurnStateCompleted)
+}
+
+// When the source refuses to close but keeps running, /clear fails and the
+// source takes the held messages back. The memo hold must end with it, or the
+// source would queue every later message and refuse the next /clear.
+func TestClearContextFailedCloseReleasesTheMemoHold(t *testing.T) {
+	release := make(chan struct{})
+	h := newMemoHarness(t, memoHarnessOptions{
+		sourceCloseFails: true,
+		respond: func(conv *fakeConversation, msg ports.ChatUserMessage, providerTurnID string) {
+			if !isMemoRequest(msg) {
+				answerTurn(conv, providerTurnID, "reply to "+msg.Text, domain.TurnStateCompleted)
+				return
+			}
+			go func() {
+				<-release
+				answerTurn(conv, providerTurnID, "<ao-project-memo>memo</ao-project-memo>", domain.TurnStateCompleted)
+			}()
+		},
+	})
+	h.svc.SetClearHandoffLimit(200 * time.Millisecond)
+	// The stuck stream must end before the harness stops the session.
+	t.Cleanup(func() { h.conv.closeOnce.Do(func() { close(h.conv.events) }) })
+	ctx := context.Background()
+	first := h.send(t, "A", domain.MessageOriginHuman)
+	h.awaitTurnState(t, first.ID, domain.TurnStateCompleted)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.svc.ClearContext(ctx, testSession)
+		done <- err
+	}()
+	awaitSent(t, h.conv, 2) // A, then the memo request
+	h.send(t, "while memo", domain.MessageOriginHuman)
+	close(release)
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "close source writer before clear") {
+			t.Fatalf("ClearContext error = %v, want the close failure", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ClearContext did not finish")
+	}
+
+	// The held message runs on the source, which still answers.
+	sent := awaitSent(t, h.conv, 3)
+	if sent[2].Text != "while memo" {
+		t.Fatalf("source got %v", h.conv.sentTexts())
+	}
+	later := h.send(t, "after the failed clear", domain.MessageOriginHuman)
+	h.awaitTurnState(t, later.ID, domain.TurnStateCompleted)
+
+	// The next /clear is not refused by a stale hold: it asks for a memo again.
+	go func() {
+		_, err := h.svc.ClearContext(ctx, testSession)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if errors.Is(err, chatsvc.ErrControllerHandoff) {
+			t.Fatalf("second ClearContext refused by the old hold: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("second ClearContext did not finish")
+	}
+	if got := h.conv.sentTexts(); len(got) != 5 || !isMemoRequest(h.conv.sentMessages()[4]) {
+		t.Fatalf("source sends after the second clear = %v, want a second memo request", got)
+	}
+}
+
+// ao send --steer during the memo step neither steers the memo turn nor starts
+// a turn beside it: the message waits and moves to the new branch.
+func TestClearContextHoldsSteerOrSendUntilTheNewBranch(t *testing.T) {
+	release := make(chan struct{})
+	h := newMemoHarness(t, memoHarnessOptions{
+		respond: func(conv *fakeConversation, msg ports.ChatUserMessage, providerTurnID string) {
+			if !isMemoRequest(msg) {
+				answerTurn(conv, providerTurnID, "reply to "+msg.Text, domain.TurnStateCompleted)
+				return
+			}
+			go func() {
+				<-release
+				answerTurn(conv, providerTurnID, "<ao-project-memo>steer memo</ao-project-memo>", domain.TurnStateCompleted)
+			}()
+		},
+	})
+	ctx := context.Background()
+	first := h.send(t, "A", domain.MessageOriginHuman)
+	h.awaitTurnState(t, first.ID, domain.TurnStateCompleted)
+
+	type clearResult struct {
+		result chatsvc.ClearContextResult
+		err    error
+	}
+	done := make(chan clearResult, 1)
+	go func() {
+		result, err := h.svc.ClearContext(ctx, testSession)
+		done <- clearResult{result, err}
+	}()
+	awaitSent(t, h.conv, 2)
+
+	steered, err := h.svc.SteerOrSend(ctx, testSession, ports.ChatUserMessage{
+		Text: "worker update", ClientMessageID: "steer-during-memo", Origin: domain.MessageOriginDaemon,
+	}, false)
+	if err != nil {
+		t.Fatalf("SteerOrSend: %v", err)
+	}
+	if steered.Steered || steered.Turn.State != domain.TurnStateQueued {
+		t.Fatalf("SteerOrSend during the memo step = %+v, want queued", steered)
+	}
+	time.Sleep(100 * time.Millisecond)
+	if got := h.conv.sentTexts(); len(got) != 2 {
+		t.Fatalf("source dispatched during the memo hold: %v", got)
+	}
+
+	close(release)
+	var outcome clearResult
+	select {
+	case outcome = <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("ClearContext did not finish")
+	}
+	if outcome.err != nil || !outcome.result.Cleared || outcome.result.Memo.Status != projectmemo.ClearSaved {
+		t.Fatalf("ClearContext = %+v, %v", outcome.result, outcome.err)
+	}
+	fresh := h.drv.latest("thread-fresh-2")
+	sent := awaitSent(t, fresh, 1)
+	if sent[0].Text != "worker update" {
+		t.Fatalf("fresh provider got %v", fresh.sentTexts())
+	}
+	requireMemoResource(t, sent[0], "steer memo")
 }
 
 func TestClearContextLeavesWorkerReportsForTheFirstTurnAfter(t *testing.T) {

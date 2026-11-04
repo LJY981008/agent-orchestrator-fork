@@ -1465,6 +1465,10 @@ func (c *Controller) sendLocked(
 	if handoff {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
+	if !queueWhenBusy && !c.memoRequestInFlight && c.memoHeld() {
+		// Only the memo request itself may dispatch during a /clear memo hold.
+		queueWhenBusy = true
+	}
 
 	// Bind retries to the client request before adding durable continuation context.
 	var err error

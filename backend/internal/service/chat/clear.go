@@ -130,7 +130,7 @@ func (s *Service) ClearContext(ctx context.Context, id domain.SessionID) (ClearC
 	}
 	// The source is idle and fenced. Closing it is irreversible, so finish or
 	// recover the boundary independently of request cancellation.
-	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), nativeEditHandoffLimit)
+	operationCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.clearHandoffLimit)
 	defer cancel()
 	// Messages held during the memo step leave the source before it closes:
 	// its stream end would fail them as orphaned. They are recorded again on
@@ -170,9 +170,12 @@ func (s *Service) ClearContext(ctx context.Context, id domain.SessionID) (ClearC
 		if source.State() == ports.ChatControllerStopped {
 			return restore(closeErr)
 		}
-		// The source still runs: reopen it and give the held messages back.
+		// The source still runs: reopen it, lift the memo hold and give the
+		// held messages back. Without the release the source would keep
+		// queueing every later message and refuse the next /clear.
 		source.AbortHandoff()
 		abortSource = false
+		source.releaseMemoHold()
 		s.deliverCarriedTurns(operationCtx, id, carried)
 		return ClearContextResult{}, closeErr
 	}

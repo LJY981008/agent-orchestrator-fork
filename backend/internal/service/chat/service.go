@@ -114,6 +114,8 @@ type Service struct {
 	// clearMemoInterruptWait bounds the wait for an interrupted memo turn.
 	clearMemoBudget        time.Duration
 	clearMemoInterruptWait time.Duration
+	// clearHandoffLimit bounds the /clear source close and fresh start.
+	clearHandoffLimit time.Duration
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -228,6 +230,7 @@ func New(opts Options) *Service {
 		memoTracker:            newProjectMemoTracker(),
 		clearMemoBudget:        clearMemoBudget,
 		clearMemoInterruptWait: clearMemoInterruptWait,
+		clearHandoffLimit:      nativeEditHandoffLimit,
 	}
 	if opts.DataDir != "" {
 		svc.memos = projectmemo.New(opts.DataDir)
