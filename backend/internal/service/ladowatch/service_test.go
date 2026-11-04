@@ -378,3 +378,82 @@ func TestLimitRecordFailureIsLeftForTheNextTick(t *testing.T) {
 		t.Fatalf("limit watch = %+v", f.watch().LadoWatchLimit)
 	}
 }
+
+// countAlerts counts the alerts of kind.
+func (f *fixture) countAlerts(kind domain.LadoAlertKind) int {
+	n := 0
+	for _, k := range f.store.alertKinds() {
+		if k == kind {
+			n++
+		}
+	}
+	return n
+}
+
+// Every limit stop is its own alert: with waking off, and past the resume cap
+// when LADO no longer resumes and the owner most needs to know.
+func TestEveryLimitStopRaisesItsOwnAlert(t *testing.T) {
+	for _, wake := range []bool{true, false} {
+		f := newFixture(t)
+		settings := domain.LadoWatchDefaults()
+		settings.WakeEnabled = wake
+		f.store.settings[proj1] = settings
+		at := t0
+		stops := domain.LadoWakeMaxResumes + 2
+		for range stops {
+			f.limitAt(at, "You've hit your session limit")
+			f.tick(at.Add(time.Minute))
+			f.tick(at.Add(domain.LadoLimitGuessedReset + domain.LadoWakeResumeDelay))
+			at = at.Add(2 * time.Hour)
+		}
+		if got := f.countAlerts(domain.LadoAlertLimited); got != stops {
+			t.Fatalf("wake %v: %d limit alerts for %d stops", wake, got, stops)
+		}
+		if w := f.watch(); w.Stops != stops {
+			t.Fatalf("wake %v: limit watch = %+v, want %d stops", wake, w.LadoWatchLimit, stops)
+		}
+	}
+}
+
+// A stall after the one nudge alerts, and so does each stall after it.
+func TestEveryLaterStallRaisesItsOwnAlert(t *testing.T) {
+	f := newFixture(t)
+	stall := domain.LadoWatchDefaults().Stall()
+	at := t0
+	for range 3 {
+		f.tick(at.Add(stall))
+		// The worker moves again, then rests.
+		at = at.Add(stall + time.Hour)
+		f.endTurn(domain.TurnStateCompleted, "", at)
+		f.rest(at)
+		f.tick(at.Add(time.Minute))
+	}
+	if got := len(f.msgs.texts()); got != domain.LadoWakeMaxNudges {
+		t.Fatalf("sent %d nudges, want %d", got, domain.LadoWakeMaxNudges)
+	}
+	if nudged, stalled := f.countAlerts(domain.LadoAlertStallNudged), f.countAlerts(domain.LadoAlertStalled); nudged != 1 || stalled != 2 {
+		t.Fatalf("alerts = %v, want one nudge alert and a stall alert for each later stall", f.store.alertKinds())
+	}
+	if w := f.watch(); w.Stalls != 3 {
+		t.Fatalf("stall watch = %+v, want 3 stalls", w.LadoWatchStall)
+	}
+}
+
+// A worker whose newest turn the owner stopped (interrupted) or took back
+// (cancelled) is never nudged: LADO only alerts.
+func TestOwnerStoppedWorkerIsNotNudged(t *testing.T) {
+	for _, state := range []domain.TurnState{domain.TurnStateInterrupted, domain.TurnStateCancelled} {
+		f := newFixture(t)
+		f.endTurn(state, "", t0)
+		f.rest(t0)
+		stall := domain.LadoWatchDefaults().Stall()
+		f.tick(t0.Add(stall))
+		f.tick(t0.Add(stall + time.Hour))
+		if len(f.msgs.texts()) != 0 {
+			t.Fatalf("%s: sent %v to a worker the owner stopped", state, f.msgs.texts())
+		}
+		if !slices.Equal(f.store.alertKinds(), []domain.LadoAlertKind{domain.LadoAlertStalled}) {
+			t.Fatalf("%s: alerts = %v, want one stall alert", state, f.store.alertKinds())
+		}
+	}
+}

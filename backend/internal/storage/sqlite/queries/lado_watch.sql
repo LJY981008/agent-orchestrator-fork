@@ -46,6 +46,7 @@ SET limit_state = sqlc.arg(limit_state),
     limit_seen_at = sqlc.arg(limit_seen_at),
     resumes = sqlc.arg(resumes),
     resumed_at = sqlc.arg(resumed_at),
+    limit_stops = sqlc.arg(limit_stops),
     updated_at = sqlc.arg(updated_at)
 WHERE session_id = sqlc.arg(session_id);
 
@@ -56,20 +57,21 @@ SET stall_state = sqlc.arg(stall_state),
     stalled_at = sqlc.arg(stalled_at),
     nudges = sqlc.arg(nudges),
     nudged_at = sqlc.arg(nudged_at),
+    stalls = sqlc.arg(stalls),
     updated_at = sqlc.arg(updated_at)
 WHERE session_id = sqlc.arg(session_id);
 
 -- name: GetLadoSessionWatch :one
 SELECT session_id, task_id, read_offsets_json, compactions, compacted_at,
-    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at,
-    stall_state, stalled_at, nudges, nudged_at, created_at, updated_at
+    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at, limit_stops,
+    stall_state, stalled_at, nudges, nudged_at, stalls, created_at, updated_at
 FROM lado_session_watch
 WHERE session_id = ?;
 
 -- name: ListLadoSessionWatchByTask :many
 SELECT session_id, task_id, read_offsets_json, compactions, compacted_at,
-    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at,
-    stall_state, stalled_at, nudges, nudged_at, created_at, updated_at
+    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at, limit_stops,
+    stall_state, stalled_at, nudges, nudged_at, stalls, created_at, updated_at
 FROM lado_session_watch
 WHERE task_id = ?
 ORDER BY created_at, session_id;
@@ -129,6 +131,16 @@ WHERE t.project_id = sqlc.arg(project_id)
 ORDER BY a.created_at DESC, a.id DESC
 LIMIT sqlc.arg(max_rows);
 
+-- name: CountLadoUnseenAlertsByProject :many
+-- How many alerts of each of a project's tasks nobody marked seen, over
+-- every alert, for the board's badges.
+SELECT a.task_id, CAST(COUNT(*) AS INTEGER) AS unseen
+FROM lado_alerts a
+JOIN lado_tasks t ON t.id = a.task_id
+WHERE t.project_id = sqlc.arg(project_id) AND a.seen_at IS NULL
+GROUP BY a.task_id
+ORDER BY a.task_id;
+
 -- name: ListLadoAlertsByTask :many
 SELECT a.id, a.task_id, a.session_id, a.kind, a.level, a.value, a.threshold, a.created_at, a.seen_at,
     t.project_id, t.issue_ref
@@ -172,9 +184,10 @@ WHERE ub.session_id = sqlc.arg(session_id) AND us.subagent_id <> '';
 
 -- name: ListLadoSessionTranscriptSources :many
 -- The conversation files of a session that the usage pipeline reads: Claude's
--- main transcript and Codex rollouts.
+-- main transcript and the session's own Codex rollouts. A subagent's rollout,
+-- which the collector registers under its parent's binding, is left out.
 SELECT DISTINCT us.kind, us.artifact_path
 FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
-WHERE ub.session_id = sqlc.arg(session_id) AND us.kind IN ('claude_main', 'codex_rollout')
+WHERE ub.session_id = sqlc.arg(session_id) AND us.kind IN ('claude_main', 'codex_rollout') AND us.subagent_id = ''
 ORDER BY us.kind, us.artifact_path;

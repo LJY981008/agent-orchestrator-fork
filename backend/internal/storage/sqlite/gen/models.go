@@ -810,10 +810,12 @@ type LadoSessionWatch struct {
 	LimitSeenAt     sql.NullTime
 	Resumes         int64
 	ResumedAt       sql.NullTime
+	LimitStops      int64
 	StallState      string
 	StalledAt       sql.NullTime
 	Nudges          int64
 	NudgedAt        sql.NullTime
+	Stalls          int64
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

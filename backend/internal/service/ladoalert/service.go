@@ -43,6 +43,7 @@ type Store interface {
 	MarkLadoAlertSeen(ctx context.Context, id domain.LadoAlertID, at time.Time) (bool, error)
 	ListLadoAlertsByProject(ctx context.Context, project domain.ProjectID, unseenOnly bool, limit int) ([]domain.LadoAlert, error)
 	ListLadoAlertsByTask(ctx context.Context, task domain.LadoTaskID) ([]domain.LadoAlert, error)
+	LadoUnseenAlertCounts(ctx context.Context, project domain.ProjectID) (map[domain.LadoTaskID]int, error)
 }
 
 // Usage adds up a task's usage (*ladousage.Service).

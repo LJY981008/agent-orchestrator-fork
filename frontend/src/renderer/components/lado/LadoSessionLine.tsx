@@ -8,6 +8,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useLadoModeState, useLadoTasks } from "../../hooks/useLado";
 import { type LadoTask, ladoTaskForSession } from "../../lib/lado";
+import { requestLadoTaskOpen } from "../../lib/lado-alert-notifications";
 import { ladoReasonText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { isOrchestratorSession, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
@@ -86,7 +87,12 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 					</>
 				) : null}
 			</span>
-			<LadoCardWatch watch={watchOf(task.id)} className="ml-auto" />
+			{/* A running task has no lane card: the board's LADO lanes take the open request and show its Usage tab. */}
+			<LadoCardWatch
+				watch={watchOf(task.id)}
+				className="ml-auto"
+				onOpenAlerts={projectId ? () => requestLadoTaskOpen({ projectId, taskId: task.id, tab: "usage" }) : undefined}
+			/>
 		</p>
 	);
 }

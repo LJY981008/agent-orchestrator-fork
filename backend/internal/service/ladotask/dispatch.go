@@ -71,8 +71,12 @@ func (s *Service) RunInput(ctx context.Context, task domain.LadoTask) (RunInput,
 	}
 	var planFile string
 	if s.deps.DataDir != "" {
+		// The file is a copy of the plan the prompt carries: one LADO cannot
+		// write leaves the prompt without its path and never holds the run.
 		if planFile, err = writePlanFile(s.deps.DataDir, rev.ID, plan); err != nil {
-			return RunInput{}, err
+			s.deps.Log.Warn("LADO could not keep the plan file a worker reads again; the worker starts without it",
+				"task", task.ID, "revision", rev.ID, "err", err)
+			planFile = ""
 		}
 	}
 	// The revision keeps the hash of its request's issue snapshot.

@@ -178,8 +178,8 @@ func (s *Store) SetLadoSessionWatchLimit(ctx context.Context, session domain.Ses
 	if l.LimitState != domain.LadoLimitNone && l.LimitState != domain.LadoLimitLimited {
 		return false, fmt.Errorf("store LADO limit watch: unknown state %q", l.LimitState)
 	}
-	if l.Resumes < 0 {
-		return false, errors.New("store LADO limit watch: the resume count cannot be negative")
+	if l.Resumes < 0 || l.Stops < 0 {
+		return false, errors.New("store LADO limit watch: the resume and stop counts cannot be negative")
 	}
 	return s.updateLadoSessionWatch(ctx, "limit watch", func(q *gen.Queries, updated time.Time) (int64, error) {
 		return q.UpdateLadoSessionWatchLimit(ctx, gen.UpdateLadoSessionWatchLimitParams{
@@ -189,6 +189,7 @@ func (s *Store) SetLadoSessionWatchLimit(ctx context.Context, session domain.Ses
 			LimitSeenAt:     ladoNullTime(l.LimitSeenAt),
 			Resumes:         int64(l.Resumes),
 			ResumedAt:       ladoNullTime(l.ResumedAt),
+			LimitStops:      int64(l.Stops),
 			UpdatedAt:       updated,
 			SessionID:       string(session),
 		})
@@ -201,8 +202,8 @@ func (s *Store) SetLadoSessionWatchStall(ctx context.Context, session domain.Ses
 	if st.StallState != domain.LadoStallNone && st.StallState != domain.LadoStallStalled {
 		return false, fmt.Errorf("store LADO stall watch: unknown state %q", st.StallState)
 	}
-	if st.Nudges < 0 {
-		return false, errors.New("store LADO stall watch: the nudge count cannot be negative")
+	if st.Nudges < 0 || st.Stalls < 0 {
+		return false, errors.New("store LADO stall watch: the nudge and stall counts cannot be negative")
 	}
 	return s.updateLadoSessionWatch(ctx, "stall watch", func(q *gen.Queries, updated time.Time) (int64, error) {
 		return q.UpdateLadoSessionWatchStall(ctx, gen.UpdateLadoSessionWatchStallParams{
@@ -210,6 +211,7 @@ func (s *Store) SetLadoSessionWatchStall(ctx context.Context, session domain.Ses
 			StalledAt:  ladoNullTime(st.StalledAt),
 			Nudges:     int64(st.Nudges),
 			NudgedAt:   ladoNullTime(st.NudgedAt),
+			Stalls:     int64(st.Stalls),
 			UpdatedAt:  updated,
 			SessionID:  string(session),
 		})
@@ -282,12 +284,14 @@ func ladoSessionWatchFromRow(row gen.LadoSessionWatch) (domain.LadoSessionWatch,
 			LimitSeenAt:       ladoTimeFromNull(row.LimitSeenAt),
 			Resumes:           int(row.Resumes),
 			ResumedAt:         ladoTimeFromNull(row.ResumedAt),
+			Stops:             int(row.LimitStops),
 		},
 		LadoWatchStall: domain.LadoWatchStall{
 			StallState: domain.LadoStallState(row.StallState),
 			StalledAt:  ladoTimeFromNull(row.StalledAt),
 			Nudges:     int(row.Nudges),
 			NudgedAt:   ladoTimeFromNull(row.NudgedAt),
+			Stalls:     int(row.Stalls),
 		},
 		CreatedAt: row.CreatedAt.UTC(),
 		UpdatedAt: row.UpdatedAt.UTC(),
@@ -456,6 +460,20 @@ func (s *Store) ListLadoAlertsByProject(ctx context.Context, project domain.Proj
 		alerts = append(alerts, ladoAlertFromRow(gen.ListLadoAlertsSinceRow(row)))
 	}
 	return alerts, nil
+}
+
+// LadoUnseenAlertCounts counts each of a project's tasks' alerts nobody
+// marked seen, over all of them; a task without one is left out.
+func (s *Store) LadoUnseenAlertCounts(ctx context.Context, project domain.ProjectID) (map[domain.LadoTaskID]int, error) {
+	rows, err := s.qr.CountLadoUnseenAlertsByProject(ctx, string(project))
+	if err != nil {
+		return nil, fmt.Errorf("count LADO unseen alerts: %w", err)
+	}
+	counts := make(map[domain.LadoTaskID]int, len(rows))
+	for _, row := range rows {
+		counts[domain.LadoTaskID(row.TaskID)] = int(row.Unseen)
+	}
+	return counts, nil
 }
 
 // ListLadoAlertsByTask reads a task's alerts, newest first.

@@ -8,7 +8,8 @@
 -- lado_session_watch is what LADO watches of one task session. Three writers
 -- share a row and each updates only its own group of columns: the compaction
 -- counter (read offsets, compactions), the limit watch (limit state, reset
--- time, resumes) and the stall watch (stall state, nudges).
+-- time, resumes, limit stops) and the stall watch (stall state, nudges,
+-- stalls). The stop and stall counts number each one's alert.
 --
 -- lado_account_limits names the agent accounts that hit a usage limit and
 -- when the limit resets; LADO starts no worker on such an account until then.
@@ -46,10 +47,12 @@ CREATE TABLE lado_session_watch (
     limit_seen_at      TIMESTAMP,
     resumes            INTEGER NOT NULL DEFAULT 0 CHECK (resumes >= 0),
     resumed_at         TIMESTAMP,
+    limit_stops        INTEGER NOT NULL DEFAULT 0 CHECK (limit_stops >= 0),
     stall_state        TEXT NOT NULL DEFAULT '' CHECK (stall_state IN ('', 'stalled')),
     stalled_at         TIMESTAMP,
     nudges             INTEGER NOT NULL DEFAULT 0 CHECK (nudges >= 0),
     nudged_at          TIMESTAMP,
+    stalls             INTEGER NOT NULL DEFAULT 0 CHECK (stalls >= 0),
     created_at         TIMESTAMP NOT NULL,
     updated_at         TIMESTAMP NOT NULL
 );

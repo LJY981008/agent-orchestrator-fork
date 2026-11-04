@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	agentregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -113,5 +114,48 @@ func TestPreflightLaunchRefusesAnUnknownHarness(t *testing.T) {
 	svc, _ := preflightService(t, domain.HarnessClaudeCode, func(context.Context) (string, error) { return "/opt/claude", nil })
 	if err := svc.PreflightLaunch(context.Background(), "no-such-agent"); !errors.Is(err, ports.ErrAgentBinaryNotFound) {
 		t.Fatalf("PreflightLaunch = %v, want ErrAgentBinaryNotFound", err)
+	}
+}
+
+// listCountingModelCache counts the catalog reads a model catalog
+// invalidation starts.
+type listCountingModelCache struct {
+	*fakeModelCache
+	lists atomic.Int32
+}
+
+func (c *listCountingModelCache) ListAgentModelCatalogsByAgent(ctx context.Context, agentID string) ([]ports.CachedAgentModelCatalog, error) {
+	c.lists.Add(1)
+	return c.fakeModelCache.ListAgentModelCatalogsByAgent(ctx, agentID)
+}
+
+// LADO checks the agent before every worker and once a minute while one
+// waits, so the check drops the install and the executable path but never
+// the model catalogs: that would rediscover every project's models each time.
+func TestPreflightLaunchLeavesTheModelCatalogsAlone(t *testing.T) {
+	stubLaunchVersion(t, func(context.Context, string) error { return nil })
+	agent := &preflightAgent{readinessTestAgent: readinessTestAgent{
+		resolve: func(context.Context) (string, error) { return "/opt/claude", nil },
+		auth:    func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+	}}
+	cache := &listCountingModelCache{fakeModelCache: &fakeModelCache{}}
+	svc := newService([]agentregistry.HarnessAgent{readinessHarness(string(domain.HarnessClaudeCode), string(domain.HarnessClaudeCode), agent)}, cache, nil, nil)
+	for range 3 {
+		if err := svc.PreflightLaunch(context.Background(), domain.HarnessClaudeCode); err != nil {
+			t.Fatalf("PreflightLaunch = %v", err)
+		}
+	}
+	if agent.invalidations.Load() < 3 {
+		t.Fatalf("executable path invalidations = %d, want one per check", agent.invalidations.Load())
+	}
+	// AO's own install invalidation does reach the catalogs, so the counter
+	// sees a catalog invalidation when one happens.
+	svc.InvalidateAgentInstallation(string(domain.HarnessClaudeCode))
+	deadline := time.Now().Add(5 * time.Second)
+	for cache.lists.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := cache.lists.Load(); got != 1 {
+		t.Fatalf("catalog reads = %d, want only the one AO's own invalidation started", got)
 	}
 }

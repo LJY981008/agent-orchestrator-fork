@@ -12,6 +12,7 @@ import {
 	createLadoTask,
 	deleteLadoRule,
 	fetchLadoAlerts,
+	fetchLadoUnseenAlertCounts,
 	fetchLadoCheckLog,
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
@@ -34,6 +35,7 @@ import {
 	LadoApiError,
 	ladoAlertsProjectQueryKey,
 	ladoAlertsQueryKey,
+	ladoUnseenAlertCountsQueryKey,
 	ladoCheckLogQueryKey,
 	ladoDispatchSettingsQueryKey,
 	ladoEffectiveQueryKey,
@@ -550,7 +552,17 @@ export function useLadoProjectUsage(projectId: string, enabled = true) {
 	});
 }
 
-/** A project's alerts: one task's, or the unseen ones the board counts. */
+/** Each task's unseen alerts, counted by the daemon over all of them, for the board's badges. */
+export function useLadoUnseenAlertCounts(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoUnseenAlertCountsQueryKey(projectId),
+		queryFn: () => fetchLadoUnseenAlertCounts(projectId),
+		enabled: enabled && Boolean(projectId),
+		retry: false,
+	});
+}
+
+/** A project's alerts: one task's, or the unseen ones. */
 export function useLadoAlerts(projectId: string, filter: LadoAlertFilter, enabled = true) {
 	return useQuery({
 		queryKey: ladoAlertsQueryKey(projectId, filter),

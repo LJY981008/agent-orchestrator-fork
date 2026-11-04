@@ -47,6 +47,7 @@ func (s *Service) watchLimit(ctx context.Context, w *worker, now time.Time) erro
 func (s *Service) recordLimit(ctx context.Context, w *worker, msg limitMessage, seen, now time.Time) error {
 	next := w.watch.LadoWatchLimit
 	next.LimitState, next.LimitResetAt, next.LimitResetGuessed, next.LimitSeenAt = domain.LadoLimitLimited, msg.ResetAt, msg.Guessed, seen
+	next.Stops++
 	if _, err := s.deps.Store.SetLadoSessionWatchLimit(ctx, w.session.ID, next, now); err != nil {
 		return err
 	}
@@ -61,7 +62,8 @@ func (s *Service) recordLimit(ctx context.Context, w *worker, msg limitMessage, 
 	s.audit(ctx, "lado.limit_detected", w.session.ID, now, map[string]any{
 		"task": w.task.ID, "limit": msg.Name, "resetAt": msg.ResetAt, "resetGuessed": msg.Guessed,
 	})
-	s.alert(ctx, *w, domain.LadoAlertLimited, next.Resumes+1, msg.ResetAt.Unix(), 0, now)
+	// Each stop is its own alert, also past the resume cap or with waking off.
+	s.alert(ctx, *w, domain.LadoAlertLimited, next.Stops, msg.ResetAt.Unix(), 0, now)
 	s.deps.Log.Info("LADO found a worker stopped at its usage limit", "task", w.task.ID, "session", w.session.ID,
 		"limit", msg.Name, "reset", msg.ResetAt, "guessed", msg.Guessed)
 	return nil
@@ -92,7 +94,7 @@ func (s *Service) limitLifted(ctx context.Context, w *worker, now time.Time) err
 // LadoWakeResumeDelay ago: once a stop, at most LadoWakeMaxResumes times a
 // session, only while it rests and has not asked the owner, and only where
 // the project lets LADO wake its workers. A worker busy at the reset is
-// resumed on a later tick.
+// resumed on a later tick; one whose newest turn the owner stopped is not.
 func (s *Service) resumeIfDue(ctx context.Context, w *worker, now time.Time) error {
 	lim := w.watch.LadoWatchLimit
 	switch {
@@ -101,7 +103,7 @@ func (s *Service) resumeIfDue(ctx context.Context, w *worker, now time.Time) err
 		lim.Resumes >= domain.LadoWakeMaxResumes,
 		!lim.ResumedAt.IsZero() && !lim.ResumedAt.Before(lim.LimitSeenAt),
 		!w.settings.WakeEnabled, s.deps.Messenger == nil,
-		w.answering(), !w.resting():
+		w.answering(), !w.resting(), w.ownerStopped():
 		return nil
 	}
 	next := lim
@@ -139,7 +141,9 @@ func stallWatched(role string) bool {
 // without a report that waits for the owner or says it is done, and whose
 // run opened no pull request: its first stall gets the nudge message, where
 // the project lets LADO wake its workers, and a stall after that, or one LADO
-// may not wake, an alert only. A worker at its usage limit is not stalled.
+// may not wake, an alert only, numbered by the session's stalls. A worker
+// whose newest turn the owner stopped gets an alert only too. A worker at its
+// usage limit is not stalled.
 // Once the worker moves again, the stall is over.
 func (s *Service) watchStall(ctx context.Context, w *worker, now time.Time) error {
 	st := w.watch.LadoWatchStall
@@ -170,6 +174,7 @@ func (s *Service) watchStall(ctx context.Context, w *worker, now time.Time) erro
 	if fresh {
 		next := st
 		next.StallState, next.StalledAt = domain.LadoStallStalled, now
+		next.Stalls++
 		if _, err := s.deps.Store.SetLadoSessionWatchStall(ctx, w.session.ID, next, now); err != nil {
 			return err
 		}
@@ -177,11 +182,11 @@ func (s *Service) watchStall(ctx context.Context, w *worker, now time.Time) erro
 		w.watch.LadoWatchStall = next
 		s.deps.Log.Info("LADO found a worker stalled", "task", w.task.ID, "session", w.session.ID, "minutes", minutes)
 	}
-	if w.settings.WakeEnabled && s.deps.Messenger != nil && st.Nudges < domain.LadoWakeMaxNudges {
+	if w.settings.WakeEnabled && s.deps.Messenger != nil && st.Nudges < domain.LadoWakeMaxNudges && !w.ownerStopped() {
 		return s.nudge(ctx, w, st, minutes, now)
 	}
 	if fresh {
-		s.alert(ctx, *w, domain.LadoAlertStalled, 1, minutes, int64(w.settings.StallMinutes), now)
+		s.alert(ctx, *w, domain.LadoAlertStalled, st.Stalls, minutes, int64(w.settings.StallMinutes), now)
 	}
 	return nil
 }

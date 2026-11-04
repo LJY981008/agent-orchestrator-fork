@@ -1546,6 +1546,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/projects/{projectId}/alerts/unseen-counts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Count each of a project's tasks' alerts nobody marked seen, over all of them, for the board's badges */
+        get: operations["countLadoUnseenAlerts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/projects/{projectId}/issues": {
         parameters: {
             query?: never;
@@ -6755,7 +6772,7 @@ export interface components {
             issueRef: string;
             /** @enum {string} */
             kind: "task_cost" | "session_cost" | "session_compactions" | "limited" | "limit_resumed" | "stall_nudged" | "stalled" | "agent_unavailable";
-            /** @description 1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed; otherwise 1. */
+            /** @description 1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed, the stop's for limited and the stall's for stalled; otherwise 1. */
             level: number;
             /** @description The alert's one line, as the orchestrator gets it. */
             line: string;
@@ -8580,6 +8597,14 @@ export interface components {
             problemDetail?: string;
             /** @description Whether LADO already keeps a token for the host. */
             stored: boolean;
+        };
+        LadoUnseenAlertCountResponse: {
+            taskId: string;
+            unseen: number;
+        };
+        LadoUnseenAlertCountsResponse: {
+            /** @description Each task with an unseen alert, by task id; a task without one is left out. */
+            tasks: components["schemas"]["LadoUnseenAlertCountResponse"][];
         };
         LadoUsageTotalsResponse: {
             /** Format: int64 */
@@ -15876,6 +15901,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    countLadoUnseenAlerts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoUnseenAlertCountsResponse"];
                 };
             };
             /** @description Not Found */

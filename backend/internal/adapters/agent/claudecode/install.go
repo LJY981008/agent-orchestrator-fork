@@ -40,10 +40,15 @@ func claudeBinaryUsable(path string) bool {
 // over it; a removed platform package, or a skipped postinstall, leaves the
 // script, which only prints "claude native binary not installed". On Windows
 // npm's claude.cmd runs that file, or cli.js in packages before the native
-// one.
+// one. Only npm puts the package next to the shim; a claude.cmd of another
+// layout (pnpm, Yarn) is taken as usable, since LADO cannot tell where its
+// package is.
 func claudeShimTargetMissing(path string) bool {
 	if strings.EqualFold(filepath.Ext(path), ".cmd") {
 		pkg := filepath.Join(filepath.Dir(path), "node_modules", "@anthropic-ai", "claude-code")
+		if !directory(pkg) {
+			return false
+		}
 		if exe := filepath.Join(pkg, "bin", "claude.exe"); regularFile(exe) {
 			return !nativeExecutable(exe)
 		}
@@ -69,6 +74,11 @@ func isNpmClaudeLauncher(path string) bool {
 		filepath.Base(bin) == "bin" &&
 		filepath.Base(pkg) == "claude-code" &&
 		filepath.Base(scope) == "@anthropic-ai"
+}
+
+func directory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func regularFile(path string) bool {

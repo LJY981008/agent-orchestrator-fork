@@ -6,7 +6,9 @@ package controllers
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -25,6 +27,7 @@ type LadoWatchService interface {
 	ProjectSettings(ctx context.Context, project domain.ProjectID) (ladoalert.SettingsView, error)
 	UpdateProjectSettings(ctx context.Context, project domain.ProjectID, values domain.LadoWatchOverrides) (ladoalert.SettingsView, error)
 	ProjectAlerts(ctx context.Context, q ladoalert.AlertQuery) ([]domain.LadoAlert, error)
+	UnseenAlertCounts(ctx context.Context, project domain.ProjectID) (map[domain.LadoTaskID]int, error)
 	MarkSeen(ctx context.Context, id domain.LadoAlertID) (domain.LadoAlert, error)
 }
 
@@ -44,6 +47,7 @@ const (
 	ladoProjectWatchSettingsPath = "/api/v1/lado/projects/{projectId}/watch-settings"
 	ladoProjectAlertsPath        = "/api/v1/lado/projects/{projectId}/alerts"
 	ladoAlertSeenPath            = "/api/v1/lado/alerts/{alertId}/seen"
+	ladoUnseenAlertCountsPath    = "/api/v1/lado/projects/{projectId}/alerts/unseen-counts"
 )
 
 func (c *LadoController) registerWatch(r chi.Router) {
@@ -52,6 +56,7 @@ func (c *LadoController) registerWatch(r chi.Router) {
 	r.Get("/lado/projects/{projectId}/watch-settings", c.getProjectWatchSettings)
 	r.Put("/lado/projects/{projectId}/watch-settings", c.putProjectWatchSettings)
 	r.Get("/lado/projects/{projectId}/alerts", c.listProjectAlerts)
+	r.Get("/lado/projects/{projectId}/alerts/unseen-counts", c.unseenAlertCounts)
 	r.Post("/lado/alerts/{alertId}/seen", c.markAlertSeen)
 }
 
@@ -131,6 +136,24 @@ func (c *LadoController) listProjectAlerts(w http.ResponseWriter, r *http.Reques
 	for _, a := range alerts {
 		resp.Alerts = append(resp.Alerts, ladoAlertResponse(a))
 	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
+}
+
+func (c *LadoController) unseenAlertCounts(w http.ResponseWriter, r *http.Request) {
+	if c.Watch == nil {
+		apispec.NotImplemented(w, r, "GET", ladoUnseenAlertCountsPath)
+		return
+	}
+	counts, err := c.Watch.UnseenAlertCounts(r.Context(), ladoProjectID(r))
+	if err != nil {
+		envelope.WriteError(w, r, err)
+		return
+	}
+	resp := LadoUnseenAlertCountsResponse{Tasks: make([]LadoUnseenAlertCountResponse, 0, len(counts))}
+	for task, n := range counts {
+		resp.Tasks = append(resp.Tasks, LadoUnseenAlertCountResponse{TaskID: string(task), Unseen: n})
+	}
+	slices.SortFunc(resp.Tasks, func(a, b LadoUnseenAlertCountResponse) int { return strings.Compare(a.TaskID, b.TaskID) })
 	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 

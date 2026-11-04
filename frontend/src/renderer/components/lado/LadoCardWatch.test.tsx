@@ -22,6 +22,7 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoTaskView: vi.fn(),
 	fetchLadoProjectUsage: vi.fn(),
 	fetchLadoAlerts: vi.fn(),
+	fetchLadoUnseenAlertCounts: vi.fn(),
 	fetchLadoTaskUsage: vi.fn(),
 }));
 
@@ -60,22 +61,8 @@ function summary(taskId: string, costNanos: number): lado.LadoTaskUsageSummary {
 	};
 }
 
-function alert(id: number, taskId = "lado-task-1"): lado.LadoAlert {
-	return {
-		id,
-		projectId: "demo",
-		taskId,
-		sessionId: "",
-		issueRef: "github:acme/demo#12",
-		kind: "task_cost",
-		level: 1,
-		value: 120_00,
-		threshold: 100_00,
-		line: "LADO 알림",
-		notificationId: `lado-alert:${id}`,
-		seenAt: null,
-		createdAt: "2026-10-19T09:30:00Z",
-	};
+function unseen(taskId: string, count: number): lado.LadoUnseenAlertCounts {
+	return { tasks: [{ taskId, unseen: count }] };
 }
 
 function renderLanes() {
@@ -106,12 +93,14 @@ beforeEach(() => {
 		history: { requests: [], revisions: [], approvals: [], critiques: [] },
 	});
 	vi.mocked(lado.fetchLadoTaskUsage).mockResolvedValue({ task: summary("lado-task-1", 120.4 * 1e9), sessions: [] });
+	vi.mocked(lado.fetchLadoAlerts).mockResolvedValue([]);
+	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValue({ tasks: [] });
 });
 
 afterEach(cleanup);
 
 test("a card shows the task's cost and a badge of its unseen alerts, and a seen alert takes the badge down", async () => {
-	vi.mocked(lado.fetchLadoAlerts).mockResolvedValueOnce([alert(8), alert(7)]).mockResolvedValue([alert(8)]);
+	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValueOnce(unseen("lado-task-1", 2)).mockResolvedValue(unseen("lado-task-1", 1));
 	const client = renderLanes();
 
 	const cards = await screen.findAllByTestId("lado-task-card");
@@ -119,7 +108,7 @@ test("a card shows the task's cost and a badge of its unseen alerts, and a seen 
 	const second = cards.find((card) => card.dataset.taskId === "lado-task-2")!;
 	expect(await within(first).findByTestId("lado-card-cost")).toHaveTextContent("$120.40");
 	expect(await within(first).findByTestId("lado-card-alerts")).toHaveTextContent("2");
-	expect(lado.fetchLadoAlerts).toHaveBeenCalledWith("demo", { unseen: true });
+	expect(lado.fetchLadoUnseenAlertCounts).toHaveBeenCalledWith("demo");
 	// A task whose sessions spent nothing and have no alerts shows neither.
 	expect(within(second).queryByTestId("lado-card-watch")).not.toBeInTheDocument();
 
@@ -133,7 +122,7 @@ test("a card shows the task's cost and a badge of its unseen alerts, and a seen 
 
 test("the badge opens the task on its Usage tab", async () => {
 	const user = userEvent.setup();
-	vi.mocked(lado.fetchLadoAlerts).mockResolvedValue([alert(7)]);
+	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValue(unseen("lado-task-1", 1));
 	renderLanes();
 
 	const badge = await screen.findByRole("button", { name: "Unseen alerts: 1" });
@@ -142,8 +131,16 @@ test("the badge opens the task on its Usage tab", async () => {
 	expect(await within(dialog).findByTestId("lado-task-usage")).toBeInTheDocument();
 });
 
+test("the badge counts every unseen alert, past the alert list's limit", async () => {
+	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValue(unseen("lado-task-1", 240));
+	renderLanes();
+	const cards = await screen.findAllByTestId("lado-task-card");
+	const first = cards.find((card) => card.dataset.taskId === "lado-task-1")!;
+	expect(await within(first).findByTestId("lado-card-alerts")).toHaveTextContent("240");
+	expect(lado.fetchLadoAlerts).not.toHaveBeenCalledWith("demo", { unseen: true });
+});
+
 test("a click on a LADO alert's notification opens its task on the Usage tab", async () => {
-	vi.mocked(lado.fetchLadoAlerts).mockResolvedValue([]);
 	renderLanes();
 	await screen.findAllByTestId("lado-task-card");
 

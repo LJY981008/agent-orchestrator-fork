@@ -125,6 +125,8 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersListLadoAlertsQuery":               "ListLadoAlertsQuery",
 	"ControllersLadoAlertResponse":                 "LadoAlertResponse",
 	"ControllersLadoAlertListResponse":             "LadoAlertListResponse",
+	"ControllersLadoUnseenAlertCountResponse":      "LadoUnseenAlertCountResponse",
+	"ControllersLadoUnseenAlertCountsResponse":     "LadoUnseenAlertCountsResponse",
 	"ControllersLadoCompactWarningResponse":        "LadoCompactWarningResponse",
 	"ControllersLadoPlanPartResponse":              "LadoPlanPartResponse",
 	"ControllersLadoExecutionPRResponse":           "LadoExecutionPRResponse",
@@ -466,6 +468,12 @@ func ladoOperations() []operation {
 			summary:    "List a project's one-line worker watch alerts, newest first: cost and compaction thresholds, usage limits and stalls",
 			pathParams: []any{controllers.LadoProjectIDParam{}, controllers.ListLadoAlertsQuery{}},
 			resps:      ladoResps(http.StatusOK, controllers.LadoAlertListResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/alerts/unseen-counts", id: "countLadoUnseenAlerts", tag: "lado",
+			summary:    "Count each of a project's tasks' alerts nobody marked seen, over all of them, for the board's badges",
+			pathParams: projectID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoUnseenAlertCountsResponse{}, http.StatusNotFound),
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/lado/alerts/{alertId}/seen", id: "markLadoAlertSeen", tag: "lado",

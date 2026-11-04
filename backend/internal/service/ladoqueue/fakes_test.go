@@ -306,6 +306,13 @@ func (f *fakeAccountLimits) LaunchAccountLimit(_ context.Context, harness domain
 	return domain.LadoAccountLimit{AccountKey: key, ResetAt: f.resetAt}, true, nil
 }
 
+// release lifts the limit before its reset.
+func (f *fakeAccountLimits) release() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.resetAt = time.Time{}
+}
+
 // fakePreflight answers its checks with next, one each, and then with err;
 // it counts the checks.
 type fakePreflight struct {

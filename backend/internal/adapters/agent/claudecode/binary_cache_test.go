@@ -148,10 +148,18 @@ func TestWindowsCmdShimNeedsItsTarget(t *testing.T) {
 	npm := t.TempDir()
 	shim := filepath.Join(npm, "claude.cmd")
 	writeExecutable(t, shim, "@echo off\r\n")
-	if !claudeShimTargetMissing(shim) {
-		t.Fatal("a claude.cmd without its package reads as an install")
+	// pnpm and Yarn keep the package away from the shim, so a claude.cmd
+	// without npm's package folder next to it stays an install.
+	if claudeShimTargetMissing(shim) {
+		t.Fatal("a claude.cmd of another layout (pnpm, Yarn) reads as missing")
 	}
 	pkg := filepath.Join(npm, "node_modules", "@anthropic-ai", "claude-code")
+	if err := os.MkdirAll(pkg, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !claudeShimTargetMissing(shim) {
+		t.Fatal("a claude.cmd whose npm package holds neither claude.exe nor cli.js reads as an install")
+	}
 	exe := filepath.Join(pkg, "bin", "claude.exe")
 	writeExecutable(t, exe, npmStub)
 	if !claudeShimTargetMissing(shim) {

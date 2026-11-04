@@ -16,8 +16,8 @@ var ladoWatchTables = []struct {
 	{"lado_watch_settings", []string{"project_id", "compact_window", "task_cost_cents", "session_cost_cents", "session_compactions", "stall_minutes", "wake_enabled", "updated_at"}},
 	{"lado_session_watch", []string{
 		"session_id", "task_id", "read_offsets_json", "compactions", "compacted_at",
-		"limit_state", "limit_reset_at", "limit_reset_guess", "limit_seen_at", "resumes", "resumed_at",
-		"stall_state", "stalled_at", "nudges", "nudged_at", "created_at", "updated_at",
+		"limit_state", "limit_reset_at", "limit_reset_guess", "limit_seen_at", "resumes", "resumed_at", "limit_stops",
+		"stall_state", "stalled_at", "nudges", "nudged_at", "stalls", "created_at", "updated_at",
 	}},
 	{"lado_account_limits", []string{"account_key", "session_id", "reset_at", "reset_guess", "detected_at", "updated_at"}},
 	{"lado_alerts", []string{"id", "task_id", "session_id", "kind", "level", "value", "threshold", "created_at", "seen_at"}},

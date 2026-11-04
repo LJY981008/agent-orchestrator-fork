@@ -62,7 +62,7 @@ type LadoAlertResponse struct {
 	ProjectID      string     `json:"projectId"`
 	IssueRef       string     `json:"issueRef"`
 	Kind           string     `json:"kind" enum:"task_cost,session_cost,session_compactions,limited,limit_resumed,stall_nudged,stalled,agent_unavailable"`
-	Level          int        `json:"level" description:"1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed; otherwise 1."`
+	Level          int        `json:"level" description:"1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed, the stop's for limited and the stall's for stalled; otherwise 1."`
 	Value          int64      `json:"value" description:"Cents for a cost, a count for compactions, minutes for a stall, the reset's Unix seconds for limited."`
 	Threshold      int64      `json:"threshold" description:"The threshold the value is held against, in the value's unit; 0 when there is none."`
 	Line           string     `json:"line" description:"The alert's one line, as the orchestrator gets it."`
@@ -74,6 +74,19 @@ type LadoAlertResponse struct {
 // LadoAlertListResponse is a project's alerts, newest first.
 type LadoAlertListResponse struct {
 	Alerts []LadoAlertResponse `json:"alerts"`
+}
+
+// LadoUnseenAlertCountResponse is how many of a task's alerts nobody marked
+// seen.
+type LadoUnseenAlertCountResponse struct {
+	TaskID string `json:"taskId"`
+	Unseen int    `json:"unseen" minimum:"1"`
+}
+
+// LadoUnseenAlertCountsResponse counts every unseen alert of a project's
+// tasks, however many there are, for the board's badges.
+type LadoUnseenAlertCountsResponse struct {
+	Tasks []LadoUnseenAlertCountResponse `json:"tasks" description:"Each task with an unseen alert, by task id; a task without one is left out."`
 }
 
 // LadoCompactWarningResponse is a setting that turns Claude Code's

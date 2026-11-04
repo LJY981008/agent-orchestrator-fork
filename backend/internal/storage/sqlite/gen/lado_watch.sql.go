@@ -13,6 +13,45 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const countLadoUnseenAlertsByProject = `-- name: CountLadoUnseenAlertsByProject :many
+SELECT a.task_id, CAST(COUNT(*) AS INTEGER) AS unseen
+FROM lado_alerts a
+JOIN lado_tasks t ON t.id = a.task_id
+WHERE t.project_id = ?1 AND a.seen_at IS NULL
+GROUP BY a.task_id
+ORDER BY a.task_id
+`
+
+type CountLadoUnseenAlertsByProjectRow struct {
+	TaskID string
+	Unseen int64
+}
+
+// How many alerts of each of a project's tasks nobody marked seen, over
+// every alert, for the board's badges.
+func (q *Queries) CountLadoUnseenAlertsByProject(ctx context.Context, projectID string) ([]CountLadoUnseenAlertsByProjectRow, error) {
+	rows, err := q.db.QueryContext(ctx, countLadoUnseenAlertsByProject, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []CountLadoUnseenAlertsByProjectRow{}
+	for rows.Next() {
+		var i CountLadoUnseenAlertsByProjectRow
+		if err := rows.Scan(&i.TaskID, &i.Unseen); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const deleteLadoAccountLimit = `-- name: DeleteLadoAccountLimit :execrows
 DELETE FROM lado_account_limits WHERE account_key = ?
 `
@@ -144,8 +183,8 @@ func (q *Queries) GetLadoSessionSubagentUsage(ctx context.Context, sessionID dom
 
 const getLadoSessionWatch = `-- name: GetLadoSessionWatch :one
 SELECT session_id, task_id, read_offsets_json, compactions, compacted_at,
-    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at,
-    stall_state, stalled_at, nudges, nudged_at, created_at, updated_at
+    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at, limit_stops,
+    stall_state, stalled_at, nudges, nudged_at, stalls, created_at, updated_at
 FROM lado_session_watch
 WHERE session_id = ?
 `
@@ -165,10 +204,12 @@ func (q *Queries) GetLadoSessionWatch(ctx context.Context, sessionID string) (La
 		&i.LimitSeenAt,
 		&i.Resumes,
 		&i.ResumedAt,
+		&i.LimitStops,
 		&i.StallState,
 		&i.StalledAt,
 		&i.Nudges,
 		&i.NudgedAt,
+		&i.Stalls,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -506,7 +547,7 @@ const listLadoSessionTranscriptSources = `-- name: ListLadoSessionTranscriptSour
 SELECT DISTINCT us.kind, us.artifact_path
 FROM usage_sources us
 JOIN usage_bindings ub ON ub.id = us.binding_id
-WHERE ub.session_id = ?1 AND us.kind IN ('claude_main', 'codex_rollout')
+WHERE ub.session_id = ?1 AND us.kind IN ('claude_main', 'codex_rollout') AND us.subagent_id = ''
 ORDER BY us.kind, us.artifact_path
 `
 
@@ -516,7 +557,8 @@ type ListLadoSessionTranscriptSourcesRow struct {
 }
 
 // The conversation files of a session that the usage pipeline reads: Claude's
-// main transcript and Codex rollouts.
+// main transcript and the session's own Codex rollouts. A subagent's rollout,
+// which the collector registers under its parent's binding, is left out.
 func (q *Queries) ListLadoSessionTranscriptSources(ctx context.Context, sessionID domain.SessionID) ([]ListLadoSessionTranscriptSourcesRow, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoSessionTranscriptSources, sessionID)
 	if err != nil {
@@ -542,8 +584,8 @@ func (q *Queries) ListLadoSessionTranscriptSources(ctx context.Context, sessionI
 
 const listLadoSessionWatchByTask = `-- name: ListLadoSessionWatchByTask :many
 SELECT session_id, task_id, read_offsets_json, compactions, compacted_at,
-    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at,
-    stall_state, stalled_at, nudges, nudged_at, created_at, updated_at
+    limit_state, limit_reset_at, limit_reset_guess, limit_seen_at, resumes, resumed_at, limit_stops,
+    stall_state, stalled_at, nudges, nudged_at, stalls, created_at, updated_at
 FROM lado_session_watch
 WHERE task_id = ?
 ORDER BY created_at, session_id
@@ -570,10 +612,12 @@ func (q *Queries) ListLadoSessionWatchByTask(ctx context.Context, taskID string)
 			&i.LimitSeenAt,
 			&i.Resumes,
 			&i.ResumedAt,
+			&i.LimitStops,
 			&i.StallState,
 			&i.StalledAt,
 			&i.Nudges,
 			&i.NudgedAt,
+			&i.Stalls,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -649,8 +693,9 @@ SET limit_state = ?1,
     limit_seen_at = ?4,
     resumes = ?5,
     resumed_at = ?6,
-    updated_at = ?7
-WHERE session_id = ?8
+    limit_stops = ?7,
+    updated_at = ?8
+WHERE session_id = ?9
 `
 
 type UpdateLadoSessionWatchLimitParams struct {
@@ -660,6 +705,7 @@ type UpdateLadoSessionWatchLimitParams struct {
 	LimitSeenAt     sql.NullTime
 	Resumes         int64
 	ResumedAt       sql.NullTime
+	LimitStops      int64
 	UpdatedAt       time.Time
 	SessionID       string
 }
@@ -673,6 +719,7 @@ func (q *Queries) UpdateLadoSessionWatchLimit(ctx context.Context, arg UpdateLad
 		arg.LimitSeenAt,
 		arg.Resumes,
 		arg.ResumedAt,
+		arg.LimitStops,
 		arg.UpdatedAt,
 		arg.SessionID,
 	)
@@ -688,8 +735,9 @@ SET stall_state = ?1,
     stalled_at = ?2,
     nudges = ?3,
     nudged_at = ?4,
-    updated_at = ?5
-WHERE session_id = ?6
+    stalls = ?5,
+    updated_at = ?6
+WHERE session_id = ?7
 `
 
 type UpdateLadoSessionWatchStallParams struct {
@@ -697,6 +745,7 @@ type UpdateLadoSessionWatchStallParams struct {
 	StalledAt  sql.NullTime
 	Nudges     int64
 	NudgedAt   sql.NullTime
+	Stalls     int64
 	UpdatedAt  time.Time
 	SessionID  string
 }
@@ -708,6 +757,7 @@ func (q *Queries) UpdateLadoSessionWatchStall(ctx context.Context, arg UpdateLad
 		arg.StalledAt,
 		arg.Nudges,
 		arg.NudgedAt,
+		arg.Stalls,
 		arg.UpdatedAt,
 		arg.SessionID,
 	)

@@ -6,7 +6,9 @@ package ladotask
 // <DataDir>/lado/runs/<revision-id>/plan.md, outside every worktree, and the
 // prompts name it. Every run of a revision shares the file. RunInput runs
 // again for each part, merge and integration worker, so the file is written
-// only when it is missing and compared otherwise.
+// only when it is missing or no longer holds the plan, and compared
+// otherwise. The file is a copy: the prompt carries the plan too, so a file
+// LADO cannot write leaves the prompt without its path and the run goes on.
 
 import (
 	"context"
@@ -36,8 +38,10 @@ func RunsDir(dataDir string, rev domain.LadoPlanRevisionID) string {
 }
 
 // writePlanFile keeps content, the pinned plan of rev, in rev's runs folder
-// and returns the file's path. A file already there must hold the same bytes:
-// it is compared by sha256 and never written again, as it is read-only.
+// and returns the file's path. A file already there that holds the same
+// bytes, compared by sha256, is left alone. One that does not, which a worker
+// may have replaced since the folder is one it can write, is written again
+// through a temp file and a rename, as a missing one is.
 func writePlanFile(dataDir string, rev domain.LadoPlanRevisionID, content []byte) (string, error) {
 	dir := RunsDir(dataDir, rev)
 	if dir == "" {
@@ -45,12 +49,12 @@ func writePlanFile(dataDir string, rev domain.LadoPlanRevisionID, content []byte
 	}
 	path := filepath.Join(dir, PlanFileName)
 	want := sha256.Sum256(content)
-	if ok, err := planFileHolds(path, want); err == nil {
-		if !ok {
-			return "", fmt.Errorf("the plan file of revision %s does not match its pinned plan", rev)
-		}
+	ok, err := planFileHolds(path, want)
+	switch {
+	case err == nil && ok:
 		return path, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
+	case err == nil, errors.Is(err, fs.ErrNotExist):
+	default:
 		return "", fmt.Errorf("read the plan file of revision %s: %w", rev, err)
 	}
 	if err := os.MkdirAll(dir, 0o750); err != nil {
@@ -73,6 +77,9 @@ func writePlanFile(dataDir string, rev domain.LadoPlanRevisionID, content []byte
 		err = os.Chmod(tmpName, 0o400)
 	}
 	if err == nil {
+		// Windows will not rename over a read-only file; a file that is
+		// not there makes this a no-op.
+		_ = os.Chmod(path, 0o600)
 		err = os.Rename(tmpName, path)
 	}
 	if err != nil {

@@ -65,14 +65,15 @@ describe("LADO usage text", () => {
 		expect(ladoAlertText(t, ladoAlert({ kind: "future" as LadoAlert["kind"] }), "en")).toBe(ladoAlert().line);
 	});
 
-	it("counts each task's unseen alerts", () => {
-		const counts = ladoUnseenAlertCounts([
-			ladoAlert({ id: 1 }),
-			ladoAlert({ id: 2, seenAt: "2026-11-04T09:05:00Z" }),
-			ladoAlert({ id: 3 }),
-			ladoAlert({ id: 4, taskId: "lado-task-2" }),
-		]);
-		expect(counts.get("lado-task-1")).toBe(2);
+	it("reads each task's unseen alerts from the daemon's counts", () => {
+		// The daemon counts every unseen alert, past any list limit.
+		const counts = ladoUnseenAlertCounts({
+			tasks: [
+				{ taskId: "lado-task-1", unseen: 240 },
+				{ taskId: "lado-task-2", unseen: 1 },
+			],
+		});
+		expect(counts.get("lado-task-1")).toBe(240);
 		expect(counts.get("lado-task-2")).toBe(1);
 		expect(ladoUnseenAlertCounts(undefined).size).toBe(0);
 	});

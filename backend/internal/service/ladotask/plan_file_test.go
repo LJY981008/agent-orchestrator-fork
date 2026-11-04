@@ -57,15 +57,48 @@ func TestRunInputKeepsThePinnedPlanAsAReadOnlyFile(t *testing.T) {
 		t.Fatalf("second RunInput = %q, %v; want the same file", again.PlanFile, err)
 	}
 
-	// A file that no longer holds the pinned plan fails the input.
+	// A file that no longer holds the pinned plan, as a worker that
+	// replaced it leaves it, is written again.
 	if err := os.Chmod(in.PlanFile, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(in.PlanFile, []byte("not the plan"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pf.svc.RunInput(ctx, task); err == nil {
-		t.Fatal("RunInput succeeded over a plan file that differs from the pinned plan")
+	fixed, err := pf.svc.RunInput(ctx, task)
+	if err != nil || fixed.PlanFile != in.PlanFile {
+		t.Fatalf("RunInput over a changed plan file = %q, %v; want the same file", fixed.PlanFile, err)
+	}
+	if data, err := os.ReadFile(in.PlanFile); err != nil || string(data) != in.PlanText {
+		t.Fatalf("plan file after RunInput holds %q (%v), want the pinned plan again", data, err)
+	}
+	if runtime.GOOS != "windows" {
+		if info, err := os.Stat(in.PlanFile); err != nil || info.Mode().Perm()&0o222 != 0 {
+			t.Fatalf("rewritten plan file mode = %v (%v), want read-only", info.Mode(), err)
+		}
+	}
+}
+
+// The plan file is a copy of the plan the prompt carries: a file LADO cannot
+// write leaves the input without its path and never fails the run.
+func TestRunInputGoesOnWithoutAPlanFileItCannotWrite(t *testing.T) {
+	pf := newPlanFixture(t)
+	ctx := context.Background()
+	task, rev := approvedRun(t, pf)
+	// A file where the revision's runs folder would be: nothing can go in it.
+	runs := filepath.Join(pf.dataDir, "lado", "runs")
+	if err := os.MkdirAll(runs, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runs, string(rev.ID)), []byte("in the way"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	in, err := pf.svc.RunInput(ctx, task)
+	if err != nil {
+		t.Fatalf("RunInput with a runs folder it cannot make = %v, want nil", err)
+	}
+	if in.PlanFile != "" || in.PlanText == "" {
+		t.Fatalf("input = plan file %q, plan %d bytes; want no file and the plan", in.PlanFile, len(in.PlanText))
 	}
 }
 

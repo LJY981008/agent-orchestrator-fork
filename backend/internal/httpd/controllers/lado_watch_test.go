@@ -231,3 +231,45 @@ func TestLadoAPI_EffectiveCompactInfo(t *testing.T) {
 		t.Fatalf("without the service = %+v", resp)
 	}
 }
+
+// The board's badges count every unseen alert, past the list's 100 and 500:
+// 120 alerts of one task and none seen read 120, and a seen one comes off.
+func TestLadoAPI_UnseenAlertCountsCountEveryAlert(t *testing.T) {
+	s := newLadoWatchStore(t)
+	ctx := context.Background()
+	var first domain.LadoAlertID
+	for i := 1; i <= 120; i++ {
+		id, added, err := s.AddLadoAlert(ctx, domain.LadoAlert{
+			TaskID: "lado-task-1", SessionID: "mer-7", Kind: domain.LadoAlertStalled, Level: i, Value: 120,
+			CreatedAt: ladoWatchTime.Add(time.Duration(i) * time.Second),
+		})
+		if err != nil || !added {
+			t.Fatalf("add alert %d: %v %v", i, added, err)
+		}
+		if i == 1 {
+			first = id
+		}
+	}
+	if _, err := s.MarkLadoAlertSeen(ctx, first, ladoWatchTime.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoWatch: ladoalert.New(ladoalert.Deps{
+		Store: s, Clock: func() time.Time { return ladoWatchTime.Add(time.Hour) }, Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})})
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/projects/mer/alerts/unseen-counts", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET = %d %s", status, body)
+	}
+	counts := decodeLadoJSON[controllers.LadoUnseenAlertCountsResponse](t, body)
+	if len(counts.Tasks) != 1 || counts.Tasks[0].TaskID != "lado-task-1" || counts.Tasks[0].Unseen != 119 {
+		t.Fatalf("unseen counts = %+v, want lado-task-1 with 119", counts)
+	}
+	if body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/projects/other/alerts/unseen-counts", ""); status != http.StatusOK ||
+		len(decodeLadoJSON[controllers.LadoUnseenAlertCountsResponse](t, body).Tasks) != 0 {
+		t.Fatalf("GET other = %d %s, want no tasks", status, body)
+	}
+	if _, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/projects/missing/alerts/unseen-counts", ""); status != http.StatusNotFound {
+		t.Fatalf("GET of an unknown project = %d, want 404", status)
+	}
+}

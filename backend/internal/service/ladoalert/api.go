@@ -180,6 +180,20 @@ func (s *Service) ProjectAlerts(ctx context.Context, q AlertQuery) ([]domain.Lad
 	return alerts, nil
 }
 
+// UnseenAlertCounts counts each of a project's tasks' unseen alerts, over all
+// of them, so the board's badges are right however many there are.
+func (s *Service) UnseenAlertCounts(ctx context.Context, project domain.ProjectID) (map[domain.LadoTaskID]int, error) {
+	if err := s.requireProject(ctx, project); err != nil {
+		return nil, err
+	}
+	counts, err := s.deps.Store.LadoUnseenAlertCounts(ctx, project)
+	if err != nil {
+		s.deps.Log.Warn("LADO could not count unseen alerts", "project", project, "err", err)
+		return nil, apierr.Internal("LADO_ALERTS_LOAD_FAILED", "Failed to load the alerts")
+	}
+	return counts, nil
+}
+
 // MarkSeen marks an alert seen and returns it. An alert seen before keeps
 // its first time.
 func (s *Service) MarkSeen(ctx context.Context, id domain.LadoAlertID) (domain.LadoAlert, error) {

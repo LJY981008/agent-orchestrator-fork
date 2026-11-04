@@ -1,12 +1,12 @@
 // LADO fork: what the board's cards say of the worker watch (issue #42): the
 // task's estimated cost in one line, and how many of its alerts nobody marked
-// seen. The board reads the project's usage totals and unseen alerts once for
+// seen. The board reads the project's usage totals and unseen alert counts once for
 // all its cards; the watch and alert events refresh them, so a seen alert in
 // any window takes the badge down.
 import { Bell } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { useLadoAlerts, useLadoProjectUsage } from "../../hooks/useLado";
+import { useLadoProjectUsage, useLadoUnseenAlertCounts } from "../../hooks/useLado";
 import { ladoCostText, ladoUnseenAlertCounts } from "../../lib/lado-usage";
 import { cn } from "../../lib/utils";
 
@@ -16,7 +16,8 @@ export type LadoTaskWatch = { costNanos?: number; unseen: number };
 /** Each task's watch, from the project's usage totals and unseen alerts. */
 export function useLadoBoardWatch(projectId: string, enabled = true): (taskId: string) => LadoTaskWatch {
 	const usage = useLadoProjectUsage(projectId, enabled);
-	const alerts = useLadoAlerts(projectId, { unseen: true }, enabled);
+	// The daemon counts every unseen alert: a list would stop at its limit.
+	const alerts = useLadoUnseenAlertCounts(projectId, enabled);
 	return useMemo(() => {
 		const costs = new Map<string, number>();
 		for (const task of usage.data?.tasks ?? []) {
@@ -68,7 +69,11 @@ export function LadoCardWatch({
 						aria-label={label}
 						title={label}
 						data-testid="lado-card-alerts"
-						onClick={onOpenAlerts}
+						onClick={(event) => {
+							// The badge sits on a card that opens something else.
+							event.stopPropagation();
+							onOpenAlerts();
+						}}
 					>
 						{badge}
 					</button>

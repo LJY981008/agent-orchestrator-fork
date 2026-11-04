@@ -4063,6 +4063,46 @@ paths:
         and compaction thresholds, usage limits and stalls'
       tags:
       - lado
+  /api/v1/lado/projects/{projectId}/alerts/unseen-counts:
+    get:
+      operationId: countLadoUnseenAlerts
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoUnseenAlertCountsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Count each of a project's tasks' alerts nobody marked seen, over all
+        of them, for the board's badges
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/issues:
     get:
       operationId: listLadoProjectIssues
@@ -19951,7 +19991,8 @@ components:
           type: string
         level:
           description: 1 past a cost threshold, 2 past twice it; the resume's number
-            for limit_resumed; otherwise 1.
+            for limit_resumed, the stop's for limited and the stall's for stalled;
+            otherwise 1.
           type: integer
         line:
           description: The alert's one line, as the orchestrator gets it.
@@ -24473,6 +24514,28 @@ components:
       - entered
       - stored
       - permissions
+      type: object
+    LadoUnseenAlertCountResponse:
+      properties:
+        taskId:
+          type: string
+        unseen:
+          minimum: 1
+          type: integer
+      required:
+      - taskId
+      - unseen
+      type: object
+    LadoUnseenAlertCountsResponse:
+      properties:
+        tasks:
+          description: Each task with an unseen alert, by task id; a task without
+            one is left out.
+          items:
+            $ref: '#/components/schemas/LadoUnseenAlertCountResponse'
+          type: array
+      required:
+      - tasks
       type: object
     LadoUsageTotalsResponse:
       properties:

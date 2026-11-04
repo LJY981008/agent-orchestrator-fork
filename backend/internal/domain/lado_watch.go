@@ -256,6 +256,9 @@ type LadoWatchLimit struct {
 	// Resumes is how many resume messages LADO sent, ResumedAt the last.
 	Resumes   int
 	ResumedAt time.Time
+	// Stops is how many limit stops LADO recorded for the session; each
+	// stop's alert has its number as its level.
+	Stops int
 }
 
 // LadoWatchStall is the stall watch's group.
@@ -265,6 +268,9 @@ type LadoWatchStall struct {
 	// Nudges is how many nudges LADO sent, NudgedAt the last.
 	Nudges   int
 	NudgedAt time.Time
+	// Stalls is how many stalls LADO recorded for the session; each stall's
+	// alert has its number as its level.
+	Stalls int
 }
 
 // LadoAccountLimit is an account at its usage limit.
@@ -299,8 +305,8 @@ const (
 	// LadoAlertSessionCompactions: one session compacted as often as the
 	// threshold. Value and Threshold are counts.
 	LadoAlertSessionCompactions LadoAlertKind = "session_compactions"
-	// LadoAlertLimited: a worker stopped at a usage limit. Value is the reset
-	// time in Unix seconds.
+	// LadoAlertLimited: a worker stopped at a usage limit. Level is the
+	// stop's number in the session, Value the reset time in Unix seconds.
 	LadoAlertLimited LadoAlertKind = "limited"
 	// LadoAlertLimitResumed: LADO sent the limit resume message. Level and
 	// Value are the resume's number, Threshold LadoWakeMaxResumes.
@@ -309,7 +315,8 @@ const (
 	// time in minutes.
 	LadoAlertStallNudged LadoAlertKind = "stall_nudged"
 	// LadoAlertStalled: a worker stayed quiet after the nudge, or the project
-	// does not let LADO wake it. Value is the stall time in minutes.
+	// does not let LADO wake it. Level is the stall's number in the session,
+	// Value the stall time in minutes.
 	LadoAlertStalled LadoAlertKind = "stalled"
 	// LadoAlertAgentUnavailable: LADO holds a new worker because the agent's
 	// executable is unavailable. Its session is empty.

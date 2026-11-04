@@ -7,8 +7,8 @@ package ladoqueue
 // merge or integration worker, the dispatcher asks whether the account a new
 // session would run on is at its limit, and then checks the agent itself.
 // Either holds the worker without spending an attempt: the queue entry or
-// the part waits with LadoWaitingAccountLimited until the reset, or with
-// LadoWaitingAgentUnavailable for a minute. The integration worker has no
+// the part waits with LadoWaitingAccountLimited, checked again every minute
+// until the limit lifts, or with LadoWaitingAgentUnavailable for a minute. The integration worker has no
 // waiting reason of its own; it waits as one does for a worker slot.
 
 import (
@@ -71,7 +71,14 @@ func (s *Service) checkLaunch(ctx context.Context, task domain.LadoTaskID, harne
 		case err != nil:
 			s.deps.Log.Warn("LADO could not read the usage limits of a new worker's account", "task", task, "agent", harness, "err", err)
 		case ok:
-			return launchHold{reason: domain.LadoWaitingAccountLimited, detail: limit.ResetAt.UTC().Format(time.RFC3339), until: limit.ResetAt}
+			// The limit may lift before its reset (a turn that completed on
+			// the account, another default account), so the entry checks
+			// again soon; the reset is only the detail.
+			until := now.Add(recheckAfter)
+			if limit.ResetAt.Before(until) {
+				until = limit.ResetAt
+			}
+			return launchHold{reason: domain.LadoWaitingAccountLimited, detail: limit.ResetAt.UTC().Format(time.RFC3339), until: until}
 		}
 	}
 	if s.deps.Preflight == nil {

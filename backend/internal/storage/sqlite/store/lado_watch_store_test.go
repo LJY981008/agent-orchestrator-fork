@@ -113,9 +113,9 @@ func TestLadoSessionWatchGroupsDoNotOverwriteEachOther(t *testing.T) {
 	at := func(minutes int) time.Time { return ladoWatchAt.Add(time.Duration(minutes) * time.Minute) }
 	compactions := domain.LadoWatchCompactions{ReadOffsets: map[string]int64{"/t/main.jsonl": 4096}, Compactions: 2, CompactedAt: at(1)}
 	limit := domain.LadoWatchLimit{
-		LimitState: domain.LadoLimitLimited, LimitResetAt: at(60), LimitResetGuessed: true, LimitSeenAt: at(2), Resumes: 1, ResumedAt: at(3),
+		LimitState: domain.LadoLimitLimited, LimitResetAt: at(60), LimitResetGuessed: true, LimitSeenAt: at(2), Resumes: 1, ResumedAt: at(3), Stops: 2,
 	}
-	stall := domain.LadoWatchStall{StallState: domain.LadoStallStalled, StalledAt: at(4), Nudges: 1, NudgedAt: at(5)}
+	stall := domain.LadoWatchStall{StallState: domain.LadoStallStalled, StalledAt: at(4), Nudges: 1, NudgedAt: at(5), Stalls: 3}
 	mustSet := func(name string, set func() (bool, error)) {
 		t.Helper()
 		if ok, err := set(); err != nil || !ok {
@@ -140,10 +140,10 @@ func TestLadoSessionWatchGroupsDoNotOverwriteEachOther(t *testing.T) {
 			t.Fatalf("%s: compactions = %+v, want %+v", step, w.LadoWatchCompactions, compactions)
 		}
 		if w.LimitState != limit.LimitState || !w.LimitResetAt.Equal(limit.LimitResetAt) || w.LimitResetGuessed != limit.LimitResetGuessed ||
-			!w.LimitSeenAt.Equal(limit.LimitSeenAt) || w.Resumes != limit.Resumes || !w.ResumedAt.Equal(limit.ResumedAt) {
+			!w.LimitSeenAt.Equal(limit.LimitSeenAt) || w.Resumes != limit.Resumes || !w.ResumedAt.Equal(limit.ResumedAt) || w.Stops != limit.Stops {
 			t.Fatalf("%s: limit = %+v, want %+v", step, w.LadoWatchLimit, limit)
 		}
-		if w.StallState != stall.StallState || !w.StalledAt.Equal(stall.StalledAt) || w.Nudges != stall.Nudges || !w.NudgedAt.Equal(stall.NudgedAt) {
+		if w.StallState != stall.StallState || !w.StalledAt.Equal(stall.StalledAt) || w.Nudges != stall.Nudges || !w.NudgedAt.Equal(stall.NudgedAt) || w.Stalls != stall.Stalls {
 			t.Fatalf("%s: stall = %+v, want %+v", step, w.LadoWatchStall, stall)
 		}
 	}
@@ -575,6 +575,9 @@ func TestLadoSessionSubagentUsageAndTranscripts(t *testing.T) {
 	}
 	main := source("claude_main", "", "/t/main.jsonl")
 	sub := source("claude_subagent", "agent-1", "/t/sub-1.jsonl")
+	// The collector registers a Codex subagent thread's rollout under its
+	// parent's binding; its compactions are not the session's own.
+	source("codex_rollout", "thread-child", "/t/child-rollout.jsonl")
 	event := func(src int64, key string, in, out int64, cost any) {
 		exec(`INSERT INTO model_usage_events (binding_id, usage_source_id, provider_id, model_id, usage_measurement_kind,
 			input_tokens, output_tokens, estimated_cost_nanos, source_event_key)

@@ -24,18 +24,42 @@ func TestAWorkerWaitsForItsAccountsLimitToReset(t *testing.T) {
 	if len(f.sessions.spawned()) != 0 {
 		t.Fatalf("spawned %v during the limit", spawnIDs(f.sessions.spawned()))
 	}
-	if e.WaitingReason != domain.LadoWaitingAccountLimited || e.AttemptCount != 0 || !e.NextAttemptAt.Equal(limits.resetAt) ||
+	// It checks again in a minute, not only at the reset.
+	if e.WaitingReason != domain.LadoWaitingAccountLimited || e.AttemptCount != 0 || !e.NextAttemptAt.Equal(t0.Add(recheckAfter)) ||
 		e.WaitingDetail != limits.resetAt.Format(time.RFC3339) {
 		t.Fatalf("entry = %+v, want it waiting for the reset without an attempt", e)
 	}
-	f.tick(t, t0.Add(time.Hour))
-	if len(f.sessions.spawned()) != 0 {
-		t.Fatalf("spawned before the reset")
+	for at := t0.Add(recheckAfter); at.Before(limits.resetAt); at = at.Add(30 * time.Minute) {
+		f.tick(t, at)
+	}
+	if e := f.store.entry("e1"); len(f.sessions.spawned()) != 0 || e.AttemptCount != 0 {
+		t.Fatalf("spawned %d, entry %+v before the reset", len(f.sessions.spawned()), e)
 	}
 	f.tick(t, limits.resetAt)
 	spawned := f.sessions.spawned()
 	if len(spawned) != 1 || spawned[0].ClientRequestID != domain.LadoClientRequestID("e1", 1) {
 		t.Fatalf("spawned %v after the reset, want the entry's first attempt", spawnIDs(spawned))
+	}
+}
+
+// A limit that lifts before its reset, as when a turn on the account
+// completes or the owner picks another default account, lets the entry start
+// on the next check, not at the reset it read.
+func TestAWorkerStartsOnceItsAccountsLimitLiftsEarly(t *testing.T) {
+	f := newFixture(t)
+	limits := &fakeAccountLimits{resetAt: t0.Add(72 * time.Hour)}
+	f.svc.deps.AccountLimits = limits
+	f.store.add(testEntry("e1", t0.Add(-time.Minute)))
+
+	f.tick(t, t0)
+	if len(f.sessions.spawned()) != 0 {
+		t.Fatalf("spawned %v during the limit", spawnIDs(f.sessions.spawned()))
+	}
+	limits.release()
+	f.tick(t, t0.Add(recheckAfter))
+	spawned := f.sessions.spawned()
+	if len(spawned) != 1 || spawned[0].ClientRequestID != domain.LadoClientRequestID("e1", 1) {
+		t.Fatalf("spawned %v a minute after the limit lifted, want the entry's first attempt", spawnIDs(spawned))
 	}
 }
 

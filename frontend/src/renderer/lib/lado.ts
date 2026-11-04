@@ -73,6 +73,7 @@ export type LadoSessionUsage = components["schemas"]["LadoSessionUsageResponse"]
 export type LadoUsageTotals = components["schemas"]["LadoUsageTotalsResponse"];
 export type LadoProjectUsage = components["schemas"]["LadoProjectUsageResponse"];
 export type LadoAlert = components["schemas"]["LadoAlertResponse"];
+export type LadoUnseenAlertCounts = components["schemas"]["LadoUnseenAlertCountsResponse"];
 export type LadoAlertKind = LadoAlert["kind"];
 export type LadoWatchSettings = components["schemas"]["LadoWatchSettingsResponse"];
 export type LadoWatchSettingsResolved = components["schemas"]["LadoWatchSettingsResolved"];
@@ -175,6 +176,8 @@ export const ladoTaskUsageQueryKey = (taskId: string) => ["lado", "task", taskId
 export const ladoProjectUsageQueryKey = (projectId: string) => ["lado", "usage", projectId] as const;
 /** Every alert list of a project: the board's unseen ones and each task's. */
 export const ladoAlertsProjectQueryKey = (projectId: string) => ["lado", "alerts", projectId] as const;
+/** Under the project's alerts key, so the alert events and a seen mark refresh it. */
+export const ladoUnseenAlertCountsQueryKey = (projectId: string) => ["lado", "alerts", projectId, "unseen-counts"] as const;
 export const ladoAlertsQueryKey = (projectId: string, filter: LadoAlertFilter) =>
 	["lado", "alerts", projectId, filter.taskId ?? "", filter.unseen === true] as const;
 export const ladoWatchSettingsQueryRoot = ["lado", "watch-settings"] as const;
@@ -738,6 +741,15 @@ export async function fetchLadoProjectUsage(projectId: string): Promise<LadoProj
 		params: { path: { projectId } },
 	});
 	if (error) throw ladoError(error, "Could not load the project's usage");
+	return data;
+}
+
+/** How many alerts of each of a project's tasks nobody marked seen, over all of them. */
+export async function fetchLadoUnseenAlertCounts(projectId: string): Promise<LadoUnseenAlertCounts> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/alerts/unseen-counts", {
+		params: { path: { projectId } },
+	});
+	if (error) throw ladoError(error, "Could not load the alerts");
 	return data;
 }
 

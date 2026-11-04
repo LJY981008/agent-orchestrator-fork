@@ -21,8 +21,12 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// launchVersionTimeout bounds the --version run.
-const launchVersionTimeout = 20 * time.Second
+// launchVersionTimeout bounds the --version run, and launchVersionWaitDelay
+// the wait for its output once it is stopped.
+const (
+	launchVersionTimeout   = 20 * time.Second
+	launchVersionWaitDelay = 2 * time.Second
+)
 
 // versionProbedHarnesses are the harnesses whose CLI answers --version
 // without starting a session. Others get the readiness check alone.
@@ -36,6 +40,10 @@ var runLaunchVersion = func(ctx context.Context, path string) error {
 	ctx, cancel := context.WithTimeout(ctx, launchVersionTimeout)
 	defer cancel()
 	cmd := aoprocess.CommandContext(ctx, path, "--version")
+	// A timeout stops the whole tree, a Windows .cmd shim's child included,
+	// and a child that still holds the output pipes is not waited for long.
+	aoprocess.ConfigureTreeCancellation(cmd)
+	cmd.WaitDelay = launchVersionWaitDelay
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -53,7 +61,8 @@ var runLaunchVersion = func(ctx context.Context, path string) error {
 }
 
 // PreflightLaunch checks that harness can start a session now: it drops the
-// cached install (InvalidateAgentInstallation), asks for launch readiness
+// cached install observation and executable path (invalidateLaunchInstall),
+// asks for launch readiness
 // (EnsureAgentReadiness with the launch purpose) and runs the executable
 // with --version. An agent that is not installed, or whose executable does
 // not run, fails with a wrapped ports.ErrAgentBinaryNotFound. Sign-in is left
@@ -63,7 +72,7 @@ func (s *Service) PreflightLaunch(ctx context.Context, harness domain.AgentHarne
 	if _, ok := s.agent(id); !ok {
 		return fmt.Errorf("agent %s: %w", id, ports.ErrAgentBinaryNotFound)
 	}
-	s.InvalidateAgentInstallation(id)
+	s.invalidateLaunchInstall(id)
 	snapshot, err := s.EnsureAgentReadiness(ctx, id, domain.AgentReadinessPurposeLaunch)
 	if err != nil {
 		return fmt.Errorf("check %s before a launch: %w", id, err)
@@ -86,8 +95,22 @@ func (s *Service) PreflightLaunch(ctx context.Context, harness domain.AgentHarne
 			return ctx.Err()
 		}
 		// The next check resolves the executable again.
-		s.InvalidateAgentInstallation(id)
+		s.invalidateLaunchInstall(id)
 		return fmt.Errorf("%s at %s does not run: %w: %w", id, path, ports.ErrAgentBinaryNotFound, err)
 	}
 	return nil
+}
+
+// invalidateLaunchInstall is InvalidateAgentInstallation without the model
+// catalogs: LADO checks before every worker it starts, and while a worker
+// waits once a minute, so dropping the catalogs would rediscover every
+// project's models each time. A changed install still refreshes them through
+// AO's own invalidation paths.
+func (s *Service) invalidateLaunchInstall(agentID string) {
+	s.readiness.Invalidate(agentID, readinessInvalidateInstallation)
+	if item, ok := s.agent(agentID); ok {
+		if invalidator, ok := item.Agent.(ports.AgentBinaryResolutionInvalidator); ok {
+			invalidator.InvalidateBinaryResolution()
+		}
+	}
 }

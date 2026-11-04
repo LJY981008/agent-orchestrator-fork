@@ -238,6 +238,14 @@ func (w worker) resting() bool {
 	return (state == domain.ActivityIdle || state == domain.ActivityWaitingInput) && w.hasTurn && w.turn.State.Terminal()
 }
 
+// ownerStopped reports whether the worker's newest turn was stopped or
+// withdrawn: the owner pressed Stop in Chat (interrupted) or took back a
+// queued turn (cancelled). LADO does not start such a worker again; it only
+// alerts.
+func (w worker) ownerStopped() bool {
+	return w.hasTurn && (w.turn.State == domain.TurnStateInterrupted || w.turn.State == domain.TurnStateCancelled)
+}
+
 // answering reports whether the worker's last report waits for the owner or
 // says it is done; LADO never speaks for the owner.
 func (w worker) answering() bool {

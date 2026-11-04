@@ -2,7 +2,7 @@
 // prices, token counts, and each alert's one line in the developer's
 // language. The daemon keeps costs in nanodollars and thresholds in cents.
 import type { TFunction } from "i18next";
-import type { LadoAlert, LadoAlertKind } from "./lado";
+import type { LadoAlert, LadoAlertKind, LadoUnseenAlertCounts } from "./lado";
 
 const NANOS_PER_DOLLAR = 1_000_000_000;
 
@@ -74,12 +74,11 @@ export function ladoAlertText(t: TFunction, alert: LadoAlert, locale: string): s
 	}
 }
 
-/** How many of the alerts nobody marked seen are each task's. */
-export function ladoUnseenAlertCounts(alerts: readonly LadoAlert[] | undefined): Map<string, number> {
-	const counts = new Map<string, number>();
-	for (const alert of alerts ?? []) {
-		if (alert.seenAt) continue;
-		counts.set(alert.taskId, (counts.get(alert.taskId) ?? 0) + 1);
+/** Each task's unseen alerts, from the daemon's counts; a task without any is left out. */
+export function ladoUnseenAlertCounts(counts: LadoUnseenAlertCounts | undefined): Map<string, number> {
+	const byTask = new Map<string, number>();
+	for (const task of counts?.tasks ?? []) {
+		if (task.unseen > 0) byTask.set(task.taskId, task.unseen);
 	}
-	return counts;
+	return byTask;
 }
