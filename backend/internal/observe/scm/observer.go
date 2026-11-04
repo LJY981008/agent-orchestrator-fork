@@ -169,7 +169,16 @@ type Config struct {
 	// BranchStates refreshes sessions' local commit and push facts on this
 	// tick. Nil skips it.
 	BranchStates BranchStateReconciler
+	// RetainedSessions names terminated sessions whose open PRs stay observed
+	// (LADO: executions not settled yet). It is read once per discovery. Nil
+	// observes live sessions only.
+	RetainedSessions RetainedSessionsFunc
 }
+
+// RetainedSessionsFunc lists terminated sessions whose open PRs the observer
+// keeps refreshing. Their PRs are only refreshed and persisted: no new PRs are
+// attached to them and lifecycle reactions are not run for them.
+type RetainedSessionsFunc func(ctx context.Context) ([]domain.SessionID, error)
 
 // BranchStateReconciler reads every live session's branch facts from git.
 type BranchStateReconciler interface {
@@ -256,12 +265,14 @@ type Observer struct {
 	Cache ObserverCache
 	// branchStates refreshes local branch facts on each tick.
 	branchStates BranchStateReconciler
+	// retainedSessions lists terminated sessions whose open PRs stay observed.
+	retainedSessions RetainedSessionsFunc
 }
 
 // New constructs an Observer with default cadence/cache settings for zero
 // values in cfg.
 func New(provider Provider, store Store, lifecycle Lifecycle, cfg Config) *Observer {
-	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates}
+	o := &Observer{provider: provider, store: store, lifecycle: lifecycle, tick: cfg.Tick, reviewInterval: cfg.ReviewInterval, clock: cfg.Clock, logger: cfg.Logger, scopedIdentityResolver: cfg.ScopedIdentityResolver, Cache: newCache(cfg.CacheMax), rateLimitUntil: map[string]time.Time{}, branchStates: cfg.BranchStates, retainedSessions: cfg.RetainedSessions}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -306,6 +317,10 @@ type subject struct {
 	branch  string
 	known   domain.PullRequest
 	hasPR   bool
+	// retained marks an open PR of a terminated session kept under
+	// observation (Config.RetainedSessions). It is persisted without a
+	// lifecycle reaction.
+	retained bool
 }
 
 // Head names are scoped to repo's provider and host. Each base has a separate
@@ -587,8 +602,11 @@ func (o *Observer) Poll(ctx context.Context) error {
 		// but semantic hashes are the observer's acknowledgement cursor. Keep
 		// changed hashes at their local values until lifecycle succeeds; if the
 		// daemon restarts after a lifecycle failure, the stale hashes force the
-		// same observation to be fetched and delivered again.
-		if o.lifecycle != nil {
+		// same observation to be fetched and delivered again. A retained
+		// (terminated) session gets no lifecycle reaction, so its observation
+		// is persisted with acknowledged hashes in one write.
+		react := o.lifecycle != nil && !subj.retained
+		if react {
 			pendingOpts := opts
 			if prepared.Changed.Metadata {
 				pendingOpts.preserveLocalMetadataHash = true
@@ -606,7 +624,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			markRepoRefreshFailed(subj.repo)
 			continue
 		}
-		if o.lifecycle != nil {
+		if react {
 			if err := o.lifecycle.ApplySCMObservation(ctx, subj.session.ID, prepared); err != nil {
 				o.logger.Error("scm observer: lifecycle notification failed", "session", subj.session.ID, "pr", firstNonEmpty(prepared.PR.URL, prepared.PR.HTMLURL, local.URL), "err", err)
 				markRepoRefreshFailed(subj.repo)
@@ -724,31 +742,34 @@ func (o *Observer) checkCredentials(ctx context.Context) (bool, error) {
 // session may own several PRs, so each open tracked PR becomes its own subject.
 // Terminal PRs stay eligible only for an opted-in live session, allowing an
 // unacknowledged teardown failure to be delivered again on a later poll.
+//
+// Terminated sessions are skipped unless Config.RetainedSessions names them.
+// A retained session contributes only its open tracked PRs, after every live
+// session so a live owner of the same PR wins. Its repos are guarded and
+// listed like any other, but it owns no branch, so it never attaches new PRs.
 func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, []sessionRepo, error) {
 	sessions, err := o.store.ListAllSessions(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
+	retainedIDs := o.retainedSessionIDs(ctx)
 	projects := map[domain.ProjectID]domain.ProjectRecord{}
 	scanRepos := map[domain.ProjectID][]ports.SCMRepo{}
 	out := map[string]*subject{}
 	var sessionRepos []sessionRepo
-	for _, sess := range sessions {
-		if sess.IsTerminated {
-			continue
-		}
+	addSession := func(sess domain.SessionRecord, retained bool) error {
 		branch := strings.TrimSpace(sess.Metadata.Branch)
-		if branch == "" {
-			continue
+		if branch == "" && !retained {
+			return nil
 		}
 		proj, ok := projects[sess.ProjectID]
 		if !ok {
 			p, found, err := o.store.GetProject(ctx, string(sess.ProjectID))
 			if err != nil {
-				return nil, nil, err
+				return err
 			}
 			if !found || !p.ArchivedAt.IsZero() {
-				continue
+				return nil
 			}
 			if p.RepoOriginURL == "" && p.Path != "" {
 				if url := resolveGitOriginURL(p.Path); url != "" {
@@ -765,24 +786,33 @@ func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, [
 			}
 		}
 		repos := append([]ports.SCMRepo(nil), scanRepos[sess.ProjectID]...)
-		sessionRepos = append(sessionRepos, checkoutSessionRepos(sess, branch, proj.Kind.WithDefault() == domain.ProjectKindWorkspace, repos)...)
+		ownRepos := checkoutSessionRepos(sess, branch, proj.Kind.WithDefault() == domain.ProjectKindWorkspace, repos)
 		childRepos, err := o.workspaceSCMSessionRepos(ctx, proj, sess, branch)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
 		for _, child := range childRepos {
-			sessionRepos = append(sessionRepos, child)
+			ownRepos = append(ownRepos, child)
 			repos = append(repos, child.repo)
 		}
 		if len(repos) == 0 {
 			o.logger.Debug("scm observer: project has no supported SCM origins", "project", proj.ID)
-			continue
+			return nil
 		}
 		prs, err := o.store.ListPRsBySession(ctx, sess.ID)
 		if err != nil {
-			return nil, nil, err
+			return err
 		}
-		for _, pr := range trackedPRsForSession(sess, prs) {
+		tracked := trackedPRsForSession(sess, prs)
+		if retained {
+			tracked = openTrackedPRs(prs)
+			if len(tracked) == 0 {
+				return nil
+			}
+			ownRepos = observeOnlySessionRepos(ownRepos)
+		}
+		sessionRepos = append(sessionRepos, ownRepos...)
+		for _, pr := range tracked {
 			prRepo, ok := repoForTrackedPR(pr, repos)
 			if !ok {
 				o.logger.Warn("scm observer: tracked PR repo no longer belongs to project", "session", sess.ID, "pr", pr.URL, "repo", pr.Repo)
@@ -793,13 +823,67 @@ func (o *Observer) discoverSubjects(ctx context.Context) (map[string]*subject, [
 			// until their first successful detail fetch stamps an identity.
 			key := keyForTrackedPR(pr, prRepo)
 			if existing, ok := out[key]; ok {
-				o.logger.Warn("scm observer: duplicate tracked PR subject skipped", "pr", key, "kept_session", existing.session.ID, "skipped_session", sess.ID)
+				if !retained {
+					o.logger.Warn("scm observer: duplicate tracked PR subject skipped", "pr", key, "kept_session", existing.session.ID, "skipped_session", sess.ID)
+				}
 				continue
 			}
-			out[key] = &subject{session: sess, repo: prRepo, branch: branch, known: pr, hasPR: true}
+			out[key] = &subject{session: sess, repo: prRepo, branch: branch, known: pr, hasPR: true, retained: retained}
+		}
+		return nil
+	}
+	var retained []domain.SessionRecord
+	for _, sess := range sessions {
+		if sess.IsTerminated {
+			if _, ok := retainedIDs[sess.ID]; ok {
+				retained = append(retained, sess)
+			}
+			continue
+		}
+		if err := addSession(sess, false); err != nil {
+			return nil, nil, err
+		}
+	}
+	for _, sess := range retained {
+		if err := addSession(sess, true); err != nil {
+			return nil, nil, err
 		}
 	}
 	return out, sessionRepos, nil
+}
+
+// retainedSessionIDs reads Config.RetainedSessions once per discovery. A
+// failure only drops the retention for this poll; live sessions still refresh.
+func (o *Observer) retainedSessionIDs(ctx context.Context) map[domain.SessionID]struct{} {
+	if o.retainedSessions == nil {
+		return nil
+	}
+	ids, err := o.retainedSessions(ctx)
+	if err != nil {
+		if !errors.Is(err, context.Canceled) {
+			o.logger.Warn("scm observer: retained session lookup failed", "err", err)
+		}
+		return nil
+	}
+	out := make(map[domain.SessionID]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
+// observeOnlySessionRepos keeps a retained session's repos guarded and listed
+// but gives them no branch and no head names, so discoverNewPRs never matches
+// a new PR to the terminated session.
+func observeOnlySessionRepos(repos []sessionRepo) []sessionRepo {
+	out := make([]sessionRepo, len(repos))
+	for i, sr := range repos {
+		sr.branch = ""
+		sr.workspace = false
+		sr.headNames = map[string]struct{}{}
+		out[i] = sr
+	}
+	return out
 }
 
 // The stored origin remains usable when the checkout is temporarily unavailable.
