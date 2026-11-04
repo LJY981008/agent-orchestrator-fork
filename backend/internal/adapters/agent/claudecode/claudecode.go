@@ -419,6 +419,8 @@ var claudeBinarySpec = binaryutil.BinarySpec{
 	UnixPaths:     []string{"/usr/local/bin/claude", "/opt/homebrew/bin/claude"},
 	UnixHomePaths: binaryutil.NodeManagedUnixHomePaths("claude", []string{".claude", "local", "claude"}),
 	NodeManaged:   true,
+	// LADO fork: an npm launcher whose native binary is gone is no install.
+	ValidateIdentity: func(_ context.Context, path string) bool { return !claudeShimTargetMissing(path) },
 	WinPaths: []binaryutil.WinPath{
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe"}},
 		{Base: binaryutil.WinAppData, Parts: []string{"npm", "claude.exe"}},
@@ -464,9 +466,11 @@ func (p *Plugin) claudeBinary(ctx context.Context) (string, error) {
 	p.binaryMu.Lock()
 	defer p.binaryMu.Unlock()
 
-	if p.resolvedBinary != "" {
+	// LADO fork: a cached path whose file went away is resolved again.
+	if p.resolvedBinary != "" && claudeBinaryUsable(p.resolvedBinary) {
 		return p.resolvedBinary, nil
 	}
+	p.resolvedBinary = ""
 
 	binary, err := ResolveClaudeBinary(ctx)
 	if err != nil {

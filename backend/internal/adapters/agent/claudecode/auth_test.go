@@ -129,7 +129,7 @@ func TestAuthStatusPrefersCLIOverStaleUserID(t *testing.T) {
 		return claudeCommandOutput{Stdout: []byte(`{"loggedIn":false,"apiProvider":"firstParty"}`)}, nil
 	}
 	t.Cleanup(func() { claudeAuthCommand = previous })
-	status, err := (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatus(context.Background())
+	status, err := (&Plugin{resolvedBinary: fixtureClaude(t)}).AuthStatus(context.Background())
 	if err != nil || status != ports.AgentAuthStatusUnauthorized {
 		t.Fatalf("AuthStatus = %q, err = %v, want signed-out CLI report to win over stale userID", status, err)
 	}
@@ -444,7 +444,7 @@ func TestUserGatewaySettingsOverrideSignedOutFirstPartyAuth(t *testing.T) {
 				return claudeCommandOutput{Stdout: []byte(`{"loggedIn":false,"apiProvider":"firstParty"}`)}, nil
 			}
 			t.Cleanup(func() { claudeAuthCommand = previous })
-			state, err := (&Plugin{resolvedBinary: "/fixture/claude"}).AuthStatus(context.Background())
+			state, err := (&Plugin{resolvedBinary: fixtureClaude(t)}).AuthStatus(context.Background())
 			want := ports.AgentAuthStatusAuthorized
 			if status == http.StatusNotFound {
 				want = ports.AgentAuthStatusConfigured
@@ -613,7 +613,7 @@ func TestLaunchAuthReprobesCachedSuccess(t *testing.T) {
 	}
 	t.Cleanup(func() { claudeAuthCommand = previous })
 
-	plugin := &Plugin{resolvedBinary: "/fixture/claude"}
+	plugin := &Plugin{resolvedBinary: fixtureClaude(t)}
 	env := map[string]string{"ANTHROPIC_BASE_URL": server.URL, "ANTHROPIC_API_KEY": "same-key"}
 	status, err := plugin.authStatusFor(context.Background(), "/project", env, false)
 	if err != nil || status != ports.AgentAuthStatusAuthorized || requests != 1 {

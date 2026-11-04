@@ -49,6 +49,38 @@ func TestInvalidateBinaryResolutionClearsCachedPath(t *testing.T) {
 	}
 }
 
+// LADO fork (issue #42): a cached path whose file was removed, as an
+// installer that moves Codex does, is resolved again on the next use.
+func TestCachedCodexPathIsResolvedAgainWhenItsFileIsGone(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix executable bits")
+	}
+	home, bin := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", bin)
+	current := filepath.Join(bin, "codex")
+	if err := os.WriteFile(current, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(old, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: old}
+	if got, err := p.ResolveBinary(context.Background()); err != nil || got != old {
+		t.Fatalf("while the cached file is there = %q, %v; want the cached %q", got, err, old)
+	}
+	if err := os.Remove(old); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.ResolveBinary(context.Background()); err != nil || got != current {
+		t.Fatalf("after its file is gone = %q, %v; want %q", got, err, current)
+	}
+	if p.resolvedBinary != current {
+		t.Fatalf("cache = %q, want the new path", p.resolvedBinary)
+	}
+}
+
 func TestNativeConversationIDRequiresCapturedCodexThreadForTUI(t *testing.T) {
 	p := &Plugin{}
 	if id, ok, err := p.NativeConversationID(context.Background(), ports.SessionRef{

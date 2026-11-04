@@ -249,6 +249,8 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		controllerCommitted bool
 		completionErr       error
 	)
+	// LADO fork: a LADO run's session reads its pinned plan file without asking.
+	additionalDirectories := m.ladoChatDirectories(ctx, in.record, workspaceProjectDirectories(in.workspace.Path, in.workspaceProject))
 	_, err = m.chat.StartChat(ctx, ChatStart{
 		SessionID:               id,
 		ProjectID:               in.cfg.ProjectID,
@@ -261,7 +263,7 @@ func (m *Manager) launchChatController(ctx context.Context, in chatSpawn) (domai
 		Effort:                  agentConfig.Effort,
 		Permissions:             agentConfig.Permissions,
 		SystemPrompt:            in.systemPrompt,
-		AdditionalDirectories:   workspaceProjectDirectories(in.workspace.Path, in.workspaceProject),
+		AdditionalDirectories:   additionalDirectories,
 		MCPServers:              mcpServers,
 		ExpectedControllerOwner: in.record.ControllerOwner(),
 		PrepareControllerEnv: func(launchCtx context.Context, expected domain.SessionControllerOwner) (map[string]string, error) {
@@ -503,6 +505,8 @@ func (m *Manager) resumeChatController(
 	if err != nil {
 		return RestoreResult{}, fmt.Errorf("%s %s: workspace roots: %w", operation, rec.ID, err)
 	}
+	// LADO fork: a LADO run's session reads its pinned plan file without asking.
+	additionalDirectories = m.ladoChatDirectories(ctx, rec, additionalDirectories)
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	if agent, ok := m.agents.Agent(rec.Harness); ok {
 		m.augmentAgentRuntimeEnv(agent, env)

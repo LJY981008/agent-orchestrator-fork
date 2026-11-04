@@ -665,6 +665,8 @@ func outputContainsAny(output string, patterns []string) bool {
 func (l *agentLauncher) runtimeEnv(ctx context.Context, spec LaunchSpec, argv []string, base map[string]string) map[string]string {
 	env := agentlaunch.MergeEnv(spec.ProjectEnv, base)
 	delete(env, sessionmanager.EnvSessionID)
+	// LADO fork: the compact window of a project in LADO mode (lado_env.go).
+	applyLadoReviewerEnv(ctx, spec, env)
 	env["AO_REVIEW_SESSION_ID"] = spec.ReviewSessionID
 	env["AO_REVIEW_WORKER_SESSION_ID"] = string(spec.WorkerID)
 	env["AO_REVIEW_HARNESS"] = string(spec.Harness)

@@ -32,10 +32,23 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.La
 	if !strings.HasSuffix(in.PlanText, "\n") {
 		b.WriteString("\n")
 	}
+	b.WriteString(planFileNote(in))
 	b.WriteString("\n## Verification and evidence\n\n")
 	b.WriteString(verificationParagraph(in.Snapshot, checks))
 	b.WriteString("\n\n" + evidenceForm)
 	return b.String()
+}
+
+// planFileNote names the read-only copy of the approved plan and asks the
+// worker to read it again once its context is summarized, when the plan,
+// which the prompt carries, is gone from it (issue #42). It is empty without
+// a plan file.
+func planFileNote(in ladotask.RunInput) string {
+	if in.PlanFile == "" {
+		return ""
+	}
+	return fmt.Sprintf("\nThe approved plan above is also kept read-only at `%s`, byte for byte. "+
+		"When your context is summarized (compacted), read that file again before you go on, so you keep to the whole plan.\n", in.PlanFile)
 }
 
 // evidenceForm is the front matter of the evidence file a worker writes, the

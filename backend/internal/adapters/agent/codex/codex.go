@@ -37,6 +37,7 @@ type Plugin struct {
 	binaryMu       sync.Mutex
 	resolvedBinary string
 	ladoOverrides  func(ctx context.Context, sessionID string) ([]string, error) // see lado_overrides.go
+	ladoCompact    func(ctx context.Context, sessionID string) ([]string, error) // see lado_overrides.go
 }
 
 // New returns a ready-to-register Codex adapter.
@@ -499,9 +500,11 @@ func (p *Plugin) codexBinary(ctx context.Context) (string, error) {
 	p.binaryMu.Lock()
 	defer p.binaryMu.Unlock()
 
-	if p.resolvedBinary != "" {
+	// LADO fork: a cached path whose file went away is resolved again.
+	if p.resolvedBinary != "" && binaryutil.CachedBinaryUsable(p.resolvedBinary) {
 		return p.resolvedBinary, nil
 	}
+	p.resolvedBinary = ""
 
 	binary, err := ResolveCodexBinary(ctx)
 	if err != nil {
