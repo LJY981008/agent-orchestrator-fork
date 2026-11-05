@@ -594,6 +594,12 @@ type WorkspaceProjectConfig struct {
 	BaseRef    string
 	Repos      []WorkspaceProjectRepoConfig
 	Assets     []WorkspaceProjectAssetConfig
+
+	// ReuseExistingBranch (LADO #60) uses Branch as the caller already created
+	// it and never picks a suffixed name. At least one repo must hold the local
+	// branch; repos without it create it from their base. It cannot be combined
+	// with FreshBranch.
+	ReuseExistingBranch bool
 }
 
 // WorkspaceProjectAssetConfig describes a non-repository child directory that

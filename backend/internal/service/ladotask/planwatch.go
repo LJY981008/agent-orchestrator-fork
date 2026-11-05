@@ -191,15 +191,21 @@ func (s *Service) pinVersion(ctx context.Context, task domain.LadoTask, req doma
 	plan, problems := domain.ParseLadoPlan(content, domain.LadoPlanExpectations{
 		Task: task.ID, Issue: task.IssueRef, Comments: comments, SourceComment: req.SourceCommentID,
 	})
+	dir, relative, repoErr := s.repoDir(ctx, task)
 	baseSHA := ""
 	if plan.BaseRef != "" && !hasProblem(problems, "base_ref") {
-		dir, err := s.repoDir(ctx, task)
+		err := repoErr
 		if err == nil {
 			baseSHA, err = s.deps.Git.RevParse(ctx, dir, plan.BaseRef)
 		}
 		if err != nil {
 			problems = append(problems, domain.LadoPlanProblem{Code: domain.LadoPlanUnknownBaseRef, Field: "base_ref", Detail: plan.BaseRef})
 		}
+	}
+	if repoErr == nil {
+		// A parts run merges in the issue's repository only (#60); a single
+		// repository's relative is empty and holds every path.
+		problems = append(problems, domain.LadoPlanOutsideRepo(plan, relative)...)
 	}
 	reviewed, addressed, notAddressed := s.reviewProblems(ctx, req, plan)
 	problems = append(problems, reviewed...)
@@ -245,24 +251,28 @@ func hasProblem(problems []domain.LadoPlanProblem, field string) bool {
 }
 
 // repoDir returns the checkout of the repository that holds the task's
-// issue: the project's folder, or the workspace child with that origin.
-func (s *Service) repoDir(ctx context.Context, task domain.LadoTask) (string, error) {
+// issue: the project's folder, or the workspace child with that origin. It
+// also returns the child's folder relative to the project's, with slashes,
+// which is "" for a single repository. ladoqueue's workerBase uses the same
+// rule.
+func (s *Service) repoDir(ctx context.Context, task domain.LadoTask) (string, string, error) {
 	project, err := s.project(ctx, task.ProjectID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	if project.Kind != domain.ProjectKindWorkspace {
-		return project.Path, nil
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return project.Path, "", nil
 	}
 	children, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	for _, child := range children {
 		repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL)
 		if err == nil && domain.LadoSameRepo(repo, task.Repo) {
-			return filepath.Join(project.Path, filepath.FromSlash(child.RelativePath)), nil
+			relative := filepath.ToSlash(child.RelativePath)
+			return filepath.Join(project.Path, filepath.FromSlash(relative)), relative, nil
 		}
 	}
-	return "", fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
+	return "", "", fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
 }

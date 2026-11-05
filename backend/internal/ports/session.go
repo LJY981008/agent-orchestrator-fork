@@ -90,6 +90,11 @@ type SpawnConfig struct {
 	// the desktop's New Task dialog is open. It is a hint: an absent or expired
 	// token falls back to ordinary workspace creation.
 	TaskPreparation domain.TaskPreparationToken
+	// ReuseExistingBranch (LADO) asks a workspace-project spawn to check out
+	// Branch as the caller already created it, with no "-2" suffix. LADO sets
+	// it for workers whose branch it made first. Single-repo spawns ignore it:
+	// they already reuse an existing branch.
+	ReuseExistingBranch bool
 }
 
 // SpawnAttachment is a single file attached to a spawn request. Data holds the

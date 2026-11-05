@@ -180,9 +180,11 @@ func TestTheIntegrationWorkerWaitsForItsAccountsLimit(t *testing.T) {
 	pf.svc.deps.AccountLimits = limits
 	pf.tick(t, t0)
 	parts := pf.parts(t, storeEntry)
+	pf.commitParts(t, "a", "b")
 	pf.reportDone(t, parts["a"].SessionID, "nothing")
 	pf.reportDone(t, parts["b"].SessionID, "nothing")
 	pf.tick(t, t0.Add(time.Minute))
+	pf.commitParts(t, "c")
 	pf.reportDone(t, pf.parts(t, storeEntry)["c"].SessionID, "nothing")
 	limits.resetAt = t0.Add(time.Hour)
 	pf.tick(t, t0.Add(2*time.Minute))

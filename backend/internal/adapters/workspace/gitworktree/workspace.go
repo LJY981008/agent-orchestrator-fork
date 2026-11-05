@@ -475,7 +475,11 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 	}
 	branch := requestedBranch
 	if !recovering {
-		branch, err = w.workspaceProjectBranch(ctx, repos, requestedBranch, cfg.FreshBranch)
+		if cfg.ReuseExistingBranch { // LADO #60: keep the branch the caller made
+			branch, err = w.ladoReuseWorkspaceBranch(ctx, repos, requestedBranch, cfg.FreshBranch)
+		} else {
+			branch, err = w.workspaceProjectBranch(ctx, repos, requestedBranch, cfg.FreshBranch)
+		}
 		if err != nil {
 			return ports.WorkspaceProjectInfo{}, err
 		}

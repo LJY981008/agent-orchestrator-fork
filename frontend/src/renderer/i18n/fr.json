@@ -4322,6 +4322,7 @@
 	"lado.planProblem.part_step_shared": "Deux parties nomment la même étape.",
 	"lado.planProblem.part_path_outside": "Le chemin d’une partie n’est pas dans les affected_paths du plan.",
 	"lado.planProblem.part_missing_field": "Il manque à une partie title, steps ou affected_paths.",
+	"lado.planProblem.part_repo_outside": "Dans un projet d’espace de travail, les chemins d’un plan avec des parties doivent rester dans le dossier du dépôt du ticket.",
 	"lado.parts.title": "Parties",
 	"lado.parts.state.waiting": "En attente",
 	"lado.parts.state.running": "En cours",
