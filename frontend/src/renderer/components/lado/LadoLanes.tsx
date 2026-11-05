@@ -22,6 +22,7 @@ import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoCardWatch, type LadoTaskWatch, useLadoBoardWatch } from "./LadoCardWatch";
+import { LadoPartWorkerCardLink } from "./LadoPartWorkerLink";
 import { LadoPlanWorkerCardLink } from "./LadoPlanWorkerStatus";
 import { LadoTaskDialog, type LadoTaskTab } from "./LadoTaskDialog";
 
@@ -170,9 +171,18 @@ function isQueued(task: LadoTask): boolean {
 
 // A task whose parts run before its integration worker starts has no session
 // card of its own yet, so it stays in the Queued lane, its card saying how
-// many parts are merged (docs/LJY-PRD/TDD.md §5.4).
+// many parts are merged and linking the part workers (docs/LJY-PRD/TDD.md
+// §3.3, §5.4). The queue entry says so whatever run the task last had: a
+// run of an earlier approval may still come as its execution (issue #61).
+// An older daemon sends no queue state; there no execution means no
+// integration worker yet. Once that worker starts, the entry is dispatched
+// and its session card carries the task.
 function runningParts(task: LadoTask): boolean {
-	return task.state === "running" && task.parts !== undefined && task.execution === undefined;
+	return (
+		task.state === "running" &&
+		task.parts !== undefined &&
+		(task.queue?.state === "running_parts" || task.execution === undefined)
+	);
 }
 
 // Like the session lanes, newest first; tasks whose issue closed go last.
@@ -207,6 +217,7 @@ function LadoTaskCard({
 	const status = ladoTaskStatus(task, t);
 	const reason = ladoTaskReason(task, t, i18n.language);
 	const worker = ladoOpenPlanWorker(task);
+	const parts = runningParts(task);
 	const issueLabel = ladoIssueLabel(task.issue.number, task.repository, repositories);
 	return (
 		<div
@@ -267,15 +278,15 @@ function LadoTaskCard({
 					</span>
 					<span className="ml-auto shrink-0 tabular-nums text-2xs text-muted-foreground">{formatTimeCompact(task.createdAt)}</span>
 				</div>
-				{/* Under the label, past the dot and its gap; a plan worker's session at the trailing edge. */}
-				{worker?.designerSessionId ? (
+				{/* Under the label, past the dot and its gap; a plan or part worker's session at the trailing edge. */}
+				{worker?.designerSessionId || parts ? (
 					<div className="mt-1 flex min-w-0 items-center gap-2 pl-3.5">
 						{reason ? (
 							<p className="min-w-0 truncate text-2xs text-muted-foreground" title={reason} data-testid="lado-task-reason">
 								{reason}
 							</p>
 						) : null}
-						<LadoPlanWorkerCardLink task={task} worker={worker} />
+						{worker?.designerSessionId ? <LadoPlanWorkerCardLink task={task} worker={worker} /> : <LadoPartWorkerCardLink task={task} />}
 					</div>
 				) : reason ? (
 					<p className="mt-1 truncate pl-3.5 text-2xs text-muted-foreground" title={reason} data-testid="lado-task-reason">
