@@ -396,3 +396,56 @@ func TestResumeClearedBranchRootSwapMovesReservedAgentSessionID(t *testing.T) {
 		t.Fatalf("memory owner differs from the store:\n got %+v\nwant %+v", owner, current.ControllerOwner())
 	}
 }
+
+// /clear, a restart that swaps in a fresh conversation, then another branch
+// activation: the chat service fences with the owner ControllerReady hands
+// back, then rebuilds it with ActivatedChatBranch after the next branch swap.
+// Both must keep matching the stored row, so the agent_session_id move on the
+// swap and the branch-activation rule agree (#46).
+func TestResumeClearedBranchThenActivateKeepsOwnerInStep(t *testing.T) {
+	ctx := context.Background()
+	f := seedClearedChat(t, domain.KindWorker, true)
+	launcher := &commitRecordingLauncher{recordingLauncher: &recordingLauncher{}}
+
+	if _, err := f.manager(launcher).ResumeAgentWithMode(ctx, f.session.ID); err != nil {
+		t.Fatalf("ResumeAgentWithMode: %v", err)
+	}
+	if len(launcher.commits) != 1 {
+		t.Fatalf("recorded %d commits, want 1", len(launcher.commits))
+	}
+	owner := launcher.commits[0].ControllerOwner
+	if stored := f.current(t).ControllerOwner(); owner != stored {
+		t.Fatalf("memory owner differs from the store:\n got %+v\nwant %+v", owner, stored)
+	}
+	// The swap moved the reserved native id too; the old one names nothing.
+	if owner.AgentSessionID != "thread-1" || owner.ProviderConversationID != "thread-1" {
+		t.Fatalf("restarted owner still names the cleared id: %+v", owner)
+	}
+	applied, err := f.store.UpdateBrowserCapabilityVerifier(ctx, f.session.ID, owner, "verifier-after-restart")
+	if err != nil || !applied {
+		t.Fatalf("capability fence with the restarted owner: applied=%v err=%v", applied, err)
+	}
+
+	conversation, err := f.store.ConversationForSession(ctx, f.session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := domain.ConversationBranch{
+		ID: "clear-branch-2", ConversationID: conversation.ID, SessionID: f.session.ID,
+		ProviderConversationID: "thread-2", ParentBranchID: clearedBranchID,
+		ForkAfterSequence: conversation.LatestSequence, CreatedAt: f.clearedAt.Add(time.Hour),
+		Strategy:        domain.ConversationBranchStrategyNative,
+		ProviderScopeID: "clear-scope-2", ProviderIDsScoped: true,
+	}
+	if err := f.store.CreateAndActivateConversationBranch(ctx, f.session.ID, next, "generation-2", next.CreatedAt); err != nil {
+		t.Fatalf("CreateAndActivateConversationBranch: %v", err)
+	}
+	want := owner.ActivatedChatBranch(f.session.Harness, "thread-2", "generation-2")
+	if stored := f.current(t).ControllerOwner(); stored != want {
+		t.Fatalf("owner after the next branch = %+v, want %+v", stored, want)
+	}
+	applied, err = f.store.UpdateBrowserCapabilityVerifier(ctx, f.session.ID, want, "verifier-after-branch")
+	if err != nil || !applied {
+		t.Fatalf("capability fence with the activated owner: applied=%v err=%v", applied, err)
+	}
+}
