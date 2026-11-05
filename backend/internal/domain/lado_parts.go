@@ -28,6 +28,10 @@ type LadoPlanPart struct {
 	AffectedPaths []string `yaml:"affected_paths"`
 	// DependsOn names the parts that must be merged before this one starts.
 	DependsOn []string `yaml:"depends_on"`
+	// AllowEmpty lets the part's worker report done without a commit; LADO
+	// then merges nothing. Without it, a part done without a commit stops
+	// the run (#60).
+	AllowEmpty bool `yaml:"allow_empty"`
 }
 
 // The limits of a parts list: a plan that names parts has 2 to 8 of them.
@@ -52,6 +56,11 @@ const (
 	LadoPlanPartStepShared        = "part_step_shared"
 	LadoPlanPartPathOutside       = "part_path_outside"
 	LadoPlanPartMissing           = "part_missing_field"
+	// LadoPlanPartRepoOutside is a path of a workspace project's plan with
+	// parts that lies outside the folder of the repository holding the
+	// issue: LADO merges the parts in that repository only (#60). Field is
+	// "affected_paths" for a plan's path, "parts" for a part's.
+	LadoPlanPartRepoOutside = "part_repo_outside"
 )
 
 // LadoPlanWarningUnsplit warns of a large plan that names no parts: one
@@ -197,6 +206,34 @@ func (r *planReader) checkParts(plan LadoPlan) {
 	if cycle := ladoPartCycle(plan.Parts); cycle != "" {
 		r.add(LadoPlanPartCycle, "parts", cycle)
 	}
+}
+
+// LadoPlanOutsideRepo lists the paths of a plan with parts that lie outside
+// relative, the slash-separated folder of the workspace repository that holds
+// the task's issue: the plan's own paths and each part's. A parts run merges
+// the parts in that one repository, so work elsewhere would be lost. A plan
+// without parts, which one worker runs, is not checked, and an empty
+// relative, the project's root, holds every path.
+func LadoPlanOutsideRepo(plan LadoPlan, relative string) []LadoPlanProblem {
+	relative = strings.Trim(relative, "/")
+	if len(plan.Parts) == 0 || relative == "" {
+		return nil
+	}
+	repo := []string{relative + "/**"}
+	var problems []LadoPlanProblem
+	for _, glob := range plan.AffectedPaths {
+		if !ladoPathInside(glob, repo) {
+			problems = append(problems, LadoPlanProblem{Code: LadoPlanPartRepoOutside, Field: "affected_paths", Detail: glob})
+		}
+	}
+	for _, part := range plan.Parts {
+		for _, glob := range part.AffectedPaths {
+			if !ladoPathInside(glob, repo) {
+				problems = append(problems, LadoPlanProblem{Code: LadoPlanPartRepoOutside, Field: "parts", Detail: part.ID + ": " + glob})
+			}
+		}
+	}
+	return problems
 }
 
 // ladoPartCycle returns the id of a part on a dependency cycle, or "". Unknown

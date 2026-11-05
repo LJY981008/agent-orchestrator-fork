@@ -89,6 +89,7 @@ parts:
     affected_paths:
       - <the part's own globs, inside affected_paths above>
     depends_on: [<ids of the parts that must be merged first; [] for none>]
+    allow_empty: <true only for a part that may end without a commit; leave it out otherwise>
 ---
 
 <the plan in prose: the approach, the decisions made and the questions left open>`
@@ -104,6 +105,8 @@ const partsGuidance = `Plan for parallel parts by default. LADO runs each part i
 - Give each part narrow affected_paths. Parts whose paths overlap do not run at once.
 - Leave the steps that check, document or publish the whole work (full checks, docs, pull request) out of every part: they are the integration steps.
 - Use 2 to 8 parts. When the work is small or can only be done in order, leave parts out and say why in one line of the plan's prose; one worker then does the whole plan.
+- In a workspace project, a plan with parts keeps its affected_paths and every part's inside the folder of the repository that holds the issue: LADO merges the parts in that repository only.
+- A part whose worker reports done without a commit stops the run, unless the part sets allow_empty: true.
 
 `
 
