@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -53,6 +55,66 @@ func TestLadoAPI_TaskParts(t *testing.T) {
 	}
 	if api := got.Parts[0]; api.WaitingReason != "" || len(api.DependsOn) != 0 {
 		t.Fatalf("part api = %+v, want no wait and an empty list", api)
+	}
+}
+
+// A task approved again after its worker ended without a PR runs the new
+// approval's parts: the task read shows the parts run, and the ended run
+// comes as previousExecution, not as execution. The seed goes through the
+// real sqlite store, so this also checks which execution the store reads.
+func TestLadoAPI_TaskApprovedAgainRunsPartsWithItsPreviousExecution(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	seed := seedLadoQueued(t, store, "mer", 1, now.Add(-time.Hour))
+	endedWorker := runLado(t, store, "mer", seed, now.Add(-30*time.Minute), domain.LadoExecution{})
+	ended, _, err := store.GetSession(ctx, endedWorker)
+	if err != nil {
+		t.Fatalf("read the worker session: %v", err)
+	}
+	ended.IsTerminated = true
+	if err := store.UpdateSession(ctx, ended); err != nil {
+		t.Fatalf("end the worker session: %v", err)
+	}
+	if _, _, err := store.ApproveLadoPlan(ctx,
+		domain.LadoPlanApproval{ID: "lado-approval-1b", RevisionID: "lado-plan-1", TaskID: seed.task, SHA256: seed.plan, ApprovedAt: now.Add(-time.Minute)},
+		domain.LadoPresenceProof{Nonce: "nonce-lado-approval-1b", Action: domain.LadoPresencePlanApprove, SubjectID: "lado-plan-1", ExpiresAt: now, UsedAt: now.Add(-time.Minute)},
+		domain.LadoAuditEvent{At: now.Add(-time.Minute), Actor: "human", Action: "plan.approved", SubjectKind: "plan_revision", SubjectID: "lado-plan-1", Payload: []byte("{}")},
+		&domain.LadoPolicySnapshot{ID: "lado-snapshot-1b", SHA256: strings.Repeat("6", 64), Content: []byte("{}")},
+		&domain.LadoQueueEntry{ID: "lado-queue-1b"}); err != nil {
+		t.Fatalf("approve again: %v", err)
+	}
+	token := claimLado(t, store, "lado-queue-1b", now)
+	base := strings.Repeat("a", 40)
+	if err := store.StartLadoPartRun(ctx, token, domain.LadoPartRun{
+		QueueEntryID: "lado-queue-1b", TaskID: seed.task, ProjectID: "mer", PlanRevisionID: "lado-plan-1", RepoDir: "/tmp/mer",
+		Branch: "lado/task-1/integration", BaseSHA: base, HeadSHA: base, StartedAt: now,
+	}, []domain.LadoTaskPart{
+		{PartID: "api", Title: "API", Phase: 1, Steps: []int{1}, AffectedPaths: []string{"api/**"}},
+		{PartID: "web", Title: "Web", Position: 1, Phase: 1, Steps: []int{2}, AffectedPaths: []string{"web/**"}},
+	}, domain.LadoAuditEvent{At: now, Actor: "lado", Action: "parts.started", SubjectKind: "queue_entry", SubjectID: "lado-queue-1b"}); err != nil {
+		t.Fatalf("start the parts run: %v", err)
+	}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoTasks: ladotask.New(ladotask.Deps{Store: store, Projects: store})})
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/tasks?projectId=mer", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", status, body)
+	}
+	tasks := decodeLadoJSON[controllers.LadoTaskListResponse](t, body).Tasks
+	if len(tasks) != 1 {
+		t.Fatalf("tasks = %s, want one", body)
+	}
+	got := tasks[0]
+	if got.State != "running" || got.Queue == nil || got.Queue.State != "running_parts" || got.Parts == nil || got.Parts.Total != 2 {
+		t.Fatalf("task = %s, want it running its parts", body)
+	}
+	if got.Execution != nil {
+		t.Fatalf("execution %+v, want none before the integration worker starts", got.Execution)
+	}
+	if prev := got.PreviousExecution; prev == nil || prev.SessionID != string(endedWorker) || prev.PlanRevisionID != "lado-plan-1" ||
+		prev.PlanRevisionNumber != 1 || prev.PolicySHA256 != "" || !prev.SessionEnded || prev.PR != nil {
+		t.Fatalf("previous execution %+v, want the ended run %s of lado-plan-1 without the new approval's snapshot", prev, endedWorker)
 	}
 }
 

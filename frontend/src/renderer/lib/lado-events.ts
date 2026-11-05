@@ -44,16 +44,27 @@ type LadoEventEnvelope = { type?: unknown; projectId?: unknown; sessionId?: unkn
 const prEventTypes = new Set(["pr_created", "pr_updated", "pr_session_changed"]);
 
 /**
+ * The task list's older run in the session: a task approved again after it
+ * keeps it as previousExecution. Kept apart from ladoTaskForSession, which
+ * gives the session's card its task and must not take an older run's.
+ */
+function previousRunInSession(tasks: readonly LadoTask[], sessionId: string): LadoTask["previousExecution"] {
+	return tasks.find((task) => task.previousExecution?.sessionId === sessionId)?.previousExecution;
+}
+
+/**
  * Whether the board's task list and the session's run panel show the run in
- * the session as ended; empty when neither shows a run there. Every update of
- * a session says whether it ended, so comparing keeps a live run's activity
- * from refetching LADO's views.
+ * the session as ended; empty when neither shows a run there. The list counts
+ * a task's older run too: the approve button waits while its session lives,
+ * and AO can restore it. Every update of a session says whether it ended, so
+ * comparing keeps a live run's activity from refetching LADO's views.
  */
 function shownRunEnds(queryClient: Pick<QueryClient, "getQueryData">, projectId: string, sessionId: string): boolean[] {
 	const tasks = queryClient.getQueryData<LadoTask[]>(ladoTasksQueryKey(projectId));
 	const task = tasks ? ladoTaskForSession(tasks, sessionId) : undefined;
+	const previous = tasks ? previousRunInSession(tasks, sessionId) : undefined;
 	const run = queryClient.getQueryData<LadoExecution | null>(ladoExecutionQueryKey(sessionId));
-	return [task?.execution?.sessionEnded, run?.sessionEnded].filter((ended) => ended !== undefined);
+	return [task?.execution?.sessionEnded, previous?.sessionEnded, run?.sessionEnded].filter((ended) => ended !== undefined);
 }
 
 /** What a batch hands on besides invalidations. */

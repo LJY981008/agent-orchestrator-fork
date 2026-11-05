@@ -371,6 +371,53 @@ func TestLadoTaskStateAfterDispatch(t *testing.T) {
 	}
 }
 
+func TestLadoTaskCurrentExecution(t *testing.T) {
+	now := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	openPR := domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/8", Number: 8}
+	closedPR := openPR
+	closedPR.Closed = true
+	ended := func(task *domain.LadoTask) { task.Execution.SessionTerminated = true }
+	for _, tc := range []struct {
+		name string
+		edit func(*domain.LadoTask)
+		want bool
+	}{
+		{"the newest approval's run", func(*domain.LadoTask) {}, true},
+		{"the newest approval's run ended without a PR", ended, true},
+		{"an older approval's run ended without a PR", func(task *domain.LadoTask) {
+			ended(task)
+			approveLadoTaskAgain(task, now)
+		}, false},
+		{"an older approval's PR closed", func(task *domain.LadoTask) {
+			ended(task)
+			task.Execution.PR = closedPR
+			approveLadoTaskAgain(task, now)
+		}, false},
+		{"an older approval's PR is open", func(task *domain.LadoTask) {
+			ended(task)
+			task.Execution.PR = openPR
+			approveLadoTaskAgain(task, now)
+		}, true},
+		{"an older approval's session lives without a PR", func(task *domain.LadoTask) { approveLadoTaskAgain(task, now) }, true},
+		{"no execution", func(task *domain.LadoTask) { task.Execution = domain.LadoExecution{} }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			task := dispatchedLadoTask(now.Add(-time.Hour))
+			tc.edit(&task)
+			e, got := task.CurrentExecution()
+			if got != tc.want {
+				t.Fatalf("CurrentExecution ok = %v, want %v", got, tc.want)
+			}
+			if got && e.SessionID != task.Execution.SessionID {
+				t.Fatalf("CurrentExecution = %q, want %q", e.SessionID, task.Execution.SessionID)
+			}
+			if !got && e.SessionID != "" {
+				t.Fatalf("CurrentExecution = %q without a current execution", e.SessionID)
+			}
+		})
+	}
+}
+
 func TestLadoTaskStateFollowsVerification(t *testing.T) {
 	now := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
 	head, older := strings.Repeat("a", 40), strings.Repeat("b", 40)

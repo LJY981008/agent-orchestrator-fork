@@ -8640,7 +8640,7 @@ export interface components {
             cancelledAt?: null | string;
             /** Format: date-time */
             createdAt: string;
-            /** @description The newest execution that opens the task's pull request: its one worker, or for a task split into parts its integration worker; omitted before that worker started. */
+            /** @description The execution that opens the task's pull request for the newest approval, or one of an older approval that still decides the task's state because its session lives, its PR is open, integrated or merged: its one worker, or for a task split into parts its integration worker; omitted before that worker started. */
             execution?: components["schemas"]["LadoTaskExecutionResponse"];
             id: string;
             issue: components["schemas"]["LadoTaskIssueResponse"];
@@ -8649,6 +8649,8 @@ export interface components {
             /** @description How far the parts run of the newest approval got; omitted for a task without parts. GET /api/v1/lado/tasks/{taskId}/parts lists the parts. */
             parts?: components["schemas"]["LadoTaskPartsSummaryResponse"];
             plan: components["schemas"]["LadoTaskPlanResponse"];
+            /** @description The newest execution when it belongs to an older approval and ended without a merge (it timed out or its session ended without a PR, or its PR closed), so it no longer decides the task's state; omitted otherwise. The daemon refuses a new approval while its session lives. */
+            previousExecution?: components["schemas"]["LadoTaskExecutionResponse"];
             projectId: string;
             /** @description The queue entry of the newest approval; omitted without one. */
             queue?: components["schemas"]["LadoTaskQueueResponse"];
