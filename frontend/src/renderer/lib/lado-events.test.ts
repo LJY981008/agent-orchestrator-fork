@@ -7,6 +7,7 @@ import {
 	ladoProjectUsageQueryKey,
 	ladoRuleQueryKey,
 	ladoRulesQueryKey,
+	ladoTaskRelaysQueryKey,
 	ladoTasksQueryKey,
 	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
@@ -33,6 +34,8 @@ const views: Record<string, QueryKey> = {
 	taskEffective: ladoEffectiveQueryKey("demo", "lado-task-1"),
 	tasks: ladoTasksQueryKey("demo"),
 	taskView: ladoTaskViewQueryKey("lado-task-1"),
+	taskRelays: ladoTaskRelaysQueryKey("lado-task-1"),
+	otherTaskRelays: ladoTaskRelaysQueryKey("lado-task-2"),
 	otherEffective: ladoEffectiveProjectQueryKey("other"),
 	otherTasks: ladoTasksQueryKey("other"),
 	rules: ladoRulesQueryKey(false),
@@ -100,6 +103,7 @@ describe("createLadoEventBatch and local setup", () => {
 		);
 		expect(invalidatedBy([{ payload: { kind: "lado_task", projectId: "demo", taskId: "lado-task-1" }, lado: true }])).toEqual([
 			"taskEffective",
+			"taskRelays",
 		]);
 		expect(
 			invalidatedBy([{ payload: { kind: "lado_execution", projectId: "demo", sessionId: "demo-7", taskId: "lado-task-1" }, lado: true }]),
@@ -108,6 +112,24 @@ describe("createLadoEventBatch and local setup", () => {
 		expect(
 			invalidatedBy([{ payload: { isTerminated: true }, event: { type: "session_updated", projectId: "demo", sessionId: "demo-7" }, lado: false }]),
 		).toEqual([]);
+	});
+});
+
+// LADO fork: relays of developer instructions (issue #49). A relay's row is a
+// task event when LADO records it and when it is delivered or fails, so the
+// task's open Relays tab reads again.
+describe("createLadoEventBatch and relays", () => {
+	it("refreshes the Relays tab of the task the event names", () => {
+		expect(invalidatedBy([{ payload: { kind: "lado_task", projectId: "demo", taskId: "lado-task-1" }, lado: true }])).toContain("taskRelays");
+		expect(invalidatedBy([{ payload: { kind: "lado_task", projectId: "demo", taskId: "lado-task-2" }, lado: true }])).toEqual(["otherTaskRelays"]);
+	});
+
+	it("leaves the Relays tab alone for an event without a task and for other kinds", () => {
+		expect(invalidatedBy([{ payload: { kind: "lado_task", projectId: "demo" }, lado: true }])).toEqual([]);
+		expect(invalidatedBy([{ payload: { kind: "lado_rules", projectId: "demo" }, lado: true }])).not.toContain("taskRelays");
+		expect(
+			invalidatedBy([{ payload: { kind: "lado_execution", projectId: "demo", sessionId: "demo-7", taskId: "lado-task-1" }, lado: true }]),
+		).not.toContain("taskRelays");
 	});
 });
 

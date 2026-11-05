@@ -27,6 +27,7 @@ import {
 	fetchLadoRules,
 	fetchLadoTasks,
 	fetchLadoTaskParts,
+	fetchLadoTaskRelays,
 	fetchLadoTaskUsage,
 	fetchLadoTaskView,
 	fetchLadoWatchSettings,
@@ -53,6 +54,7 @@ import {
 	ladoRulesQueryKey,
 	ladoTasksQueryKey,
 	ladoTaskPartsQueryKey,
+	ladoTaskRelaysQueryKey,
 	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
 	ladoTaskViewQueryRoot,
@@ -530,6 +532,21 @@ export function useLadoTaskUsage(taskId: string, enabled = true) {
 		enabled: enabled && Boolean(taskId),
 		refetchOnMount: "always",
 		refetchInterval: LADO_USAGE_REFRESH_MS,
+		retry: false,
+	});
+}
+
+/**
+ * The developer instructions LADO relayed to a task's workers (issue #49).
+ * The task's events refresh it (lado-events.ts), so an open tab shows a relay
+ * as it is delivered or fails.
+ */
+export function useLadoTaskRelays(taskId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoTaskRelaysQueryKey(taskId),
+		queryFn: () => fetchLadoTaskRelays(taskId),
+		enabled: enabled && Boolean(taskId),
+		refetchOnMount: "always",
 		retry: false,
 	});
 }
