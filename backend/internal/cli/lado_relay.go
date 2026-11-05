@@ -2,7 +2,7 @@ package cli
 
 // LADO fork: `ao lado relay`, what a LADO project's orchestrator runs when the
 // developer tells it to have a running worker go on (issue #49,
-// docs/LJY-PRD/adr/0010-worker-relay.md). The orchestrator may not message a
+// docs/LJY-PRD/adr/0011-worker-relay.md). The orchestrator may not message a
 // worker itself (LADO_SEND_REFUSED); it asks the daemon, which checks the
 // caller, the task, the worker and the developer's words, and delivers the
 // instruction in LADO's name. AO_SESSION_ID names the orchestrator, as for

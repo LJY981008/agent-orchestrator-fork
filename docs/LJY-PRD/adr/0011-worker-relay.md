@@ -1,4 +1,4 @@
-# LADO 10. LADO relays the developer's instructions to a running worker
+# LADO 11. LADO relays the developer's instructions to a running worker
 
 Date: 2026-11-05
 Status: Accepted. Decided in issue #49, plan revision 1, approved 2026-11-05. Amends the worker gate of [adr/0003](0003-enforcement-points.md) item 4 without changing it. Design in TDD §5.1 and §6.3.

@@ -2,7 +2,7 @@ package daemon
 
 // LADO fork: wiring of the relay of a developer's instruction from a LADO
 // project's orchestrator to a running worker (issue #49,
-// docs/LJY-PRD/adr/0010-worker-relay.md). The worker gate is unchanged: the
+// docs/LJY-PRD/adr/0011-worker-relay.md). The worker gate is unchanged: the
 // relay delivers through the session manager as the daemon, with no sender
 // session, so an orchestrator's own ao send stays LADO_SEND_REFUSED while
 // the instruction LADO checked goes through.

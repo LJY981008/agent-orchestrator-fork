@@ -1,7 +1,7 @@
 package store
 
 // LADO fork: relays of developer instructions to running workers (issue #49,
-// docs/LJY-PRD/adr/0010-worker-relay.md). The relay service records each
+// docs/LJY-PRD/adr/0011-worker-relay.md). The relay service records each
 // relay as sending before it delivers the message and marks it delivered or
 // failed afterwards. It reads a task's executions of every role, with whether
 // each session ended and its activity, to pick the worker.

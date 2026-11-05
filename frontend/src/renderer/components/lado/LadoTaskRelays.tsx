@@ -5,7 +5,7 @@
 // words it rests on, whether the instruction goes beyond those words or may
 // leave the approved plan, and why a failed relay was not delivered. The
 // evidence proves only that the developer wrote those words, not that the
-// instruction says the same (docs/LJY-PRD/adr/0010-worker-relay.md); the
+// instruction says the same (docs/LJY-PRD/adr/0011-worker-relay.md); the
 // beyond-evidence mark says when it does not. The task's events refresh the
 // tab (lado-events.ts), so a relay shows as LADO records, delivers or fails it.
 import type { ReactNode } from "react";

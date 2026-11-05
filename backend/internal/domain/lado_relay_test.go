@@ -76,7 +76,7 @@ func TestLadoRelayNormalize(t *testing.T) {
 func TestLadoRelayLimits(t *testing.T) {
 	if domain.LadoRelayMaxInstructionChars != 8000 || domain.LadoRelayMinEvidenceChars != 4 ||
 		domain.LadoRelayMaxEvidenceChars != 2000 || domain.LadoRelayEvidenceMaxAge.Hours() != 24 {
-		t.Fatal("relay limits changed; update the plan and ADR 0010")
+		t.Fatal("relay limits changed; update the plan and ADR 0011")
 	}
 	if domain.LadoRelaySenderLabel != "LADO 전달 · 개발자 지시" {
 		t.Fatalf("sender label = %q", domain.LadoRelaySenderLabel)

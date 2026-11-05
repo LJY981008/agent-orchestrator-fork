@@ -1,5 +1,5 @@
 -- LADO fork: relaying a developer's instruction to a running worker (issue
--- #49, docs/LJY-PRD/adr/0010-worker-relay.md).
+-- #49, docs/LJY-PRD/adr/0011-worker-relay.md).
 --
 -- lado_relays holds one row per relay. LADO writes it as 'sending' before it
 -- delivers the message and then sets 'delivered' with delivered_at, or

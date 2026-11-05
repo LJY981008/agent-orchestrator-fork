@@ -2,7 +2,7 @@ package controllers
 
 // LADO fork: the routes an orchestrator relays a developer's instruction to a
 // running worker through, and the task window reads the relays from (issue
-// #49, docs/LJY-PRD/adr/0010-worker-relay.md). Like the rest of /api/v1/lado,
+// #49, docs/LJY-PRD/adr/0011-worker-relay.md). Like the rest of /api/v1/lado,
 // they serve the loopback listener only. The daemon's ladorelay service does
 // every check; the worker gate still refuses an orchestrator's own ao send.
 

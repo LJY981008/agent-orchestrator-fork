@@ -1,6 +1,6 @@
 // Package ladorelay relays a developer's instruction from a LADO project's
 // orchestrator to a running worker of a task (issue #49,
-// docs/LJY-PRD/adr/0010-worker-relay.md).
+// docs/LJY-PRD/adr/0011-worker-relay.md).
 //
 // The worker gate still refuses a message an orchestrator sends a worker
 // itself (LADO_SEND_REFUSED). Instead the orchestrator asks LADO, and this
