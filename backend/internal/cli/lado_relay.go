@@ -19,9 +19,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// maxLadoRelayBytes caps an instruction read from stdin: the daemon's limit
-// of 8000 characters, every one up to four bytes.
+// maxLadoRelayBytes caps an instruction or evidence read from stdin or a
+// file: the daemon's limit of 8000 characters, every one up to four bytes.
 const maxLadoRelayBytes = 32 << 10
+
+// ladoRelayStdin names stdin as the file of --evidence-file or
+// --message-file.
+const ladoRelayStdin = "-"
 
 // createLadoRelayRequest mirrors controllers.CreateLadoRelayRequest.
 type createLadoRelayRequest struct {
@@ -47,7 +51,7 @@ type ladoRelayResponse struct {
 }
 
 func newLadoRelayCommand(ctx *commandContext) *cobra.Command {
-	var task, worker, evidence, message string
+	var task, worker, evidence, message, evidenceFile, messageFile string
 	var outsidePlan, asJSON bool
 	cmd := &cobra.Command{
 		Use:   "relay",
@@ -56,7 +60,9 @@ func newLadoRelayCommand(ctx *commandContext) *cobra.Command {
 			"LADO checks that --evidence is a sentence the developer typed to you in the last 24 hours, finds the task's " +
 			"running worker (single, part, merge or integration) and delivers the instruction in LADO's name. An instruction " +
 			"that is not in the developer's message reaches the worker marked as such, with the developer's words quoted. " +
-			"The instruction is --message, or stdin without it. AO_SESSION_ID names you.",
+			"The instruction is --message, --message-file, or stdin without either. The evidence must match the developer's words " +
+			"character for character, so pass it with --evidence-file (a path, or - for stdin through a quoted heredoc such as " +
+			"<<'LADO_EVIDENCE') whenever it holds quotes, $, backticks or !, which a shell would change. AO_SESSION_ID names you.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			session := strings.TrimSpace(os.Getenv("AO_SESSION_ID"))
@@ -65,20 +71,46 @@ func newLadoRelayCommand(ctx *commandContext) *cobra.Command {
 			}
 			task, worker = strings.TrimSpace(task), strings.TrimSpace(worker)
 			if task == "" {
-				return usageError{errors.New("usage: --task is required: the task id or the issue number (#49)")}
+				return usageError{errors.New("usage: --task is required: the task id or the issue number (49)")}
+			}
+			flags := cmd.Flags()
+			if flags.Changed("evidence") && flags.Changed("evidence-file") {
+				return usageError{errors.New("usage: pass the evidence with --evidence or --evidence-file, not both")}
+			}
+			if flags.Changed("message") && flags.Changed("message-file") {
+				return usageError{errors.New("usage: pass the instruction with --message or --message-file, not both")}
+			}
+			messageFromStdin := messageFile == ladoRelayStdin || (!flags.Changed("message") && !flags.Changed("message-file"))
+			if evidenceFile == ladoRelayStdin && messageFromStdin {
+				return usageError{errors.New("usage: stdin can carry the evidence or the instruction, not both: " +
+					"pass the instruction with --message or --message-file <path>")}
+			}
+			if flags.Changed("evidence-file") {
+				raw, err := readLadoRelayInput(cmd, evidenceFile, "the evidence")
+				if err != nil {
+					return err
+				}
+				evidence = raw
 			}
 			if strings.TrimSpace(evidence) == "" {
-				return usageError{errors.New("usage: --evidence is required: the developer's sentence, word for word")}
+				return usageError{errors.New("usage: --evidence or --evidence-file is required: the developer's sentence, word for word")}
 			}
-			if !cmd.Flags().Changed("message") {
-				raw, err := readLadoRelayMessage(cmd)
+			switch {
+			case flags.Changed("message-file"):
+				raw, err := readLadoRelayInput(cmd, messageFile, "the instruction")
+				if err != nil {
+					return err
+				}
+				message = raw
+			case !flags.Changed("message"):
+				raw, err := readLadoRelayInput(cmd, ladoRelayStdin, "the instruction")
 				if err != nil {
 					return err
 				}
 				message = raw
 			}
 			if strings.TrimSpace(message) == "" {
-				return usageError{errors.New("usage: the instruction is empty: pass --message or pipe it on stdin")}
+				return usageError{errors.New("usage: the instruction is empty: pass --message, --message-file or pipe it on stdin")}
 			}
 			req := createLadoRelayRequest{
 				SessionID: session, Task: task, WorkerSessionID: worker,
@@ -98,23 +130,41 @@ func newLadoRelayCommand(ctx *commandContext) *cobra.Command {
 			return printLadoRelay(cmd.OutOrStdout(), res)
 		},
 	}
-	cmd.Flags().StringVar(&task, "task", "", "The task: its id (lado-task-…) or the issue number (#49) (required)")
+	cmd.Flags().StringVar(&task, "task", "", "The task: its id (lado-task-…) or the issue number (49, or '#49' quoted) (required)")
 	cmd.Flags().StringVar(&worker, "session", "", "The worker session to relay to, when several workers of the task are running")
-	cmd.Flags().StringVar(&evidence, "evidence", "", "The developer's sentence that gives the instruction, word for word (required)")
-	cmd.Flags().StringVar(&message, "message", "", "The instruction; best the developer's own words. Without it, read from stdin")
+	cmd.Flags().StringVar(&evidence, "evidence", "", "The developer's sentence that gives the instruction, word for word (or --evidence-file)")
+	cmd.Flags().StringVar(&evidenceFile, "evidence-file", "", "Read the evidence from this file, or from stdin with -, so no shell changes it")
+	cmd.Flags().StringVar(&message, "message", "", "The instruction; best the developer's own words. Without it or --message-file, read from stdin")
+	cmd.Flags().StringVar(&messageFile, "message-file", "", "Read the instruction from this file, or from stdin with -")
 	cmd.Flags().BoolVar(&outsidePlan, "outside-plan", false, "Mark the instruction as adding a step or a path the approved plan does not have")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print the relay as JSON")
 	return cmd
 }
 
-// readLadoRelayMessage reads the instruction piped in.
-func readLadoRelayMessage(cmd *cobra.Command) (string, error) {
-	raw, err := io.ReadAll(io.LimitReader(cmd.InOrStdin(), maxLadoRelayBytes+1))
+// readLadoRelayInput reads what (the evidence or the instruction) from the
+// file name, or from stdin for "-", byte for byte.
+func readLadoRelayInput(cmd *cobra.Command, name, what string) (string, error) {
+	var in io.Reader
+	source := "stdin"
+	if name == ladoRelayStdin {
+		in = cmd.InOrStdin()
+	} else {
+		if strings.TrimSpace(name) == "" {
+			return "", usageError{fmt.Errorf("usage: name the file of %s, or - for stdin", what)}
+		}
+		f, err := os.Open(name)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", what, err)
+		}
+		defer func() { _ = f.Close() }()
+		in, source = f, name
+	}
+	raw, err := io.ReadAll(io.LimitReader(in, maxLadoRelayBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("read stdin: %w", err)
+		return "", fmt.Errorf("read %s from %s: %w", what, source, err)
 	}
 	if len(raw) > maxLadoRelayBytes {
-		return "", usageError{fmt.Errorf("the instruction is over %d bytes", maxLadoRelayBytes)}
+		return "", usageError{fmt.Errorf("%s is over %d bytes", what, maxLadoRelayBytes)}
 	}
 	return string(raw), nil
 }

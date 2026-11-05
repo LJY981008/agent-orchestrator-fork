@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,6 +74,59 @@ func TestLadoRelayReadsTheInstructionFromStdin(t *testing.T) {
 	}
 }
 
+// The evidence must match the developer's words character for character, so
+// --evidence-file takes it from stdin (a quoted heredoc) or a file byte for
+// byte, quotes, $, backticks and ! included, and --message-file does the
+// same for the instruction.
+func TestLadoRelayReadsTheEvidenceAndTheInstructionFromFiles(t *testing.T) {
+	const evidence = "그 워커에게 'A' 와 \"B\" 를 하고 $HOME, `date`, !! 도 그대로 둬\n"
+	const instruction = "it's the developer's \"two\" follow-ups\n"
+	dir := t.TempDir()
+	evidencePath, instructionPath := filepath.Join(dir, "evidence.txt"), filepath.Join(dir, "instruction.txt")
+	if err := os.WriteFile(evidencePath, []byte(evidence), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(instructionPath, []byte(instruction), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name         string
+		stdin        string
+		args         []string
+		wantEvidence string
+		wantMessage  string
+	}{
+		{"evidence on stdin, message flag", evidence,
+			[]string{"--evidence-file", "-", "--message", "후속 2건"}, evidence, "후속 2건"},
+		{"evidence on stdin, message file", evidence,
+			[]string{"--evidence-file", "-", "--message-file", instructionPath}, evidence, instruction},
+		{"evidence file, message on stdin", instruction,
+			[]string{"--evidence-file", evidencePath}, evidence, instruction},
+		{"evidence flag, message from stdin by name", instruction,
+			[]string{"--evidence", "이어서 해", "--message-file", "-"}, "이어서 해", instruction},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "mer-orchestrator-1")
+			cfg := setConfigEnv(t)
+			srv, capture := ladoServer(t, http.StatusCreated, ladoRelayAnswer)
+			writeRunFileFor(t, cfg, srv)
+			_, errOut, err := executeCLI(t, Deps{In: strings.NewReader(tc.stdin), ProcessAlive: func(int) bool { return true }},
+				append([]string{"lado", "relay", "--task", "49"}, tc.args...)...)
+			if err != nil {
+				t.Fatalf("relay: %v\nstderr=%s", err, errOut)
+			}
+			var body createLadoRelayRequest
+			if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
+				t.Fatalf("body %s: %v", capture.body, err)
+			}
+			if body.Evidence != tc.wantEvidence || body.Message != tc.wantMessage || body.Task != "49" {
+				t.Fatalf("body = %+v, want evidence %q and message %q", body, tc.wantEvidence, tc.wantMessage)
+			}
+		})
+	}
+}
+
 func TestLadoRelayShowsTheCandidatesOfARefusal(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "mer-orchestrator-1")
 	cfg := setConfigEnv(t)
@@ -121,6 +176,12 @@ func TestLadoRelayUsageErrors(t *testing.T) {
 		{"no evidence", "o-1", "", []string{"--task", "#1", "--message", "m"}},
 		{"no instruction", "o-1", " \n", []string{"--task", "#1", "--evidence", "abcd"}},
 		{"empty message", "o-1", "from stdin", []string{"--task", "#1", "--evidence", "abcd", "--message", " "}},
+		{"evidence twice", "o-1", "", []string{"--task", "1", "--evidence", "abcd", "--evidence-file", "-", "--message", "m"}},
+		{"message twice", "o-1", "", []string{"--task", "1", "--evidence", "abcd", "--message", "m", "--message-file", "-"}},
+		{"both on stdin", "o-1", "abcd", []string{"--task", "1", "--evidence-file", "-", "--message-file", "-"}},
+		{"evidence on stdin, no message", "o-1", "abcd", []string{"--task", "1", "--evidence-file", "-"}},
+		{"empty evidence file", "o-1", " \n", []string{"--task", "1", "--evidence-file", "-", "--message", "m"}},
+		{"no evidence file name", "o-1", "", []string{"--task", "1", "--evidence-file", "", "--message", "m"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
