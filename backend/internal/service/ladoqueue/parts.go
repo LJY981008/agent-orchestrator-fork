@@ -493,7 +493,7 @@ func (s *Service) partAttemptFailed(ctx context.Context, r *partRun, i int, mess
 // spent their attempts.
 func (s *Service) mergeAttemptFailed(ctx context.Context, r *partRun, i int, message string) error {
 	part := &r.parts[i]
-	if part.MergeAttempts >= domain.LadoMaxPartAttempts {
+	if part.MergeAttempts-part.MergeAttemptsBase >= domain.LadoMaxPartAttempts {
 		return s.failRun(ctx, r, part.PartID, message)
 	}
 	next := *part

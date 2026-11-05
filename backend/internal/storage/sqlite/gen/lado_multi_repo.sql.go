@@ -46,23 +46,6 @@ func (q *Queries) CountLadoExecutionTrackedPRs(ctx context.Context, executionSes
 	return count, err
 }
 
-const countUnsettledLadoExecutionPRs = `-- name: CountUnsettledLadoExecutionPRs :one
-SELECT COUNT(*)
-FROM lado_execution_prs x
-LEFT JOIN pr p ON p.url = x.pr_url
-WHERE x.execution_session_id = ?1
-  AND x.replaced_at IS NULL
-  AND (x.settled_at IS NULL OR p.pr_state IN ('open', 'draft'))
-`
-
-// The live tracked PRs of an execution not settled yet, or open again since.
-func (q *Queries) CountUnsettledLadoExecutionPRs(ctx context.Context, executionSessionID string) (int64, error) {
-	row := q.db.QueryRowContext(ctx, countUnsettledLadoExecutionPRs, executionSessionID)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
-}
-
 const getLadoExecutionTrackedPR = `-- name: GetLadoExecutionTrackedPR :one
 SELECT execution_session_id, pr_url, repo_key, position, tracked_at, replaced_at, settled_at, settled_pr_state
 FROM lado_execution_prs
@@ -670,6 +653,80 @@ func (q *Queries) SettleLadoExecutionPR(ctx context.Context, arg SettleLadoExecu
 		arg.ExecutionSessionID,
 		arg.PRURL,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const settleLadoExecutionsFromTrackedPRs = `-- name: SettleLadoExecutionsFromTrackedPRs :execrows
+UPDATE lado_executions
+SET settled_at = (
+        SELECT l.settled_at FROM lado_execution_prs l
+        WHERE l.execution_session_id = lado_executions.session_id AND l.replaced_at IS NULL
+        ORDER BY l.settled_at DESC, l.position DESC, l.pr_url DESC LIMIT 1
+    ),
+    settled_pr_url = (
+        SELECT l.pr_url FROM lado_execution_prs l
+        WHERE l.execution_session_id = lado_executions.session_id AND l.replaced_at IS NULL
+        ORDER BY l.settled_at DESC, l.position DESC, l.pr_url DESC LIMIT 1
+    ),
+    settled_pr_state = (
+        SELECT l.settled_pr_state FROM lado_execution_prs l
+        WHERE l.execution_session_id = lado_executions.session_id AND l.replaced_at IS NULL
+        ORDER BY l.settled_at DESC, l.position DESC, l.pr_url DESC LIMIT 1
+    )
+WHERE (CAST(?1 AS TEXT) = '' OR lado_executions.session_id = CAST(?1 AS TEXT))
+  AND lado_executions.role IN ('', 'integration')
+  AND EXISTS (
+        SELECT 1 FROM lado_execution_prs x
+        WHERE x.execution_session_id = lado_executions.session_id AND x.replaced_at IS NULL
+    )
+  AND NOT EXISTS (
+        SELECT 1 FROM lado_execution_prs x
+        LEFT JOIN pr p ON p.url = x.pr_url
+        WHERE x.execution_session_id = lado_executions.session_id AND x.replaced_at IS NULL
+          AND (x.settled_at IS NULL OR p.pr_state IN ('open', 'draft'))
+    )
+  AND NOT (
+        EXISTS (
+            SELECT 1 FROM json_each(lado_executions.pr_repos_json) AS j
+            WHERE NOT EXISTS (
+                SELECT 1 FROM lado_execution_prs x
+                WHERE x.execution_session_id = lado_executions.session_id AND x.replaced_at IS NULL
+                  AND x.repo_key = CAST(j.value AS TEXT)
+            )
+        )
+        AND (
+            lado_executions.pr_repos_firm = 1
+            OR (
+                EXISTS (SELECT 1 FROM sessions ws WHERE ws.id = lado_executions.session_id AND ws.is_terminated = 0)
+                AND COALESCE((
+                    SELECT rp.state FROM reports rp WHERE rp.session_id = lado_executions.session_id
+                    ORDER BY rp.created_at DESC, rp.id DESC LIMIT 1
+                ), '') <> 'done'
+            )
+        )
+    )
+  AND NOT EXISTS (
+        SELECT 1 FROM lado_execution_prs l
+        WHERE l.execution_session_id = lado_executions.session_id AND l.replaced_at IS NULL
+          AND l.pr_url = lado_executions.settled_pr_url AND l.settled_pr_state = lado_executions.settled_pr_state
+          AND l.settled_at = (
+                SELECT MAX(m.settled_at) FROM lado_execution_prs m
+                WHERE m.execution_session_id = lado_executions.session_id AND m.replaced_at IS NULL
+            )
+    )
+`
+
+// Settles each execution with tracked PRs (one session, or all when
+// session_id is empty) with its latest settled live PR, once every live
+// tracked PR settled and none is open again, and no repository of
+// pr_repos_json still waits for a PR: a firm list always waits, a guessed
+// one only while the session runs and its newest report is not done. An
+// execution settled with that PR in that state already is left as it is.
+func (q *Queries) SettleLadoExecutionsFromTrackedPRs(ctx context.Context, sessionID string) (int64, error) {
+	result, err := q.db.ExecContext(ctx, settleLadoExecutionsFromTrackedPRs, sessionID)
 	if err != nil {
 		return 0, err
 	}

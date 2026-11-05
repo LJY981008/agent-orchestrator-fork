@@ -16,7 +16,8 @@
 -- there. Position 0 repeats lado_part_runs' and lado_task_parts' own
 -- columns; a run started before 0015 has no rows and reads as that one
 -- repository. lado_task_parts.merge_repo names the repository whose merge
--- conflicted.
+-- conflicted, and merge_attempts_base the part's merge_attempts when that
+-- conflict began: each conflicting repository gets its own merge attempts.
 --
 -- lado_executions gains the repositories the execution is expected to open a
 -- PR in, in merge order (pr_repos_json), and whether that list is a fact
@@ -77,6 +78,7 @@ ALTER TABLE lado_executions ADD COLUMN pr_repos_json TEXT NOT NULL DEFAULT '[]'
     CHECK (json_valid(pr_repos_json) AND json_type(pr_repos_json, '$') = 'array');
 ALTER TABLE lado_executions ADD COLUMN pr_repos_firm INTEGER NOT NULL DEFAULT 0 CHECK (pr_repos_firm IN (0, 1));
 ALTER TABLE lado_task_parts ADD COLUMN merge_repo TEXT NOT NULL DEFAULT '';
+ALTER TABLE lado_task_parts ADD COLUMN merge_attempts_base INTEGER NOT NULL DEFAULT 0 CHECK (merge_attempts_base >= 0);
 ALTER TABLE lado_pr_resolves ADD COLUMN pr_url TEXT NOT NULL DEFAULT '';
 ALTER TABLE lado_execution_reviews ADD COLUMN pr_url TEXT NOT NULL DEFAULT '';
 
@@ -86,6 +88,7 @@ ALTER TABLE lado_execution_reviews ADD COLUMN pr_url TEXT NOT NULL DEFAULT '';
 DROP TRIGGER IF EXISTS lado_cdc_task_parts_update;
 ALTER TABLE lado_execution_reviews DROP COLUMN pr_url;
 ALTER TABLE lado_pr_resolves DROP COLUMN pr_url;
+ALTER TABLE lado_task_parts DROP COLUMN merge_attempts_base;
 ALTER TABLE lado_task_parts DROP COLUMN merge_repo;
 ALTER TABLE lado_executions DROP COLUMN pr_repos_firm;
 ALTER TABLE lado_executions DROP COLUMN pr_repos_json;

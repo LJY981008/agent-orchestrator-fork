@@ -264,6 +264,8 @@ func (s *Service) finishMergeRepos(ctx context.Context, r *partRun, i int) error
 		if errors.Is(err, errMergeConflict) {
 			next := *part
 			next.State, next.MergeSessionID, next.MergeBranch, next.MergeRepo = domain.LadoPartConflict, "", "", strings.Trim(repo.Relative, "/")
+			// This repository's merge workers count from here (#64).
+			next.MergeAttemptsBase = part.MergeAttempts
 			if err := s.writePart(ctx, part, next); err != nil {
 				return err
 			}

@@ -288,6 +288,53 @@ func TestMultiRepoConflictInOneRepositoryIsResolvedThere(t *testing.T) {
 	mf.requireUntouched(t)
 }
 
+// Each repository whose merge conflicts gets merge workers of its own, as a
+// run in one repository gives each conflict (review of #64): part b
+// conflicts in back and one merge worker resolves it, then b conflicts in
+// front, and that repository's first merge worker ending without reporting
+// done is followed by another rather than failing the run.
+func TestMultiRepoEachConflictingRepositoryGetsItsOwnMergeAttempts(t *testing.T) {
+	mf := newMultiRepoFixture(t, multiRepoPlanText)
+	integration := domain.LadoIntegrationBranch("task-1", storeEntry)
+
+	mf.tick(t, t0)
+	parts := mf.parts(t, storeEntry)
+	commitOn(t, mf.back, parts["a"].Branch, map[string]string{"shared.txt": "start\na\n"})
+	commitOn(t, mf.front, parts["a"].Branch, map[string]string{"shared.txt": "start\na\n"})
+	bBack := commitOn(t, mf.back, parts["b"].Branch, map[string]string{"shared.txt": "start\nb\n"})
+	commitOn(t, mf.front, parts["b"].Branch, map[string]string{"shared.txt": "start\nb\n"})
+	mf.reportDone(t, parts["a"].SessionID, "a")
+	mf.reportDone(t, parts["b"].SessionID, "b")
+	mf.tick(t, t0.Add(time.Minute))
+
+	b := mf.parts(t, storeEntry)["b"]
+	if b.State != domain.LadoPartConflict || b.MergeRepo != "back" || b.MergeAttempts != 1 || b.MergeSessionID == "" {
+		t.Fatalf("part b = %+v, want it in conflict in back with its first merge worker", b)
+	}
+	backHead := branchIn(t, mf.back, integration)
+	commitOn(t, mf.back, b.MergeBranch, map[string]string{"shared.txt": "start\na\nb\n"}, backHead, bBack)
+	mf.reportDone(t, b.MergeSessionID, "kept both lines in back")
+	mf.tick(t, t0.Add(2*time.Minute))
+
+	b = mf.parts(t, storeEntry)["b"]
+	if b.State != domain.LadoPartConflict || b.MergeRepo != "front" || b.MergeAttempts != 2 || b.MergeAttemptsBase != 1 || b.MergeSessionID == "" {
+		t.Fatalf("part b = %+v, want it in conflict in front with front's first merge worker", b)
+	}
+	first := b.MergeSessionID
+	endStoreSession(t, mf.storeFixture, first)
+	mf.tick(t, t0.Add(3*time.Minute))
+
+	b = mf.parts(t, storeEntry)["b"]
+	if b.State != domain.LadoPartConflict || b.MergeRepo != "front" || b.MergeAttempts != 3 || b.MergeSessionID == "" || b.MergeSessionID == first {
+		t.Fatalf("part b = %+v, want front's second merge worker after the first ended without done", b)
+	}
+	endStoreSession(t, mf.storeFixture, b.MergeSessionID)
+	mf.tick(t, t0.Add(4*time.Minute))
+	if b = mf.parts(t, storeEntry)["b"]; b.State != domain.LadoPartFailed {
+		t.Fatalf("part b = %+v, want the run failed once front's two merge workers ended without done", b)
+	}
+}
+
 // A run whose parts left front as it was expects a PR in back only: the
 // front part, allowed to end without a commit, merges nothing, front's
 // integration branch stays at its main, and the integration worker is told

@@ -523,7 +523,7 @@ const listLadoTaskParts = `-- name: ListLadoTaskParts :many
 SELECT queue_entry_id, part_id, task_id, title, position, phase, steps_json, paths_json, depends_on_json,
     state, attempts, merge_attempts, waiting_reason, waiting_detail, session_id, branch, start_sha,
     merge_from_sha, merge_tip_sha, merged_sha, merge_session_id, merge_branch, summary, error_message,
-    updated_at, merge_repo
+    updated_at, merge_repo, merge_attempts_base
 FROM lado_task_parts
 WHERE queue_entry_id = ?
 ORDER BY position, part_id
@@ -565,6 +565,7 @@ func (q *Queries) ListLadoTaskParts(ctx context.Context, queueEntryID string) ([
 			&i.ErrorMessage,
 			&i.UpdatedAt,
 			&i.MergeRepo,
+			&i.MergeAttemptsBase,
 		); err != nil {
 			return nil, err
 		}
@@ -583,7 +584,7 @@ const listLadoTaskPartsForEntries = `-- name: ListLadoTaskPartsForEntries :many
 SELECT queue_entry_id, part_id, task_id, title, position, phase, steps_json, paths_json, depends_on_json,
     state, attempts, merge_attempts, waiting_reason, waiting_detail, session_id, branch, start_sha,
     merge_from_sha, merge_tip_sha, merged_sha, merge_session_id, merge_branch, summary, error_message,
-    updated_at, merge_repo
+    updated_at, merge_repo, merge_attempts_base
 FROM lado_task_parts
 WHERE queue_entry_id IN (/*SLICE:entry_ids*/?)
 ORDER BY queue_entry_id, position, part_id
@@ -635,6 +636,7 @@ func (q *Queries) ListLadoTaskPartsForEntries(ctx context.Context, entryIds []st
 			&i.ErrorMessage,
 			&i.UpdatedAt,
 			&i.MergeRepo,
+			&i.MergeAttemptsBase,
 		); err != nil {
 			return nil, err
 		}
@@ -854,35 +856,37 @@ SET state = ?1,
     merge_session_id = ?12,
     merge_branch = ?13,
     merge_repo = ?14,
-    summary = ?15,
-    error_message = ?16,
-    updated_at = ?17
-WHERE lado_task_parts.queue_entry_id = ?18
-  AND lado_task_parts.part_id = ?19
-  AND lado_task_parts.state = ?20
+    merge_attempts_base = ?15,
+    summary = ?16,
+    error_message = ?17,
+    updated_at = ?18
+WHERE lado_task_parts.queue_entry_id = ?19
+  AND lado_task_parts.part_id = ?20
+  AND lado_task_parts.state = ?21
 `
 
 type UpdateLadoTaskPartParams struct {
-	State          string
-	Attempts       int64
-	MergeAttempts  int64
-	WaitingReason  string
-	WaitingDetail  string
-	SessionID      string
-	Branch         string
-	StartSha       string
-	MergeFromSha   string
-	MergeTipSha    string
-	MergedSha      string
-	MergeSessionID string
-	MergeBranch    string
-	MergeRepo      string
-	Summary        string
-	ErrorMessage   string
-	UpdatedAt      time.Time
-	QueueEntryID   string
-	PartID         string
-	OldState       string
+	State             string
+	Attempts          int64
+	MergeAttempts     int64
+	WaitingReason     string
+	WaitingDetail     string
+	SessionID         string
+	Branch            string
+	StartSha          string
+	MergeFromSha      string
+	MergeTipSha       string
+	MergedSha         string
+	MergeSessionID    string
+	MergeBranch       string
+	MergeRepo         string
+	MergeAttemptsBase int64
+	Summary           string
+	ErrorMessage      string
+	UpdatedAt         time.Time
+	QueueEntryID      string
+	PartID            string
+	OldState          string
 }
 
 // Writes a part's progress. The caller read the row and passes its state as
@@ -903,6 +907,7 @@ func (q *Queries) UpdateLadoTaskPart(ctx context.Context, arg UpdateLadoTaskPart
 		arg.MergeSessionID,
 		arg.MergeBranch,
 		arg.MergeRepo,
+		arg.MergeAttemptsBase,
 		arg.Summary,
 		arg.ErrorMessage,
 		arg.UpdatedAt,

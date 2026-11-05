@@ -88,6 +88,9 @@ type Store interface {
 	MarkLadoExecutionReviewCancelled(ctx context.Context, runID string, at time.Time) error
 	ReplaceLadoEvidenceLinks(ctx context.Context, session domain.SessionID, headSHA string, links []domain.LadoEvidenceLink) error
 	SettleLadoExecutionPR(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error
+	// Settles the executions that waited for a repository's PR and no
+	// longer do (#64).
+	SettleLadoExecutionsAwaitingRepos(ctx context.Context) (int64, error)
 	ListLadoIntegrationStatusRetries(ctx context.Context, limit int) ([]domain.LadoIntegrationApproval, error)
 	SetLadoIntegrationStatus(ctx context.Context, id string, state domain.LadoIntegrationStatusState, attempts int, postedAt time.Time, errorMessage string) error
 	// The integration approval and the merge gate.
@@ -453,7 +456,9 @@ func (s *Service) baseBranchOf(ctx context.Context, place repoPlace) (string, er
 // that PR of the execution for failedRetryAfter. A pass verifies up to
 // verifyBatch executions in the store's order, except that after a merge
 // moved a target the open executions of that target come first, those with
-// an approved head before the others.
+// an approved head before the others. An execution whose PRs all settled
+// while a repository still waited for its PR settles once it no longer
+// waits.
 func (s *Service) Tick(ctx context.Context) error {
 	s.passMu.Lock()
 	defer s.passMu.Unlock()
@@ -508,6 +513,11 @@ func (s *Service) Tick(ctx context.Context) error {
 		s.mu.Unlock()
 		if err != nil {
 			problems = append(problems, fmt.Errorf("execution %s, pull request %s: %w", exec.SessionID, exec.PR.URL, err))
+		}
+	}
+	if ctx.Err() == nil {
+		if _, err := s.deps.Store.SettleLadoExecutionsAwaitingRepos(ctx); err != nil {
+			problems = append(problems, fmt.Errorf("settle the executions awaiting repositories: %w", err))
 		}
 	}
 	if ctx.Err() == nil {

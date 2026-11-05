@@ -29,6 +29,9 @@ type verifyMulti struct {
 	reviewPR map[string]string
 	// trackCalls counts TrackLadoExecutionPR calls that tracked a PR.
 	trackCalls int
+	// awaitingSweeps counts SettleLadoExecutionsAwaitingRepos calls; the
+	// store tests cover what they settle.
+	awaitingSweeps int
 }
 
 // verifyTracked is one tracking row: settled is the state the loop settled
@@ -232,7 +235,8 @@ func (s *verifyStore) ReplaceLadoExecutionPR(_ context.Context, session domain.S
 	live := s.liveTrackedLocked(session)
 	at := slices.IndexFunc(live, func(row *verifyTracked) bool { return row.url == oldURL })
 	old, _ := s.prLocked(session, oldURL)
-	if at < 0 || !old.Closed || old.Merged || s.trackedURLLocked(session, newURL) {
+	replaceable := (old.Closed && !old.Merged) || (at >= 0 && old.Merged && live[at].settled == domain.PRStateMerged)
+	if at < 0 || !replaceable || s.trackedURLLocked(session, newURL) {
 		return false, nil
 	}
 	live[at].replaced = true
@@ -270,6 +274,13 @@ func (s *verifyStore) SettleLadoExecutionPR(ctx context.Context, session domain.
 	}
 	s.settled[session], s.settledPR[session] = at, settleKey(prURL, state)
 	return nil
+}
+
+func (s *verifyStore) SettleLadoExecutionsAwaitingRepos(context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.multi.awaitingSweeps++
+	return 0, nil
 }
 
 // trackedOf returns the session's live tracked PRs as url@repo#position.
@@ -530,6 +541,58 @@ func TestTrackLeavesASecondOpenPRUntracked(t *testing.T) {
 	}
 	if _, ok := f.store.recordOf(exec.SessionID, verifyHead2); !ok {
 		t.Error("the PR that took the closed one's place was not verified")
+	}
+}
+
+// A follow-up PR the worker opens in a repository whose tracked PR merged
+// and was settled takes that PR's place (review of #64), as the session's
+// newest PR did before LADO tracked PRs: it is tracked, verified and
+// approved, in a single-repository project too.
+func TestTrackFollowUpPRAfterAMerge(t *testing.T) {
+	f := newApproveFixture(t)
+	exec := f.add("3", verifyHead1)
+	first := exec.PR
+	f.store.setSessionPRs(exec.SessionID, first)
+	f.tick()
+
+	f.store.updatePR(first.URL, func(pr *domain.LadoExecutionPR) { pr.Merged = true })
+	f.clock.advance(time.Minute)
+	f.tick()
+	if got := f.store.settledStateOf(exec.SessionID, first.URL); got != domain.PRStateMerged {
+		t.Fatalf("first settled as %q, want merged", got)
+	}
+	if f.store.multi.awaitingSweeps == 0 {
+		t.Fatal("a pass did not settle the executions awaiting repositories")
+	}
+
+	second := domain.LadoExecutionPR{URL: "https://github.com/acme/demo/pull/4", Number: 4, HeadSHA: verifyHead2, TargetBranch: "main", Title: first.Title}
+	merged := first
+	merged.Merged = true
+	f.store.setSessionPRs(exec.SessionID, second, merged)
+	f.heads.set(second.URL, verifyHead2)
+	f.clock.advance(time.Minute)
+	f.tick()
+	if got := f.store.trackedOf(exec.SessionID); !slices.Equal(got, []string{second.URL + "@#0"}) {
+		t.Fatalf("tracked after a follow-up PR = %v, want it in the merged one's place", got)
+	}
+	if !slices.ContainsFunc(f.store.auditEvents(), func(e domain.LadoAuditEvent) bool {
+		return e.Action == ladoAuditPRReplaced && strings.Contains(string(e.Payload), second.URL)
+	}) {
+		t.Errorf("audit events = %+v, want the replacement", f.store.auditEvents())
+	}
+	if _, ok := f.store.recordOf(exec.SessionID, verifyHead2); !ok {
+		t.Fatal("the follow-up PR's head was not verified")
+	}
+	if got := f.execution(exec.SessionID); got.PR.URL != second.URL || len(got.UntrackedPRs) != 0 {
+		t.Fatalf("execution PR = %s, untracked %v; want the follow-up tracked", got.PR.URL, got.UntrackedPRs)
+	}
+	pr := f.previewPR(exec, second, verifyHead2)
+	result, err := f.svc.ApproveIntegration(f.ctx, ApproveInput{
+		SessionID: exec.SessionID, PRURL: second.URL, HeadSHA: verifyHead2,
+		VerificationSHA256: pr.VerificationSHA256, Acknowledge: pr.Acknowledge, Presence: presenceProof("nonce-follow-up", false),
+	})
+	if err != nil || result.Approval == nil || result.Approval.PRURL != second.URL {
+		t.Fatalf("approve the follow-up PR = %+v, %v; want its approval", result.Approval, err)
 	}
 }
 

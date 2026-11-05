@@ -295,9 +295,6 @@ func TestTrackAndReplaceLadoExecutionPR(t *testing.T) {
 		t.Fatalf("replacing an open PR = (%v, %v), want refused", ok, err)
 	}
 	mustWriteLadoRepoPR(t, s, exec.SessionID, "front", 2, domain.PRStateClosed, ladoHead('b'), domain.MergeMergeable, at.Add(2*time.Minute))
-	if ok, err := s.ReplaceLadoExecutionPR(ctx, exec.SessionID, merged, newer, at, audit); err != nil || ok {
-		t.Fatalf("replacing a merged PR = (%v, %v), want refused", ok, err)
-	}
 	before := ladoAuditProbe(t, s)
 	if ok, err := s.ReplaceLadoExecutionPR(ctx, exec.SessionID, closed, newer, at.Add(3*time.Minute), audit); err != nil || !ok {
 		t.Fatalf("ReplaceLadoExecutionPR = (%v, %v)", ok, err)
@@ -312,6 +309,41 @@ func TestTrackAndReplaceLadoExecutionPR(t *testing.T) {
 	if !slices.Equal(ladoTrackedURLs(read), []string{merged, newer}) || read.PRs[1].Repo != "front" || read.PRs[1].Position != 1 ||
 		len(read.UntrackedPRs) != 0 {
 		t.Fatalf("PRs after the replacement = %+v, untracked %v", read.PRs, read.UntrackedPRs)
+	}
+}
+
+// A tracked PR that merged gives way to a newer PR of its repository only
+// once verification settled its merge (review of #64): the follow-up PR
+// takes its place, and its own merge settles the execution again.
+func TestReplaceLadoExecutionPRAfterASettledMerge(t *testing.T) {
+	s, raw := openLadoMultiRepoStore(t)
+	ctx := context.Background()
+	at := ladoVerifyAt
+	exec := mustLadoExecution(t, s, "1", at, false)
+	first := mustWriteLadoRepoPR(t, s, exec.SessionID, "back", 1, domain.PRStateOpen, ladoHead('a'), domain.MergeMergeable, at)
+	mustTrackLadoPR(t, s, exec.SessionID, first, "back", 0, true)
+	mustWriteLadoRepoPR(t, s, exec.SessionID, "back", 1, domain.PRStateMerged, ladoHead('a'), domain.MergeMergeable, at.Add(time.Minute))
+	followUp := mustWriteLadoRepoPR(t, s, exec.SessionID, "back", 2, domain.PRStateOpen, ladoHead('b'), domain.MergeMergeable, at.Add(2*time.Minute))
+	if ok, err := s.ReplaceLadoExecutionPR(ctx, exec.SessionID, first, followUp, at, nil); err != nil || ok {
+		t.Fatalf("replacing a merge not settled yet = (%v, %v), want refused", ok, err)
+	}
+	if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, first, domain.PRStateMerged, at.Add(time.Minute), nil); err != nil {
+		t.Fatalf("settle the first PR: %v", err)
+	}
+	if ok, err := s.ReplaceLadoExecutionPR(ctx, exec.SessionID, first, followUp, at.Add(2*time.Minute), nil); err != nil || !ok {
+		t.Fatalf("replacing a settled merge = (%v, %v), want replaced", ok, err)
+	}
+	read := mustReadLadoExecution(t, s, exec.SessionID)
+	if !slices.Equal(ladoTrackedURLs(read), []string{followUp}) || read.PRs[0].Repo != "back" || read.PRs[0].Position != 0 || read.PR.URL != followUp {
+		t.Fatalf("PRs after the follow-up = %+v, PR %s", read.PRs, read.PR.URL)
+	}
+	mustWriteLadoRepoPR(t, s, exec.SessionID, "back", 2, domain.PRStateMerged, ladoHead('b'), domain.MergeMergeable, at.Add(3*time.Minute))
+	if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, followUp, domain.PRStateMerged, at.Add(3*time.Minute), nil); err != nil {
+		t.Fatalf("settle the follow-up PR: %v", err)
+	}
+	var url string
+	if err := raw.QueryRow(`SELECT settled_pr_url FROM lado_executions WHERE session_id = ?`, string(exec.SessionID)).Scan(&url); err != nil || url != followUp {
+		t.Fatalf("execution settled with %q (%v), want the follow-up PR", url, err)
 	}
 }
 
@@ -352,6 +384,80 @@ func TestLadoExecutionCarriesExpectedReposAndWorkerDone(t *testing.T) {
 	read = mustReadLadoExecution(t, s, session.ID)
 	if !read.WorkerDone || len(read.MissingPRRepos()) != 0 {
 		t.Fatalf("after done: done %v, missing %v", read.WorkerDone, read.MissingPRRepos())
+	}
+}
+
+// An execution whose PRs all settled while a repository it expects a PR in
+// has none yet stays unsettled (review of #64): a guessed list waits while
+// the worker runs and settles once it reports done, a firm list waits for
+// that repository's PR.
+func TestSettleLadoExecutionPRWaitsForAnExpectedRepository(t *testing.T) {
+	for _, firm := range []bool{false, true} {
+		t.Run(fmt.Sprintf("firm=%v", firm), func(t *testing.T) {
+			s, raw := openLadoMultiRepoStore(t)
+			ctx := context.Background()
+			at := ladoVerifyAt
+			entry := mustQueuedLadoTask(t, s, "1", "mer", ladoQueueAt)
+			claimed := mustClaimLadoQueue(t, s, at, 1, ladoTokens("await"), entry)[0]
+			session := mustLadoSession(t, s, "mer", false)
+			if err := s.LinkLadoExecution(ctx, entry, claimed.LeaseToken, domain.LadoExecution{
+				SessionID: session.ID, StartedAt: at, PRRepos: []string{"back", "front"}, PRReposFirm: firm,
+			}); err != nil {
+				t.Fatalf("LinkLadoExecution: %v", err)
+			}
+			settled := func() (string, string) {
+				t.Helper()
+				var url, state string
+				if err := raw.QueryRow(`SELECT settled_pr_url, settled_pr_state FROM lado_executions WHERE session_id = ?`, string(session.ID)).Scan(&url, &state); err != nil {
+					t.Fatalf("read settled: %v", err)
+				}
+				return url, state
+			}
+			sweep := func(want int64) {
+				t.Helper()
+				if n, err := s.SettleLadoExecutionsAwaitingRepos(ctx); err != nil || n != want {
+					t.Fatalf("SettleLadoExecutionsAwaitingRepos = (%d, %v), want %d", n, err, want)
+				}
+			}
+			back := mustWriteLadoRepoPR(t, s, session.ID, "back", 1, domain.PRStateOpen, ladoHead('a'), domain.MergeMergeable, at)
+			mustTrackLadoPR(t, s, session.ID, back, "back", 0, true)
+			mustWriteLadoRepoPR(t, s, session.ID, "back", 1, domain.PRStateMerged, ladoHead('a'), domain.MergeMergeable, at.Add(time.Minute))
+			if err := s.SettleLadoExecutionPR(ctx, session.ID, back, domain.PRStateMerged, at.Add(time.Minute), nil); err != nil {
+				t.Fatalf("settle back: %v", err)
+			}
+			if url, state := settled(); url != "" || state != "" {
+				t.Fatalf("execution settled with %s %s while front has no PR", url, state)
+			}
+			sweep(0)
+
+			report := domain.ReportRecord{
+				ID: "report-done", SessionID: session.ID, ProjectID: session.ProjectID, State: domain.ReportDone, Note: "done",
+				CreatedAt: at.Add(2 * time.Minute), DeliveryState: domain.ReportPending, AvailableAt: at, RepeatCount: 1,
+				SettlementDeadline: at.Add(time.Hour),
+			}
+			if _, err := s.CreateReport(ctx, report); err != nil {
+				t.Fatalf("CreateReport: %v", err)
+			}
+			if !firm {
+				sweep(1)
+				if url, state := settled(); url != back || state != string(domain.PRStateMerged) {
+					t.Fatalf("execution settled with %s %s after done, want back merged", url, state)
+				}
+				sweep(0)
+				return
+			}
+			sweep(0)
+			front := mustWriteLadoRepoPR(t, s, session.ID, "front", 2, domain.PRStateOpen, ladoHead('b'), domain.MergeMergeable, at.Add(3*time.Minute))
+			mustTrackLadoPR(t, s, session.ID, front, "front", 1, true)
+			mustWriteLadoRepoPR(t, s, session.ID, "front", 2, domain.PRStateMerged, ladoHead('b'), domain.MergeMergeable, at.Add(4*time.Minute))
+			if err := s.SettleLadoExecutionPR(ctx, session.ID, front, domain.PRStateMerged, at.Add(4*time.Minute), nil); err != nil {
+				t.Fatalf("settle front: %v", err)
+			}
+			if url, state := settled(); url != front || state != string(domain.PRStateMerged) {
+				t.Fatalf("execution settled with %s %s, want front merged", url, state)
+			}
+			sweep(0)
+		})
 	}
 }
 

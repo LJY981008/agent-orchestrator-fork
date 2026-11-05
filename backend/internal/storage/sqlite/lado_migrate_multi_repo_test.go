@@ -24,7 +24,7 @@ var ladoMultiRepoColumns = []struct {
 	columns []string
 }{
 	{"lado_executions", []string{"pr_repos_json", "pr_repos_firm"}},
-	{"lado_task_parts", []string{"merge_repo"}},
+	{"lado_task_parts", []string{"merge_repo", "merge_attempts_base"}},
 	{"lado_pr_resolves", []string{"pr_url"}},
 	{"lado_execution_reviews", []string{"pr_url"}},
 }

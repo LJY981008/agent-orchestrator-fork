@@ -526,8 +526,11 @@ func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]do
 // prURL in state (merged or closed) at at, with audit in the same
 // transaction when it is given. A PR the execution tracks (issue #64) is
 // settled on its tracking row, and once no live tracked PR of the execution
-// is left unsettled the execution's own settled_* take this PR's values in
-// the same transaction, so they stay the execution's last settlement. A PR
+// is left unsettled and no repository it expects a PR in still waits for one
+// (SettleLadoExecutionsFromTrackedPRs) the execution's own settled_* take
+// this PR's values in the same transaction, so they stay the execution's
+// last settlement. An execution that still waits for a repository settles
+// later, when SettleLadoExecutionsAwaitingRepos finds it no longer does. A PR
 // of an execution without tracked PRs settles the execution as before. A PR
 // settled before in that state, a replaced PR, and a session that is not an
 // execution write nothing, so the audit event is appended once per PR and
@@ -567,14 +570,8 @@ func (s *Store) SettleLadoExecutionPR(ctx context.Context, session domain.Sessio
 				return err
 			}
 			if n > 0 {
-				left, err := q.CountUnsettledLadoExecutionPRs(ctx, string(session))
-				if err != nil {
+				if _, err := q.SettleLadoExecutionsFromTrackedPRs(ctx, string(session)); err != nil {
 					return err
-				}
-				if left == 0 {
-					if _, err := settleExecution(); err != nil {
-						return err
-					}
 				}
 			}
 		}
@@ -584,6 +581,25 @@ func (s *Store) SettleLadoExecutionPR(ctx context.Context, session domain.Sessio
 		_, err = appendLadoAuditEventTx(ctx, q, *audit)
 		return err
 	})
+}
+
+// SettleLadoExecutionsAwaitingRepos settles the executions whose tracked
+// PRs all settled while a repository of their PR list still waited for a PR
+// and that no longer wait (review of #64): a guessed list stops waiting when
+// the session ends or reports done. Each takes its latest settled tracked
+// PR, at the time that PR settled. It returns how many it settled.
+func (s *Store) SettleLadoExecutionsAwaitingRepos(ctx context.Context) (int64, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
+	defer s.writeMu.Unlock()
+	var n int64
+	err := s.inTx(ctx, "settle LADO executions awaiting repositories", func(q *gen.Queries) error {
+		var err error
+		n, err = q.SettleLadoExecutionsFromTrackedPRs(ctx, "")
+		return err
+	})
+	return n, err
 }
 
 // ApproveLadoIntegrations records the integration approvals one presence

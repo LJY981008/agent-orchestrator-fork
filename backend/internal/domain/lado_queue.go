@@ -347,9 +347,11 @@ func ladoSameRelative(a, b string) bool {
 }
 
 // LadoMergeBlockers returns the tracked PRs that must merge before the PR at
-// prURL may (#64): those of repositories before its own in PRRepos that have
-// not merged yet, in that order. A PR outside PRRepos, or of an execution
-// without them, waits for none: only a plan's repos list sets an order.
+// prURL may (#64): those of repositories before its own in PRRepos that are
+// still open, in that order. A PR outside PRRepos, or of an execution
+// without them, waits for none: only a plan's repos list sets an order. A PR
+// that closed without merging can never merge, so it holds nothing back; a
+// newer PR that replaces it in its repository does once it is tracked.
 func LadoMergeBlockers(exec LadoExecution, prURL string) []LadoExecutionTrackedPR {
 	tracked := exec.TrackedPRs()
 	at := slices.IndexFunc(tracked, func(pr LadoExecutionTrackedPR) bool { return pr.PR.URL == prURL })
@@ -363,7 +365,7 @@ func LadoMergeBlockers(exec LadoExecution, prURL string) []LadoExecutionTrackedP
 	var blockers []LadoExecutionTrackedPR
 	for _, repo := range exec.PRRepos[:order] {
 		for _, pr := range tracked {
-			if ladoSameRelative(pr.Repo, repo) && !pr.PR.Merged {
+			if ladoSameRelative(pr.Repo, repo) && !pr.PR.Merged && !pr.PR.Closed {
 				blockers = append(blockers, pr)
 			}
 		}

@@ -99,12 +99,13 @@ func (s *Store) TrackLadoExecutionPR(ctx context.Context, session domain.Session
 }
 
 // ReplaceLadoExecutionPR tracks newURL instead of oldURL for the execution
-// of session at at: the worker closed the PR it opened and opened a newer one
-// in the same repository. The new PR takes the old one's repository and
-// position, the old one keeps its row as replaced, and audit, when given, is
-// appended in the same transaction. It reports false, writing nothing, when
-// oldURL is not a live tracked PR of the execution, AO does not see it
-// closed, or newURL is tracked already.
+// of session at at: the worker closed the PR it opened, or that PR merged and
+// verification settled it, and the worker opened a newer one in the same
+// repository. The new PR takes the old one's repository and position, the
+// old one keeps its row as replaced, and audit, when given, is appended in
+// the same transaction. It reports false, writing nothing, when oldURL is not
+// a live tracked PR of the execution, AO sees it neither closed nor merged
+// and settled merged, or newURL is tracked already.
 func (s *Store) ReplaceLadoExecutionPR(ctx context.Context, session domain.SessionID, oldURL, newURL string, at time.Time, audit *domain.LadoAuditEvent) (bool, error) {
 	if session == "" || oldURL == "" || newURL == "" || oldURL == newURL || at.IsZero() {
 		return false, errors.New("replace LADO execution PR: a session, two PRs and a time are required")
@@ -132,7 +133,8 @@ func (s *Store) ReplaceLadoExecutionPR(ctx context.Context, session domain.Sessi
 		if err != nil {
 			return err
 		}
-		if pr.PRState != domain.PRStateClosed {
+		settledMerged := pr.PRState == domain.PRStateMerged && old.SettledAt.Valid && old.SettledPRState == string(domain.PRStateMerged)
+		if pr.PRState != domain.PRStateClosed && !settledMerged {
 			return errKept
 		}
 		if _, err := q.MarkLadoExecutionPRReplaced(ctx, gen.MarkLadoExecutionPRReplacedParams{

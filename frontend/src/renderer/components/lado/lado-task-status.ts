@@ -67,15 +67,27 @@ export function ladoMissingPRRepos(execution: LadoRunPRs, reason: string | undef
 	return (execution.prRepos ?? []).filter((repo) => !tracked.has(repo));
 }
 
+// A repository's folder as the daemon compares it, without a leading or
+// trailing "/".
+function ladoRepoFolder(repo: string): string {
+	return repo.replace(/^\/+|\/+$/g, "");
+}
+
 /**
  * Whether the approved pull request can merge now: the merge gate holds one
- * back until every pull request before it in the plan's repos order merged
- * (LADO_INTEGRATION_MERGE_ORDER), so the app offers only that one.
+ * back until every open pull request of a repository before its own in the
+ * plan's repos order merged (LADO_INTEGRATION_MERGE_ORDER), so the app offers
+ * only that one.
  */
 export function ladoMergeable(execution: LadoRunPRs, pr: LadoExecutionTrackedPR): boolean {
 	if (pr.merged || pr.closed || pr.state !== "integrating" || !pr.integration.headApproved) return false;
-	if ((execution.prRepos ?? []).length === 0) return true;
-	return ladoTrackedPRs(execution).every((other) => other.position >= pr.position || other.merged);
+	// As the daemon's merge gate: only the plan's repos order, and a pull
+	// request that closed without merging holds nothing back.
+	const order = (execution.prRepos ?? []).map(ladoRepoFolder);
+	const at = order.indexOf(ladoRepoFolder(pr.repo));
+	if (at < 0) return true;
+	const before = order.slice(0, at);
+	return ladoTrackedPRs(execution).every((other) => other.merged || other.closed || !before.includes(ladoRepoFolder(other.repo)));
 }
 
 /**

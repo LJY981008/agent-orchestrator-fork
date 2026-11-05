@@ -955,32 +955,33 @@ type LadoTask struct {
 }
 
 type LadoTaskPart struct {
-	QueueEntryID   string
-	PartID         string
-	TaskID         string
-	Title          string
-	Position       int64
-	Phase          int64
-	StepsJson      string
-	PathsJson      string
-	DependsOnJson  string
-	State          string
-	Attempts       int64
-	MergeAttempts  int64
-	WaitingReason  string
-	WaitingDetail  string
-	SessionID      string
-	Branch         string
-	StartSha       string
-	MergeFromSha   string
-	MergeTipSha    string
-	MergedSha      string
-	MergeSessionID string
-	MergeBranch    string
-	Summary        string
-	ErrorMessage   string
-	UpdatedAt      time.Time
-	MergeRepo      string
+	QueueEntryID      string
+	PartID            string
+	TaskID            string
+	Title             string
+	Position          int64
+	Phase             int64
+	StepsJson         string
+	PathsJson         string
+	DependsOnJson     string
+	State             string
+	Attempts          int64
+	MergeAttempts     int64
+	WaitingReason     string
+	WaitingDetail     string
+	SessionID         string
+	Branch            string
+	StartSha          string
+	MergeFromSha      string
+	MergeTipSha       string
+	MergedSha         string
+	MergeSessionID    string
+	MergeBranch       string
+	Summary           string
+	ErrorMessage      string
+	UpdatedAt         time.Time
+	MergeRepo         string
+	MergeAttemptsBase int64
 }
 
 type LadoTaskPartRepo struct {

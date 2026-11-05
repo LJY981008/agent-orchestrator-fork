@@ -9,8 +9,9 @@ package ladoverify
 // in a single-repository project, and its place in the merge order is the
 // plan's repos order. A repository keeps the PR pinned first: a second PR
 // opened there while that one is open stays untracked, also in a
-// single-repository project. A pinned PR the worker closed without merging
-// gives way to a newer PR of the same repository.
+// single-repository project. A pinned PR the worker closed without merging,
+// or one that merged and was settled, gives way to a newer PR of the same
+// repository: a follow-up PR after a merge is tracked as before #64.
 
 import (
 	"context"
@@ -84,8 +85,9 @@ func (s *Service) trackPRs(ctx context.Context) error {
 }
 
 // trackExecution pins the untracked PRs of one execution. A tracked PR that
-// closed without merging is replaced first by the newest untracked PR of its
-// repository with a higher number, with an audit event. Then each untracked
+// closed without merging, or that merged and was settled (its merge audited
+// and the execution settled with it), is replaced first by the newest
+// untracked PR of its repository with a higher number, with an audit event. Then each untracked
 // PR, the session's newest first, is pinned in its repository unless that
 // repository has a live tracked PR already: the newest PR of a repository
 // wins, and the others stay untracked. A PR whose URL LADO cannot read in a
@@ -124,7 +126,9 @@ func (s *Service) trackExecution(ctx context.Context, exec domain.LadoExecution,
 	now := s.now()
 
 	for _, tracked := range exec.PRs {
-		if !tracked.PR.Closed || tracked.PR.Merged {
+		closedUnmerged := tracked.PR.Closed && !tracked.PR.Merged
+		mergedSettled := tracked.PR.Merged && tracked.Settled
+		if !closedUnmerged && !mergedSettled {
 			continue
 		}
 		newer := -1
@@ -152,7 +156,7 @@ func (s *Service) trackExecution(ctx context.Context, exec domain.LadoExecution,
 		}
 		used[next.URL] = true
 		if replaced {
-			s.deps.Log.Info("LADO tracks a newer pull request of a repository whose tracked one closed",
+			s.deps.Log.Info("LADO tracks a newer pull request of a repository whose tracked one closed or merged",
 				"session", exec.SessionID, "repo", tracked.Repo, "old", tracked.PR.URL, "new", next.URL)
 		}
 	}

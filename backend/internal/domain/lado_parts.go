@@ -629,6 +629,11 @@ type LadoTaskPart struct {
 	// conflicted, where the part's merge worker resolves it (#64); empty
 	// while no merge conflicts and for a run in one repository.
 	MergeRepo string
+	// MergeAttemptsBase is MergeAttempts when the merge in MergeRepo began to
+	// conflict: each conflicting repository gets LadoMaxPartAttempts merge
+	// workers of its own, while MergeAttempts keeps numbering the merge
+	// workers' branches and requests. Zero for a run in one repository.
+	MergeAttemptsBase int
 	// Summary is the part worker's done report.
 	Summary   string
 	Error     string

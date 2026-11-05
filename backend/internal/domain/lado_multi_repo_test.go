@@ -324,7 +324,13 @@ func TestLadoMergeBlockers(t *testing.T) {
 	if got := domain.LadoMergeBlockers(e, front); len(got) != 0 {
 		t.Fatalf("front's blockers once back merged = %+v, want none", got)
 	}
-	e.PRs[1].PR.Merged = false
+	// A back PR closed without merging can never merge: front does not wait
+	// for it (review of #64).
+	e.PRs[1].PR.Merged, e.PRs[1].PR.Closed = false, true
+	if got := domain.LadoMergeBlockers(e, front); len(got) != 0 {
+		t.Fatalf("front's blockers once back closed unmerged = %+v, want none", got)
+	}
+	e.PRs[1].PR.Closed = false
 	e.PRRepos = nil
 	if got := domain.LadoMergeBlockers(e, front); len(got) != 0 {
 		t.Fatalf("without an order: blockers = %+v, want none", got)
