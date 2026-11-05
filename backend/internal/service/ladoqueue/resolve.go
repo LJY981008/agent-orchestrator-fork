@@ -230,7 +230,7 @@ func (s *Service) readResolveRepo(ctx context.Context, exec domain.LadoExecution
 	if !ok {
 		return resolveRepo{}, false, nil
 	}
-	dir, base, err := s.workerBase(ctx, task)
+	dir, _, base, err := s.workerBase(ctx, task)
 	if err != nil {
 		return resolveRepo{}, false, fmt.Errorf("resolve the task's repository: %w", err)
 	}
@@ -328,6 +328,9 @@ func (s *Service) startResolve(ctx context.Context, c domain.LadoResolveCandidat
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName("[resolve] " + task.Issue.Title),
 		Branch:            branch,
+		// LADO made the branch at the pull request's head: a workspace
+		// session must work on it, not on a new name (#60).
+		ReuseExistingBranch: true,
 	}
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
 	id := session.ID
