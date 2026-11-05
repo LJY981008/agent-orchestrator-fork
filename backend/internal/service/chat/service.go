@@ -2541,11 +2541,17 @@ func (s *Service) relayChatTurn(
 		return "", err
 	}
 	defer release()
-	msg := s.resolveSteerSender(ctx, ports.ChatUserMessage{
+	msg := ports.ChatUserMessage{
 		Text: text, ClientMessageID: clientMessageID,
 		SenderSessionID: options.SenderSessionID, InteractionAt: options.InteractionAt,
 		Origin: domain.MessageOriginAutomation, AuthoredByUser: options.AuthoredByUser,
-	})
+	}
+	// LADO fork: a message AO sends on its own behalf keeps the caller's label;
+	// one from a session is labelled from that session below.
+	if msg.SenderSessionID == "" {
+		msg.SenderDisplayName = strings.TrimSpace(options.SenderDisplayName)
+	}
+	msg = s.resolveSteerSender(ctx, msg)
 	turn, err := controller.Send(ctx, msg)
 	if err != nil {
 		return "", err
