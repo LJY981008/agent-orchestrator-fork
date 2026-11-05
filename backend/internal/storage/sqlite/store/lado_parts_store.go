@@ -29,60 +29,72 @@ func (s *Store) StartLadoPartRun(ctx context.Context, token string, run domain.L
 	}
 	defer s.writeMu.Unlock()
 	err := s.inTx(ctx, "start LADO parts run", func(q *gen.Queries) error {
-		n, err := q.StartLadoPartRunEntry(ctx, gen.StartLadoPartRunEntryParams{
-			PartsStartedAt: ladoNullTime(run.StartedAt),
-			ID:             string(run.QueueEntryID),
-			LeaseToken:     ladoNullString(token),
-		})
-		if err != nil {
+		if err := startLadoPartRunTx(ctx, q, token, run, parts); err != nil {
 			return err
 		}
-		if n == 0 || token == "" {
-			return domain.ErrLadoLeaseLost
-		}
-		var ahead sql.NullInt64
-		if run.BaseCommitsAhead != nil {
-			ahead = sql.NullInt64{Int64: int64(*run.BaseCommitsAhead), Valid: true}
-		}
-		if err := q.InsertLadoPartRun(ctx, gen.InsertLadoPartRunParams{
-			QueueEntryID:         string(run.QueueEntryID),
-			TaskID:               string(run.TaskID),
-			ProjectID:            string(run.ProjectID),
-			PlanRevisionID:       string(run.PlanRevisionID),
-			RepoDir:              run.RepoDir,
-			Branch:               run.Branch,
-			BaseSha:              run.BaseSHA,
-			HeadSha:              run.HeadSHA,
-			PlanBaseSha:          run.PlanBaseSHA,
-			BaseCommitsAhead:     ahead,
-			BaseBranch:           run.BaseBranch,
-			BaseRemote:           run.BaseRemote,
-			DispatchLocalBaseSha: run.DispatchLocalBaseSHA,
-			StartedAt:            run.StartedAt.UTC(),
-		}); err != nil {
-			return err
-		}
-		for _, part := range parts {
-			if err := q.InsertLadoTaskPart(ctx, gen.InsertLadoTaskPartParams{
-				QueueEntryID:  string(run.QueueEntryID),
-				PartID:        part.PartID,
-				TaskID:        string(run.TaskID),
-				Title:         part.Title,
-				Position:      int64(part.Position),
-				Phase:         int64(part.Phase),
-				StepsJson:     ladoJSON(part.Steps),
-				PathsJson:     ladoJSON(part.AffectedPaths),
-				DependsOnJson: ladoJSON(part.DependsOn),
-				WaitingReason: part.WaitingReason,
-				UpdatedAt:     run.StartedAt.UTC(),
-			}); err != nil {
-				return err
-			}
-		}
-		_, err = appendLadoAuditEventTx(ctx, q, event)
+		_, err := appendLadoAuditEventTx(ctx, q, event)
 		return err
 	})
 	return unwrapLadoSentinel(err)
+}
+
+// startLadoPartRunTx writes StartLadoPartRun's rows but its audit event.
+func startLadoPartRunTx(ctx context.Context, q *gen.Queries, token string, run domain.LadoPartRun, parts []domain.LadoTaskPart) error {
+	n, err := q.StartLadoPartRunEntry(ctx, gen.StartLadoPartRunEntryParams{
+		PartsStartedAt: ladoNullTime(run.StartedAt),
+		ID:             string(run.QueueEntryID),
+		LeaseToken:     ladoNullString(token),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 || token == "" {
+		return domain.ErrLadoLeaseLost
+	}
+	if err := q.InsertLadoPartRun(ctx, gen.InsertLadoPartRunParams{
+		QueueEntryID:         string(run.QueueEntryID),
+		TaskID:               string(run.TaskID),
+		ProjectID:            string(run.ProjectID),
+		PlanRevisionID:       string(run.PlanRevisionID),
+		RepoDir:              run.RepoDir,
+		Branch:               run.Branch,
+		BaseSha:              run.BaseSHA,
+		HeadSha:              run.HeadSHA,
+		PlanBaseSha:          run.PlanBaseSHA,
+		BaseCommitsAhead:     ladoNullInt(run.BaseCommitsAhead),
+		BaseBranch:           run.BaseBranch,
+		BaseRemote:           run.BaseRemote,
+		DispatchLocalBaseSha: run.DispatchLocalBaseSHA,
+		StartedAt:            run.StartedAt.UTC(),
+	}); err != nil {
+		return err
+	}
+	for _, part := range parts {
+		if err := q.InsertLadoTaskPart(ctx, gen.InsertLadoTaskPartParams{
+			QueueEntryID:  string(run.QueueEntryID),
+			PartID:        part.PartID,
+			TaskID:        string(run.TaskID),
+			Title:         part.Title,
+			Position:      int64(part.Position),
+			Phase:         int64(part.Phase),
+			StepsJson:     ladoJSON(part.Steps),
+			PathsJson:     ladoJSON(part.AffectedPaths),
+			DependsOnJson: ladoJSON(part.DependsOn),
+			WaitingReason: part.WaitingReason,
+			UpdatedAt:     run.StartedAt.UTC(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ladoNullInt stores an optional count.
+func ladoNullInt(n *int) sql.NullInt64 {
+	if n == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*n), Valid: true}
 }
 
 // ActiveLadoPartRuns returns the parts runs in progress: started, without an
@@ -158,6 +170,11 @@ func (s *Store) MergeLadoTaskPart(ctx context.Context, part domain.LadoTaskPart,
 		}
 		if n == 0 {
 			return errStale
+		}
+		// A run with repository rows (issue #64) keeps its first one the
+		// same as the run's own columns.
+		if err := mirrorLadoFirstRepoTx(ctx, q, part); err != nil {
+			return err
 		}
 		_, err = appendLadoAuditEventTx(ctx, q, event)
 		return err
@@ -339,6 +356,8 @@ func (s *Store) LinkLadoPartExecution(ctx context.Context, request string, exec 
 			PartID:               exec.PartID,
 			Branch:               exec.Branch,
 			StartSha:             exec.StartSHA,
+			PRReposJson:          ladoPRReposJSON(exec.PRRepos),
+			PRReposFirm:          boolInt(exec.PRReposFirm),
 		}); err != nil {
 			return err
 		}
@@ -483,6 +502,7 @@ func ladoTaskPartFromGen(row gen.LadoTaskPart) domain.LadoTaskPart {
 		MergedSHA:      row.MergedSha,
 		MergeSessionID: domain.SessionID(row.MergeSessionID),
 		MergeBranch:    row.MergeBranch,
+		MergeRepo:      row.MergeRepo,
 		Summary:        row.Summary,
 		Error:          row.ErrorMessage,
 		UpdatedAt:      row.UpdatedAt.UTC(),
@@ -513,6 +533,7 @@ func ladoTaskPartParams(part domain.LadoTaskPart, oldState domain.LadoPartState)
 		MergedSha:      part.MergedSHA,
 		MergeSessionID: string(part.MergeSessionID),
 		MergeBranch:    part.MergeBranch,
+		MergeRepo:      part.MergeRepo,
 		Summary:        part.Summary,
 		ErrorMessage:   part.Error,
 		UpdatedAt:      updated.UTC(),

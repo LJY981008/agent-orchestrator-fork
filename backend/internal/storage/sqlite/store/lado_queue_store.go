@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -131,10 +132,11 @@ func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask)
 	return nil
 }
 
-// fillLadoExecutionFacts sets each execution's newest PR, the
-// verification facts of that PR's head and its PR's resolve. Every read that gives an execution to
-// a task's state goes through it, so the state is the same in task lists, one
-// task and the execution view.
+// fillLadoExecutionFacts sets each execution's PRs, whether its worker
+// reported done, the verification facts of each PR's head and its PR's
+// resolve. Every read that gives an execution to a task's state goes through
+// it, so the state is the same in task lists, one task and the execution
+// view.
 func (s *Store) fillLadoExecutionFacts(ctx context.Context, executions []domain.LadoExecution) error {
 	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
 		return err
@@ -146,51 +148,122 @@ func (s *Store) fillLadoExecutionFacts(ctx context.Context, executions []domain.
 	return err
 }
 
-// fillLadoExecutionPRs sets each execution's newest PR, reading the PRs of
-// all their sessions at once, and the session's other open PRs, newest
-// first, as untracked.
+// fillLadoExecutionPRs sets each execution's PRs as readLadoExecutionPRs
+// does, with only open PRs as untracked.
 func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.LadoExecution) error {
+	_, err := s.readLadoExecutionPRs(ctx, executions, false)
+	return err
+}
+
+// ladoPRKey names one PR of an execution.
+type ladoPRKey struct {
+	session domain.SessionID
+	url     string
+}
+
+// readLadoExecutionPRs sets each execution's PRs, reading the PRs of all
+// their sessions at once, and whether its worker's newest report is done
+// (WorkerDone). An execution with tracked PRs (lado_execution_prs, issue
+// #64) gets its live ones as PRs, in merge order, and the first as PR; one
+// without gets its session's newest PR as PR, as before LADO tracked PRs.
+// UntrackedPRs are the session's other PRs, newest first: the open ones that
+// LADO does not track, or with all, every PR without a tracking row,
+// merged and closed ones too, and for an execution without tracked PRs its
+// newest PR as well. It returns each PR's source branch.
+func (s *Store) readLadoExecutionPRs(ctx context.Context, executions []domain.LadoExecution, all bool) (map[ladoPRKey]string, error) {
 	if len(executions) == 0 {
-		return nil
+		return nil, nil
 	}
 	sessions := make([]domain.SessionID, 0, len(executions))
+	ids := make([]string, 0, len(executions))
 	for _, execution := range executions {
 		sessions = append(sessions, execution.SessionID)
+		ids = append(ids, string(execution.SessionID))
 	}
 	rows, err := s.qr.ListLadoExecutionPRs(ctx, sessions)
 	if err != nil {
-		return fmt.Errorf("read LADO execution PRs: %w", err)
+		return nil, fmt.Errorf("read LADO execution PRs: %w", err)
+	}
+	trackedRows, err := s.qr.ListLadoExecutionTrackedPRs(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read LADO tracked PRs: %w", err)
+	}
+	reports, err := s.qr.ListLatestLadoSessionReportStates(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("read LADO worker reports: %w", err)
+	}
+	done := make(map[domain.SessionID]bool, len(reports))
+	for _, row := range reports {
+		done[domain.SessionID(row.SessionID)] = row.State == string(domain.ReportDone)
+	}
+	branches := map[ladoPRKey]string{}
+	// Rows come live first and in merge order within each session.
+	tracked := map[domain.SessionID][]domain.LadoExecutionTrackedPR{}
+	trackedURL := map[ladoPRKey]bool{}
+	for _, row := range trackedRows {
+		session := domain.SessionID(row.ExecutionSessionID)
+		key := ladoPRKey{session, row.PRURL}
+		trackedURL[key] = true
+		if row.PRState != "" {
+			branches[key] = row.PRSourceBranch
+		}
+		if row.ReplacedAt.Valid {
+			continue
+		}
+		pr := ladoExecutionPR(row.PRURL, row.PRNumber, domain.PRState(row.PRState), row.PRHeadSha, row.PRTargetBranch, row.PRTitle, domain.Mergeability(row.PRMergeability))
+		tracked[session] = append(tracked[session], domain.LadoExecutionTrackedPR{
+			PR:       pr,
+			Repo:     row.RepoKey,
+			Position: int(row.Position),
+			// Settled in the state the PR is in: a settled PR that opened
+			// again is not.
+			Settled: row.SettledAt.Valid && (row.PRState == "" || row.PRState == row.SettledPRState),
+		})
 	}
 	// Rows come newest first within each session.
 	newest := make(map[domain.SessionID]gen.ListLadoExecutionPRsRow, len(rows))
 	untracked := map[domain.SessionID][]domain.LadoExecutionPR{}
 	for _, row := range rows {
-		if _, ok := newest[row.SessionID]; !ok {
-			newest[row.SessionID] = row
-			continue
-		}
+		key := ladoPRKey{row.SessionID, row.URL}
+		branches[key] = row.SourceBranch
 		pr := ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title, row.Mergeability)
-		if !pr.Merged && !pr.Closed {
+		_, seen := newest[row.SessionID]
+		if !seen {
+			newest[row.SessionID] = row
+		}
+		switch {
+		case trackedURL[key]:
+		case len(tracked[row.SessionID]) == 0 && !seen && !all:
+			// The newest PR of an execution without tracked PRs is its PR.
+		case all || (!pr.Merged && !pr.Closed):
 			untracked[row.SessionID] = append(untracked[row.SessionID], pr)
 		}
 	}
 	for i := range executions {
-		if row, ok := newest[executions[i].SessionID]; ok {
-			executions[i].PR = ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title, row.Mergeability)
+		execution := &executions[i]
+		execution.PRs = tracked[execution.SessionID]
+		switch {
+		case len(execution.PRs) > 0:
+			execution.PR = execution.PRs[0].PR
+		default:
+			if row, ok := newest[execution.SessionID]; ok {
+				execution.PR = ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title, row.Mergeability)
+			}
 		}
-		executions[i].UntrackedPRs = untracked[executions[i].SessionID]
+		execution.UntrackedPRs = untracked[execution.SessionID]
+		execution.WorkerDone = done[execution.SessionID]
 	}
-	return nil
+	return branches, nil
 }
 
 // fillLadoVerification sets what LADO verified and approved about each
-// execution's PR at its current head: the head's record, by its outcome and
-// reason, and its integration approval of that PR into the branch it merges
-// into now, by its status state, which once the PR merged is the merged
-// head's. The PRs must be read first. A record or an approval of another
-// head says nothing about the current one, an approval of another PR or into
-// another branch neither, and a PR whose head AO has not observed has
-// neither.
+// execution's PRs at their current heads, PR and each of PRs: the head's
+// record, by its outcome and reason, and its integration approval of that PR
+// into the branch it merges into now, by its status state, which once the PR
+// merged is the merged head's. The PRs must be read first. A record or an
+// approval of another head says nothing about the current one, an approval
+// of another PR or into another branch neither, a revoked approval does not
+// count, and a PR whose head AO has not observed has neither.
 func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.LadoExecution) error {
 	type head struct {
 		session domain.SessionID
@@ -198,9 +271,15 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 	}
 	var sessions, shas []string
 	for _, execution := range executions {
-		if execution.PR.URL != "" && execution.PR.HeadSHA != "" {
-			sessions = append(sessions, string(execution.SessionID))
-			shas = append(shas, execution.PR.HeadSHA)
+		prs := []domain.LadoExecutionPR{execution.PR}
+		for _, tracked := range execution.PRs {
+			prs = append(prs, tracked.PR)
+		}
+		for _, pr := range prs {
+			if pr.URL != "" && pr.HeadSHA != "" {
+				sessions = append(sessions, string(execution.SessionID))
+				shas = append(shas, pr.HeadSHA)
+			}
 		}
 	}
 	if len(sessions) == 0 {
@@ -235,25 +314,35 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 			PRURL: row.PRURL, TargetBranch: row.TargetBranch, StatusState: domain.LadoIntegrationStatusState(row.StatusState),
 		})
 	}
-	for i := range executions {
-		execution := &executions[i]
-		if execution.PR.URL == "" || execution.PR.HeadSHA == "" {
-			continue
+	facts := func(session domain.SessionID, pr domain.LadoExecutionPR) (domain.LadoExecutionVerification, domain.LadoExecutionIntegration) {
+		var verification domain.LadoExecutionVerification
+		var integration domain.LadoExecutionIntegration
+		if pr.URL == "" || pr.HeadSHA == "" {
+			return verification, integration
 		}
-		key := head{execution.SessionID, execution.PR.HeadSHA}
+		key := head{session, pr.HeadSHA}
 		// A record verified the PR it names: a new PR at the same head waits
 		// for its own (review of #31).
-		if verifiedPR[key] == execution.PR.URL {
-			execution.Verification = verified[key]
+		if verifiedPR[key] == pr.URL {
+			verification = verified[key]
 		}
 		// An approval holds for its PR and the branch it was approved into.
-		ofPR := slices.DeleteFunc(slices.Clone(approved[key]), func(a domain.LadoIntegrationApproval) bool { return a.PRURL != execution.PR.URL })
-		if approval, ok := domain.LadoApprovalFor(ofPR, execution.PR.TargetBranch); ok {
-			execution.Integration = domain.LadoExecutionIntegration{
+		ofPR := slices.DeleteFunc(slices.Clone(approved[key]), func(a domain.LadoIntegrationApproval) bool { return a.PRURL != pr.URL })
+		if approval, ok := domain.LadoApprovalFor(ofPR, pr.TargetBranch); ok {
+			integration = domain.LadoExecutionIntegration{
 				HeadApproved:       true,
 				StatusState:        approval.StatusState,
-				MergedHeadApproved: execution.PR.Merged,
+				MergedHeadApproved: pr.Merged,
 			}
+		}
+		return verification, integration
+	}
+	for i := range executions {
+		execution := &executions[i]
+		execution.Verification, execution.Integration = facts(execution.SessionID, execution.PR)
+		for j := range execution.PRs {
+			tracked := &execution.PRs[j]
+			tracked.Verification, tracked.Integration = facts(execution.SessionID, tracked.PR)
 		}
 	}
 	return nil
@@ -550,6 +639,8 @@ func (s *Store) LinkLadoExecution(ctx context.Context, entryID domain.LadoQueueE
 			BaseBranch:           exec.BaseBranch,
 			BaseRemote:           exec.BaseRemote,
 			DispatchLocalBaseSha: exec.DispatchLocalBaseSHA,
+			PRReposJson:          ladoPRReposJSON(exec.PRRepos),
+			PRReposFirm:          boolInt(exec.PRReposFirm),
 		}); err != nil {
 			return err
 		}
@@ -924,7 +1015,30 @@ func ladoExecutionFromGen(row gen.LadoExecution) domain.LadoExecution {
 		PartID:               row.PartID,
 		Branch:               row.Branch,
 		StartSHA:             row.StartSha,
+		PRRepos:              ladoPRReposFromJSON(row.PRReposJson),
+		PRReposFirm:          row.PRReposFirm == 1,
 	}
+}
+
+// ladoPRReposJSON stores the repositories an execution is expected to open a
+// PR in, each without a leading or trailing "/", as a JSON array.
+func ladoPRReposJSON(repos []string) string {
+	trimmed := make([]string, 0, len(repos))
+	for _, repo := range repos {
+		trimmed = append(trimmed, strings.Trim(repo, "/"))
+	}
+	return ladoJSON(trimmed)
+}
+
+// ladoPRReposFromJSON reads pr_repos_json; an empty list is nil.
+func ladoPRReposFromJSON(raw string) []string {
+	var repos []string
+	// The column only ever holds what the store wrote.
+	_ = json.Unmarshal([]byte(raw), &repos)
+	if len(repos) == 0 {
+		return nil
+	}
+	return repos
 }
 
 func ladoDispatchSettingsFromGen(row gen.LadoDispatchSetting) domain.LadoDispatchSettings {

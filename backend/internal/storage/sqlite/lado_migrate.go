@@ -118,7 +118,11 @@ END`,
     OLD.waiting_detail IS NOT NEW.waiting_detail OR
     OLD.session_id IS NOT NEW.session_id OR
     OLD.merge_session_id IS NOT NEW.merge_session_id OR
-    OLD.attempts IS NOT NEW.attempts`),
+    OLD.attempts IS NOT NEW.attempts OR
+    OLD.merge_repo IS NOT NEW.merge_repo`),
+	// A parts run's integration branch in one repository publishes when it
+	// moves (issue #64); its rows are written with the run, which publishes.
+	ladoPartRunChildCDCTrigger("lado_cdc_part_run_repos_update", "AFTER UPDATE ON lado_part_run_repos", "WHEN OLD.head_sha IS NOT NEW.head_sha"),
 	// An execution publishes on its session when it starts and when it times
 	// out. Dispatch settings and project caps publish nothing.
 	ladoExecutionCDCTrigger("lado_cdc_executions_insert", "AFTER INSERT ON lado_executions", ""),
@@ -147,6 +151,16 @@ END`,
 	ladoExecutionChildCDCTrigger("lado_cdc_pr_resolves_insert", "AFTER INSERT ON lado_pr_resolves", ""),
 	ladoExecutionChildCDCTrigger("lado_cdc_pr_resolves_update", "AFTER UPDATE ON lado_pr_resolves",
 		"WHEN OLD.state IS NOT NEW.state OR OLD.attempts IS NOT NEW.attempts OR OLD.session_id IS NOT NEW.session_id OR OLD.error IS NOT NEW.error"),
+	// A tracked PR publishes its execution's change when LADO starts tracking
+	// it, replaces it with a newer PR, settles it or moves it in the merge
+	// order (issue #64).
+	ladoExecutionChildCDCTrigger("lado_cdc_execution_prs_insert", "AFTER INSERT ON lado_execution_prs", ""),
+	ladoExecutionChildCDCTrigger("lado_cdc_execution_prs_update", "AFTER UPDATE ON lado_execution_prs",
+		`WHEN OLD.replaced_at IS NOT NEW.replaced_at OR
+    OLD.settled_at IS NOT NEW.settled_at OR
+    OLD.settled_pr_state IS NOT NEW.settled_pr_state OR
+    OLD.position IS NOT NEW.position OR
+    OLD.repo_key IS NOT NEW.repo_key`),
 	// A relay of a developer instruction publishes its task's change when it
 	// is recorded and when it is delivered or fails, so the task view's relay
 	// tab follows (issue #49).
@@ -234,6 +248,26 @@ BEGIN
     FROM lado_tasks
     JOIN projects ON projects.id = lado_tasks.project_id
     WHERE lado_tasks.id = NEW.task_id;
+END`
+}
+
+// ladoPartRunChildCDCTrigger publishes a change of the task whose parts run
+// NEW.queue_entry_id names, in the task's project.
+func ladoPartRunChildCDCTrigger(name, event, when string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_task', 'taskId', lado_tasks.id, 'projectId', projects.id),
+        datetime('now')
+    FROM lado_part_runs
+    JOIN lado_tasks ON lado_tasks.id = lado_part_runs.task_id
+    JOIN projects ON projects.id = lado_tasks.project_id
+    WHERE lado_part_runs.queue_entry_id = NEW.queue_entry_id;
 END`
 }
 
