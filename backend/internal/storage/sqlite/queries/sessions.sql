@@ -107,7 +107,16 @@ WHERE id = sqlc.arg(id)
 -- name: ReplaceUnpersistedChatProvider :execrows
 -- Move a Chat from a provider id the provider never persisted to the fresh id
 -- it started instead. Guarded on the old id so a newer owner is never replaced.
+-- agent_session_id moves with it only when it still names the old id (a branch
+-- activation or a hook reserved it); any other value, empty included, stays.
+-- SQLite evaluates every SET expression against the old row.
 UPDATE sessions SET
+    agent_session_id = CASE
+        WHEN agent_session_id <> '' AND agent_session_id = sqlc.arg(expected_provider_conversation_id)
+        THEN sqlc.arg(provider_conversation_id) ELSE agent_session_id END,
+    agent_session_id_launch_id = CASE
+        WHEN agent_session_id <> '' AND agent_session_id = sqlc.arg(expected_provider_conversation_id)
+        THEN '' ELSE agent_session_id_launch_id END,
     provider_conversation_id = sqlc.arg(provider_conversation_id)
 WHERE id = sqlc.arg(id)
   AND session_mode = 'chat'

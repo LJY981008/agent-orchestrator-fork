@@ -595,6 +595,11 @@ func (m *Manager) resumeChatController(
 					completionErr = err
 					return ChatControllerCommit{}, err
 				}
+				// The store moved a reserved agent_session_id along; mirror it so
+				// the spawn merge keeps it and the owner matches the row (#46).
+				previous := rec.Metadata.ProviderConversationID
+				moveReservedAgentSessionID(&rec.Metadata, previous, started.ProviderConversationID)
+				moveReservedAgentSessionID(&metadata, previous, started.ProviderConversationID)
 				// The swap is one-shot: any later call with this id must not retry it.
 				rec.Metadata.ProviderConversationID = started.ProviderConversationID
 				freshIfMissing = false
@@ -666,7 +671,13 @@ func (m *Manager) providerNeverPersisted(ctx context.Context, rec domain.Session
 		return false
 	}
 	persisted, err := m.persistedNativeConversationID(ctx, rec, id, handoff)
-	return err == nil && persisted == ""
+	if err == nil && persisted == "" {
+		return true
+	}
+	// LADO fork (#46): a /clear branch that has recorded nothing since the
+	// clear is just as untouched as an empty root.
+	exists, err := m.nativeHistoryExists(ctx, rec, id, handoff)
+	return err == nil && !exists && m.clearedChatBranchNotStarted(ctx, rec)
 }
 
 func (m *Manager) replaceUnpersistedChatProvider(ctx context.Context, rec domain.SessionRecord, providerConversationID string) error {
