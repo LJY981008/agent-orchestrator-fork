@@ -187,6 +187,15 @@ func TestWorkspacePlanAcrossRepositoriesNeedsRepos(t *testing.T) {
 			},
 			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: "side"}},
 		},
+		{
+			// The dispatch, the PR tracking and the merge order compare
+			// folders exactly, so the plan must name the child as it is.
+			name: "a repos entry in another case than its child",
+			content: func(pf *planFixture) string {
+				return withRepos(pf.partsPlanFile([]string{"Back/**", "front/**"}, []string{"front/**"}), "Back", "front")
+			},
+			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: "Back"}},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

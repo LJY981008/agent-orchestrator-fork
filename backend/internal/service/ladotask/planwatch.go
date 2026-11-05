@@ -313,9 +313,11 @@ func repoProblems(plan domain.LadoPlan, layout repoLayout) []domain.LadoPlanProb
 		}
 		return problems
 	}
+	// An entry names a child as its folder is written: the dispatch, the PR
+	// tracking and the merge order compare folders exactly.
 	for _, entry := range plan.Repos {
 		known := slices.ContainsFunc(layout.children, func(child string) bool {
-			return strings.EqualFold(strings.Trim(child, "/"), entry)
+			return strings.Trim(child, "/") == entry
 		})
 		if !known {
 			problems = append(problems, domain.LadoPlanProblem{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: entry})
