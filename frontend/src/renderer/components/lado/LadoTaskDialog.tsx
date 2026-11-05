@@ -183,8 +183,12 @@ function TaskViewBody({
 	const queueing = task.state === "queued" || task.state === "dispatching";
 	// LADO runs one worker per task: while its session lives, while LADO
 	// verifies or integrates its PR, or once its work merged, the daemon
-	// approves no plan of the task.
-	const runHolds = runStates.has(task.state) || (task.execution !== undefined && !task.execution.sessionEnded);
+	// approves no plan of the task. That holds for the session of an older
+	// approval's run too, which comes as previousExecution.
+	const runHolds =
+		runStates.has(task.state) ||
+		(task.execution !== undefined && !task.execution.sessionEnded) ||
+		(task.previousExecution !== undefined && !task.previousExecution.sessionEnded);
 	const approving = readingRules || approve.isPending;
 	const approvable = open && !pending && shown !== undefined && shown.latest && shown.revision.valid && (!shown.approved || reapprove);
 	const canApprove = approvable && !runHolds && !approving;

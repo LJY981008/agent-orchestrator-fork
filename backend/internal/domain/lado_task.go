@@ -207,21 +207,33 @@ func (t LadoTask) StateReason() string {
 	return reason
 }
 
+// CurrentExecution returns the task's execution when it still decides the
+// task's state: it ran for the newest approval, or it runs, is verified, is
+// integrated or merged. A run of an older approval that ended without a
+// merge (it failed, or its PR closed) is history: a task approved again
+// after such a run shows its new entry, and false comes back.
+func (t LadoTask) CurrentExecution() (LadoExecution, bool) {
+	e := t.Execution
+	if e.SessionID == "" {
+		return LadoExecution{}, false
+	}
+	if e.PlanApprovalID == t.Plan.Approval.ID {
+		return e, true
+	}
+	switch state, _ := e.taskState(); state {
+	case LadoTaskRunning, LadoTaskValidating, LadoTaskIntegrationPending, LadoTaskIntegrating, LadoTaskCompleted:
+		return e, true
+	}
+	return LadoExecution{}, false
+}
+
 func (t LadoTask) stateAt(now time.Time) (LadoTaskState, string) {
 	if !t.CancelledAt.IsZero() {
 		return LadoTaskCancelled, ""
 	}
 	closed := t.Issue.State == IssueDone || t.Issue.State == IssueCancelled
-	if e := t.Execution; e.SessionID != "" {
-		state, reason := e.taskState()
-		// A run of an older approval that ended without a merge is history:
-		// a task approved again after a failed run shows its new entry.
-		current := e.PlanApprovalID == t.Plan.Approval.ID
-		switch state {
-		case LadoTaskRunning, LadoTaskValidating, LadoTaskIntegrationPending, LadoTaskIntegrating, LadoTaskCompleted:
-			current = true
-		}
-		if current && (state != LadoTaskFailed || !closed) {
+	if e, current := t.CurrentExecution(); current {
+		if state, reason := e.taskState(); state != LadoTaskFailed || !closed {
 			return state, reason
 		}
 	}

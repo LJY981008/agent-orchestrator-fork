@@ -1,6 +1,7 @@
 import { QueryClient, type QueryKey } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import {
+	type LadoTask,
 	ladoAlertsQueryKey,
 	ladoEffectiveProjectQueryKey,
 	ladoEffectiveQueryKey,
@@ -112,6 +113,38 @@ describe("createLadoEventBatch and local setup", () => {
 		expect(
 			invalidatedBy([{ payload: { isTerminated: true }, event: { type: "session_updated", projectId: "demo", sessionId: "demo-7" }, lado: false }]),
 		).toEqual([]);
+	});
+});
+
+// LADO fork: a task approved again keeps its older run as previousExecution
+// (issue #61). The approve button waits while that run's session lives, so
+// the task list refreshes when AO ends or restores the session.
+describe("createLadoEventBatch and a task's older run", () => {
+	const previousTask = (sessionEnded: boolean): LadoTask =>
+		({
+			id: "lado-task-1",
+			projectId: "demo",
+			state: "running",
+			previousExecution: { sessionId: "demo-7", planRevisionId: "lado-plan-1", startedAt: "2026-11-05T00:00:00Z", timedOut: false, sessionEnded },
+		}) as LadoTask;
+
+	function sessionUpdated(tasks: LadoTask[], isTerminated: boolean): QueryKey[] {
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(ladoTasksQueryKey("demo"), tasks);
+		const batch = createLadoEventBatch(queryClient);
+		expect(batch.note({ isTerminated }, { type: "session_updated", projectId: "demo", sessionId: "demo-7" })).toBe(false);
+		const invalidated: QueryKey[] = [];
+		batch.flush((queryKey) => invalidated.push(queryKey));
+		return invalidated;
+	}
+
+	it("refreshes the project's tasks when the older run's session comes back", () => {
+		expect(sessionUpdated([previousTask(true)], false)).toContainEqual(ladoTasksQueryKey("demo"));
+	});
+
+	it("leaves the tasks alone while the older run's session stays as the list shows it", () => {
+		expect(sessionUpdated([previousTask(true)], true)).not.toContainEqual(ladoTasksQueryKey("demo"));
+		expect(sessionUpdated([previousTask(false)], false)).not.toContainEqual(ladoTasksQueryKey("demo"));
 	});
 });
 
