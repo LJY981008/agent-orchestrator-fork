@@ -1,7 +1,7 @@
 # LADO 3. Where LADO enforces approval
 
 Date: 2026-10-19
-Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3; items 1, 2, 3 and 7 amended 2026-10-27 while building step 8 (end of this record).
+Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3; items 1, 2, 3 and 7 amended 2026-10-27 while building step 8, and items 1, 2 and 3 again 2026-11-04 for #53 (end of this record).
 
 ## Context
 
@@ -50,3 +50,11 @@ Built as decided, with these changes (TDD §7, §8; owner's decisions of 2026-10
 - **Item 7: what blocks.** A failing commit message validator and a changed protected path that the approved plan does not name fail the head, and the worker gets one fix request; a changed path outside the plan's `affected_paths` and an unclear commit message are confirm codes. The validators run over merge-base..head in the verification loop, so a commit made with `--no-verify` is judged like any other.
 - **Not built yet:** GitLab's protected branches with external status checks, and creating rulesets from the app.
 - **Checked against GitHub (2026-10-28, #15).** On the fork, a temporary ruleset on a temporary base branch held a PR at `BLOCKED` until LADO's approval posted `lado/integration`, which made it `CLEAN` (not merged). A ruleset that takes the check from one app only kept the PR blocked after LADO's status, which is why LADO reads it as unprotected (TDD §7.1, §15 item 8). Everything made for the check was deleted.
+
+## Amended 2026-11-04 (#53)
+
+The owner runs overlapping tasks in parallel (`overlapWait` off) and settles them when they merge. A merge into the base can then change what another head's approval was given against, without a text conflict. Changes (TDD §3.2, §7.2, §7.3, §7.4):
+
+- **Item 3: the loop fetches the base.** The step-8 rule "the loop never fetches" no longer holds. The verification loop fetches each base branch of each repository at most every 2 minutes (30 s each), and at once after LADO settles a merge into it, verifying the open executions of that target first, approved heads first. The `base_branch` item compares the head with the remote target: a move past the head's merge base whose changed files include one the head changed or the plan names (the project's overlap ignore list left out) **fails** as `base_overlap`, the PR's owner gets one fix request, and the head cannot be approved; any other move is the confirm code `base_advanced`.
+- **Items 1 and 2: an approval holds for its base.** The approval records the remote target's commit (`approved_base_sha`). The loop revokes the approval of a head whose record turns `base_overlap` (the row stays, `revoked_at`; audit `integration.revoked`), and on GitHub posts `pending` in the same `lado/integration` context, which replaces the success. AO's merge gate fetches the target before an approved head merges; when the tip moved since the approval it computes the head's record again without starting a check command, and refuses with `LADO_INTEGRATION_REVOKED` when it is `base_overlap` (revoking it), or with `LADO_MERGE_GATE_FAILED` when the fetch or the computation fails. A revoked head cannot be approved again; only a new head can.
+- **Remaining gap: GitHub's own merge.** Between a merge on GitHub and the loop's pass that revokes the other approval and posts `pending`, GitHub's merge button can still merge the other PR, for a few seconds to tens of seconds; the immediate fetch after a settled merge shortens this. The ruleset option "Require branches to be up to date before merging" closes it, and LADO recommends it. A GitLab approval is `not_applicable` and only AO's gate stops it, as before.

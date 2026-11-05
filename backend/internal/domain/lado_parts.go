@@ -570,19 +570,27 @@ type LadoRunRequest struct {
 	Attempt int
 }
 
+// Resolve reports whether the request is a resolve worker's: a merge worker
+// without a part.
+func (r LadoRunRequest) Resolve() bool { return r.Role == LadoRoleMerge && r.Part == "" }
+
 // LadoRunClientRequestID is the client request id of a worker of a parts
 // run: "lado:<entry>/<part>/<attempt>" for a part,
 // "lado:<entry>/merge-<part>/<attempt>" for its merge worker and
-// "lado:<entry>/integration/<attempt>" for the integration worker. Each
-// attempt is a new id, so each worker is a new session.
+// "lado:<entry>/integration/<attempt>" for the integration worker and
+// "lado:<entry>/_resolve/<attempt>" for a resolve worker (a merge worker
+// without a part, LadoResolveClientRequestID). Each attempt is a new id, so
+// each worker is a new session.
 func LadoRunClientRequestID(r LadoRunRequest) string {
 	middle := r.Part
-	switch r.Role {
-	case LadoRoleSingle:
+	switch {
+	case r.Role == LadoRoleSingle:
 		return LadoClientRequestID(r.Entry, r.Attempt)
-	case LadoRoleMerge:
+	case r.Resolve():
+		middle = ladoResolveID
+	case r.Role == LadoRoleMerge:
 		middle = ladoMergePrefix + r.Part
-	case LadoRoleIntegration:
+	case r.Role == LadoRoleIntegration:
 		middle = ladoPartReservedID
 	}
 	return ladoClientRequestPrefix + string(r.Entry) + "/" + middle + "/" + strconv.Itoa(r.Attempt)
@@ -614,6 +622,8 @@ func ParseLadoRunClientRequestID(s string) (LadoRunRequest, bool) {
 	switch middle := fields[1]; {
 	case middle == ladoPartReservedID:
 		r.Role = LadoRoleIntegration
+	case middle == ladoResolveID:
+		r.Role = LadoRoleMerge
 	case strings.HasPrefix(middle, ladoMergePrefix) && ValidLadoPartID(strings.TrimPrefix(middle, ladoMergePrefix)):
 		r.Role, r.Part = LadoRoleMerge, strings.TrimPrefix(middle, ladoMergePrefix)
 	case ValidLadoPartID(middle):

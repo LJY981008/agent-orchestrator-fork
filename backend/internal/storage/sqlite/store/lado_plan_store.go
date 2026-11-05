@@ -479,6 +479,7 @@ func unwrapLadoSentinel(err error) error {
 		domain.ErrLadoConflictAcceptanceNotLive,
 		domain.ErrLadoIntegrationAlreadyApproved,
 		domain.ErrLadoVerificationChanged,
+		domain.ErrLadoIntegrationRevoked,
 	} {
 		if errors.Is(err, sentinel) {
 			return sentinel

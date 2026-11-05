@@ -332,7 +332,7 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 		t.Fatalf("store the old head's record: %v", err)
 	}
 	got := get()
-	wantPR := controllers.LadoExecutionPRResponse{URL: prURL, Number: 7, HeadSHA: ladoVerifyHead, TargetBranch: "main", Title: "검증 화면 추가"}
+	wantPR := controllers.LadoExecutionPRResponse{URL: prURL, Number: 7, HeadSHA: ladoVerifyHead, TargetBranch: "main", Title: "검증 화면 추가", Mergeability: "unknown"}
 	if got.PR == nil || *got.PR != wantPR {
 		t.Fatalf("PR = %+v, want %+v", got.PR, wantPR)
 	}
@@ -408,6 +408,30 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 		!reflect.DeepEqual(in.Acknowledged, []string{"outside_plan", "unprotected"}) || in.Actor != "human" || !in.ApprovedAt.Equal(approvedAt) ||
 		in.StatusState != "failed" || in.StatusAttempts != 1 || in.StatusPostedAt != nil || in.StatusError != "the host answered 403" {
 		t.Fatalf("integration = %+v, want the head's approval whose status failed", in)
+	}
+
+	// The base moved under the head with a change to the same files: the
+	// record fails on base_overlap, says which files and the run validates
+	// on it.
+	tip := strings.Repeat("f", 40)
+	overlapped := ladoVerifyRecord(t, worker, prURL, ladoVerifyHead, now)
+	overlapped.Items[4] = mustLadoItem(t, domain.LadoVerifyBaseBranch, domain.LadoVerifyFail, domain.LadoCodeBaseOverlap, domain.LadoBaseBranchDetails{
+		Branch: "main", Remote: "origin", Advanced: true, AdvancedTip: tip, Overlap: []string{"backend/app.go", "docs/notes.md"}, OverlapCount: 2,
+	})
+	if _, err := store.UpsertLadoVerification(ctx, overlapped); err != nil {
+		t.Fatalf("store the overlapped record: %v", err)
+	}
+	got = get()
+	if v := got.Verification; v == nil || v.Outcome != "fail" || v.Reason != domain.LadoCodeBaseOverlap {
+		t.Fatalf("verification = %+v, want it to fail on base_overlap", got.Verification)
+	}
+	base := got.Verification.Items[4]
+	if base.Kind != "base_branch" || base.Code != "base_overlap" || !base.Details.Advanced || base.Details.AdvancedTip != tip ||
+		!reflect.DeepEqual(base.Details.Overlap, []string{"backend/app.go", "docs/notes.md"}) || base.Details.OverlapCount != 2 {
+		t.Fatalf("base_branch item = %+v, want the overlapping files", base)
+	}
+	if got.State != "validating" || got.StateReason != domain.LadoCodeBaseOverlap {
+		t.Fatalf("state = %s (%s), want validating (base_overlap)", got.State, got.StateReason)
 	}
 
 	// Without verification wired, the execution has neither.

@@ -51,8 +51,8 @@ func (s *Service) requestFixes(ctx context.Context, in headInputs, ev evaluation
 			s.deps.Log.Warn("LADO could not write a fix request", "session", in.exec.SessionID, "head", in.head, "item", item.Kind, "err", err)
 			continue
 		}
-		if err := s.deps.Sender.Send(ctx, in.exec.SessionID, message); err != nil {
-			s.deps.Log.Warn("LADO could not tell a worker what failed; it tries again", "session", in.exec.SessionID, "head", in.head, "item", item.Kind, "err", err)
+		if err := s.deps.Sender.Send(ctx, in.owner, message); err != nil {
+			s.deps.Log.Warn("LADO could not tell a worker what failed; it tries again", "session", in.owner, "head", in.head, "item", item.Kind, "err", err)
 			continue
 		}
 		notified = append(notified, string(item.Kind))
@@ -72,6 +72,8 @@ func fixable(item domain.LadoVerifyItem) bool {
 		return item.Code == domain.LadoCodeProtectedPath
 	case domain.LadoVerifyReview:
 		return item.Code == domain.LadoCodeChangesRequested
+	case domain.LadoVerifyBaseBranch:
+		return item.Code == domain.LadoCodeBaseOverlap
 	}
 	return false
 }
@@ -105,11 +107,29 @@ func (s *Service) fixMessage(in headInputs, ev evaluation, item domain.LadoVerif
 			return "", err
 		}
 		what, body = "the code review asked for changes", reviewFailure(ev.reviewRuns, details)
+	case domain.LadoVerifyBaseBranch:
+		var details domain.LadoBaseBranchDetails
+		if err := json.Unmarshal(item.Details, &details); err != nil {
+			return "", err
+		}
+		what = fmt.Sprintf("the base branch %s took a merge that changed the same paths as your branch", in.target)
+		body = overlapFailure(details)
 	default:
 		return "", fmt.Errorf("no fix request for the %s item", item.Kind)
 	}
 	header := fmt.Sprintf("LADO checked head %s of your pull request, and the %s item failed: %s.", shortCommit(in.head), item.Kind, what)
 	return fitFixMessage(header, body), nil
+}
+
+// overlapFailure lists the files the base and the head both changed and
+// says how to take the base in.
+func overlapFailure(details domain.LadoBaseBranchDetails) string {
+	list := strings.Join(details.Overlap, "\n")
+	if more := details.OverlapCount - len(details.Overlap); more > 0 {
+		list += fmt.Sprintf("\nand %d more", more)
+	}
+	return "Merge the base into your branch (or rebase onto it and push with --force-with-lease), " +
+		"run the project's check commands again and push.\n\n" + list
 }
 
 // commandsFailure names each check command whose newest run on the head did

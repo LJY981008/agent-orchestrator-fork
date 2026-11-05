@@ -40,10 +40,15 @@ var errHeadUnavailable = errors.New("the repository does not have the head, and 
 // requests the record calls for; fetchBase fetches the base branch from its
 // remote before git reads anything, and the PR's head when the repository
 // lacks it, as an integration approval does.
+// loopFetch fetches the base branch as the loop does, at most every
+// baseFetchEvery per repository, remote and branch, and forceFetch past
+// that, as after a merge into it (#53).
 type verifyOptions struct {
 	forceProtection bool
 	startWork       bool
 	fetchBase       bool
+	loopFetch       bool
+	forceFetch      bool
 }
 
 // headInputs is what a head's record is computed from.
@@ -55,10 +60,20 @@ type headInputs struct {
 	// a workspace project, slash-separated (empty for a single repository):
 	// the plan's paths are relative to the project root.
 	dir, prefix string
-	// worktree is the execution's worktree of that repository, empty when AO
-	// recorded none; live says whether the worker session still runs.
+	// owner is the session that takes the head's fix and pull requests: the
+	// execution's own session while it lives (domain.LadoSessionLive), else
+	// its live resolve worker; empty when neither lives, and live says
+	// whether there is one (#53).
+	owner domain.SessionID
+	live  bool
+	// worktree is the worktree of that repository where the check commands
+	// run: the one at the head of the execution's own session and its
+	// resolve worker, else the owner's, else the execution's own; empty when
+	// AO recorded none.
 	worktree string
-	live     bool
+	// ignore are the project's globs whose files never count as an overlap
+	// with the base.
+	ignore []string
 	// headMissing says that the repository lacks the head and LADO could
 	// not fetch it (ensureHead).
 	headMissing bool
@@ -71,6 +86,9 @@ type headInputs struct {
 	// target is the branch the PR merges into. baseBranch and baseRemote are
 	// the base the dispatcher resolved, else the target on origin.
 	target, baseBranch, baseRemote string
+	// baseTip is the remote-tracking target's commit right after an
+	// approval fetched it (verifyOptions.fetchBase), empty when git has none.
+	baseTip string
 }
 
 // validatorSet is what a rule snapshot's validators turn on: the Korean
@@ -115,20 +133,33 @@ type evaluation struct {
 // opts.startWork the fix requests of items that fail now go out first. The
 // head's evidence links are replaced when the evidence item changed.
 func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opts verifyOptions) (domain.LadoVerification, error) {
+	record, _, err := s.verifyHeadIn(ctx, exec, opts)
+	return record, err
+}
+
+// verifyHeadIn is verifyHead, which also returns the inputs it read.
+func (s *Service) verifyHeadIn(ctx context.Context, exec domain.LadoExecution, opts verifyOptions) (domain.LadoVerification, headInputs, error) {
 	s.verifyMu.Lock()
 	defer s.verifyMu.Unlock()
 	in, err := s.headInputs(ctx, exec)
 	if err != nil {
-		return domain.LadoVerification{}, err
+		return domain.LadoVerification{}, in, err
 	}
-	if opts.fetchBase {
-		s.fetchBase(ctx, in)
+	switch {
+	case opts.fetchBase:
+		s.fetchBase(ctx, in, true)
+		if in.baseTip, err = s.remoteTip(ctx, in); err != nil {
+			s.deps.Log.Warn("LADO could not read the remote base branch it fetched", "session", exec.SessionID,
+				"remote", in.baseRemote, "branch", in.target, "err", redactedErrorLine(err))
+		}
+	case opts.loopFetch:
+		s.fetchBase(ctx, in, opts.forceFetch)
 	}
 	in.headMissing = !s.ensureHead(ctx, in, opts.fetchBase)
 	ev := s.evaluate(ctx, in, opts)
 	if ctx.Err() != nil {
 		// A stopping daemon leaves the stored record as it was.
-		return domain.LadoVerification{}, ctx.Err()
+		return domain.LadoVerification{}, in, ctx.Err()
 	}
 	now := s.now()
 	record := domain.LadoVerification{
@@ -142,7 +173,7 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 	}
 	previous, found, err := s.deps.Store.GetLadoVerification(ctx, exec.SessionID, in.head)
 	if err != nil {
-		return domain.LadoVerification{}, fmt.Errorf("read the record of head %s: %w", in.head, err)
+		return domain.LadoVerification{}, in, fmt.Errorf("read the record of head %s: %w", in.head, err)
 	}
 	if found && previous.Notified != nil {
 		record.Notified = previous.Notified
@@ -152,7 +183,7 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 			ev.links[i].ID, ev.links[i].CreatedAt = "lado-evidence-"+s.deps.NewID(), now
 		}
 		if err := s.deps.Store.ReplaceLadoEvidenceLinks(ctx, exec.SessionID, in.head, ev.links); err != nil {
-			return domain.LadoVerification{}, fmt.Errorf("store the evidence links of head %s: %w", in.head, err)
+			return domain.LadoVerification{}, in, fmt.Errorf("store the evidence links of head %s: %w", in.head, err)
 		}
 	}
 	if opts.startWork {
@@ -160,10 +191,10 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 		record.Notified = s.requestPull(ctx, in, record.Notified)
 	}
 	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
-		return domain.LadoVerification{}, fmt.Errorf("store the record of head %s: %w", in.head, err)
+		return domain.LadoVerification{}, in, fmt.Errorf("store the record of head %s: %w", in.head, err)
 	}
 	s.markVerified(ctx, record)
-	return record, nil
+	return record, in, nil
 }
 
 // headInputs reads the inputs of the execution's PR head. Without its task,
@@ -192,6 +223,11 @@ func (s *Service) headInputs(ctx context.Context, exec domain.LadoExecution) (he
 		return in, fmt.Errorf("read the project's check commands: %w", err)
 	}
 	in.commands, in.timeout = commands, time.Duration(minutes)*time.Minute
+	settings, err := s.deps.Store.LadoProjectSettings(ctx, task.ProjectID)
+	if err != nil {
+		return in, fmt.Errorf("read the project's LADO settings: %w", err)
+	}
+	in.ignore = settings.OverlapIgnoreOrDefault()
 	in.target = cmp.Or(exec.PR.TargetBranch, exec.BaseBranch)
 	in.baseBranch = cmp.Or(exec.BaseBranch, in.target)
 	in.baseRemote = cmp.Or(exec.BaseRemote, "origin")
@@ -233,14 +269,57 @@ func (s *Service) readPlaces(ctx context.Context, in *headInputs) error {
 		}
 		in.dir, in.prefix = filepath.Join(project.Path, filepath.FromSlash(relative)), filepath.ToSlash(relative)
 	}
+	return s.readOwner(ctx, in, relative)
+}
+
+// readOwner finds the session that takes the head's requests and the
+// worktree where its check commands run (headInputs.owner and worktree).
+func (s *Service) readOwner(ctx context.Context, in *headInputs, relative string) error {
+	worktreeOf := func(session domain.SessionRecord) string {
+		if session.Metadata.WorkspacePath == "" {
+			return ""
+		}
+		return filepath.Join(session.Metadata.WorkspacePath, filepath.FromSlash(relative))
+	}
 	session, ok, err := s.deps.Sessions.GetSession(ctx, in.exec.SessionID)
 	if err != nil {
 		return fmt.Errorf("read the worker session: %w", err)
 	}
-	if ok && session.Metadata.WorkspacePath != "" {
-		in.worktree = filepath.Join(session.Metadata.WorkspacePath, filepath.FromSlash(relative))
+	own := ""
+	if ok {
+		own = worktreeOf(session)
+		if domain.LadoSessionLive(session) && !in.exec.SessionTerminated {
+			in.owner = in.exec.SessionID
+		}
 	}
-	in.live = ok && !session.IsTerminated && !in.exec.SessionTerminated
+	trees := []string{own}
+	if id := in.exec.Resolve.SessionID; id != "" && id != in.exec.SessionID {
+		worker, ok, err := s.deps.Sessions.GetSession(ctx, id)
+		if err != nil {
+			return fmt.Errorf("read the resolve worker session: %w", err)
+		}
+		if ok {
+			tree := worktreeOf(worker)
+			if in.owner == "" && domain.LadoSessionLive(worker) {
+				in.owner = id
+				// The owner's worktree comes first.
+				trees = []string{tree, own}
+			} else {
+				trees = append(trees, tree)
+			}
+		}
+	}
+	in.live = in.owner != ""
+	in.worktree = cmp.Or(trees...)
+	for _, tree := range trees {
+		if tree == "" || in.head == "" {
+			continue
+		}
+		if current, err := s.deps.Git.RevParse(ctx, tree, "HEAD"); err == nil && strings.EqualFold(current, in.head) {
+			in.worktree = tree
+			break
+		}
+	}
 	return nil
 }
 
@@ -345,7 +424,8 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 		{domain.LadoVerifyBaseBranch, func() (domain.LadoVerifyItem, error) {
 			return EvaluateBase(ctx, s.deps.Git, BaseInput{
 				Dir: in.dir, Branch: in.baseBranch, Remote: in.baseRemote, HeadSHA: in.head, StartedAt: in.exec.StartedAt,
-				DispatchLocalSHA: in.exec.DispatchLocalBaseSHA,
+				DispatchLocalSHA: in.exec.DispatchLocalBaseSHA, Target: in.target, Prefix: in.prefix,
+				Affected: in.plan.AffectedPaths, Ignore: in.ignore,
 			})
 		}},
 		{domain.LadoVerifyProtection, func() (domain.LadoVerifyItem, error) {
@@ -421,15 +501,60 @@ func headKey(session domain.SessionID, head string) string {
 
 // fetchBase brings the remote-tracking base branch, and the PR's target
 // when it is another branch, up to date in the repository that holds the
-// issue. A fetch that fails is logged: the items then compare with what the
-// last fetch brought.
-func (s *Service) fetchBase(ctx context.Context, in headInputs) {
+// issue: each at most every baseFetchEvery unless force, within
+// baseFetchTimeout. A fetch that fails is logged: the items then compare
+// with what the last fetch brought.
+func (s *Service) fetchBase(ctx context.Context, in headInputs, force bool) {
 	for _, branch := range slices.Compact([]string{in.baseBranch, in.target}) {
-		if err := s.deps.Git.Fetch(ctx, in.dir, in.baseRemote, branch); err != nil {
+		if !s.fetchDue(fetchKey(in.dir, in.baseRemote, branch), force) {
+			continue
+		}
+		if err := s.fetchBranch(ctx, in.dir, in.baseRemote, branch); err != nil {
 			s.deps.Log.Warn("LADO could not fetch the base branch; it compares with the last fetch", "session", in.exec.SessionID,
 				"remote", in.baseRemote, "branch", branch, "err", redactedErrorLine(err))
 		}
 	}
+}
+
+// fetchBranch fetches remote's branch into dir within baseFetchTimeout.
+func (s *Service) fetchBranch(ctx context.Context, dir, remote, branch string) error {
+	ctx, cancel := context.WithTimeout(ctx, baseFetchTimeout)
+	defer cancel()
+	return s.deps.Git.Fetch(ctx, dir, remote, branch)
+}
+
+// fetchKey names one branch of one remote of a repository.
+func fetchKey(dir, remote, branch string) string {
+	return dir + "\x00" + remote + "\x00" + branch
+}
+
+// fetchDue reports whether the branch at key is to be fetched now, and if
+// so notes the fetch: always with force, else when the last fetch is
+// baseFetchEvery old or older.
+func (s *Service) fetchDue(key string, force bool) bool {
+	now := s.now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if last, ok := s.baseFetched[key]; ok && !force && now.Sub(last) < baseFetchEvery {
+		return false
+	}
+	for other, at := range s.baseFetched {
+		if now.Sub(at) >= baseFetchEvery {
+			delete(s.baseFetched, other)
+		}
+	}
+	s.baseFetched[key] = now
+	return true
+}
+
+// remoteTip returns the commit of the remote-tracking target branch, empty
+// when git has no such ref.
+func (s *Service) remoteTip(ctx context.Context, in headInputs) (string, error) {
+	tip, err := s.deps.Git.RevParse(ctx, in.dir, "refs/remotes/"+in.baseRemote+"/"+in.target)
+	if errors.Is(err, ErrRefNotFound) {
+		return "", nil
+	}
+	return tip, err
 }
 
 // verifyingItem is an item LADO could not compute this time: it waits.
@@ -734,8 +859,8 @@ func (s *Service) requestPull(ctx context.Context, in headInputs, notified []str
 	message := fmt.Sprintf("LADO checks head %s of your pull request, which was made on the host, for example by Update branch or an applied suggestion. "+
 		"Your worktree is at %s, which the head builds on. Pull your branch so that your worktree is at the head: "+
 		"LADO runs the project's check commands there. If you change anything after that, push again.", shortCommit(in.head), shortCommit(current))
-	if err := s.deps.Sender.Send(ctx, in.exec.SessionID, message); err != nil {
-		s.deps.Log.Warn("LADO could not ask a worker to pull its branch; it tries again", "session", in.exec.SessionID, "head", in.head, "err", err)
+	if err := s.deps.Sender.Send(ctx, in.owner, message); err != nil {
+		s.deps.Log.Warn("LADO could not ask a worker to pull its branch; it tries again", "session", in.owner, "head", in.head, "err", err)
 		return notified
 	}
 	return append(slices.Clone(notified), domain.LadoNotifiedWorktreeBehind)

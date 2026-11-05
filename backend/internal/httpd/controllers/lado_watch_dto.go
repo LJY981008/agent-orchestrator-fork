@@ -61,9 +61,9 @@ type LadoAlertResponse struct {
 	SessionID      string     `json:"sessionId" description:"The session; empty for an alert of the task's total or of the task itself."`
 	ProjectID      string     `json:"projectId"`
 	IssueRef       string     `json:"issueRef"`
-	Kind           string     `json:"kind" enum:"task_cost,session_cost,session_compactions,limited,limit_resumed,stall_nudged,stalled,agent_unavailable"`
+	Kind           string     `json:"kind" enum:"task_cost,session_cost,session_compactions,limited,limit_resumed,stall_nudged,stalled,agent_unavailable,conflict_unresolved"`
 	Level          int        `json:"level" description:"1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed, the stop's for limited and the stall's for stalled; otherwise 1."`
-	Value          int64      `json:"value" description:"Cents for a cost, a count for compactions, minutes for a stall, the reset's Unix seconds for limited."`
+	Value          int64      `json:"value" description:"Cents for a cost, a count for compactions, minutes for a stall, the reset's Unix seconds for limited, the failed resolve workers in a row for conflict_unresolved."`
 	Threshold      int64      `json:"threshold" description:"The threshold the value is held against, in the value's unit; 0 when there is none."`
 	Line           string     `json:"line" description:"The alert's one line, as the orchestrator gets it."`
 	NotificationID string     `json:"notificationId" description:"The desktop notification id: lado-alert:<id>."`

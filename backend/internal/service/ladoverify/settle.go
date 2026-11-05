@@ -44,6 +44,11 @@ func (s *Service) settle(ctx context.Context, exec domain.LadoExecution) error {
 		return fmt.Errorf("settle the execution: %w", err)
 	}
 	s.storeEntryMetrics(ctx, exec)
+	if exec.PR.Merged {
+		// The merge moved the target: the other open executions into it
+		// check their heads against it on the next pass (#53).
+		s.markUrgent(ctx, exec)
+	}
 	if audit != nil {
 		s.deps.Log.Warn("LADO saw a pull request merged without an integration approval", "task", exec.TaskID, "session", exec.SessionID, "pr", exec.PR.URL, "head", exec.PR.HeadSHA)
 	}

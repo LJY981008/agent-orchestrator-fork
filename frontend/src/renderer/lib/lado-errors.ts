@@ -200,6 +200,8 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_INTEGRATION_HEAD_CHANGED: "lado.error.integrationHeadChanged",
 	LADO_VERIFICATION_CHANGED: "lado.error.verificationChanged",
 	LADO_INTEGRATION_ALREADY_APPROVED: "lado.error.integrationAlreadyApproved",
+	// The base moved under the head with a change to the same paths (#53).
+	LADO_INTEGRATION_REVOKED: "lado.error.integrationRevoked",
 	LADO_INTEGRATION_ACK_MISMATCH: "lado.error.integrationAckMismatch",
 	LADO_VERIFY_UNAVAILABLE: "lado.error.verifyUnavailable",
 	LADO_VERIFY_FAILED: "lado.error.internal",
@@ -544,6 +546,12 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	changes_requested: "lado.reason.changes_requested",
 	status_not_posted: "lado.reason.status_not_posted",
 	merged_without_approval: "lado.reason.merged_without_approval",
+	// An open PR that conflicts, or whose base moved under its head with a
+	// change to the same paths, and LADO's resolve workers (#53).
+	base_overlap: "lado.reason.base_overlap",
+	merge_conflict: "lado.reason.merge_conflict",
+	resolving: "lado.reason.resolving",
+	conflict_unresolved: "lado.reason.conflict_unresolved",
 };
 
 /**

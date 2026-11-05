@@ -125,7 +125,7 @@ func (s *Service) admit(ctx context.Context, now time.Time, settings domain.Lado
 			}
 			continue
 		}
-		if _, err := s.dispatch(ctx, entry, settings, load, now); err != nil {
+		if _, err := s.dispatch(ctx, entry, settings, now); err != nil {
 			problems = append(problems, fmt.Errorf("queue entry %s: %w", entry.ID, err))
 		}
 	}

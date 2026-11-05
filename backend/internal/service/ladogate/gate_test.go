@@ -559,3 +559,33 @@ func TestAuthorizeSpawnGrantsOnlyThePartsRunStartInProgress(t *testing.T) {
 		requireRefusal(t, gate.AuthorizeSpawn(context.Background(), cfg), "LADO_TASK_REQUIRED")
 	}
 }
+
+// A resolve worker (part "_resolve") starts through the grant of its start
+// in progress, as a part does; another attempt, an expired grant and another
+// hash do not.
+func TestAuthorizeSpawnGrantsTheResolveStartInProgress(t *testing.T) {
+	now := time.Now()
+	granted := domain.LadoResolveClientRequestID("entry-1", 1)
+	expired := domain.LadoResolveClientRequestID("entry-2", 1)
+	grants := fakeGrants{parts: map[string]fakeLease{
+		granted: {project: "lado", hash: "hash-1", leaseUntil: now.Add(time.Hour)},
+		expired: {project: "lado", hash: "hash-2", leaseUntil: now.Add(-time.Minute)},
+	}}
+	gate := ladogate.New(ladoProject(), fakeSessions{}, grants, fakePolicies{}, fakeExecutions{})
+	worker := func(id, hash string) ports.SpawnConfig {
+		return ports.SpawnConfig{ProjectID: "lado", Kind: domain.KindWorker, Prompt: "resolve", ClientRequestID: id, ClientRequestHash: hash}
+	}
+	if granted != "lado:entry-1/_resolve/1" {
+		t.Fatalf("resolve client request id = %q", granted)
+	}
+	if err := gate.AuthorizeSpawn(context.Background(), worker(granted, "hash-1")); err != nil {
+		t.Fatalf("AuthorizeSpawn(%s) = %v, want the resolve start granted", granted, err)
+	}
+	for _, cfg := range []ports.SpawnConfig{
+		worker(domain.LadoResolveClientRequestID("entry-1", 2), "hash-1"),
+		worker(expired, "hash-2"),
+		worker(granted, "hash-2"),
+	} {
+		requireRefusal(t, gate.AuthorizeSpawn(context.Background(), cfg), "LADO_TASK_REQUIRED")
+	}
+}

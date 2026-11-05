@@ -148,6 +148,16 @@ const (
 	// LadoCompletedWithoutApproval means the PR merged a head that had no
 	// integration approval.
 	LadoCompletedWithoutApproval = "merged_without_approval"
+	// LadoValidatingMergeConflict means the open PR conflicts with the
+	// branch it merges into.
+	LadoValidatingMergeConflict = "merge_conflict"
+	// LadoValidatingResolving means a LADO resolve worker takes the base
+	// into the PR's branch, its run's own session having ended.
+	LadoValidatingResolving = "resolving"
+	// LadoValidatingConflictUnresolved means LADO's resolve workers failed
+	// LadoMaxResolveAttempts times in a row, or one asked for a person: the
+	// owner resolves the PR.
+	LadoValidatingConflictUnresolved = "conflict_unresolved"
 )
 
 // State derives the task's state now, as StateAt does.
@@ -159,7 +169,10 @@ func (t LadoTask) State() LadoTaskState {
 // After dispatch its execution decides: Completed once the PR merged, Closed
 // unmerged once the PR closed without a merge, Failed when the run timed out
 // or its session ended without a PR, and Running while it has no PR. With
-// its PR open, the PR's current head decides: Integrating once it has an
+// its PR open, a conflict LADO's resolve workers could not resolve, one they
+// resolve, a conflict and a base that moved under the head with a change to
+// the same paths keep it Validating, in that order and even when the head
+// was approved. Otherwise the PR's current head decides: Integrating once it has an
 // integration approval, Integration pending once its verification record
 // passes or needs confirming, and Validating while it has no record or one
 // that waits or fails. A failed run leaves a task whose issue is closed
@@ -183,6 +196,8 @@ func (t LadoTask) StateAt(now time.Time) LadoTaskState {
 // review (LadoReview*), what blocks it (LadoBlocked*), why it failed
 // (LadoFailed*), why its queue entry waits (LadoWaiting*), what its PR's
 // head waits for or fails on (LadoValidatingVerifying or a LadoCode*), that
+// the PR conflicts or LADO resolves it (LadoValidatingMergeConflict,
+// LadoValidatingResolving, LadoValidatingConflictUnresolved), that
 // the approved head's commit status is not posted
 // (LadoIntegratingStatusNotPosted), or that the merged head had no
 // integration approval (LadoCompletedWithoutApproval). Other states have
@@ -286,8 +301,25 @@ func (e LadoExecution) taskState() (LadoTaskState, string) {
 	case e.PR.URL == "":
 		return LadoTaskRunning, ""
 	}
-	// The PR is open: its current head decides. A record of another head
-	// says nothing about this one.
+	// The PR is open. A conflict with its base, or a base that moved under
+	// its head with a change to the same paths, comes before an approval:
+	// the head has to take in the base, so the approval no longer merges.
+	overlap := e.Verification.BaseOverlap && e.Verification.HeadSHA == e.PR.HeadSHA
+	conflicting := e.PR.Mergeability == MergeConflicting
+	switch {
+	// A person resolves once the workers gave up, while the PR still
+	// conflicts or its head still overlaps the base.
+	case e.Resolve.State == LadoResolveNeedsHuman && (conflicting || overlap):
+		return LadoTaskValidating, LadoValidatingConflictUnresolved
+	case e.Resolve.State == LadoResolveResolving:
+		return LadoTaskValidating, LadoValidatingResolving
+	case conflicting:
+		return LadoTaskValidating, LadoValidatingMergeConflict
+	case overlap:
+		return LadoTaskValidating, LadoCodeBaseOverlap
+	}
+	// Otherwise its current head decides. A record of another head says
+	// nothing about this one.
 	v := e.Verification
 	switch {
 	case e.Integration.HeadApproved && e.Integration.StatusState == LadoIntegrationStatusFailed:

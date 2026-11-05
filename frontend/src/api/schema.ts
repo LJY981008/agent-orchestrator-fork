@@ -6771,7 +6771,7 @@ export interface components {
             id: number;
             issueRef: string;
             /** @enum {string} */
-            kind: "task_cost" | "session_cost" | "session_compactions" | "limited" | "limit_resumed" | "stall_nudged" | "stalled" | "agent_unavailable";
+            kind: "task_cost" | "session_cost" | "session_compactions" | "limited" | "limit_resumed" | "stall_nudged" | "stalled" | "agent_unavailable" | "conflict_unresolved";
             /** @description 1 past a cost threshold, 2 past twice it; the resume's number for limit_resumed, the stop's for limited and the stall's for stalled; otherwise 1. */
             level: number;
             /** @description The alert's one line, as the orchestrator gets it. */
@@ -6794,7 +6794,7 @@ export interface components {
             threshold: number;
             /**
              * Format: int64
-             * @description Cents for a cost, a count for compactions, minutes for a stall, the reset's Unix seconds for limited.
+             * @description Cents for a cost, a count for compactions, minutes for a stall, the reset's Unix seconds for limited, the failed resolve workers in a row for conflict_unresolved.
              */
             value: number;
         };
@@ -7044,6 +7044,11 @@ export interface components {
             closed: boolean;
             /** @description The PR's head as AO last observed it, which LADO verifies; omitted until AO observed it. */
             headSha?: string;
+            /**
+             * @description Whether the host can merge the PR into its target as AO last observed it.
+             * @enum {string}
+             */
+            mergeability?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
             merged: boolean;
             number: number;
             /** @description The branch the PR merges into. */
@@ -7058,6 +7063,19 @@ export interface components {
             revisionId: string;
             /** @description Hash of the approved plan file. */
             sha256: string;
+        };
+        LadoExecutionResolveResponse: {
+            /** @description Resolve workers that failed in a row; a resolved PR starts again from 0. */
+            attempts: number;
+            /** @description The last failure, without secrets. */
+            error?: string;
+            /** @description The newest resolve worker's AO session. */
+            sessionId?: string;
+            /**
+             * @description resolving: a resolve worker runs, or LADO waits for its push to show; needs_human: the workers failed twice in a row, or one asked for a person. Omitted when none runs and none gave up.
+             * @enum {string}
+             */
+            state?: "resolving" | "needs_human";
         };
         LadoExecutionResponse: {
             /** @description The attempt that started the worker, from 1. */
@@ -7077,6 +7095,8 @@ export interface components {
             plan: components["schemas"]["LadoExecutionPlanResponse"];
             /** @description The newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
+            /** @description What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed. */
+            resolve?: components["schemas"]["LadoExecutionResolveResponse"];
             /**
              * @description What the worker does in a task split into parts: one part, the merge of one part, or the integration that opens the pull request; omitted for a task's one worker.
              * @enum {string}
@@ -7096,7 +7116,7 @@ export interface components {
              * @description Why the run is in its state, as the task's stateReason says it.
              * @enum {string}
              */
-            stateReason?: "timed_out" | "ended_without_pr" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
+            stateReason?: "timed_out" | "ended_without_pr" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
             task: components["schemas"]["LadoExecutionTaskResponse"];
             /**
              * Format: date-time
@@ -8479,10 +8499,10 @@ export interface components {
              */
             state: "draft" | "planned" | "review_required" | "blocked" | "approved" | "queued" | "dispatching" | "running" | "validating" | "integration_pending" | "integrating" | "failed" | "completed" | "cancelled" | "closed_unmerged";
             /**
-             * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
+             * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, conflict_unresolved when LADO's resolve workers could not resolve the open PR, resolving while one takes the base into it, merge_conflict while the PR conflicts with its base and base_overlap when the base moved under the head with a change to the same paths, all four before an approval; else verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
         };
         LadoTaskTimelineResponse: {
             approvals: number;
@@ -8645,7 +8665,7 @@ export interface components {
              * @description The code of the first item that fails, else of the first that waits; omitted otherwise.
              * @enum {string}
              */
-            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "review_pending" | "changes_requested";
+            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "base_overlap" | "review_pending" | "changes_requested";
             /** @description The record's hash, which an integration approval signs as verificationSha256. */
             sha256: string;
         };
@@ -8683,6 +8703,10 @@ export interface components {
             subject: string;
         };
         LadoVerifyItemDetailsResponse: {
+            /** @description base_branch: the remote base branch moved past the head's merge base. */
+            advanced?: boolean;
+            /** @description base_branch: the remote base branch's commit LADO compared the head with. */
+            advancedTip?: string;
             /** @description base_branch: the remote base held the head before any approval. */
             alreadyOnBase?: boolean;
             /** @description base_branch and protection: the base branch. */
@@ -8718,6 +8742,10 @@ export interface components {
             outsideCount?: number;
             /** @description paths: the first 50 changed paths no affected_paths entry matches. */
             outsidePlan?: string[];
+            /** @description base_branch: the first files changed on the remote base branch since the head's merge base that the head changed or the plan names. */
+            overlap?: string[];
+            /** @description base_branch: how many files changed on the remote base branch overlap the head or the plan. */
+            overlapCount?: number;
             /** @description commit_messages: the PR title. */
             prTitle?: components["schemas"]["LadoVerifyTextResponse"];
             /** @description paths: changed paths a protected glob matches that the plan does not name. */
@@ -8748,10 +8776,10 @@ export interface components {
         };
         LadoVerifyItemResponse: {
             /**
-             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone.
+             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone; base_advanced: the remote base branch moved past the head's merge base without touching its files; base_overlap: it moved with a change to files the head changed or the plan names, so the head must take in the base.
              * @enum {string}
              */
-            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
+            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "base_advanced" | "base_overlap" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
             details: components["schemas"]["LadoVerifyItemDetailsResponse"];
             /** @enum {string} */
             kind: "required_checks" | "commands" | "commit_messages" | "paths" | "base_branch" | "protection" | "review" | "evidence";

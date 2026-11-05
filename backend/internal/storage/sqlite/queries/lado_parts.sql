@@ -200,13 +200,16 @@ ORDER BY t.project_id, t.id;
 
 -- name: CountLiveLadoWorkers :one
 -- What takes a worker slot: live execution sessions of every role, active
--- leases, and parts run workers the dispatcher is starting. A worker that
--- started but is not linked yet counts twice for a moment, never not at all.
+-- leases, and parts run and resolve workers the dispatcher is starting. A
+-- worker that started but is not linked yet counts twice for a moment, never
+-- not at all.
 SELECT
     (SELECT COUNT(*) FROM lado_executions e JOIN sessions s ON s.id = e.session_id WHERE s.is_terminated = 0)
     + (SELECT COUNT(*) FROM lado_queue_entries q WHERE q.lease_token IS NOT NULL AND q.lease_expires_at > sqlc.arg(now))
     + (SELECT COUNT(*) FROM lado_queue_entries q
-        WHERE q.part_spawn_request <> '' AND q.part_spawn_expires_at > sqlc.arg(now)) AS live;
+        WHERE q.part_spawn_request <> '' AND q.part_spawn_expires_at > sqlc.arg(now))
+    + (SELECT COUNT(*) FROM lado_pr_resolves r
+        WHERE r.spawn_request <> '' AND r.spawn_expires_at > sqlc.arg(now)) AS live;
 
 -- name: GetLadoPartSpawnGrant :one
 -- The entry whose current parts run spawn is the client request id, with

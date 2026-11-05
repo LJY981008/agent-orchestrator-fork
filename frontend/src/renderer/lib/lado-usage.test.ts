@@ -61,6 +61,9 @@ describe("LADO usage text", () => {
 		);
 		expect(ladoAlertText(t, ladoAlert({ kind: "stalled", value: 120 }), "en")).toBe("Worker quiet for over 120 min");
 		expect(ladoAlertText(t, ladoAlert({ kind: "agent_unavailable" }), "en")).toContain("LADO holds the new worker");
+		expect(ladoAlertText(t, ladoAlert({ kind: "conflict_unresolved", value: 2 }), "en")).toBe(
+			"Resolve workers failed 2 times in a row; resolve the conflict yourself",
+		);
 		// A kind from a newer daemon reads as its own line.
 		expect(ladoAlertText(t, ladoAlert({ kind: "future" as LadoAlert["kind"] }), "en")).toBe(ladoAlert().line);
 	});
