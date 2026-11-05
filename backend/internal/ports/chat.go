@@ -488,6 +488,13 @@ type MessageDeliveryOptions struct {
 	// SenderSessionID is cooperative local identity, resolved from stored metadata.
 	SenderSessionID string
 	AuthoredByUser  bool
+	// SenderDisplayName labels a message AO delivers on its own behalf, with
+	// no sender session. Chat stores it on the message only when
+	// SenderSessionID is empty; a session's label always comes from the
+	// session. It is never an authorship fact: the LADO gate reads only
+	// SenderSessionID and AuthoredByUser. LADO fork: LADO's relay of a
+	// developer's instruction to a worker sets it (docs/LJY-PRD/TDD.md §6.3).
+	SenderDisplayName string
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the
