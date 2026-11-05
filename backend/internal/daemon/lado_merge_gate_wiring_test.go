@@ -3,10 +3,12 @@ package daemon
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -132,12 +134,125 @@ func TestInstallLadoMergeGateGuardsAOsMerge(t *testing.T) {
 	}
 }
 
+// #64: a task whose merge requests are in two child repositories of a
+// workspace. The loop pins both from LADO's store, back first as the plan
+// orders, and AO's merge gate lets front merge only once back merged.
+func TestLadoMergeGateKeepsTheOrderOfATasksPRs(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	useLadoStoredTokens(t, nil)
+	cfg := config.Config{DataDir: t.TempDir(), StateDir: t.TempDir()}
+	store := sqlitetest.MustOpen(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	worker := seedLadoVerifyExecutionWith(t, store, cfg, at, domain.LadoExecution{PRRepos: []string{"back", "front"}})
+	root := t.TempDir()
+	tips := map[string]string{}
+	for _, name := range []string{"back", "front"} {
+		_, tips[name] = ladoGateRepoAt(t, root, name)
+	}
+	if err := store.UpsertWorkspaceProject(ctx, domain.ProjectRecord{ID: "mer", Path: root, Kind: domain.ProjectKindWorkspace, RegisteredAt: at}, []domain.WorkspaceRepoRecord{
+		{ProjectID: "mer", Name: "back", RelativePath: "back", RepoOriginURL: "https://gitlab.com/acme/back.git", DefaultBranch: "main"},
+		{ProjectID: "mer", Name: "front", RelativePath: "front", RepoOriginURL: "https://gitlab.com/acme/front.git", DefaultBranch: "main"},
+	}); err != nil {
+		t.Fatalf("make the project a workspace: %v", err)
+	}
+	type mr struct {
+		url, repo, head string
+		number          int
+	}
+	back := mr{"https://gitlab.com/acme/back/-/merge_requests/1", "back", strings.Repeat("b1", 20), 1}
+	front := mr{"https://gitlab.com/acme/front/-/merge_requests/2", "front", strings.Repeat("f1", 20), 2}
+	write := func(m mr, updated time.Time, merged bool) {
+		t.Helper()
+		if err := store.WriteSCMObservation(ctx, domain.PullRequest{
+			URL: m.url, SessionID: worker, Number: m.number, HeadSHA: m.head, TargetBranch: "main", Title: "로그인을 더한다", UpdatedAt: updated,
+			Provider: "gitlab", Host: "gitlab.com", Repo: "acme/" + m.repo, Merged: merged,
+		}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatalf("write the merge request: %v", err)
+		}
+	}
+	write(back, at, false)
+	write(front, at.Add(time.Second), false)
+
+	verify := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler)).verify
+	// The heads are not in the repositories, so their records wait; the
+	// pass pins the merge requests first.
+	_ = verify.Tick(ctx)
+	exec, ok, err := store.LadoExecution(ctx, worker)
+	if err != nil || !ok {
+		t.Fatalf("LadoExecution = %v, %v", ok, err)
+	}
+	var tracked []string
+	for _, pr := range exec.PRs {
+		tracked = append(tracked, fmt.Sprintf("%s@%s#%d", pr.PR.URL, pr.Repo, pr.Position))
+	}
+	if want := []string{back.url + "@back#0", front.url + "@front#1"}; !slices.Equal(tracked, want) || exec.PR.URL != back.url {
+		t.Fatalf("tracked = %v with %s first, want %v", tracked, exec.PR.URL, want)
+	}
+
+	// Both heads are approved.
+	var items []domain.LadoVerifyItem
+	for _, kind := range domain.LadoVerifyKinds() {
+		item, err := domain.NewLadoVerifyItem(kind, domain.LadoVerifyPass, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, item)
+	}
+	var approvals []domain.LadoIntegrationApproval
+	for i, m := range []mr{back, front} {
+		record := domain.LadoVerification{ExecutionSessionID: worker, HeadSHA: m.head, PRURL: m.url, Items: items, ComputedAt: at}
+		sum, err := record.SHA256()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.UpsertLadoVerification(ctx, record); err != nil {
+			t.Fatalf("UpsertLadoVerification: %v", err)
+		}
+		approvals = append(approvals, domain.LadoIntegrationApproval{
+			ID: fmt.Sprintf("lado-integration-%d", i), ExecutionSessionID: worker, PRURL: m.url, HeadSHA: m.head, TargetBranch: "main", VerificationSHA256: sum,
+			Actor: "human", ApprovedAt: at, StatusState: domain.LadoIntegrationStatusNotApplicable, BaseTipSHA: tips[m.repo],
+		})
+	}
+	proof := domain.LadoPresenceProof{Nonce: "CCCCCCCCCCCCCCCCCCCCCC", Action: domain.LadoPresenceIntegrationApprove,
+		SubjectID: string(worker) + "@" + back.head + "," + front.head, ExpiresAt: at.Add(time.Minute), UsedAt: at}
+	if err := store.ApproveLadoIntegrations(ctx, approvals, proof, domain.LadoAuditEvent{
+		At: at, Actor: "human", Action: "integration.approved", SubjectKind: "execution", SubjectID: string(worker), Payload: []byte("{}"),
+	}); err != nil {
+		t.Fatalf("ApproveLadoIntegrations: %v", err)
+	}
+
+	gate := func(m mr) error {
+		return verify.AuthorizeMerge(ctx, domain.PullRequest{URL: m.url, SessionID: worker, Number: m.number, TargetBranch: "main"}, m.head)
+	}
+	var apiErr *apierr.Error
+	if err := gate(front); !errors.As(err, &apiErr) || apiErr.Code != "LADO_INTEGRATION_MERGE_ORDER" {
+		t.Fatalf("merge front before back = %v, want LADO_INTEGRATION_MERGE_ORDER", err)
+	}
+	if waiting, _ := apiErr.Details["waitingFor"].([]string); !slices.Equal(waiting, []string{back.url}) {
+		t.Errorf("front waits for %v, want back", apiErr.Details["waitingFor"])
+	}
+	if err := gate(back); err != nil {
+		t.Fatalf("merge back = %v, want allowed", err)
+	}
+	write(back, at.Add(2*time.Second), true)
+	if err := gate(front); err != nil {
+		t.Fatalf("merge front once back merged = %v, want allowed", err)
+	}
+}
+
 // ladoGateRepo makes a bare origin with one commit on main and a clone of it,
 // and returns the clone and main's commit.
 func ladoGateRepo(t *testing.T) (string, string) {
 	t.Helper()
-	root := t.TempDir()
-	origin, dir := filepath.Join(root, "origin.git"), filepath.Join(root, "app")
+	return ladoGateRepoAt(t, t.TempDir(), "app")
+}
+
+// ladoGateRepoAt is ladoGateRepo with the clone at root/name, its origin
+// beside it.
+func ladoGateRepoAt(t *testing.T, root, name string) (string, string) {
+	t.Helper()
+	origin, dir := filepath.Join(root, name+".git"), filepath.Join(root, name)
 	ladoGit(t, root, "init", "-q", "--bare", "-b", "main", origin)
 	ladoGit(t, root, "clone", "-q", origin, dir)
 	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# app\n"), 0o644); err != nil {
