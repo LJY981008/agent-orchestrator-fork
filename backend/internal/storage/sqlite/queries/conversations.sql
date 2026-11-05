@@ -187,6 +187,86 @@ WHERE parent_branch_id IS NULL
         )
   );
 
+-- name: ClearedBranchUntouched :one
+-- Proves that the active branch a Chat /clear created has recorded nothing
+-- since the clear, so a provider that never persisted its conversation can be
+-- moved to a fresh one without dropping history. The only row allowed on the
+-- branch is the /clear boundary activity (named by boundary_provider_item_id);
+-- the boundary write may also be missing. Edit branches (replaced_turn_id set)
+-- never qualify. Rows are not the whole proof: latest_sequence must not pass
+-- the boundary row (or the fork point when there is none), so a row that was
+-- hidden or removed after the clear still counts. Provider events are not part
+-- of the proof: ACP may send config notifications right after session/new and
+-- before any prompt, and they allocate no conversation sequence.
+-- ReplaceUntouchedClearedBranchProvider repeats this WHERE clause verbatim;
+-- keep the two in step.
+SELECT EXISTS (
+SELECT 1 FROM conversation_branches
+WHERE conversation_branches.id = sqlc.arg(branch_id)
+  AND conversation_branches.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_branches.parent_branch_id IS NOT NULL
+  AND conversation_branches.replaced_turn_id IS NULL
+  AND conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
+  AND EXISTS (
+      SELECT 1 FROM conversations AS c
+      WHERE c.id = conversation_branches.conversation_id
+        AND c.active_branch_id = conversation_branches.id
+        AND c.current_session_id = sqlc.arg(session_id)
+        AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
+        AND c.latest_sequence <= COALESCE((
+            SELECT boundary.sequence FROM conversation_activities AS boundary
+            WHERE boundary.branch_id = conversation_branches.id
+              AND boundary.provider_item_id = sqlc.arg(boundary_provider_item_id)
+        ), conversation_branches.fork_after_sequence)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS t WHERE t.branch_id = conversation_branches.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_messages AS m WHERE m.branch_id = conversation_branches.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_activities AS a
+      WHERE a.branch_id = conversation_branches.id
+        AND a.provider_item_id <> sqlc.arg(boundary_provider_item_id)
+  )
+);
+
+-- name: ReplaceUntouchedClearedBranchProvider :execrows
+-- Same proof as ClearedBranchUntouched. Rebinds the empty /clear branch to the
+-- fresh provider id and keeps its provider scope, which is part of the
+-- persistent provider host's identity.
+UPDATE conversation_branches
+SET provider_conversation_id = sqlc.arg(provider_conversation_id)
+WHERE conversation_branches.id = sqlc.arg(branch_id)
+  AND conversation_branches.conversation_id = sqlc.arg(conversation_id)
+  AND conversation_branches.parent_branch_id IS NOT NULL
+  AND conversation_branches.replaced_turn_id IS NULL
+  AND conversation_branches.provider_conversation_id = sqlc.arg(expected_provider_conversation_id)
+  AND EXISTS (
+      SELECT 1 FROM conversations AS c
+      WHERE c.id = conversation_branches.conversation_id
+        AND c.active_branch_id = conversation_branches.id
+        AND c.current_session_id = sqlc.arg(session_id)
+        AND (c.session_id = sqlc.arg(session_id) OR (c.scope = 'project' AND c.session_id IS NULL))
+        AND c.latest_sequence <= COALESCE((
+            SELECT boundary.sequence FROM conversation_activities AS boundary
+            WHERE boundary.branch_id = conversation_branches.id
+              AND boundary.provider_item_id = sqlc.arg(boundary_provider_item_id)
+        ), conversation_branches.fork_after_sequence)
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS t WHERE t.branch_id = conversation_branches.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_messages AS m WHERE m.branch_id = conversation_branches.id
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_activities AS a
+      WHERE a.branch_id = conversation_branches.id
+        AND a.provider_item_id <> sqlc.arg(boundary_provider_item_id)
+  );
+
 -- name: InsertConversationBranch :exec
 INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,

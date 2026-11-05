@@ -71,6 +71,14 @@ func ConversationContextResetProviderItemID(session SessionID) string {
 	return "ao-context-reset:" + string(session)
 }
 
+// ConversationClearBoundaryProviderItemID returns the durable identity of the
+// hidden activity a Chat /clear writes at the start of its new branch. It is
+// keyed on the branch too, so a retried write updates one row, and the store
+// can tell that boundary row apart from anything recorded after it.
+func ConversationClearBoundaryProviderItemID(session SessionID, branchID string) string {
+	return ConversationContextResetProviderItemID(session) + ":" + branchID
+}
+
 // TurnState is the lifecycle of one request and the agent work that follows it.
 type TurnState string
 

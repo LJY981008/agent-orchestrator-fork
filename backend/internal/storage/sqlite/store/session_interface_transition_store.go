@@ -348,8 +348,11 @@ func (s *Store) commitSessionControllerEpoch(
 
 // ReplaceUnpersistedChatProvider moves a Chat whose provider never persisted
 // its reserved conversation onto the fresh conversation the provider started
-// instead. The session and its untouched root branch move together; recorded
-// history or a different current owner fails the swap and changes nothing.
+// instead. The session and its untouched active branch move together: the empty
+// root, or else an empty branch a /clear created (ClearedBranchUntouched).
+// The session's agent_session_id follows when it still names the old id.
+// Recorded history or a different current owner fails the swap and changes
+// nothing.
 func (s *Store) ReplaceUnpersistedChatProvider(
 	ctx context.Context,
 	id domain.SessionID,
@@ -377,11 +380,48 @@ func (s *Store) ReplaceUnpersistedChatProvider(
 		if err != nil {
 			return fmt.Errorf("rebind root branch: %w", err)
 		}
+		if rebound == 0 {
+			rebound, err = replaceUntouchedClearedBranchProvider(ctx, q, id,
+				expectedProviderConversationID, providerConversationID)
+			if err != nil {
+				return err
+			}
+		}
 		if rebound != 1 {
-			return errors.New("empty root proof changed")
+			return errors.New("empty branch proof changed")
 		}
 		return nil
 	})
+}
+
+// replaceUntouchedClearedBranchProvider rebinds the session's active /clear
+// branch when it has recorded nothing since the clear. A session with no
+// conversation rebinds nothing.
+func replaceUntouchedClearedBranchProvider(
+	ctx context.Context,
+	q *gen.Queries,
+	id domain.SessionID,
+	expectedProviderConversationID, providerConversationID string,
+) (int64, error) {
+	conv, err := q.SelectConversationBySession(ctx, &id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("look up conversation: %w", err)
+	}
+	rebound, err := q.ReplaceUntouchedClearedBranchProvider(ctx, gen.ReplaceUntouchedClearedBranchProviderParams{
+		ProviderConversationID:         providerConversationID,
+		BranchID:                       conv.ActiveBranchID,
+		ConversationID:                 conv.ID,
+		ExpectedProviderConversationID: expectedProviderConversationID,
+		SessionID:                      &id,
+		BoundaryProviderItemID:         domain.ConversationClearBoundaryProviderItemID(id, conv.ActiveBranchID),
+	})
+	if err != nil {
+		return 0, fmt.Errorf("rebind cleared branch: %w", err)
+	}
+	return rebound, nil
 }
 
 // EnqueueSessionInterfaceTransitionMessage queues a user message while an interface transition is active.
