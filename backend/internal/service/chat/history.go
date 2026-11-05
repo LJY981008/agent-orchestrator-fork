@@ -1083,19 +1083,20 @@ func (s *Service) installStartedBranchController(
 		s.controllers[id] = replacement
 	}
 	if cfg, ok := s.startConfigs[owner]; ok {
-		cfg.ExpectedControllerOwner.Harness = cfg.Harness
-		cfg.ExpectedControllerOwner.Mode = domain.SessionModeChat
-		cfg.ExpectedControllerOwner.IsTerminated = false
-		cfg.ExpectedControllerOwner.RuntimeLaunchID = ""
 		if owner.Kind == domain.ConversationOwnerSession {
-			// Session branch activation also moves the native identity to the
-			// new provider conversation (ActivateConversationBranchSession).
-			// Without it the next replacement fails its browser capability fence.
-			cfg.ExpectedControllerOwner.AgentSessionID = replacement.ProviderConversationID()
-			cfg.ExpectedControllerOwner.AgentSessionIDLaunchID = ""
+			// Match the row ActivateConversationBranchSession wrote; a stale
+			// native identity fails the next replacement's capability fence.
+			cfg.ExpectedControllerOwner = cfg.ExpectedControllerOwner.ActivatedChatBranch(
+				cfg.Harness, replacement.ProviderConversationID(), replacement.Generation())
+		} else {
+			// Review owners never share the session row's native identity.
+			cfg.ExpectedControllerOwner.Harness = cfg.Harness
+			cfg.ExpectedControllerOwner.Mode = domain.SessionModeChat
+			cfg.ExpectedControllerOwner.IsTerminated = false
+			cfg.ExpectedControllerOwner.RuntimeLaunchID = ""
+			cfg.ExpectedControllerOwner.ProviderConversationID = replacement.ProviderConversationID()
+			cfg.ExpectedControllerOwner.ControllerGeneration = replacement.Generation()
 		}
-		cfg.ExpectedControllerOwner.ProviderConversationID = replacement.ProviderConversationID()
-		cfg.ExpectedControllerOwner.ControllerGeneration = replacement.Generation()
 		s.startConfigs[owner] = cfg
 	}
 	s.mu.Unlock()
