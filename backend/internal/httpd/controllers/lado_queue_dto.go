@@ -43,7 +43,7 @@ type LadoTaskQueueResponse struct {
 	EnqueuedAt    time.Time  `json:"enqueuedAt" description:"When the plan was approved; the dispatcher takes the oldest first."`
 }
 
-// LadoExecutionPRResponse is the newest PR of an execution's session.
+// LadoExecutionPRResponse is a PR of an execution's session.
 type LadoExecutionPRResponse struct {
 	URL          string `json:"url"`
 	Number       int    `json:"number"`
@@ -53,6 +53,40 @@ type LadoExecutionPRResponse struct {
 	TargetBranch string `json:"targetBranch,omitempty" description:"The branch the PR merges into."`
 	Title        string `json:"title,omitempty"`
 	Mergeability string `json:"mergeability,omitempty" enum:"unknown,mergeable,conflicting,blocked,unstable" description:"Whether the host can merge the PR into its target as AO last observed it."`
+}
+
+// LadoTrackedPRVerificationResponse is what LADO verified about a tracked
+// PR's current head, in short.
+type LadoTrackedPRVerificationResponse struct {
+	HeadSHA string `json:"headSha" description:"The head the record verified; another head than the PR's means LADO has not verified its current head yet."`
+	Outcome string `json:"outcome" enum:"pass,wait,fail,confirm"`
+	Reason  string `json:"reason,omitempty" description:"The code of the first item that fails, else of the first that waits, as LadoVerificationResponse's reason; omitted otherwise."`
+}
+
+// LadoTrackedPRIntegrationResponse is where the integration approval of a
+// tracked PR's current head stands.
+type LadoTrackedPRIntegrationResponse struct {
+	HeadApproved  bool   `json:"headApproved" description:"The PR's current head has an integration approval into its target that holds."`
+	StatusState   string `json:"statusState,omitempty" enum:"pending,posted,failed,not_applicable" description:"How posting that approval's lado/integration status went; omitted without an approval."`
+	RevokedReason string `json:"revokedReason,omitempty" enum:"base_overlap,sibling_revoked" description:"Why LADO withdrew the head's approval, while it has none that holds: base_overlap when the base moved under this head with a change to the same paths (only a new head can be approved), sibling_revoked when that happened to another unmerged PR of the same task, which approves the PRs again together, this head included. Only GET /api/v1/lado/executions/{sessionId} reads it."`
+}
+
+// LadoExecutionTrackedPRResponse is one PR LADO tracks for an execution
+// (#64): one per repository the execution opened a PR in, in the order the
+// PRs merge.
+type LadoExecutionTrackedPRResponse struct {
+	LadoExecutionPRResponse
+	Repo        string `json:"repo" description:"The repository the PR is open in, as its slash-separated folder under the workspace's; empty for a single-repository project."`
+	Position    int    `json:"position" description:"The PR's place in the merge order, from 0: the order of the plan's repos, else the order LADO began tracking the PRs."`
+	State       string `json:"state" enum:"running,validating,integration_pending,integrating,failed,completed,closed_unmerged" description:"The state this PR alone gives its task: validating while LADO verifies its head or it conflicts, integration_pending while its head waits for the developer's approval, integrating once that head is approved, completed once it merged, closed_unmerged once it closed without a merge."`
+	StateReason string `json:"stateReason,omitempty" enum:"verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,pr_repo_not_in_workspace,review_pending,changes_requested,status_not_posted,merged_without_approval,base_overlap,merge_conflict,resolving,conflict_unresolved" description:"Why the PR is in its state, as the task's stateReason says it."`
+	Settled     bool   `json:"settled" description:"LADO's verification settled the PR once it merged or closed."`
+	// Verification and Integration are those of the PR's current head.
+	Verification *LadoTrackedPRVerificationResponse `json:"verification,omitempty" description:"What LADO verified about the PR's current head, in short; omitted until LADO computed it."`
+	Integration  LadoTrackedPRIntegrationResponse   `json:"integration"`
+	// Record and Approval are the execution read's.
+	Record   *LadoVerificationResponse        `json:"record,omitempty" description:"The full verification record of the PR's current head; only GET /api/v1/lado/executions/{sessionId} reads it, and omits it until LADO computed it."`
+	Approval *LadoIntegrationApprovalResponse `json:"approval,omitempty" description:"The integration approval of the PR's current head that holds; only GET /api/v1/lado/executions/{sessionId} reads it, and omits it without one."`
 }
 
 // LadoTaskExecutionResponse is a task's newest execution: the worker session
@@ -69,8 +103,11 @@ type LadoTaskExecutionResponse struct {
 	DeadlineAt         *time.Time                `json:"deadlineAt,omitempty" description:"When LADO stops the run; omitted without a limit."`
 	TimedOut           bool                      `json:"timedOut" description:"LADO stopped the run at its deadline."`
 	SessionEnded       bool                      `json:"sessionEnded" description:"The worker session ended. While it lives, the task cannot be approved again."`
-	PR                 *LadoExecutionPRResponse  `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
-	UntrackedPRs       []LadoExecutionPRResponse `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none."`
+	PR                 *LadoExecutionPRResponse  `json:"pr,omitempty" description:"The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none."`
+	UntrackedPRs       []LadoExecutionPRResponse `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify, such as a second open PR in a repository whose tracked PR is still open; omitted while it has none."`
+	// TrackedPRs and PRRepos are the run's PRs across repositories (#64).
+	TrackedPRs []LadoExecutionTrackedPRResponse `json:"trackedPrs,omitempty" description:"The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR."`
+	PRRepos    []string                         `json:"prRepos,omitempty" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing."`
 }
 
 // LadoSessionIDParam names an execution's session in
@@ -142,12 +179,17 @@ type LadoExecutionResponse struct {
 	PartID       string                        `json:"partId,omitempty" description:"The part a part or merge worker works on."`
 	Branch       string                        `json:"branch,omitempty" description:"The branch LADO started the worker on; omitted when AO named it."`
 	State        string                        `json:"state" enum:"running,validating,integration_pending,integrating,failed,completed,closed_unmerged" description:"The state the run gives its task, as the daemon derives it: running without a PR, failed when it timed out or ended without one, and once a PR is open that PR's verification and integration."`
-	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,pr_repo_not_in_workspace,review_pending,changes_requested,status_not_posted,merged_without_approval,base_overlap,merge_conflict,resolving,conflict_unresolved" description:"Why the run is in its state, as the task's stateReason says it."`
-	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
+	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,pr_repo_not_in_workspace,review_pending,changes_requested,status_not_posted,merged_without_approval,base_overlap,merge_conflict,resolving,conflict_unresolved,pr_missing" description:"Why the run is in its state, as the task's stateReason says it."`
+	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none."`
 	// Verification and Integration are those of the PR's current head.
 	Verification *LadoVerificationResponse        `json:"verification,omitempty" description:"What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying."`
 	Integration  *LadoIntegrationApprovalResponse `json:"integration,omitempty" description:"The integration approval of the PR's current head; omitted without one."`
 	Resolve      *LadoExecutionResolveResponse    `json:"resolve,omitempty" description:"What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed."`
+	// TrackedPRs and PRRepos are the run's PRs across repositories (#64).
+	TrackedPRs   []LadoExecutionTrackedPRResponse `json:"trackedPrs,omitempty" description:"The PRs LADO tracks for the run, one per repository, in merge order, each with its head's full record and approval when verification is wired; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR. The task's integration approval names the open ones together."`
+	UntrackedPRs []LadoExecutionPRResponse        `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none."`
+	PRRepos      []string                         `json:"prRepos,omitempty" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order."`
+	PRReposFirm  bool                             `json:"prReposFirm,omitempty" description:"Omitted when false. prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended."`
 }
 
 // LadoExecutionResolveResponse is where resolving an execution's PR stands:
@@ -158,6 +200,7 @@ type LadoExecutionResolveResponse struct {
 	Attempts  int    `json:"attempts" description:"Resolve workers that failed in a row; a resolved PR starts again from 0."`
 	SessionID string `json:"sessionId,omitempty" description:"The newest resolve worker's AO session."`
 	Error     string `json:"error,omitempty" description:"The last failure, without secrets."`
+	PRURL     string `json:"prUrl,omitempty" description:"The tracked PR the resolve is for, the first in merge order that conflicts or whose base overlaps; omitted for a resolve recorded before LADO tracked several PRs, which is for the run's PR."`
 }
 
 // LadoDispatchSettingsResponse is the dispatcher's settings for every

@@ -162,27 +162,55 @@ type LadoIntegrationApprovalResponse struct {
 	StatusError        string     `json:"statusError,omitempty" description:"Why the last post failed, without secrets."`
 }
 
-// ApproveLadoIntegrationRequest approves the integration of one head of the
-// execution's PR, or previews it with dryRun. A real approval needs a
-// human-presence proof in X-LADO-Presence over these exact bytes, for
-// <sessionId>@<headSha>, which the desktop app adds after the developer
-// confirms.
-type ApproveLadoIntegrationRequest struct {
+// ApproveLadoIntegrationPR is one PR head of a task's integration approval.
+type ApproveLadoIntegrationPR struct {
 	PRURL              string   `json:"prUrl" minLength:"1"`
 	HeadSHA            string   `json:"headSha" minLength:"40" description:"The head the developer approves; another live head refuses the approval."`
-	VerificationSHA256 string   `json:"verificationSha256,omitempty" description:"The hash of the record the developer saw, from the dry run; another record refuses the approval. A dry run needs none."`
-	Acknowledge        []string `json:"acknowledge,omitempty" description:"The confirm codes the developer acknowledged: exactly the record's, from the dry run's confirm. A dry run needs none."`
-	DryRun             bool     `json:"dryRun,omitempty" description:"Read the PR's live head, the base branch and its rules again and answer the head's record, its hash and the codes to confirm, without a presence proof and without approving."`
+	VerificationSHA256 string   `json:"verificationSha256,omitempty" description:"The hash of the head's record the developer saw, from the dry run; another record refuses the approval. A dry run needs none."`
+	Acknowledge        []string `json:"acknowledge,omitempty" description:"The head record's confirm codes the developer acknowledged, from the dry run's confirm. A dry run needs none."`
 }
 
-// LadoIntegrationApproveResponse is the head's record as the approval or its
-// dry run computed it, with what an approval acknowledges and, once
-// approved, the approval.
-type LadoIntegrationApproveResponse struct {
+// ApproveLadoIntegrationRequest approves the integration of the heads of
+// the execution's open PRs together, or previews it with dryRun: prs names
+// them, or prUrl and headSha name the one PR of an execution LADO tracks one
+// open PR for. A real approval needs a human-presence proof in
+// X-LADO-Presence over these exact bytes, for <sessionId>@<heads>: the heads
+// joined by "," in the PRs' merge order (one head for one PR), which the
+// desktop app adds after the developer confirms.
+type ApproveLadoIntegrationRequest struct {
+	PRs                []ApproveLadoIntegrationPR `json:"prs,omitempty" description:"The PRs approved together: every open PR LADO tracks for the execution (#64), else LADO_INTEGRATION_PRS_CHANGED; a dry run may name any of them. Leave prUrl, headSha, verificationSha256 and acknowledge out when sending it."`
+	PRURL              string                     `json:"prUrl,omitempty" minLength:"1" description:"The PR approved, without prs."`
+	HeadSHA            string                     `json:"headSha,omitempty" minLength:"40" description:"The head the developer approves, without prs; another live head refuses the approval."`
+	VerificationSHA256 string                     `json:"verificationSha256,omitempty" description:"The hash of the record the developer saw, from the dry run; another record refuses the approval. A dry run needs none."`
+	Acknowledge        []string                   `json:"acknowledge,omitempty" description:"The confirm codes the developer acknowledged: exactly the record's, from the dry run's confirm. A dry run needs none."`
+	DryRun             bool                       `json:"dryRun,omitempty" description:"Read each PR's live head, the base branch and its rules again and answer each head's record, its hash and the codes to confirm, without a presence proof and without approving."`
+}
+
+// LadoIntegrationApprovePRResponse is one PR head's part of an integration
+// approval or its dry run.
+type LadoIntegrationApprovePRResponse struct {
+	PRURL              string                           `json:"prUrl"`
 	Verification       LadoVerificationResponse         `json:"verification"`
 	VerificationSHA256 string                           `json:"verificationSha256"`
-	Confirm            []string                         `json:"confirm" description:"The record's confirm codes, sorted: what an approval sends as acknowledge."`
-	Approval           *LadoIntegrationApprovalResponse `json:"approval,omitempty" description:"The recorded approval; omitted for a dry run."`
+	Confirm            []string                         `json:"confirm" description:"The record's confirm codes, sorted: what an approval sends as this PR's acknowledge."`
+	Approval           *LadoIntegrationApprovalResponse `json:"approval,omitempty" description:"The head's approval: recorded now, or recorded before for a head approved already; omitted for a dry run."`
+}
+
+// LadoIntegrationApproveResponse is each head's record as the approval or
+// its dry run computed it, with what an approval acknowledges and, once
+// approved, the approval: the first PR's in merge order in the top fields,
+// each PR's in prs.
+type LadoIntegrationApproveResponse struct {
+	Verification       LadoVerificationResponse           `json:"verification"`
+	VerificationSHA256 string                             `json:"verificationSha256"`
+	Confirm            []string                           `json:"confirm" description:"The record's confirm codes, sorted: what an approval sends as acknowledge."`
+	Approval           *LadoIntegrationApprovalResponse   `json:"approval,omitempty" description:"The recorded approval; omitted for a dry run."`
+	PRs                []LadoIntegrationApprovePRResponse `json:"prs,omitempty" description:"Each PR the request named, in merge order; one for a request that named one."`
+}
+
+// LadoIntegrationStatusQuery names the PR whose status is posted again.
+type LadoIntegrationStatusQuery struct {
+	PRURL string `query:"prUrl,omitempty" description:"The open PR LADO tracks for the execution whose approved head's status is posted again; the first in merge order when omitted."`
 }
 
 // LadoRunChecksResponse is what running the check commands again set off.

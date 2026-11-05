@@ -1436,7 +1436,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve the integration of the head of an execution's PR with a human-presence proof, or preview it with dryRun; LADO then posts the lado/integration status and never merges */
+        /** Approve the integration of the heads of an execution's open PRs together with one human-presence proof, or preview it with dryRun; LADO then posts each lado/integration status and never merges */
         post: operations["approveLadoIntegration"];
         delete?: never;
         options?: never;
@@ -1453,7 +1453,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Post the lado/integration status of the PR's approved current head again, its attempts started over; needs no presence proof */
+        /** Post the lado/integration status of an open PR's approved current head again, its attempts started over; needs no presence proof */
         post: operations["repostLadoIntegrationStatus"];
         delete?: never;
         options?: never;
@@ -5497,14 +5497,26 @@ export interface components {
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
         };
-        ApproveLadoIntegrationRequest: {
-            /** @description The confirm codes the developer acknowledged: exactly the record's, from the dry run's confirm. A dry run needs none. */
+        ApproveLadoIntegrationPR: {
+            /** @description The head record's confirm codes the developer acknowledged, from the dry run's confirm. A dry run needs none. */
             acknowledge?: string[];
-            /** @description Read the PR's live head, the base branch and its rules again and answer the head's record, its hash and the codes to confirm, without a presence proof and without approving. */
-            dryRun?: boolean;
             /** @description The head the developer approves; another live head refuses the approval. */
             headSha: string;
             prUrl: string;
+            /** @description The hash of the head's record the developer saw, from the dry run; another record refuses the approval. A dry run needs none. */
+            verificationSha256?: string;
+        };
+        ApproveLadoIntegrationRequest: {
+            /** @description The confirm codes the developer acknowledged: exactly the record's, from the dry run's confirm. A dry run needs none. */
+            acknowledge?: string[];
+            /** @description Read each PR's live head, the base branch and its rules again and answer each head's record, its hash and the codes to confirm, without a presence proof and without approving. */
+            dryRun?: boolean;
+            /** @description The head the developer approves, without prs; another live head refuses the approval. */
+            headSha?: string;
+            /** @description The PR approved, without prs. */
+            prUrl?: string;
+            /** @description The PRs approved together: every open PR LADO tracks for the execution (#64), else LADO_INTEGRATION_PRS_CHANGED; a dry run may name any of them. Leave prUrl, headSha, verificationSha256 and acknowledge out when sending it. */
+            prs?: components["schemas"]["ApproveLadoIntegrationPR"][];
             /** @description The hash of the record the developer saw, from the dry run; another record refuses the approval. A dry run needs none. */
             verificationSha256?: string;
         };
@@ -7236,6 +7248,8 @@ export interface components {
             attempts: number;
             /** @description The last failure, without secrets. */
             error?: string;
+            /** @description The tracked PR the resolve is for, the first in merge order that conflicts or whose base overlaps; omitted for a resolve recorded before LADO tracked several PRs, which is for the run's PR. */
+            prUrl?: string;
             /** @description The newest resolve worker's AO session. */
             sessionId?: string;
             /**
@@ -7260,8 +7274,12 @@ export interface components {
             /** @description The part a part or merge worker works on. */
             partId?: string;
             plan: components["schemas"]["LadoExecutionPlanResponse"];
-            /** @description The newest PR of the worker session; omitted while it has none. */
+            /** @description The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
+            /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. */
+            prRepos?: string[];
+            /** @description Omitted when false. prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended. */
+            prReposFirm?: boolean;
             /** @description What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed. */
             resolve?: components["schemas"]["LadoExecutionResolveResponse"];
             /**
@@ -7283,13 +7301,17 @@ export interface components {
              * @description Why the run is in its state, as the task's stateReason says it.
              * @enum {string}
              */
-            stateReason?: "timed_out" | "ended_without_pr" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
+            stateReason?: "timed_out" | "ended_without_pr" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
             task: components["schemas"]["LadoExecutionTaskResponse"];
             /**
              * Format: date-time
              * @description When LADO stopped the run at its deadline.
              */
             timedOutAt?: null | string;
+            /** @description The PRs LADO tracks for the run, one per repository, in merge order, each with its head's full record and approval when verification is wired; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR. The task's integration approval names the open ones together. */
+            trackedPrs?: components["schemas"]["LadoExecutionTrackedPRResponse"][];
+            /** @description The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none. */
+            untrackedPrs?: components["schemas"]["LadoExecutionPRResponse"][];
             /** @description What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying. */
             verification?: components["schemas"]["LadoVerificationResponse"];
         };
@@ -7337,6 +7359,46 @@ export interface components {
             /** @description The issue's title as LADO last read it. */
             title: string;
         };
+        LadoExecutionTrackedPRResponse: {
+            /** @description The integration approval of the PR's current head that holds; only GET /api/v1/lado/executions/{sessionId} reads it, and omits it without one. */
+            approval?: components["schemas"]["LadoIntegrationApprovalResponse"];
+            /** @description Closed without a merge. */
+            closed: boolean;
+            /** @description The PR's head as AO last observed it, which LADO verifies; omitted until AO observed it. */
+            headSha?: string;
+            integration: components["schemas"]["LadoTrackedPRIntegrationResponse"];
+            /**
+             * @description Whether the host can merge the PR into its target as AO last observed it.
+             * @enum {string}
+             */
+            mergeability?: "unknown" | "mergeable" | "conflicting" | "blocked" | "unstable";
+            merged: boolean;
+            number: number;
+            /** @description The PR's place in the merge order, from 0: the order of the plan's repos, else the order LADO began tracking the PRs. */
+            position: number;
+            /** @description The full verification record of the PR's current head; only GET /api/v1/lado/executions/{sessionId} reads it, and omits it until LADO computed it. */
+            record?: components["schemas"]["LadoVerificationResponse"];
+            /** @description The repository the PR is open in, as its slash-separated folder under the workspace's; empty for a single-repository project. */
+            repo: string;
+            /** @description LADO's verification settled the PR once it merged or closed. */
+            settled: boolean;
+            /**
+             * @description The state this PR alone gives its task: validating while LADO verifies its head or it conflicts, integration_pending while its head waits for the developer's approval, integrating once that head is approved, completed once it merged, closed_unmerged once it closed without a merge.
+             * @enum {string}
+             */
+            state: "running" | "validating" | "integration_pending" | "integrating" | "failed" | "completed" | "closed_unmerged";
+            /**
+             * @description Why the PR is in its state, as the task's stateReason says it.
+             * @enum {string}
+             */
+            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
+            /** @description The branch the PR merges into. */
+            targetBranch?: string;
+            title?: string;
+            url: string;
+            /** @description What LADO verified about the PR's current head, in short; omitted until LADO computed it. */
+            verification?: components["schemas"]["LadoTrackedPRVerificationResponse"];
+        };
         LadoImpactProjectResponse: {
             id: string;
             name: string;
@@ -7373,11 +7435,22 @@ export interface components {
             /** @description The record hash the approval signed. */
             verificationSha256: string;
         };
+        LadoIntegrationApprovePRResponse: {
+            /** @description The head's approval: recorded now, or recorded before for a head approved already; omitted for a dry run. */
+            approval?: components["schemas"]["LadoIntegrationApprovalResponse"];
+            /** @description The record's confirm codes, sorted: what an approval sends as this PR's acknowledge. */
+            confirm: string[];
+            prUrl: string;
+            verification: components["schemas"]["LadoVerificationResponse"];
+            verificationSha256: string;
+        };
         LadoIntegrationApproveResponse: {
             /** @description The recorded approval; omitted for a dry run. */
             approval?: components["schemas"]["LadoIntegrationApprovalResponse"];
             /** @description The record's confirm codes, sorted: what an approval sends as acknowledge. */
             confirm: string[];
+            /** @description Each PR the request named, in merge order; one for a request that named one. */
+            prs?: components["schemas"]["LadoIntegrationApprovePRResponse"][];
             verification: components["schemas"]["LadoVerificationResponse"];
             verificationSha256: string;
         };
@@ -7467,6 +7540,18 @@ export interface components {
             path: string;
             /** @description The workspace repository that has the connection's repository. Empty for a single-repo project. */
             repository?: string;
+        };
+        LadoPartRunRepoResponse: {
+            /** @description The repository's base branch the dispatch resolved. */
+            baseBranch?: string;
+            /** @description The commit the repository's integration branch started from. */
+            baseSha: string;
+            /** @description Where LADO last moved the repository's integration branch; its base while no part changed the repository. */
+            headSha: string;
+            /** @description The repository's place in the run's order, from 0: the order of the plan's repos, in which the PRs merge. */
+            position: number;
+            /** @description The repository's slash-separated folder under the workspace's; empty for a single-repository project, or a run in the issue's repository alone that started before runs had repositories. */
+            repo: string;
         };
         LadoPermissionResponse: {
             /** @description What is missing, or why it cannot be verified. */
@@ -8602,8 +8687,10 @@ export interface components {
             planRevisionNumber?: number;
             /** @description Hash of the rule snapshot the worker runs under; omitted for the run of an older approval. GET /api/v1/lado/executions/{sessionId} always has it. */
             policySha256?: string;
-            /** @description The newest PR of the worker session; omitted while it has none. */
+            /** @description The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
+            /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing. */
+            prRepos?: string[];
             /** @description The worker session ended. While it lives, the task cannot be approved again. */
             sessionEnded: boolean;
             sessionId: string;
@@ -8611,7 +8698,9 @@ export interface components {
             startedAt: string;
             /** @description LADO stopped the run at its deadline. */
             timedOut: boolean;
-            /** @description The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none. */
+            /** @description The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR. */
+            trackedPrs?: components["schemas"]["LadoExecutionTrackedPRResponse"][];
+            /** @description The worker session's other open PRs, newest first, which LADO does not track or verify, such as a second open PR in a repository whose tracked PR is still open; omitted while it has none. */
             untrackedPrs?: components["schemas"]["LadoExecutionPRResponse"][];
         };
         LadoTaskIssueResponse: {
@@ -8631,6 +8720,16 @@ export interface components {
         LadoTaskListResponse: {
             tasks: components["schemas"]["LadoTaskResponse"][];
         };
+        LadoTaskPartRepoResponse: {
+            /** @description The part left the repository as it found it: it has no commits there. */
+            empty: boolean;
+            /** @description The repository's integration branch commit once the part was merged there. */
+            mergedSha?: string;
+            /** @description The repository's slash-separated folder under the workspace's; empty for a run in one repository. */
+            repo: string;
+            /** @description The repository's integration branch commit the part's branch started from there. */
+            startSha?: string;
+        };
         LadoTaskPartResponse: {
             affectedPaths: string[];
             /** @description Workers started for the part so far; LADO gives up after two. */
@@ -8641,12 +8740,16 @@ export interface components {
             error?: string;
             id: string;
             mergeAttempts: number;
+            /** @description The repository, as its slash-separated folder under the workspace's, whose merge of the part conflicted and where its merge worker resolves it; omitted while no merge conflicts and for a run in one repository. */
+            mergeRepo?: string;
             /** @description The merge worker resolving the part's conflict. */
             mergeSessionId?: string;
             /** @description The integration branch's commit once the part was merged. */
             mergedSha?: string;
             /** @description The display phase, as the plan view shows it. */
             phase: number;
+            /** @description How the part went in each of the run's repositories, in the run's order; one with an empty repo for a run in one repository. */
+            repos?: components["schemas"]["LadoTaskPartRepoResponse"][];
             /** @description The part's newest worker session. */
             sessionId?: string;
             /** @description The integration branch's commit the part's branch started from. */
@@ -8673,11 +8776,13 @@ export interface components {
         LadoTaskPartsResponse: {
             /** @description The approved base commit the integration branch started from. */
             baseSha?: string;
-            /** @description The integration branch; omitted while the newest approval runs no parts. */
+            /** @description The integration branch, named the same in each of the run's repositories; omitted while the newest approval runs no parts. */
             branch?: string;
             /** @description Where LADO last moved the integration branch. */
             headSha?: string;
             parts: components["schemas"]["LadoTaskPartResponse"][];
+            /** @description The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Omitted while the newest approval runs no parts. */
+            repos?: components["schemas"]["LadoPartRunRepoResponse"][];
             /** Format: date-time */
             startedAt?: null | string;
         };
@@ -8755,10 +8860,10 @@ export interface components {
              */
             state: "draft" | "planned" | "review_required" | "blocked" | "approved" | "queued" | "dispatching" | "running" | "validating" | "integration_pending" | "integrating" | "failed" | "completed" | "cancelled" | "closed_unmerged";
             /**
-             * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, conflict_unresolved when LADO's resolve workers could not resolve the open PR, resolving while one takes the base into it, merge_conflict while the PR conflicts with its base and base_overlap when the base moved under the head with a change to the same paths, all four before an approval; else verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
+             * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; for validating, pr_missing while a repository the task is expected to open a pull request in has none yet (a workspace task across repositories), conflict_unresolved when LADO's resolve workers could not resolve the open PR, resolving while one takes the base into it, merge_conflict while the PR conflicts with its base and base_overlap when the base moved under the head with a change to the same paths, all four before an approval; else verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
         };
         LadoTaskTimelineResponse: {
             approvals: number;
@@ -8873,6 +8978,28 @@ export interface components {
             problemDetail?: string;
             /** @description Whether LADO already keeps a token for the host. */
             stored: boolean;
+        };
+        LadoTrackedPRIntegrationResponse: {
+            /** @description The PR's current head has an integration approval into its target that holds. */
+            headApproved: boolean;
+            /**
+             * @description Why LADO withdrew the head's approval, while it has none that holds: base_overlap when the base moved under this head with a change to the same paths (only a new head can be approved), sibling_revoked when that happened to another unmerged PR of the same task, which approves the PRs again together, this head included. Only GET /api/v1/lado/executions/{sessionId} reads it.
+             * @enum {string}
+             */
+            revokedReason?: "base_overlap" | "sibling_revoked";
+            /**
+             * @description How posting that approval's lado/integration status went; omitted without an approval.
+             * @enum {string}
+             */
+            statusState?: "pending" | "posted" | "failed" | "not_applicable";
+        };
+        LadoTrackedPRVerificationResponse: {
+            /** @description The head the record verified; another head than the PR's means LADO has not verified its current head yet. */
+            headSha: string;
+            /** @enum {string} */
+            outcome: "pass" | "wait" | "fail" | "confirm";
+            /** @description The code of the first item that fails, else of the first that waits, as LadoVerificationResponse's reason; omitted otherwise. */
+            reason?: string;
         };
         LadoUnseenAlertCountResponse: {
             taskId: string;
@@ -15868,7 +15995,10 @@ export interface operations {
     };
     repostLadoIntegrationStatus: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description The open PR LADO tracks for the execution whose approved head's status is posted again; the first in merge order when omitted. */
+                prUrl?: string;
+            };
             header?: never;
             path: {
                 /** @description AO session id of the worker. */

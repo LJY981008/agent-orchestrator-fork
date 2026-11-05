@@ -9,6 +9,7 @@ package ladoverify
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -17,10 +18,14 @@ import (
 // HeadView is what LADO holds about one head of an execution's PR: the
 // head's verification record with its hash, and its integration approval
 // into the branch the PR merges into now. Each is nil while there is none.
+// Revoked is the newest approval of the head into that branch that LADO
+// withdrew, while the head has no approval that holds (#64: a sibling PR's
+// base overlap withdraws it too).
 type HeadView struct {
 	Verification *domain.LadoVerification
 	SHA256       string
 	Approval     *domain.LadoIntegrationApproval
+	Revoked      *domain.LadoIntegrationApproval
 }
 
 // Head reads the verification record of one head of an execution's PR and
@@ -51,6 +56,13 @@ func (s *Service) Head(ctx context.Context, session domain.SessionID, prURL, hea
 	}
 	if approval, ok := domain.LadoApprovalFor(approvals, target); ok {
 		view.Approval = &approval
+		return view, nil
+	}
+	for _, approval := range approvals {
+		if approval.Revoked() && (approval.TargetBranch == "" || strings.EqualFold(approval.TargetBranch, target)) &&
+			(view.Revoked == nil || approval.RevokedAt.After(view.Revoked.RevokedAt)) {
+			view.Revoked = &approval
+		}
 	}
 	return view, nil
 }

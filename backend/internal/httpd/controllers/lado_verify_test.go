@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"testing"
@@ -42,17 +43,18 @@ type fakeLadoVerifyService struct {
 	gotProject domain.ProjectID
 	gotRefresh bool
 	// reposted is the approval a status repost answers; gotRepost the
-	// session it was asked for.
-	reposted  domain.LadoIntegrationApproval
-	gotRepost domain.SessionID
+	// session it was asked for and gotRepostPR the PR.
+	reposted    domain.LadoIntegrationApproval
+	gotRepost   domain.SessionID
+	gotRepostPR string
 }
 
 func (f *fakeLadoVerifyService) Head(context.Context, domain.SessionID, string, string, string) (ladoverify.HeadView, error) {
 	return ladoverify.HeadView{}, errors.New("not used")
 }
 
-func (f *fakeLadoVerifyService) RepostIntegrationStatus(_ context.Context, session domain.SessionID) (domain.LadoIntegrationApproval, error) {
-	f.gotRepost = session
+func (f *fakeLadoVerifyService) RepostIntegrationStatusOf(_ context.Context, session domain.SessionID, prURL string) (domain.LadoIntegrationApproval, error) {
+	f.gotRepost, f.gotRepostPR = session, prURL
 	return f.reposted, f.err
 }
 
@@ -67,7 +69,15 @@ func (f *fakeLadoVerifyService) ApproveIntegration(_ context.Context, in ladover
 	if in.Presence == nil {
 		return ladoverify.ApproveResult{}, apierr.Forbidden("LADO_PRESENCE_REQUIRED", "Approve the integration in the AO desktop app.")
 	}
-	proof, err := in.Presence(domain.LadoPresenceIntegrationApprove, string(in.SessionID)+"@"+strings.ToLower(in.HeadSHA))
+	heads := strings.ToLower(in.HeadSHA)
+	if len(in.PRs) > 0 {
+		var each []string
+		for _, pr := range in.PRs {
+			each = append(each, strings.ToLower(pr.HeadSHA))
+		}
+		heads = strings.Join(each, ",")
+	}
+	proof, err := in.Presence(domain.LadoPresenceIntegrationApprove, string(in.SessionID)+"@"+heads)
 	if err != nil {
 		return ladoverify.ApproveResult{}, err
 	}
@@ -154,13 +164,14 @@ func ladoApproveResult(t *testing.T, at time.Time) ladoverify.ApproveResult {
 	t.Helper()
 	record := ladoVerifyRecord(t, "mer-1", "https://github.com/acme/demo/pull/7", ladoVerifyHead, at)
 	sum := ladoRecordSHA(t, record)
+	approval := &domain.LadoIntegrationApproval{
+		ID: "lado-integration-1", ExecutionSessionID: "mer-1", PRURL: record.PRURL, HeadSHA: ladoVerifyHead, VerificationSHA256: sum,
+		Acknowledged: record.ConfirmCodes(), ProofNonce: "AAAAAAAAAAAAAAAAAAAAAA", Actor: "human", ApprovedAt: at,
+		StatusState: domain.LadoIntegrationStatusPosted, StatusAttempts: 1, StatusPostedAt: at,
+	}
 	return ladoverify.ApproveResult{
-		Verification: record, SHA256: sum, Confirm: record.ConfirmCodes(),
-		Approval: &domain.LadoIntegrationApproval{
-			ID: "lado-integration-1", ExecutionSessionID: "mer-1", PRURL: record.PRURL, HeadSHA: ladoVerifyHead, VerificationSHA256: sum,
-			Acknowledged: record.ConfirmCodes(), ProofNonce: "AAAAAAAAAAAAAAAAAAAAAA", Actor: "human", ApprovedAt: at,
-			StatusState: domain.LadoIntegrationStatusPosted, StatusAttempts: 1, StatusPostedAt: at,
-		},
+		Verification: record, SHA256: sum, Confirm: record.ConfirmCodes(), Approval: approval,
+		PRs: []ladoverify.ApprovePRResult{{PRURL: record.PRURL, Verification: record, SHA256: sum, Confirm: record.ConfirmCodes(), Approval: approval}},
 	}
 }
 
@@ -213,6 +224,15 @@ func TestLadoAPI_IntegrationApproveNeedsPresence(t *testing.T) {
 		got.ApprovedAt, got.StatusPostedAt = want.ApprovedAt, want.StatusPostedAt
 		if !reflect.DeepEqual(got, want) {
 			t.Fatalf("approval = %+v, want %+v", got, want)
+		}
+		// The old single body names its PR in prUrl and headSha, and the
+		// answer lists that one PR in prs too (#64).
+		if len(svc.gotApprove.PRs) != 0 || svc.gotApprove.PRURL != "https://github.com/acme/demo/pull/7" {
+			t.Fatalf("service got %+v; want the single PR's fields", svc.gotApprove)
+		}
+		if len(resp.PRs) != 1 || resp.PRs[0].PRURL != "https://github.com/acme/demo/pull/7" || resp.PRs[0].Approval == nil ||
+			resp.PRs[0].Approval.ID != "lado-integration-1" || resp.PRs[0].VerificationSHA256 != result.SHA256 {
+			t.Fatalf("prs = %+v, want the one PR with its approval", resp.PRs)
 		}
 	})
 	for _, tc := range []struct {
@@ -295,13 +315,20 @@ func TestLadoAPI_IntegrationApprovePassesTheExactBody(t *testing.T) {
 // observes it.
 func writeLadoHeadPR(t *testing.T, store *sqlite.Store, session domain.SessionID, number int, head string, at time.Time) string {
 	t.Helper()
-	url := fmt.Sprintf("https://github.com/acme/demo/pull/%d", number)
+	return writeLadoRepoPR(t, store, session, "acme/demo", number, head, at)
+}
+
+// writeLadoRepoPR writes the session's open PR number in the GitHub
+// repository ownerRepo with its head, as AO observes it.
+func writeLadoRepoPR(t *testing.T, store *sqlite.Store, session domain.SessionID, ownerRepo string, number int, head string, at time.Time) string {
+	t.Helper()
+	prURL := fmt.Sprintf("https://github.com/%s/pull/%d", ownerRepo, number)
 	if err := store.WriteSCMObservation(context.Background(), domain.PullRequest{
-		URL: url, SessionID: session, Number: number, HeadSHA: head, TargetBranch: "main", Title: "검증 화면 추가", UpdatedAt: at,
+		URL: prURL, SessionID: session, Number: number, HeadSHA: head, TargetBranch: "main", Title: "검증 화면 추가", UpdatedAt: at,
 	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatalf("write PR %d: %v", number, err)
 	}
-	return url
+	return prURL
 }
 
 func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
@@ -469,8 +496,12 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 
 	// Without verification wired, the execution has neither.
 	bare := newLadoTestServer(t, httpd.APIDeps{LadoQueue: ladoqueue.New(ladoqueue.Deps{Store: store})})
+	// The tracked PR keeps the short verification and integration the
+	// execution's row carries (#64), without the full record or approval.
 	body, _, _ := doRequest(t, bare, "GET", "/api/v1/lado/executions/"+string(worker), "")
-	if strings.Contains(string(body), `"verification"`) || strings.Contains(string(body), `"integration"`) {
+	plain := decodeLadoJSON[controllers.LadoExecutionResponse](t, body)
+	if plain.Verification != nil || plain.Integration != nil || len(plain.TrackedPRs) != 1 ||
+		plain.TrackedPRs[0].Record != nil || plain.TrackedPRs[0].Approval != nil {
 		t.Fatalf("execution without verification wired = %s", body)
 	}
 }
@@ -503,12 +534,17 @@ func TestLadoAPI_RepostIntegrationStatus(t *testing.T) {
 	}}
 	srv := newLadoTestServer(t, httpd.APIDeps{LadoVerify: svc})
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/lado/executions/mer-1/integration-status", "")
-	if status != http.StatusOK || svc.gotRepost != "mer-1" {
-		t.Fatalf("status = %d for %q, body %s", status, svc.gotRepost, body)
+	if status != http.StatusOK || svc.gotRepost != "mer-1" || svc.gotRepostPR != "" {
+		t.Fatalf("status = %d for %q (%q), body %s", status, svc.gotRepost, svc.gotRepostPR, body)
 	}
 	got := decodeLadoJSON[controllers.LadoIntegrationApprovalResponse](t, body)
 	if got.ID != "lado-integration-1" || got.TargetBranch != "main" || got.StatusState != "posted" || got.StatusAttempts != 1 || got.StatusPostedAt == nil {
 		t.Fatalf("approval = %+v", got)
+	}
+	// prUrl names one of the task's PRs (#64).
+	front := "https://github.com/acme/front/pull/2"
+	if _, status, _ := doRequest(t, srv, "POST", "/api/v1/lado/executions/mer-1/integration-status?prUrl="+url.QueryEscape(front), ""); status != http.StatusOK || svc.gotRepostPR != front {
+		t.Fatalf("status = %d for PR %q, want %s", status, svc.gotRepostPR, front)
 	}
 	svc.err = apierr.Conflict("LADO_INTEGRATION_NOT_APPROVED", "no approval", nil)
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/lado/executions/mer-1/integration-status", "")
