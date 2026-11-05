@@ -172,11 +172,12 @@ function isQueued(task: LadoTask): boolean {
 // A task whose parts run before its integration worker starts has no session
 // card of its own yet, so it stays in the Queued lane, its card saying how
 // many parts are merged and linking the part workers (docs/LJY-PRD/TDD.md
-// §3.3, §5.4). The queue entry says so whatever run the task last had: a
-// run of an earlier approval may still come as its execution (issue #61).
-// An older daemon sends no queue state; there no execution means no
-// integration worker yet. Once that worker starts, the entry is dispatched
-// and its session card carries the task.
+// §3.3, §5.4). The queue entry says so whatever run the task last had: the
+// daemon sends an earlier approval's ended run as previousExecution, but one
+// from before issue #61 sent it as the execution. An older daemon sends no
+// queue state; there no execution means no integration worker yet. Once that
+// worker starts, the entry is dispatched and its session card carries the
+// task.
 function runningParts(task: LadoTask): boolean {
 	return (
 		task.state === "running" &&
