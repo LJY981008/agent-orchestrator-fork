@@ -121,7 +121,12 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	// (decision e of the step 6 plan), and so are the branch, its remote and
 	// the commit of the local branch, for the base branch check after the
 	// pull request (decision h of the step 8 plan).
-	dir, relative, base, err := s.workerBase(ctx, task)
+	issueRepo, children, err := s.taskRepos(ctx, task)
+	var base ports.WorkspaceDefaultBranch
+	if err == nil {
+		base, err = s.resolveBase(ctx, issueRepo)
+	}
+	dir, relative := issueRepo.dir, issueRepo.relative
 	if err != nil {
 		s.deps.Log.Warn("LADO could not tell which branch a queued task's worker starts from", "entry", entry.ID, "task", task.ID,
 			"problem", problem(err, "the base branch could not be resolved"))
@@ -203,18 +208,25 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		return false, s.handBack(ctx, entry)
 	}
 	if len(plan.Parts) > 0 {
-		if outside := domain.LadoPlanOutsideRepo(plan, relative); len(outside) > 0 {
-			// A revision pinned before plans were checked for this (#60)
-			// can name paths a parts run would lose.
-			return false, s.fail(ctx, entry, partsOutsideRepo(outside, relative))
+		issueRun := domain.LadoPartRunRepo{
+			Relative: relative, Dir: dir, BaseSHA: dispatchSHA, HeadSHA: dispatchSHA,
+			BaseBranch: base.Branch, BaseRemote: base.Remote, DispatchLocalBaseSHA: localSHA, BaseCommitsAhead: ahead,
 		}
-		return s.startParts(ctx, entry, task, in, plan, dir, base, dispatchSHA, ahead, localSHA)
+		repos, err := s.partRunRepos(ctx, entry, task, plan, issueRun, children, now)
+		if repos == nil {
+			// The entry is settled: no worker started.
+			return false, err
+		}
+		return s.startParts(ctx, entry, task, in, plan, repos)
 	}
 	cfg := spawnConfig(task, entry, in, agent, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
 	exec := domain.LadoExecution{
 		SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead,
 		BaseBranch: base.Branch, BaseRemote: base.Remote, DispatchLocalBaseSHA: localSHA,
+		// The plan's repos list says where the worker opens its PRs (#64);
+		// they are what the plan declared, not facts.
+		PRRepos: slices.Clone(plan.Repos),
 	}
 	if err != nil {
 		// AO can fail a spawn after it started the session, as when the
@@ -314,6 +326,15 @@ func (s *Service) WorkerBase(ctx context.Context, task domain.LadoTask) (ports.W
 	return base, err
 }
 
+// repoPlace is one repository of a task's project: its folder relative to
+// the project's, with slashes ("" for a single repository), its folder, and
+// the branch the project configures for it.
+type repoPlace struct {
+	relative   string
+	dir        string
+	configured string
+}
+
 // workerBase resolves the branch AO starts the task's worker from, the way
 // AO's spawn resolves it (session_manager refreshDefaultBranchesBestEffort),
 // and the repository it is resolved in: for a single repository, the
@@ -323,39 +344,129 @@ func (s *Service) WorkerBase(ctx context.Context, task domain.LadoTask) (ports.W
 // folder relative to the project's, with slashes, which is "" for a single
 // repository; ladotask's repoDir uses the same rule.
 func (s *Service) workerBase(ctx context.Context, task domain.LadoTask) (string, string, ports.WorkspaceDefaultBranch, error) {
-	if s.deps.Branches == nil {
-		return "", "", ports.WorkspaceDefaultBranch{}, errors.New("no branch resolver is wired")
-	}
-	project, ok, err := s.deps.Projects.GetProject(ctx, string(task.ProjectID))
+	place, _, err := s.taskRepos(ctx, task)
 	if err != nil {
 		return "", "", ports.WorkspaceDefaultBranch{}, err
 	}
-	if !ok {
-		return "", "", ports.WorkspaceDefaultBranch{}, fmt.Errorf("project %s not found", task.ProjectID)
+	base, err := s.resolveBase(ctx, place)
+	return place.dir, place.relative, base, err
+}
+
+// taskRepos reads where the task's project keeps its repositories: the one
+// that holds the task's issue and, for a workspace project, every child
+// repository (#64). A single repository has no children.
+func (s *Service) taskRepos(ctx context.Context, task domain.LadoTask) (repoPlace, []repoPlace, error) {
+	if s.deps.Branches == nil {
+		return repoPlace{}, nil, errors.New("no branch resolver is wired")
 	}
-	dir, relative, configured := project.Path, "", project.Config.WorktreeBaseBranch()
-	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
-		children, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
-		if err != nil {
-			return "", "", ports.WorkspaceDefaultBranch{}, err
+	project, ok, err := s.deps.Projects.GetProject(ctx, string(task.ProjectID))
+	if err != nil {
+		return repoPlace{}, nil, err
+	}
+	if !ok {
+		return repoPlace{}, nil, fmt.Errorf("project %s not found", task.ProjectID)
+	}
+	issue := repoPlace{dir: project.Path, configured: project.Config.WorktreeBaseBranch()}
+	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
+		return issue, nil, nil
+	}
+	records, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
+	if err != nil {
+		return repoPlace{}, nil, err
+	}
+	children := make([]repoPlace, 0, len(records))
+	found := false
+	for _, child := range records {
+		relative := filepath.ToSlash(child.RelativePath)
+		place := repoPlace{relative: relative, dir: filepath.Join(project.Path, filepath.FromSlash(relative)), configured: child.DefaultBranch}
+		children = append(children, place)
+		if found {
+			continue
 		}
-		found := false
-		for _, child := range children {
-			repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL)
-			if err == nil && domain.LadoSameRepo(repo, task.Repo) {
-				relative = filepath.ToSlash(child.RelativePath)
-				dir, configured, found = filepath.Join(project.Path, filepath.FromSlash(relative)), child.DefaultBranch, true
-				break
-			}
+		if repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL); err == nil && domain.LadoSameRepo(repo, task.Repo) {
+			issue, found = place, true
 		}
-		if !found {
-			return "", "", ports.WorkspaceDefaultBranch{}, fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
-		}
+	}
+	if !found {
+		return repoPlace{}, nil, fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
+	}
+	return issue, children, nil
+}
+
+// resolveBase resolves the branch AO starts a worktree of the repository at
+// place from.
+func (s *Service) resolveBase(ctx context.Context, place repoPlace) (ports.WorkspaceDefaultBranch, error) {
+	if s.deps.Branches == nil {
+		return ports.WorkspaceDefaultBranch{}, errors.New("no branch resolver is wired")
 	}
 	ctx, cancel := context.WithTimeout(ctx, baseResolveTimeout)
 	defer cancel()
-	base, err := s.deps.Branches.ResolveDefaultBranch(ctx, dir, configured)
-	return dir, relative, base, err
+	return s.deps.Branches.ResolveDefaultBranch(ctx, place.dir, place.configured)
+}
+
+// childPlace returns the child repository whose folder is relative.
+func childPlace(children []repoPlace, relative string) (repoPlace, bool) {
+	relative = strings.Trim(relative, "/")
+	for _, child := range children {
+		if strings.Trim(child.relative, "/") == relative {
+			return child, true
+		}
+	}
+	return repoPlace{}, false
+}
+
+// partRunRepos decides the repositories a parts run keeps an integration
+// branch in, in the order their PRs merge (#64): the plan's repos list, or
+// the one repository its paths lie in (domain.LadoPlanRepos). issueRun is the
+// repository that holds the issue with the base the dispatch resolved; every
+// other repository's base is resolved here, from its own default branch, and
+// only the issue's is compared with the plan's base SHA. A plan whose paths
+// lie in several repositories without a repos list, pinned before plans were
+// checked for it, fails as it did before (#60); so do paths outside the
+// repositories and a repos entry that is no repository of the project. It
+// returns nil when the dispatch stops here, having settled the entry, with
+// the write that failed.
+func (s *Service) partRunRepos(ctx context.Context, entry domain.LadoQueueEntry, task domain.LadoTask, plan domain.LadoPlan,
+	issueRun domain.LadoPartRunRepo, children []repoPlace, now time.Time) ([]domain.LadoPartRunRepo, error) {
+	relatives := make([]string, len(children))
+	for i, child := range children {
+		relatives[i] = child.relative
+	}
+	names, problems := domain.LadoPlanRepos(plan, relatives, issueRun.Relative)
+	if len(problems) > 0 {
+		// A revision pinned before plans were checked for this (#60) can
+		// name paths a parts run would lose.
+		return nil, s.fail(ctx, entry, partsOutsideRepo(domain.LadoPlanOutsideRepo(plan, issueRun.Relative), []string{issueRun.Relative}))
+	}
+	if outside := domain.LadoPlanOutsideRepos(plan, names); len(outside) > 0 {
+		return nil, s.fail(ctx, entry, partsOutsideRepo(outside, names))
+	}
+	repos := make([]domain.LadoPartRunRepo, 0, len(names))
+	for i, name := range names {
+		name = strings.Trim(name, "/")
+		if name == strings.Trim(issueRun.Relative, "/") {
+			repo := issueRun
+			repo.Relative, repo.Position = name, i
+			repos = append(repos, repo)
+			continue
+		}
+		place, ok := childPlace(children, name)
+		if !ok {
+			return nil, s.fail(ctx, entry, partsUnknownRepo(name))
+		}
+		base, err := s.resolveBase(ctx, place)
+		if err != nil {
+			s.deps.Log.Warn("LADO could not tell which branch a queued task's repository starts from", "entry", entry.ID, "task", task.ID,
+				"repo", name, "problem", problem(err, "the base branch could not be resolved"))
+			return nil, s.recheck(ctx, entry, domain.LadoWaitingRetry, now)
+		}
+		sha, _ := s.baseMove(ctx, entry, place.dir, base, domain.LadoPlanRevision{BaseRef: "refs/heads/" + base.Branch})
+		repos = append(repos, domain.LadoPartRunRepo{
+			Relative: name, Position: i, Dir: place.dir, BaseSHA: sha, HeadSHA: sha,
+			BaseBranch: base.Branch, BaseRemote: base.Remote, DispatchLocalBaseSHA: s.localBase(ctx, entry, place.dir, base),
+		})
+	}
+	return repos, nil
 }
 
 // baseMove reads the commit the worker's base names now, in the repository
@@ -646,14 +757,36 @@ func oneLine(s string) string {
 }
 
 // partsOutsideRepo is the error of an entry whose plan with parts names paths
-// outside relative, the workspace repository its parts run merges in.
-func partsOutsideRepo(problems []domain.LadoPlanProblem, relative string) string {
+// outside relatives, the workspace repositories its parts run merges in.
+func partsOutsideRepo(problems []domain.LadoPlanProblem, relatives []string) string {
 	globs := make([]string, len(problems))
 	for i, p := range problems {
 		globs[i] = p.Detail
 	}
-	message := fmt.Sprintf("LADO_PARTS_OUTSIDE_REPO: a parts run merges in the repository folder %s/ only, and the plan names paths outside it: %s",
-		strings.Trim(relative, "/"), strings.Join(globs, ", "))
+	var message string
+	if len(relatives) == 1 {
+		message = fmt.Sprintf("LADO_PARTS_OUTSIDE_REPO: a parts run merges in the repository folder %s/ only, and the plan names paths outside it: %s",
+			strings.Trim(relatives[0], "/"), strings.Join(globs, ", "))
+	} else {
+		folders := make([]string, len(relatives))
+		for i, relative := range relatives {
+			folders[i] = strings.Trim(relative, "/") + "/"
+		}
+		message = fmt.Sprintf("LADO_PARTS_OUTSIDE_REPO: a parts run merges in the repository folders %s only, and the plan names paths outside them: %s",
+			joinAnd(folders), strings.Join(globs, ", "))
+	}
+	return cutProblem(message)
+}
+
+// partsUnknownRepo is the error of an entry whose plan's repos list names a
+// folder that is no repository of the project, as after the workspace's
+// repositories changed since the plan was pinned.
+func partsUnknownRepo(relative string) string {
+	return cutProblem(fmt.Sprintf("LADO_PARTS_OUTSIDE_REPO: the plan's repos list names %s/, which is no repository of the project", relative))
+}
+
+// cutProblem cuts an entry's error to maxProblemBytes.
+func cutProblem(message string) string {
 	if len(message) > maxProblemBytes {
 		message = strings.ToValidUTF8(message[:maxProblemBytes-3], "") + "..."
 	}

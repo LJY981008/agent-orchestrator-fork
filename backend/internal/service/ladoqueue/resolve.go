@@ -131,6 +131,12 @@ func (s *Service) resolveOne(ctx context.Context, c domain.LadoResolveCandidate,
 	case domain.LadoResolveNeedsHuman:
 		return s.reopenResolve(ctx, c, round.now)
 	}
+	if !c.Conflicting() && r.PRURL != "" && otherConflict(c) {
+		// The PR the resolve was for no longer conflicts and another tracked
+		// PR of the execution does (#64): the resolve moves on to that one,
+		// which the next pass picks, in merge order.
+		return s.moveResolveOn(ctx, c, round.now)
+	}
 	if !c.Conflicting() || c.SessionLive {
 		// The execution's own session gets AO's conflict notice.
 		return nil
@@ -171,11 +177,13 @@ func (s *Service) endResolve(ctx context.Context, c domain.LadoResolveCandidate,
 		}
 	}
 	s.forgetResolve(c.Execution.SessionID)
-	if r.Version == 0 || (r.State == domain.LadoResolveNone && r.Attempts == 0 && r.Error == "" && r.DoneSeenAt.IsZero()) {
+	if r.Version == 0 || (r.State == domain.LadoResolveNone && r.Attempts == 0 && r.Error == "" && r.DoneSeenAt.IsZero() && r.PRURL == "") {
 		return nil
 	}
 	next := r
-	next.State, next.Attempts, next.DoneSeenAt, next.Error = domain.LadoResolveNone, 0, time.Time{}, ""
+	// The resolve of the next PR that conflicts, in merge order (#64), starts
+	// afresh.
+	next.State, next.Attempts, next.DoneSeenAt, next.Error, next.PRURL = domain.LadoResolveNone, 0, time.Time{}, "", ""
 	if ok, err := s.writeResolve(ctx, next, now); err != nil || !ok {
 		return err
 	}
@@ -205,7 +213,7 @@ func (s *Service) reopenResolve(ctx context.Context, c domain.LadoResolveCandida
 		}
 	}
 	next := c.Resolve
-	next.State, next.Attempts, next.DoneSeenAt, next.Error = domain.LadoResolveNone, 0, time.Time{}, ""
+	next.State, next.Attempts, next.DoneSeenAt, next.Error, next.PRURL = domain.LadoResolveNone, 0, time.Time{}, "", ""
 	if ok, err := s.writeResolve(ctx, next, now); err != nil || !ok {
 		return err
 	}
@@ -213,15 +221,22 @@ func (s *Service) reopenResolve(ctx context.Context, c domain.LadoResolveCandida
 	return nil
 }
 
-// resolveRepo is where an execution's PR is read: the task's repository, the
-// remote and the PR's target branch.
+// resolveRepo is where an execution's PR is read: the repository the PR is
+// open in, the remote and the PR's target branch. folder is that
+// repository's folder in the workspace, as "front", when it is not the one
+// that holds the task's issue (#64); empty otherwise.
 type resolveRepo struct {
 	task       domain.LadoTask
 	dir        string
 	remote     string
 	baseBranch string
+	folder     string
 }
 
+// readResolveRepo reads where the execution's PR is resolved. A PR LADO
+// tracks in another repository of the workspace than the issue's (#64) is
+// resolved there, from that repository's remote and default branch; any
+// other in the task's repository, from the base the execution recorded.
 func (s *Service) readResolveRepo(ctx context.Context, exec domain.LadoExecution) (resolveRepo, bool, error) {
 	task, ok, err := s.deps.Store.LadoTask(ctx, exec.TaskID)
 	if err != nil {
@@ -230,11 +245,31 @@ func (s *Service) readResolveRepo(ctx context.Context, exec domain.LadoExecution
 	if !ok {
 		return resolveRepo{}, false, nil
 	}
-	dir, _, base, err := s.workerBase(ctx, task)
+	issue, children, err := s.taskRepos(ctx, task)
 	if err != nil {
 		return resolveRepo{}, false, fmt.Errorf("resolve the task's repository: %w", err)
 	}
-	repo := resolveRepo{task: task, dir: dir, remote: exec.BaseRemote, baseBranch: exec.PR.TargetBranch}
+	place, own := issue, true
+	if relative := strings.Trim(trackedRepo(exec), "/"); relative != "" && relative != strings.Trim(issue.relative, "/") {
+		child, found := childPlace(children, relative)
+		if !found {
+			return resolveRepo{}, false, fmt.Errorf("resolve the PR's repository: the project has no repository %s/", relative)
+		}
+		place, own = child, false
+	}
+	base, err := s.resolveBase(ctx, place)
+	if err != nil {
+		return resolveRepo{}, false, fmt.Errorf("resolve the PR's repository: %w", err)
+	}
+	repo := resolveRepo{task: task, dir: place.dir, baseBranch: exec.PR.TargetBranch}
+	if own {
+		repo.remote = exec.BaseRemote
+		if repo.baseBranch == "" {
+			repo.baseBranch = exec.BaseBranch
+		}
+	} else {
+		repo.folder = strings.Trim(place.relative, "/")
+	}
 	if repo.remote == "" {
 		repo.remote = base.Remote
 	}
@@ -242,12 +277,53 @@ func (s *Service) readResolveRepo(ctx context.Context, exec domain.LadoExecution
 		repo.remote = defaultResolveRemote
 	}
 	if repo.baseBranch == "" {
-		repo.baseBranch = exec.BaseBranch
-	}
-	if repo.baseBranch == "" {
 		repo.baseBranch = base.Branch
 	}
 	return repo, true, nil
+}
+
+// trackedRepo returns the repository folder of the execution's PR among the
+// PRs LADO tracks for it (#64), "" for a PR it does not track.
+func trackedRepo(exec domain.LadoExecution) string {
+	for _, pr := range exec.PRs {
+		if pr.PR.URL == exec.PR.URL {
+			return pr.Repo
+		}
+	}
+	return ""
+}
+
+// otherConflict reports whether a tracked PR of the candidate's execution
+// other than the one its resolve is for conflicts with its base, or its
+// head's record failed with base_overlap (#64).
+func otherConflict(c domain.LadoResolveCandidate) bool {
+	for _, pr := range c.Execution.PRs {
+		if pr.PR.URL == c.Execution.PR.URL || pr.PR.Merged || pr.PR.Closed || pr.PR.HeadSHA == "" {
+			continue
+		}
+		if pr.PR.Mergeability == domain.MergeConflicting || (pr.Verification.BaseOverlap && pr.Verification.HeadSHA == pr.PR.HeadSHA) {
+			return true
+		}
+	}
+	return false
+}
+
+// moveResolveOn forgets the PR a resolve that runs no worker was for, with
+// its failed attempts, so that the next pass resolves the first tracked PR
+// that conflicts.
+func (s *Service) moveResolveOn(ctx context.Context, c domain.LadoResolveCandidate, now time.Time) error {
+	r := c.Resolve
+	if r.State != domain.LadoResolveNone {
+		return nil
+	}
+	next := r
+	next.Attempts, next.DoneSeenAt, next.Error, next.PRURL = 0, time.Time{}, "", ""
+	if ok, err := s.writeResolve(ctx, next, now); err != nil || !ok {
+		return err
+	}
+	s.forgetResolve(c.Execution.SessionID)
+	s.appendAudit(ctx, s.audit("resolve.moved_on", r.QueueEntryID, map[string]any{"task": r.TaskID, "execution": r.ExecutionSessionID, "pr": r.PRURL}))
+	return nil
 }
 
 // startResolve starts a resolve worker for a PR no session works on, within
@@ -298,6 +374,10 @@ func (s *Service) startResolve(ctx context.Context, c domain.LadoResolveCandidat
 	next := r
 	next.ExecutionSessionID, next.TaskID, next.QueueEntryID = exec.SessionID, exec.TaskID, exec.QueueEntryID
 	next.StartHeadSHA, next.BaseTipSHA, next.NotifiedHeadSHA, next.DoneSeenAt = headTip, baseTip, "", time.Time{}
+	if len(exec.PRs) > 0 {
+		// The resolve is for this tracked PR until it is resolved (#64).
+		next.PRURL = exec.PR.URL
+	}
 	if ok, err := s.writeResolve(ctx, next, now); err != nil || !ok {
 		return err
 	}
@@ -543,7 +623,7 @@ func (s *Service) notifyResolver(ctx context.Context, c domain.LadoResolveCandid
 // worker, done, is stopped.
 func (s *Service) resolveSucceeded(ctx context.Context, c domain.LadoResolveCandidate, r domain.LadoPRResolve, now time.Time) error {
 	next := r
-	next.State, next.Attempts, next.DoneSeenAt, next.Error = domain.LadoResolveNone, 0, time.Time{}, ""
+	next.State, next.Attempts, next.DoneSeenAt, next.Error, next.PRURL = domain.LadoResolveNone, 0, time.Time{}, "", ""
 	if ok, err := s.writeResolve(ctx, next, now); err != nil || !ok {
 		return err
 	}
@@ -716,6 +796,9 @@ func resolvePrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.L
 	fmt.Fprintf(&b, "You are resolving the pull request of a plan the developer approved in LADO for %s: %s.\n", task.IssueRef, oneLine(task.Issue.Title))
 	fmt.Fprintf(&b, "The pull request %s (source branch `%s`) %s. The worker that opened it no longer runs, so LADO started you to take the base in.\n\n", pr.URL, c.PRSourceBranch, why)
 	b.WriteString("## Your task\n\n")
+	if repo.folder != "" {
+		fmt.Fprintf(&b, "- The pull request is open in the workspace repository folder `%s/`. Work in `%s/` only.\n", repo.folder, repo.folder)
+	}
 	fmt.Fprintf(&b, "- You work on branch `%s`, which starts at the pull request's head `%s`.\n", branch, headTip)
 	fmt.Fprintf(&b, "- Fetch the base and merge it: `git fetch %s %s` and `git merge --no-ff %s/%s`. The merge must contain the base commit `%s`. Write the merge commit's title in Korean.\n",
 		repo.remote, repo.baseBranch, repo.remote, repo.baseBranch, baseTip)

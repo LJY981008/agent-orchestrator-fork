@@ -485,6 +485,26 @@ func (f *fakeStore) StartLadoPartRun(context.Context, string, domain.LadoPartRun
 	return errors.New("the fake store keeps no parts runs")
 }
 
+func (f *fakeStore) StartLadoPartRunRepos(context.Context, string, domain.LadoPartRun, []domain.LadoPartRunRepo, []domain.LadoTaskPart, domain.LadoAuditEvent) error {
+	return errors.New("the fake store keeps no parts runs")
+}
+
+func (f *fakeStore) LadoPartRunRepos(context.Context, domain.LadoQueueEntryID) ([]domain.LadoPartRunRepo, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) LadoTaskPartRepos(context.Context, domain.LadoQueueEntryID) (map[string][]domain.LadoTaskPartRepo, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) SetLadoTaskPartRepos(context.Context, domain.LadoTaskPart, domain.LadoPartState, []domain.LadoTaskPartRepo) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeStore) MergeLadoTaskPartRepo(context.Context, domain.LadoTaskPart, domain.LadoPartState, domain.LadoTaskPartRepo, string, *domain.LadoAuditEvent) (bool, error) {
+	return false, nil
+}
+
 func (f *fakeStore) ActiveLadoPartRuns(context.Context) ([]domain.LadoActivePartRun, error) {
 	return nil, nil
 }
