@@ -2016,6 +2016,8 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		BaseRef:       baseRefs[filepath.Clean(project.Path)],
 		Repos:         childRepos,
 		Assets:        assets,
+
+		ReuseExistingBranch: cfg.ReuseExistingBranch, // LADO #60
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
