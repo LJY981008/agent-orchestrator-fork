@@ -9,7 +9,9 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladogate"
 )
 
 // recordingWorkGate records what the session manager asks the LADO gate and
@@ -72,6 +74,8 @@ func TestLadoSendOriginReadsTheDeliveryFacts(t *testing.T) {
 		{"report relay", report, ports.MessageDeliveryOptions{}, ports.SendOriginCoordination},
 		{"session sending a report envelope", report, ports.MessageDeliveryOptions{SenderSessionID: "mer-orchestrator-1"}, ports.SendOriginSession},
 		{"no sender facts", "CI failed on your PR", ports.MessageDeliveryOptions{}, ports.SendOriginDaemon},
+		{"LADO relay label only", domain.LadoRelayHeader, ports.MessageDeliveryOptions{SenderDisplayName: ladoRelayLabel}, ports.SendOriginDaemon},
+		{"session that also carries LADO's label", "make it blue", ports.MessageDeliveryOptions{SenderSessionID: "mer-orchestrator-1", SenderDisplayName: ladoRelayLabel}, ports.SendOriginSession},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -177,6 +181,87 @@ func TestSendTellsTheWorkGateWhoSent(t *testing.T) {
 	}
 	if len(msg.msgs) != 2 {
 		t.Fatalf("delivered %d messages, want 2", len(msg.msgs))
+	}
+}
+
+// ladoRelayLabel is the label LADO's relay delivers with.
+const ladoRelayLabel = domain.LadoRelaySenderLabel
+
+// ladoModeOn reads every project as in LADO mode.
+type ladoModeOn struct{}
+
+func (ladoModeOn) LadoProjectSettings(context.Context, domain.ProjectID) (domain.LadoProjectSettings, error) {
+	return domain.LadoProjectSettings{LadoMode: true}, nil
+}
+
+// ladoSendRefusal reports whether err is the gate's LADO_SEND_REFUSED.
+func ladoSendRefusal(err error) bool {
+	var apiErr *apierr.Error
+	return errors.As(err, &apiErr) && apiErr.Code == "LADO_SEND_REFUSED"
+}
+
+// LADO's relay of a developer's instruction sends with a display name and no
+// sender session, so LADO's real gate lets it through as AO's own message. A
+// session's message stays refused whatever label it carries: the label is
+// presentation, never an authorship fact (docs/LJY-PRD/TDD.md §6.3).
+func TestLadoRelayLabelPassesTheGateOnlyWithoutASenderSession(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = pastStartupGate(domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, Harness: "claude-code"})
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, fakeAgent{}, msg, st)
+	m.SetWorkGate(ladogate.New(ladoModeOn{}, st, nil, nil, nil))
+
+	err := m.SendWithOptions(ctx, "mer-1", "rebase now", nil,
+		ports.MessageDeliveryOptions{SenderSessionID: "mer-orchestrator-1", SenderDisplayName: ladoRelayLabel})
+	if !ladoSendRefusal(err) {
+		t.Fatalf("orchestrator send with LADO's label: error = %v, want LADO_SEND_REFUSED", err)
+	}
+	if len(msg.msgs) != 0 {
+		t.Fatalf("delivered %q after a refusal, want nothing", msg.msgs)
+	}
+
+	err = m.SendWithOptions(ctx, "mer-1", domain.LadoRelayHeader+"\n\n후속 2건을 이어서 하세요.", nil,
+		ports.MessageDeliveryOptions{SenderDisplayName: ladoRelayLabel})
+	if err != nil {
+		t.Fatalf("LADO relay: %v", err)
+	}
+	if len(msg.msgs) != 1 || !strings.Contains(msg.msgs[0], "후속 2건을 이어서 하세요.") {
+		t.Fatalf("delivered %q, want the relayed instruction", msg.msgs)
+	}
+}
+
+// A Chat worker gets the label with the message, so the timeline can show it.
+func TestLadoRelayLabelReachesAChatWorker(t *testing.T) {
+	launcher := &recordingLauncher{}
+	m, st, _ := newChatManager(launcher)
+	rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+		ProjectID: chatTestProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex,
+		Prompt: "initial brief", RequestedMode: domain.SessionModeChat,
+	})
+	if err != nil {
+		t.Fatalf("Spawn: %v", err)
+	}
+	m.SetWorkGate(ladogate.New(ladoModeOn{}, st, nil, nil, nil))
+
+	err = m.SendWithOptions(ctx, rec.ID, "rebase now", nil,
+		ports.MessageDeliveryOptions{SenderSessionID: "mer-orchestrator-1", SenderDisplayName: ladoRelayLabel})
+	if !ladoSendRefusal(err) {
+		t.Fatalf("orchestrator send with LADO's label: error = %v, want LADO_SEND_REFUSED", err)
+	}
+	if len(launcher.relayed) != 0 {
+		t.Fatalf("relayed %q after a refusal, want nothing", launcher.relayed)
+	}
+
+	if err := m.SendWithOptions(ctx, rec.ID, "후속 2건을 이어서 하세요.", nil,
+		ports.MessageDeliveryOptions{SenderDisplayName: ladoRelayLabel}); err != nil {
+		t.Fatalf("LADO relay: %v", err)
+	}
+	if len(launcher.relayOptions) != 1 {
+		t.Fatalf("relayed %d messages, want 1", len(launcher.relayOptions))
+	}
+	got := launcher.relayOptions[0]
+	if got.SenderDisplayName != ladoRelayLabel || got.SenderSessionID != "" || got.AuthoredByUser {
+		t.Fatalf("relay options = %+v, want LADO's label and no sender", got)
 	}
 }
 
