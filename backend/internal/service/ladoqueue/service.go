@@ -90,7 +90,16 @@ type ResolveStore interface {
 
 // PartStore keeps parts runs (parts.go).
 type PartStore interface {
-	StartLadoPartRun(ctx context.Context, token string, run domain.LadoPartRun, parts []domain.LadoTaskPart, event domain.LadoAuditEvent) error
+	// StartLadoPartRunRepos starts a parts run in its repositories (#64):
+	// one for a run in one repository.
+	StartLadoPartRunRepos(ctx context.Context, token string, run domain.LadoPartRun, repos []domain.LadoPartRunRepo, parts []domain.LadoTaskPart, event domain.LadoAuditEvent) error
+	// LadoPartRunRepos, LadoTaskPartRepos, SetLadoTaskPartRepos and
+	// MergeLadoTaskPartRepo read and write a run in several repositories
+	// repository by repository (parts_repos.go).
+	LadoPartRunRepos(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoPartRunRepo, error)
+	LadoTaskPartRepos(ctx context.Context, entryID domain.LadoQueueEntryID) (map[string][]domain.LadoTaskPartRepo, error)
+	SetLadoTaskPartRepos(ctx context.Context, part domain.LadoTaskPart, oldState domain.LadoPartState, repos []domain.LadoTaskPartRepo) (bool, error)
+	MergeLadoTaskPartRepo(ctx context.Context, part domain.LadoTaskPart, oldState domain.LadoPartState, repo domain.LadoTaskPartRepo, oldHead string, event *domain.LadoAuditEvent) (bool, error)
 	ActiveLadoPartRuns(ctx context.Context) ([]domain.LadoActivePartRun, error)
 	LadoPartRun(ctx context.Context, entryID domain.LadoQueueEntryID) (domain.LadoPartRun, bool, error)
 	LadoTaskParts(ctx context.Context, entryID domain.LadoQueueEntryID) ([]domain.LadoTaskPart, error)

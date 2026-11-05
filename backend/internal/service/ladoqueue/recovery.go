@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -92,7 +93,8 @@ func (s *Service) recoverEntry(ctx context.Context, entry domain.LadoQueueEntry,
 // then is no longer known, so the execution records no base move.
 func (s *Service) relink(ctx context.Context, entry domain.LadoQueueEntry, session domain.SessionRecord, settings domain.LadoDispatchSettings) error {
 	ctx = context.WithoutCancel(ctx)
-	err := s.link(ctx, entry, domain.LadoExecution{SessionID: session.ID, StartedAt: session.CreatedAt.UTC()}, settings)
+	exec := domain.LadoExecution{SessionID: session.ID, StartedAt: session.CreatedAt.UTC(), PRRepos: s.declaredRepos(ctx, entry)}
+	err := s.link(ctx, entry, exec, settings)
 	if errors.Is(err, domain.ErrLadoLeaseLost) {
 		s.deps.Log.Warn("LADO lost the claim of a queue entry before linking the worker it started",
 			"entry", entry.ID, "task", entry.TaskID, "session", session.ID)
@@ -105,6 +107,23 @@ func (s *Service) relink(ctx context.Context, entry domain.LadoQueueEntry, sessi
 		"session", session.ID, "attempt", entry.AttemptCount)
 	s.stopIfUnwanted(ctx, entry, session.ID)
 	return nil
+}
+
+// declaredRepos reads the repos list of the plan the entry's worker started
+// from (#64), which its execution keeps as the repositories it opens PRs in.
+// A plan that cannot be read now, or is no longer the entry's, gives none:
+// the execution then waits for no PR of its own repositories.
+func (s *Service) declaredRepos(ctx context.Context, entry domain.LadoQueueEntry) []string {
+	task, ok, err := s.deps.Store.LadoTask(ctx, entry.TaskID)
+	if err != nil || !ok {
+		return nil
+	}
+	in, err := s.deps.Tasks.RunInput(ctx, task)
+	if err != nil || in.Approval.ID != entry.PlanApprovalID {
+		return nil
+	}
+	plan, _ := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{Task: task.ID, Issue: task.IssueRef})
+	return slices.Clone(plan.Repos)
 }
 
 // stopUnfinished stops a session AO began for an expired attempt but never

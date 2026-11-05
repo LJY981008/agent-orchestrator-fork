@@ -23,9 +23,9 @@ func TestWorkerPromptsNameThePlanFileToReadAgain(t *testing.T) {
 	run := domain.LadoPartRun{Branch: "b/root", HeadSHA: "def"}
 	prompts := map[string]string{
 		"single":      workerPrompt(task, in, nil),
-		"part":        partPrompt(task, in, part, []domain.LadoTaskPart{part}, "b/store"),
-		"merge":       mergePrompt(task, in, part, "b/merge"),
-		"integration": integrationPrompt(task, in, nil, run, []domain.LadoTaskPart{part}),
+		"part":        partPrompt(task, in, part, []domain.LadoTaskPart{part}, "b/store", nil),
+		"merge":       mergePrompt(task, in, part, "b/merge", "", part.MergeTipSHA),
+		"integration": integrationPrompt(task, in, nil, run, []domain.LadoTaskPart{part}, nil),
 	}
 	for role, prompt := range prompts {
 		if !strings.Contains(prompt, "kept read-only at `"+planFile+"`, byte for byte") {
@@ -46,7 +46,7 @@ func TestWorkerPromptsNameThePlanFileToReadAgain(t *testing.T) {
 	in.PlanFile = ""
 	for role, prompt := range map[string]string{
 		"single": workerPrompt(task, in, nil),
-		"part":   partPrompt(task, in, part, []domain.LadoTaskPart{part}, "b/store"),
+		"part":   partPrompt(task, in, part, []domain.LadoTaskPart{part}, "b/store", nil),
 	} {
 		if strings.Contains(prompt, "read that file again") {
 			t.Errorf("%s prompt names a plan file it does not have", role)

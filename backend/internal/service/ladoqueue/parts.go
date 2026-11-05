@@ -25,27 +25,34 @@ import (
 )
 
 // startParts starts the parts run of a claimed entry whose approved plan has
-// parts: it makes the integration branch at the dispatch's base commit and
-// records the run and its waiting parts, which frees the entry's lease. The
-// parts' workers start in the parts pass. It reports whether the run started,
-// which takes the task's slot.
+// parts: it makes the integration branch at the dispatch's base commit in
+// each repository the run keeps one in (repos, in merge order, #64) and
+// records the run, its repositories and its waiting parts, which frees the
+// entry's lease. The parts' workers start in the parts pass. It reports
+// whether the run started, which takes the task's slot.
 func (s *Service) startParts(ctx context.Context, entry domain.LadoQueueEntry, task domain.LadoTask, in ladotask.RunInput, plan domain.LadoPlan,
-	dir string, base ports.WorkspaceDefaultBranch, dispatchSHA string, ahead *int, localSHA string) (bool, error) {
-	if !commitID.MatchString(dispatchSHA) {
-		// Without the base commit there is nothing to branch from: try again.
-		return false, s.attemptFailed(ctx, entry, "the base commit could not be read")
+	repos []domain.LadoPartRunRepo) (bool, error) {
+	for _, repo := range repos {
+		if !commitID.MatchString(repo.BaseSHA) {
+			// Without the base commit there is nothing to branch from: try again.
+			return false, s.attemptFailed(ctx, entry, "the base commit could not be read")
+		}
 	}
 	branch := domain.LadoIntegrationBranch(task.ID, entry.ID)
-	if err := s.deps.PartGit.CreateBranch(ctx, dir, branch, dispatchSHA); err != nil {
-		s.deps.Log.Warn("LADO could not make a task's integration branch", "entry", entry.ID, "task", task.ID, "branch", branch, "err", err)
-		return false, s.attemptFailed(ctx, entry, "the integration branch could not be made")
+	for _, repo := range repos {
+		if err := s.deps.PartGit.CreateBranch(ctx, repo.Dir, branch, repo.BaseSHA); err != nil {
+			s.deps.Log.Warn("LADO could not make a task's integration branch", "entry", entry.ID, "task", task.ID, "branch", branch,
+				"repo", repo.Relative, "err", err)
+			return false, s.attemptFailed(ctx, entry, "the integration branch could not be made")
+		}
 	}
+	first := repos[0]
 	at := s.deps.Clock().UTC()
 	run := domain.LadoPartRun{
-		QueueEntryID: entry.ID, TaskID: task.ID, ProjectID: task.ProjectID, RepoDir: dir,
-		Branch: branch, BaseSHA: dispatchSHA, HeadSHA: dispatchSHA,
-		PlanRevisionID: in.Revision.ID, PlanBaseSHA: in.Revision.BaseSHA, BaseCommitsAhead: ahead,
-		BaseBranch: base.Branch, BaseRemote: base.Remote, DispatchLocalBaseSHA: localSHA, StartedAt: at,
+		QueueEntryID: entry.ID, TaskID: task.ID, ProjectID: task.ProjectID, RepoDir: first.Dir,
+		Branch: branch, BaseSHA: first.BaseSHA, HeadSHA: first.BaseSHA,
+		PlanRevisionID: in.Revision.ID, PlanBaseSHA: in.Revision.BaseSHA, BaseCommitsAhead: first.BaseCommitsAhead,
+		BaseBranch: first.BaseBranch, BaseRemote: first.BaseRemote, DispatchLocalBaseSHA: first.DispatchLocalBaseSHA, StartedAt: at,
 	}
 	phases := domain.LadoPartPhases(plan.Parts)
 	parts := make([]domain.LadoTaskPart, 0, len(plan.Parts))
@@ -59,8 +66,16 @@ func (s *Service) startParts(ctx context.Context, entry domain.LadoQueueEntry, t
 			Steps: p.Steps, AffectedPaths: p.AffectedPaths, DependsOn: p.DependsOn, WaitingReason: waiting,
 		})
 	}
-	err := s.deps.Store.StartLadoPartRun(context.WithoutCancel(ctx), entry.LeaseToken, run, parts,
-		s.audit("parts.started", entry.ID, map[string]any{"task": task.ID, "branch": branch, "base": dispatchSHA, "parts": len(parts)}))
+	payload := map[string]any{"task": task.ID, "branch": branch, "base": first.BaseSHA, "parts": len(parts)}
+	if len(repos) > 1 {
+		bases := map[string]string{}
+		for _, repo := range repos {
+			bases[repo.Relative] = repo.BaseSHA
+		}
+		payload["repos"] = bases
+	}
+	err := s.deps.Store.StartLadoPartRunRepos(context.WithoutCancel(ctx), entry.LeaseToken, run, repos, parts,
+		s.audit("parts.started", entry.ID, payload))
 	switch {
 	case errors.Is(err, domain.ErrLadoLeaseLost):
 		s.deps.Log.Warn("LADO lost the claim of a queue entry before starting its parts", "entry", entry.ID, "task", task.ID)
@@ -68,7 +83,7 @@ func (s *Service) startParts(ctx context.Context, entry domain.LadoQueueEntry, t
 	case err != nil:
 		return false, fmt.Errorf("start the parts run: %w", err)
 	}
-	s.deps.Log.Info("LADO started a task's parts run", "entry", entry.ID, "task", task.ID, "branch", branch, "parts", len(parts))
+	s.deps.Log.Info("LADO started a task's parts run", "entry", entry.ID, "task", task.ID, "branch", branch, "parts", len(parts), "repos", len(repos))
 	return true, nil
 }
 
@@ -122,6 +137,18 @@ type partRun struct {
 	in *ladotask.RunInput
 	// holds are the pass's launch holds (launch_hold.go).
 	holds launchHolds
+	// repos are the run's repositories in merge order (#64): one for a run
+	// in one repository, which keeps to run and the parts' own fields.
+	// partRepos is how each part went in each repository, by part id, read
+	// only for a run in several (multi).
+	repos     []domain.LadoPartRunRepo
+	partRepos map[string][]domain.LadoTaskPartRepo
+}
+
+// multi reports whether the run keeps integration branches in several
+// repositories (#64).
+func (r *partRun) multi() bool {
+	return len(r.repos) > 1
 }
 
 func (s *Service) advanceRun(ctx context.Context, active domain.LadoActivePartRun, settings domain.LadoDispatchSettings, load *domain.LadoRunLoad, tight bool, holds launchHolds, now time.Time) error {
@@ -151,6 +178,9 @@ func (s *Service) advanceRun(ctx context.Context, active domain.LadoActivePartRu
 		return err
 	}
 	r := &partRun{run: active.Run, entry: active.Entry, task: task, parts: parts, execs: map[domain.SessionID]domain.LadoExecution{}, holds: holds}
+	if err := s.loadRepos(ctx, r); err != nil {
+		return err
+	}
 	for _, exec := range execs {
 		r.execs[exec.SessionID] = exec
 	}
@@ -249,6 +279,9 @@ func (s *Service) writePart(ctx context.Context, part *domain.LadoTaskPart, next
 // plan marks it allow_empty, and fails the run otherwise. Otherwise
 // LADO records the merge it is about to make, then makes it.
 func (s *Service) mergeDone(ctx context.Context, r *partRun, i int) error {
+	if r.multi() {
+		return s.mergeDoneRepos(ctx, r, i)
+	}
 	part := &r.parts[i]
 	tip, err := s.deps.PartGit.BranchSHA(ctx, r.run.RepoDir, part.Branch)
 	if err != nil {
@@ -301,6 +334,9 @@ func (s *Service) allowsEmpty(ctx context.Context, r *partRun, partID string) (b
 // the branch already holds that merge, as after a restart between the two,
 // the merge is recorded without being made again.
 func (s *Service) finishMerge(ctx context.Context, r *partRun, i int) error {
+	if r.multi() {
+		return s.finishMergeRepos(ctx, r, i)
+	}
 	part := &r.parts[i]
 	current, err := s.deps.PartGit.BranchSHA(ctx, r.run.RepoDir, r.run.Branch)
 	if err != nil {
@@ -344,6 +380,9 @@ func (s *Service) finishMerge(ctx context.Context, r *partRun, i int) error {
 // when another part merged meanwhile, LADO merges the worker's branch onto
 // it as it merges a part; a conflict there is a merge still to be done.
 func (s *Service) fastForward(ctx context.Context, r *partRun, i int, note string) error {
+	if r.multi() {
+		return s.fastForwardRepo(ctx, r, i, note)
+	}
 	part := &r.parts[i]
 	tip, err := s.deps.PartGit.BranchSHA(ctx, r.run.RepoDir, part.MergeBranch)
 	if err != nil {
@@ -658,8 +697,15 @@ func (s *Service) startPart(ctx context.Context, r *partRun, i int, settings dom
 	next.State, next.Attempts, next.Branch, next.StartSHA = domain.LadoPartRunning, attempt, branch, r.run.HeadSHA
 	next.WaitingReason, next.WaitingDetail, next.MergeFromSHA, next.MergeTipSHA = "", "", "", ""
 	req := domain.LadoRunRequest{Entry: r.entry.ID, Role: domain.LadoRolePart, Part: part.PartID, Attempt: attempt}
-	prompt := partPrompt(r.task, in, *part, r.parts, branch)
-	started, err := s.startRunWorker(ctx, r, req, in, branch, r.run.HeadSHA, prompt, settings, &next, part.State)
+	if r.multi() {
+		// Each repository's start is recorded before the worker starts
+		// there, as the part's own start is with its link.
+		if err := s.recordPartStarts(ctx, r, i); err != nil {
+			return err
+		}
+	}
+	prompt := partPrompt(r.task, in, *part, r.parts, branch, r.folders())
+	started, err := s.startRunWorker(ctx, r, req, in, branch, r.run.HeadSHA, r.allBranchesAt(), prompt, settings, &next, part.State)
 	if err != nil || started {
 		if started {
 			*part = next
@@ -712,8 +758,20 @@ func (s *Service) startMergeWorker(ctx context.Context, r *partRun, i int, setti
 	next := *part
 	next.MergeAttempts, next.MergeBranch, next.WaitingReason, next.WaitingDetail = attempt, branch, "", ""
 	req := domain.LadoRunRequest{Entry: r.entry.ID, Role: domain.LadoRoleMerge, Part: part.PartID, Attempt: attempt}
-	prompt := mergePrompt(r.task, in, *part, branch)
-	started, err := s.startRunWorker(ctx, r, req, in, branch, r.run.HeadSHA, prompt, settings, &next, part.State)
+	at, folder, tip := []branchAt{{dir: r.run.RepoDir, sha: r.run.HeadSHA}}, "", part.MergeTipSHA
+	startSHA := r.run.HeadSHA
+	if r.multi() {
+		// The merge conflicted in one repository; its merge worker works
+		// there, from that repository's integration head.
+		k := r.repoIndex(part.MergeRepo)
+		if k < 0 {
+			return s.failRun(ctx, r, part.PartID, "the repository whose merge conflicted is not the run's")
+		}
+		repo := r.repos[k]
+		at, folder, tip, startSHA = []branchAt{{dir: repo.Dir, sha: repo.HeadSHA}}, repo.Relative, r.partRepo(part.PartID, k).MergeTipSHA, repo.HeadSHA
+	}
+	prompt := mergePrompt(r.task, in, *part, branch, folder, tip)
+	started, err := s.startRunWorker(ctx, r, req, in, branch, startSHA, at, prompt, settings, &next, part.State)
 	if err != nil || started {
 		if started {
 			*part = next
@@ -760,8 +818,8 @@ func (s *Service) startIntegration(ctx context.Context, r *partRun, settings dom
 	}
 	r.run.IntegrationAttempts = attempt
 	req := domain.LadoRunRequest{Entry: r.entry.ID, Role: domain.LadoRoleIntegration, Attempt: attempt}
-	prompt := integrationPrompt(r.task, in, checks, r.run, r.parts)
-	started, err := s.startRunWorker(ctx, r, req, in, r.run.Branch, r.run.HeadSHA, prompt, settings, nil, "")
+	prompt := integrationPrompt(r.task, in, checks, r.run, r.parts, r.repos)
+	started, err := s.startRunWorker(ctx, r, req, in, r.run.Branch, r.run.HeadSHA, nil, prompt, settings, nil, "")
 	if started {
 		load.Workers++
 		s.appendAudit(ctx, s.audit("integration.dispatched", r.entry.ID, map[string]any{"task": r.task.ID, "attempt": attempt, "branch": r.run.Branch, "head": r.run.HeadSHA}))
@@ -770,20 +828,22 @@ func (s *Service) startIntegration(ctx context.Context, r *partRun, settings dom
 }
 
 // startRunWorker starts one fresh worker session of a parts run on branch,
-// which it first makes at startSHA unless it is the integration branch. The
+// which it first makes in each repository of at at its commit; the
+// integration branch exists already, and at is nil for it. startSHA is the
+// commit the execution records as its start. The
 // entry's spawn request lets the worker gate grant that one spawn; the
 // session is linked as an execution of the entry with its role, part and
 // branch, and part, when given, is written with it. It reports whether a
 // worker started; a start that failed spends the attempt.
-func (s *Service) startRunWorker(ctx context.Context, r *partRun, req domain.LadoRunRequest, in ladotask.RunInput, branch, startSHA, prompt string,
-	settings domain.LadoDispatchSettings, part *domain.LadoTaskPart, oldState domain.LadoPartState) (bool, error) {
+func (s *Service) startRunWorker(ctx context.Context, r *partRun, req domain.LadoRunRequest, in ladotask.RunInput, branch, startSHA string, at []branchAt,
+	prompt string, settings domain.LadoDispatchSettings, part *domain.LadoTaskPart, oldState domain.LadoPartState) (bool, error) {
 	agent, err := snapshotAgent(in.Snapshot)
 	if err != nil {
 		return false, err
 	}
 	request := domain.LadoRunClientRequestID(req)
-	if req.Role != domain.LadoRoleIntegration {
-		if err := s.deps.PartGit.CreateBranch(ctx, r.run.RepoDir, branch, startSHA); err != nil {
+	for _, b := range at {
+		if err := s.deps.PartGit.CreateBranch(ctx, b.dir, branch, b.sha); err != nil {
 			return false, err
 		}
 	}
@@ -836,6 +896,11 @@ func (s *Service) linkRunWorker(ctx context.Context, r *partRun, req domain.Lado
 	if req.Role == domain.LadoRoleIntegration {
 		exec.DispatchBaseSHA, exec.BaseCommitsAhead = r.run.BaseSHA, r.run.BaseCommitsAhead
 		exec.BaseBranch, exec.BaseRemote, exec.DispatchLocalBaseSHA = r.run.BaseBranch, r.run.BaseRemote, r.run.DispatchLocalBaseSHA
+		if r.multi() {
+			// The repositories the parts changed are where the integration
+			// worker opens its PRs, in the plan's order: facts, not a plan.
+			exec.PRRepos, exec.PRReposFirm = r.changedRepos(), true
+		}
 	}
 	if settings.MaxRunMinutes > 0 {
 		exec.DeadlineAt = started.Add(time.Duration(settings.MaxRunMinutes) * time.Minute)
@@ -939,6 +1004,9 @@ func (s *Service) relinkRunWorker(ctx context.Context, entry domain.LadoQueueEnt
 		return fmt.Errorf("task %s not found", entry.TaskID)
 	}
 	r := &partRun{run: run, entry: entry, task: task}
+	if err := s.loadRepos(ctx, r); err != nil {
+		return err
+	}
 	branch, startSHA := run.Branch, run.HeadSHA
 	var part *domain.LadoTaskPart
 	var oldState domain.LadoPartState
@@ -960,6 +1028,9 @@ func (s *Service) relinkRunWorker(ctx context.Context, entry domain.LadoQueueEnt
 		} else {
 			branch = domain.LadoMergeBranch(task.ID, entry.ID, req.Part, req.Attempt)
 			next.MergeAttempts, next.MergeBranch, next.WaitingReason, next.WaitingDetail = req.Attempt, branch, "", ""
+			if k := r.repoIndex(next.MergeRepo); r.multi() && k >= 0 {
+				startSHA = r.repos[k].HeadSHA
+			}
 		}
 		part = &next
 	}
