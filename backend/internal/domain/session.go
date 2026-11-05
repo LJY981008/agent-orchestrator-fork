@@ -472,6 +472,35 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 	}
 }
 
+// ActivatedChatBranch returns the owner a chat session has after one of its
+// conversation branches becomes active, so in-memory fences match the row
+// that branch activation leaves behind. Field by field:
+//   - AgentSessionID, AgentSessionIDLaunchID, ProviderConversationID and
+//     ControllerGeneration: ActivateConversationBranchSession (sessions.sql)
+//     writes these same values.
+//   - Mode chat and IsTerminated false: that statement's WHERE clause only
+//     matches a live chat session.
+//   - RuntimeLaunchID empty: the chat commit (lifecycle markSpawned) already
+//     cleared it before any branch can be activated.
+//   - Harness: branch activation never changes it.
+//
+// Review-owned controllers do not share the session row's native identity,
+// so callers must not apply this to them.
+func (o SessionControllerOwner) ActivatedChatBranch(
+	harness AgentHarness,
+	providerConversationID, controllerGeneration string,
+) SessionControllerOwner {
+	o.Harness = harness
+	o.Mode = SessionModeChat
+	o.IsTerminated = false
+	o.RuntimeLaunchID = ""
+	o.AgentSessionID = providerConversationID
+	o.AgentSessionIDLaunchID = ""
+	o.ProviderConversationID = providerConversationID
+	o.ControllerGeneration = controllerGeneration
+	return o
+}
+
 // Session is the read-model returned across the API boundary: a SessionRecord
 // plus derived display facts. None of Status, SCMStatus, or KanbanColumn is
 // persisted.
