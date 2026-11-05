@@ -4319,6 +4319,7 @@
 	"lado.planProblem.part_step_shared": "Duas partes citam a mesma etapa.",
 	"lado.planProblem.part_path_outside": "O caminho de uma parte não está dentro de affected_paths do plano.",
 	"lado.planProblem.part_missing_field": "Falta a uma parte title, steps ou affected_paths.",
+	"lado.planProblem.part_repo_outside": "Em um projeto de workspace, os caminhos de um plano com partes devem ficar dentro da pasta do repositório que tem a issue.",
 	"lado.parts.title": "Partes",
 	"lado.parts.state.waiting": "Aguardando",
 	"lado.parts.state.running": "Em execução",

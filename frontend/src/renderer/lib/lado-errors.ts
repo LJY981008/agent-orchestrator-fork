@@ -443,6 +443,8 @@ const planProblemKeys: Partial<Record<string, LadoPlanProblemKey>> = {
 	part_step_shared: "lado.planProblem.part_step_shared",
 	part_path_outside: "lado.planProblem.part_path_outside",
 	part_missing_field: "lado.planProblem.part_missing_field",
+	// A workspace project runs parts in the issue's repository only (#60).
+	part_repo_outside: "lado.planProblem.part_repo_outside",
 };
 
 /**
