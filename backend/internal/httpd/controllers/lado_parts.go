@@ -45,8 +45,12 @@ func ladoTaskPartsResponse(view ladoqueue.PartsView) LadoTaskPartsResponse {
 		}
 	}
 	for _, part := range view.Parts {
+		partRepos := view.PartRepos[part.PartID]
 		var repos []LadoTaskPartRepoResponse
-		for _, repo := range view.PartRepos[part.PartID] {
+		if len(partRepos) > 0 {
+			repos = make([]LadoTaskPartRepoResponse, 0, len(partRepos))
+		}
+		for _, repo := range partRepos {
 			repos = append(repos, LadoTaskPartRepoResponse{Repo: repo.Relative, StartSHA: repo.StartSHA, MergedSHA: repo.MergedSHA, Empty: repo.Empty()})
 		}
 		resp.Parts = append(resp.Parts, LadoTaskPartResponse{
