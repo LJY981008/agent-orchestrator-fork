@@ -761,6 +761,10 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 		? `ao://sessions/${encodeURIComponent(senderProjectId)}/${encodeURIComponent(senderSessionId)}`
 		: undefined;
 	const visibleText = senderSessionId ? stripSteerSenderPrefix(message.text, senderSessionId) : message.text;
+	// LADO fork: a message AO sends on its own behalf, such as LADO's relay of
+	// a developer's instruction, stores its label as the display name with no
+	// sender session.
+	const ownLabel = message.senderLabel ?? (message.senderDisplayName?.trim() || message.origin);
 	const longReport = visibleText.length > ORIGIN_REPORT_COLLAPSE_AT;
 	const preview = longReport
 		? originReportPreview(visibleText)
@@ -768,7 +772,7 @@ export function OriginMessage({ message }: { message: ConversationMessage }) {
 
 	return (
 		<AutomationMessageFrame
-			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : message.senderLabel ?? message.origin}
+			label={senderSessionId ? <>{"[from "}{senderHref ? <SessionLabelLink href={senderHref}>{senderLabel}</SessionLabelLink> : senderLabel}{"]"}</> : ownLabel}
 			createdAt={message.createdAt}
 		>
 			{longReport && !expanded ? (
