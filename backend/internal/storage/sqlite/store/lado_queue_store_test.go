@@ -148,6 +148,14 @@ func insertLadoExecution(t *testing.T, raw *sql.DB, exec domain.LadoExecution) d
 	if !exec.DeadlineAt.IsZero() {
 		deadline = sql.NullTime{Time: exec.DeadlineAt, Valid: true}
 	}
+	repos, err := json.Marshal(append([]string{}, exec.PRRepos...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var firm int64
+	if exec.PRReposFirm {
+		firm = 1
+	}
 	if err := q.InsertLadoExecution(ctx, gen.InsertLadoExecutionParams{
 		SessionID:        string(exec.SessionID),
 		TaskID:           entry.TaskID,
@@ -161,6 +169,10 @@ func insertLadoExecution(t *testing.T, raw *sql.DB, exec domain.LadoExecution) d
 		BaseCommitsAhead: ahead,
 		StartedAt:        exec.StartedAt,
 		DeadlineAt:       deadline,
+		Role:             exec.Role,
+		PartID:           exec.PartID,
+		PRReposJson:      string(repos),
+		PRReposFirm:      firm,
 	}); err != nil {
 		t.Fatalf("insert execution of %s: %v", exec.QueueEntryID, err)
 	}

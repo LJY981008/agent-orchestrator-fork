@@ -9,11 +9,14 @@ package store
 // and the approval of the PR's current head (fillLadoVerification).
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -264,6 +267,55 @@ func (s *Store) AddLadoExecutionReview(ctx context.Context, r domain.LadoExecuti
 	})
 }
 
+// AddLadoExecutionPRReview records a review run LADO started for the head of
+// one PR of an execution (issue #64) as that PR's next round, from 1 to
+// domain.LadoReviewRoundCap: the PR's own rounds count, and so do those
+// recorded before rounds named a PR, which count for every PR of the
+// execution. A round that is not the next one is refused.
+func (s *Store) AddLadoExecutionPRReview(ctx context.Context, r domain.LadoExecutionReview, prURL string) error {
+	if r.ReviewRunID == "" || r.ExecutionSessionID == "" || r.CreatedAt.IsZero() || prURL == "" {
+		return errors.New("add LADO execution review: a run, a session, a PR and a time are required")
+	}
+	if r.Round < 1 || r.Round > domain.LadoReviewRoundCap {
+		return fmt.Errorf("add LADO execution review: round %d is not 1 to %d", r.Round, domain.LadoReviewRoundCap)
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "add LADO execution review", func(q *gen.Queries) error {
+		rounds, err := q.CountLadoExecutionPRReviews(ctx, gen.CountLadoExecutionPRReviewsParams{ExecutionSessionID: string(r.ExecutionSessionID), PRURL: prURL})
+		if err != nil {
+			return err
+		}
+		if int64(r.Round) != rounds+1 {
+			return fmt.Errorf("round %d is not the next one: the PR has %d", r.Round, rounds)
+		}
+		return q.InsertLadoExecutionReview(ctx, gen.InsertLadoExecutionReviewParams{
+			ReviewRunID:        r.ReviewRunID,
+			ExecutionSessionID: string(r.ExecutionSessionID),
+			HeadSha:            r.HeadSHA,
+			Round:              int64(r.Round),
+			CreatedAt:          r.CreatedAt.UTC(),
+			PRURL:              prURL,
+		})
+	})
+}
+
+// ListLadoExecutionPRReviews returns the review rounds of one PR of an
+// execution in order: its own and those recorded before rounds named a PR.
+func (s *Store) ListLadoExecutionPRReviews(ctx context.Context, session domain.SessionID, prURL string) ([]domain.LadoExecutionReview, error) {
+	rows, err := s.qr.ListLadoExecutionPRReviews(ctx, gen.ListLadoExecutionPRReviewsParams{ExecutionSessionID: string(session), PRURL: prURL})
+	if err != nil {
+		return nil, fmt.Errorf("list LADO execution reviews of a PR: %w", err)
+	}
+	reviews := make([]domain.LadoExecutionReview, 0, len(rows))
+	for _, row := range rows {
+		reviews = append(reviews, ladoExecutionReviewFromGen(row))
+	}
+	return reviews, nil
+}
+
 // ListLadoExecutionReviews returns an execution's review rounds in order.
 func (s *Store) ListLadoExecutionReviews(ctx context.Context, session domain.SessionID) ([]domain.LadoExecutionReview, error) {
 	rows, err := s.qr.ListLadoExecutionReviews(ctx, string(session))
@@ -382,26 +434,79 @@ func (s *Store) ListLadoCommitChecks(ctx context.Context, prURL, commit string) 
 }
 
 // ListLadoExecutionsToVerify returns up to limit executions for the
-// verification loop: those whose session's newest PR is open with a head AO
-// observed, and those whose newest PR merged or closed and is not settled in
-// that state yet. Heads without a record come first, then the records
-// computed longest ago, so that each execution takes its turn however many
-// wait. Each carries that PR, whether its session ended, the verification
-// facts of the PR's head and its PR's resolve, as task reads give them.
+// verification loop, one per PR to verify: each live tracked PR
+// (lado_execution_prs, issue #64) that is open with a head AO observed, or
+// merged or closed and not settled in that state yet, and for an execution
+// without tracked PRs its session's newest PR on the same terms. Heads
+// without a record come first, then the records computed longest ago, so
+// that each execution takes its turn however many wait. An execution with
+// several such PRs comes once for each, its PR being the one to verify, with
+// that PR's verification facts; PRs, whether its session ended, whether its
+// worker reported done and its resolve are the execution's, as task reads
+// give them, except that a resolve of another PR is left out.
 func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]domain.LadoExecution, error) {
 	if limit <= 0 {
 		return nil, nil
+	}
+	type pick struct {
+		execution  domain.LadoExecution
+		verifiedAt sql.NullTime
+		position   int64
+	}
+	trackedRows, err := s.qr.ListLadoTrackedPRsToVerify(ctx, int64(limit))
+	if err != nil {
+		return nil, fmt.Errorf("list LADO tracked PRs to verify: %w", err)
 	}
 	rows, err := s.qr.ListLadoExecutionsToVerify(ctx, int64(limit))
 	if err != nil {
 		return nil, fmt.Errorf("list LADO executions to verify: %w", err)
 	}
-	executions := make([]domain.LadoExecution, 0, len(rows))
+	picks := make([]pick, 0, len(trackedRows)+len(rows))
+	for _, row := range trackedRows {
+		execution := ladoExecutionFromGen(row.LadoExecution)
+		execution.SessionTerminated = row.SessionTerminated
+		execution.PR = ladoExecutionPR(row.PRURL, row.PRNumber, row.PRState, row.PRHeadSha, row.PRTargetBranch, row.PRTitle, row.PRMergeability)
+		picks = append(picks, pick{execution, row.VerifiedAt, row.PRPosition})
+	}
 	for _, row := range rows {
 		execution := ladoExecutionFromGen(row.LadoExecution)
 		execution.SessionTerminated = row.SessionTerminated
 		execution.PR = ladoExecutionPR(row.PRURL, row.PRNumber, row.PRState, row.PRHeadSha, row.PRTargetBranch, row.PRTitle, row.PRMergeability)
-		executions = append(executions, execution)
+		picks = append(picks, pick{execution, row.VerifiedAt, 0})
+	}
+	// The order of both queries: heads without a record, then the oldest
+	// records, then by start, session and merge order.
+	slices.SortStableFunc(picks, func(a, b pick) int {
+		if a.verifiedAt.Valid != b.verifiedAt.Valid {
+			if a.verifiedAt.Valid {
+				return 1
+			}
+			return -1
+		}
+		if c := a.verifiedAt.Time.Compare(b.verifiedAt.Time); a.verifiedAt.Valid && c != 0 {
+			return c
+		}
+		if c := a.execution.StartedAt.Compare(b.execution.StartedAt); c != 0 {
+			return c
+		}
+		if c := strings.Compare(string(a.execution.SessionID), string(b.execution.SessionID)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.position, b.position)
+	})
+	if len(picks) > limit {
+		picks = picks[:limit]
+	}
+	executions := make([]domain.LadoExecution, 0, len(picks))
+	for _, p := range picks {
+		executions = append(executions, p.execution)
+	}
+	if _, err := s.readLadoExecutionPRs(ctx, executions, false); err != nil {
+		return nil, err
+	}
+	// The PR to verify stays the execution's PR.
+	for i := range executions {
+		executions[i].PR = picks[i].execution.PR
 	}
 	if err := s.fillLadoVerification(ctx, executions); err != nil {
 		return nil, err
@@ -409,16 +514,32 @@ func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]do
 	if _, err := s.fillLadoResolves(ctx, executions); err != nil {
 		return nil, err
 	}
+	for i := range executions {
+		if url := executions[i].Resolve.PRURL; url != "" && url != executions[i].PR.URL {
+			executions[i].Resolve = domain.LadoExecutionResolve{}
+		}
+	}
 	return executions, nil
 }
 
-// SettleLadoExecution records that the loop settled the execution's PR
-// prURL in state (merged or closed) at at, with audit in the same
-// transaction when it is given. An execution settled before with that PR in
-// that state, and a session that is not an execution, write nothing, so the
-// audit event is appended once per PR and state: a PR that was closed and
-// merges after it opened again, or a newer PR, settles again.
+// SettleLadoExecution settles the execution's PR prURL as
+// SettleLadoExecutionPR does.
 func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error {
+	return s.SettleLadoExecutionPR(ctx, session, prURL, state, at, audit)
+}
+
+// SettleLadoExecutionPR records that the loop settled the execution's PR
+// prURL in state (merged or closed) at at, with audit in the same
+// transaction when it is given. A PR the execution tracks (issue #64) is
+// settled on its tracking row, and once no live tracked PR of the execution
+// is left unsettled the execution's own settled_* take this PR's values in
+// the same transaction, so they stay the execution's last settlement. A PR
+// of an execution without tracked PRs settles the execution as before. A PR
+// settled before in that state, a replaced PR, and a session that is not an
+// execution write nothing, so the audit event is appended once per PR and
+// state: a PR that was closed and merges after it opened again, or a newer
+// PR, settles again.
+func (s *Store) SettleLadoExecutionPR(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error {
 	if at.IsZero() || prURL == "" {
 		return errors.New("settle LADO execution: a PR and a time are required")
 	}
@@ -430,11 +551,41 @@ func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionI
 	}
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "settle LADO execution", func(q *gen.Queries) error {
-		n, err := q.SettleLadoExecution(ctx, gen.SettleLadoExecutionParams{
-			SettledAt: ladoNullTime(at), PRURL: prURL, PRState: string(state), SessionID: string(session),
-		})
-		if err != nil || n == 0 || audit == nil {
+		settleExecution := func() (int64, error) {
+			return q.SettleLadoExecution(ctx, gen.SettleLadoExecutionParams{
+				SettledAt: ladoNullTime(at), PRURL: prURL, PRState: string(state), SessionID: string(session),
+			})
+		}
+		_, err := q.GetLadoExecutionTrackedPR(ctx, gen.GetLadoExecutionTrackedPRParams{ExecutionSessionID: string(session), PRURL: prURL})
+		var n int64
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			if n, err = settleExecution(); err != nil {
+				return err
+			}
+		case err != nil:
 			return err
+		default:
+			n, err = q.SettleLadoExecutionPR(ctx, gen.SettleLadoExecutionPRParams{
+				SettledAt: ladoNullTime(at), PRState: string(state), ExecutionSessionID: string(session), PRURL: prURL,
+			})
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				left, err := q.CountUnsettledLadoExecutionPRs(ctx, string(session))
+				if err != nil {
+					return err
+				}
+				if left == 0 {
+					if _, err := settleExecution(); err != nil {
+						return err
+					}
+				}
+			}
+		}
+		if n == 0 || audit == nil {
+			return nil
 		}
 		_, err = appendLadoAuditEventTx(ctx, q, *audit)
 		return err
@@ -442,61 +593,116 @@ func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionI
 }
 
 // ApproveLadoIntegration records the integration approval a, the presence
-// proof it used and its audit event in one transaction (docs/LJY-PRD/TDD.md
-// §7.1); the approval takes the proof's nonce. A proof used before is refused
-// with domain.ErrLadoPresenceReplayed, a PR head that has an approval for
-// a's target branch already with domain.ErrLadoIntegrationAlreadyApproved
-// (domain.ErrLadoIntegrationRevoked when LADO revoked that one), and an
-// approval whose
-// verification sha256 is not the one of the head's stored record with
-// domain.ErrLadoVerificationChanged: the caller stores the record it
-// recomputed first. When any part fails, nothing is kept.
+// proof it used and its audit event in one transaction, as
+// ApproveLadoIntegrations does with one approval.
 func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error {
-	if a.ID == "" || a.ExecutionSessionID == "" || a.HeadSHA == "" || a.ApprovedAt.IsZero() {
-		return errors.New("approve LADO integration: an id, a session, a head and a time are required")
+	return s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{a}, proof, audit)
+}
+
+// ApproveLadoIntegrations records the integration approvals one presence
+// proof signs, the proof and the audit event in one transaction
+// (docs/LJY-PRD/TDD.md §7.1; issue #64 approves a task's PRs together). The
+// first approval takes the proof's nonce; each later one takes the derived
+// nonce "<nonce>#<n>" (LadoDerivedPresenceNonce), whose proof row, with the
+// proof's action and subject, the transaction inserts too, so proof_nonce
+// stays unique. A client nonce is base64url and never has a "#". A proof
+// used before is refused with domain.ErrLadoPresenceReplayed, a PR head that
+// has an approval for the approval's target branch already with
+// domain.ErrLadoIntegrationAlreadyApproved (domain.ErrLadoIntegrationRevoked
+// when LADO revoked that one for its own base), and an approval whose
+// verification sha256 is not the one of the head's stored record with
+// domain.ErrLadoVerificationChanged: the caller stores the records it
+// recomputed first. An approval LADO revoked because a sibling PR's base
+// moved (domain.LadoIntegrationSiblingRevoked) is renewed in place instead:
+// its row takes the new approval's facts and nonce and holds again, keeping
+// its id. When any part fails, nothing is kept.
+func (s *Store) ApproveLadoIntegrations(ctx context.Context, approvals []domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error {
+	if len(approvals) == 0 {
+		return errors.New("approve LADO integration: an approval is required")
 	}
-	acknowledged, err := json.Marshal(append([]string{}, a.Acknowledged...))
-	if err != nil {
-		return fmt.Errorf("approve LADO integration: %w", err)
+	acknowledged := make([]string, len(approvals))
+	for i, a := range approvals {
+		if a.ID == "" || a.ExecutionSessionID == "" || a.HeadSHA == "" || a.ApprovedAt.IsZero() {
+			return errors.New("approve LADO integration: an id, a session, a head and a time are required")
+		}
+		raw, err := json.Marshal(append([]string{}, a.Acknowledged...))
+		if err != nil {
+			return fmt.Errorf("approve LADO integration: %w", err)
+		}
+		acknowledged[i] = string(raw)
 	}
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
 	}
 	defer s.writeMu.Unlock()
-	err = s.inTx(ctx, "approve LADO integration", func(q *gen.Queries) error {
+	err := s.inTx(ctx, "approve LADO integration", func(q *gen.Queries) error {
 		if err := insertLadoPresenceProof(ctx, q, proof); err != nil {
 			return err
 		}
-		rows, err := q.ListLadoIntegrationApprovalsForHead(ctx, gen.ListLadoIntegrationApprovalsForHeadParams{
-			ExecutionSessionID: string(a.ExecutionSessionID), PRURL: a.PRURL, HeadSha: a.HeadSHA,
-		})
-		if err != nil {
-			return err
-		}
-		for _, row := range rows {
-			if strings.EqualFold(row.TargetBranch, a.TargetBranch) {
-				if row.RevokedAt.Valid {
-					return domain.ErrLadoIntegrationRevoked
+		for i, a := range approvals {
+			nonce := LadoDerivedPresenceNonce(proof.Nonce, i)
+			if i > 0 {
+				derived := proof
+				derived.Nonce = nonce
+				if err := insertLadoPresenceProof(ctx, q, derived); err != nil {
+					return err
 				}
-				return domain.ErrLadoIntegrationAlreadyApproved
+			}
+			if err := approveLadoIntegrationTx(ctx, q, a, acknowledged[i], nonce); err != nil {
+				return err
 			}
 		}
-		record, err := q.GetLadoVerification(ctx, gen.GetLadoVerificationParams{ExecutionSessionID: string(a.ExecutionSessionID), HeadSha: a.HeadSHA})
-		if errors.Is(err, sql.ErrNoRows) || (err == nil && record.Sha256 != a.VerificationSHA256) {
-			return domain.ErrLadoVerificationChanged
+		_, err := appendLadoAuditEventTx(ctx, q, audit)
+		return err
+	})
+	return unwrapLadoSentinel(err)
+}
+
+// LadoDerivedPresenceNonce is the proof nonce of the approval at index i of
+// those one presence proof signs: the proof's own for the first, and
+// "<nonce>#<i>" for the others.
+func LadoDerivedPresenceNonce(nonce string, i int) string {
+	if i == 0 {
+		return nonce
+	}
+	return nonce + "#" + strconv.Itoa(i)
+}
+
+// approveLadoIntegrationTx writes one approval of ApproveLadoIntegrations
+// with its proof nonce.
+func approveLadoIntegrationTx(ctx context.Context, q *gen.Queries, a domain.LadoIntegrationApproval, acknowledged, nonce string) error {
+	rows, err := q.ListLadoIntegrationApprovalsForHead(ctx, gen.ListLadoIntegrationApprovalsForHeadParams{
+		ExecutionSessionID: string(a.ExecutionSessionID), PRURL: a.PRURL, HeadSha: a.HeadSHA,
+	})
+	if err != nil {
+		return err
+	}
+	renew := ""
+	for _, row := range rows {
+		if !strings.EqualFold(row.TargetBranch, a.TargetBranch) {
+			continue
 		}
-		if err != nil {
-			return err
+		switch {
+		case row.RevokedAt.Valid && row.RevokedReason == domain.LadoIntegrationSiblingRevoked:
+			renew = row.ID
+		case row.RevokedAt.Valid:
+			return domain.ErrLadoIntegrationRevoked
+		default:
+			return domain.ErrLadoIntegrationAlreadyApproved
 		}
-		err = q.InsertLadoIntegrationApproval(ctx, gen.InsertLadoIntegrationApprovalParams{
-			ID:                 a.ID,
-			ExecutionSessionID: string(a.ExecutionSessionID),
-			PRURL:              a.PRURL,
-			HeadSha:            a.HeadSHA,
-			TargetBranch:       a.TargetBranch,
+	}
+	record, err := q.GetLadoVerification(ctx, gen.GetLadoVerificationParams{ExecutionSessionID: string(a.ExecutionSessionID), HeadSha: a.HeadSHA})
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && record.Sha256 != a.VerificationSHA256) {
+		return domain.ErrLadoVerificationChanged
+	}
+	if err != nil {
+		return err
+	}
+	if renew != "" {
+		n, err := q.RenewLadoIntegrationApproval(ctx, gen.RenewLadoIntegrationApprovalParams{
 			VerificationSha256: a.VerificationSHA256,
-			AcknowledgedJson:   string(acknowledged),
-			ProofNonce:         proof.Nonce,
+			AcknowledgedJson:   acknowledged,
+			ProofNonce:         nonce,
 			Actor:              a.Actor,
 			ApprovedAt:         a.ApprovedAt.UTC(),
 			StatusState:        string(a.StatusState),
@@ -504,19 +710,39 @@ func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegra
 			StatusPostedAt:     ladoNullTime(a.StatusPostedAt),
 			StatusError:        a.StatusError,
 			ApprovedBaseSha:    a.BaseTipSHA,
+			ID:                 renew,
 		})
-		if isSQLiteUnique(err) {
-			// The proof's nonce is new (inserted above), so the PR, head and
-			// target are what repeat.
-			return domain.ErrLadoIntegrationAlreadyApproved
-		}
 		if err != nil {
 			return err
 		}
-		_, err = appendLadoAuditEventTx(ctx, q, audit)
-		return err
+		if n == 0 {
+			return domain.ErrLadoIntegrationRevoked
+		}
+		return nil
+	}
+	err = q.InsertLadoIntegrationApproval(ctx, gen.InsertLadoIntegrationApprovalParams{
+		ID:                 a.ID,
+		ExecutionSessionID: string(a.ExecutionSessionID),
+		PRURL:              a.PRURL,
+		HeadSha:            a.HeadSHA,
+		TargetBranch:       a.TargetBranch,
+		VerificationSha256: a.VerificationSHA256,
+		AcknowledgedJson:   acknowledged,
+		ProofNonce:         nonce,
+		Actor:              a.Actor,
+		ApprovedAt:         a.ApprovedAt.UTC(),
+		StatusState:        string(a.StatusState),
+		StatusAttempts:     int64(a.StatusAttempts),
+		StatusPostedAt:     ladoNullTime(a.StatusPostedAt),
+		StatusError:        a.StatusError,
+		ApprovedBaseSha:    a.BaseTipSHA,
 	})
-	return unwrapLadoSentinel(err)
+	if isSQLiteUnique(err) {
+		// The nonce is new (inserted above), so the PR, head and target are
+		// what repeat.
+		return domain.ErrLadoIntegrationAlreadyApproved
+	}
+	return err
 }
 
 // RevokeLadoIntegrationApproval withdraws the integration approval id at at

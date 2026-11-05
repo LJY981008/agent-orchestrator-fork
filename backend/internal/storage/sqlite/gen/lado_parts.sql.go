@@ -394,7 +394,7 @@ func (q *Queries) ListActiveLadoPartRuns(ctx context.Context) ([]ListActiveLadoP
 }
 
 const listLadoExecutionsForEntry = `-- name: ListLadoExecutionsForEntry :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha, e.pr_repos_json, e.pr_repos_firm,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
@@ -444,6 +444,8 @@ func (q *Queries) ListLadoExecutionsForEntry(ctx context.Context, queueEntryID s
 			&i.LadoExecution.PartID,
 			&i.LadoExecution.Branch,
 			&i.LadoExecution.StartSha,
+			&i.LadoExecution.PRReposJson,
+			&i.LadoExecution.PRReposFirm,
 			&i.SessionTerminated,
 		); err != nil {
 			return nil, err
@@ -521,7 +523,7 @@ const listLadoTaskParts = `-- name: ListLadoTaskParts :many
 SELECT queue_entry_id, part_id, task_id, title, position, phase, steps_json, paths_json, depends_on_json,
     state, attempts, merge_attempts, waiting_reason, waiting_detail, session_id, branch, start_sha,
     merge_from_sha, merge_tip_sha, merged_sha, merge_session_id, merge_branch, summary, error_message,
-    updated_at
+    updated_at, merge_repo
 FROM lado_task_parts
 WHERE queue_entry_id = ?
 ORDER BY position, part_id
@@ -562,6 +564,7 @@ func (q *Queries) ListLadoTaskParts(ctx context.Context, queueEntryID string) ([
 			&i.Summary,
 			&i.ErrorMessage,
 			&i.UpdatedAt,
+			&i.MergeRepo,
 		); err != nil {
 			return nil, err
 		}
@@ -580,7 +583,7 @@ const listLadoTaskPartsForEntries = `-- name: ListLadoTaskPartsForEntries :many
 SELECT queue_entry_id, part_id, task_id, title, position, phase, steps_json, paths_json, depends_on_json,
     state, attempts, merge_attempts, waiting_reason, waiting_detail, session_id, branch, start_sha,
     merge_from_sha, merge_tip_sha, merged_sha, merge_session_id, merge_branch, summary, error_message,
-    updated_at
+    updated_at, merge_repo
 FROM lado_task_parts
 WHERE queue_entry_id IN (/*SLICE:entry_ids*/?)
 ORDER BY queue_entry_id, position, part_id
@@ -631,6 +634,7 @@ func (q *Queries) ListLadoTaskPartsForEntries(ctx context.Context, entryIds []st
 			&i.Summary,
 			&i.ErrorMessage,
 			&i.UpdatedAt,
+			&i.MergeRepo,
 		); err != nil {
 			return nil, err
 		}
@@ -849,12 +853,13 @@ SET state = ?1,
     merged_sha = ?11,
     merge_session_id = ?12,
     merge_branch = ?13,
-    summary = ?14,
-    error_message = ?15,
-    updated_at = ?16
-WHERE lado_task_parts.queue_entry_id = ?17
-  AND lado_task_parts.part_id = ?18
-  AND lado_task_parts.state = ?19
+    merge_repo = ?14,
+    summary = ?15,
+    error_message = ?16,
+    updated_at = ?17
+WHERE lado_task_parts.queue_entry_id = ?18
+  AND lado_task_parts.part_id = ?19
+  AND lado_task_parts.state = ?20
 `
 
 type UpdateLadoTaskPartParams struct {
@@ -871,6 +876,7 @@ type UpdateLadoTaskPartParams struct {
 	MergedSha      string
 	MergeSessionID string
 	MergeBranch    string
+	MergeRepo      string
 	Summary        string
 	ErrorMessage   string
 	UpdatedAt      time.Time
@@ -896,6 +902,7 @@ func (q *Queries) UpdateLadoTaskPart(ctx context.Context, arg UpdateLadoTaskPart
 		arg.MergedSha,
 		arg.MergeSessionID,
 		arg.MergeBranch,
+		arg.MergeRepo,
 		arg.Summary,
 		arg.ErrorMessage,
 		arg.UpdatedAt,

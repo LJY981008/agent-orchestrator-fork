@@ -528,6 +528,19 @@ type LadoExecution struct {
 	PartID               string
 	Branch               string
 	StartSha             string
+	PRReposJson          string
+	PRReposFirm          int64
+}
+
+type LadoExecutionPR struct {
+	ExecutionSessionID string
+	PRURL              string
+	RepoKey            string
+	Position           int64
+	TrackedAt          time.Time
+	ReplacedAt         sql.NullTime
+	SettledAt          sql.NullTime
+	SettledPRState     string
 }
 
 type LadoExecutionReview struct {
@@ -537,6 +550,7 @@ type LadoExecutionReview struct {
 	Round              int64
 	CreatedAt          time.Time
 	CancelledAt        sql.NullTime
+	PRURL              string
 }
 
 type LadoExecutionTiming struct {
@@ -603,6 +617,7 @@ type LadoPRResolf struct {
 	Version            int64
 	CreatedAt          time.Time
 	UpdatedAt          time.Time
+	PRURL              string
 }
 
 type LadoPartRun struct {
@@ -622,6 +637,19 @@ type LadoPartRun struct {
 	StartedAt            time.Time
 	IntegrationAttempts  int64
 	IntegrationRetryAt   sql.NullTime
+}
+
+type LadoPartRunRepo struct {
+	QueueEntryID         string
+	RelativePath         string
+	Position             int64
+	RepoDir              string
+	BaseSha              string
+	HeadSha              string
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSha string
+	BaseCommitsAhead     sql.NullInt64
 }
 
 type LadoPlanApproval struct {
@@ -952,6 +980,17 @@ type LadoTaskPart struct {
 	Summary        string
 	ErrorMessage   string
 	UpdatedAt      time.Time
+	MergeRepo      string
+}
+
+type LadoTaskPartRepo struct {
+	QueueEntryID string
+	PartID       string
+	RelativePath string
+	StartSha     string
+	MergeFromSha string
+	MergeTipSha  string
+	MergedSha    string
 }
 
 type LadoVerification struct {

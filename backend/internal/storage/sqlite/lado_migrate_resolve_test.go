@@ -12,6 +12,8 @@ var ladoResolveColumns = []string{
 	"execution_session_id", "task_id", "queue_entry_id", "state", "attempts", "spawns", "session_id",
 	"start_head_sha", "base_tip_sha", "spawn_request", "spawn_expires_at", "done_seen_at",
 	"notified_head_sha", "error", "version", "created_at", "updated_at",
+	// 0015 adds the last one.
+	"pr_url",
 }
 
 // ladoRevokeColumns are the columns 0013 adds to lado_integration_approvals.

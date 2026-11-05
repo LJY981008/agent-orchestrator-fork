@@ -69,6 +69,7 @@ func (s *Store) UpsertLadoPRResolve(ctx context.Context, r domain.LadoPRResolve)
 				DoneSeenAt:         ladoNullTime(r.DoneSeenAt),
 				NotifiedHeadSha:    r.NotifiedHeadSHA,
 				Error:              r.Error,
+				PRURL:              r.PRURL,
 				UpdatedAt:          r.UpdatedAt.UTC(),
 				ExecutionSessionID: string(r.ExecutionSessionID),
 				OldVersion:         int64(r.Version),
@@ -96,6 +97,7 @@ func (s *Store) UpsertLadoPRResolve(ctx context.Context, r domain.LadoPRResolve)
 			NotifiedHeadSha:    r.NotifiedHeadSHA,
 			Error:              r.Error,
 			CreatedAt:          r.UpdatedAt.UTC(),
+			PRURL:              r.PRURL,
 		})
 		written = n > 0
 		return err
@@ -247,6 +249,7 @@ func (s *Store) LinkLadoResolveExecution(ctx context.Context, request string, ex
 			PartID:               "",
 			Branch:               exec.Branch,
 			StartSha:             exec.StartSHA,
+			PRReposJson:          "[]",
 		}); err != nil {
 			return err
 		}
@@ -268,13 +271,16 @@ func (s *Store) LinkLadoResolveExecution(ctx context.Context, request string, ex
 }
 
 // ListLadoExecutionsToResolve returns up to limit executions the resolver
-// looks at, oldest first: those that ran a PR (role empty or integration) whose
-// newest PR is open with an observed head and conflicts with its base, or
-// whose record of that head failed with base_overlap, and those whose
-// resolve row still has a state or a spawn request, whatever their PR (so the
-// resolver can stop and clear it once the PR merged or closed). Each comes
-// with its PR, verification and resolve facts, its project, the PR's source
-// branch and whether its session and its resolve worker still work.
+// looks at, oldest first: those that ran a PR (role empty or integration) with
+// an open PR whose observed head conflicts with its base, or whose record of
+// that head failed with base_overlap, and those whose resolve row still has a
+// state or a spawn request, whatever their PRs (so the resolver can stop and
+// clear it once the PR merged or closed). An execution with tracked PRs
+// (issue #64) looks at each live one, one without at its session's newest
+// PR. Each comes with its PRs, verification and resolve facts, its project,
+// whether its session and its resolve worker still work, and as its PR the
+// one a resolve worker works on (resolvePR) with that PR's source branch and
+// verification facts.
 func (s *Store) ListLadoExecutionsToResolve(ctx context.Context, limit int) ([]domain.LadoResolveCandidate, error) {
 	if limit <= 0 {
 		return nil, nil
@@ -289,7 +295,8 @@ func (s *Store) ListLadoExecutionsToResolve(ctx context.Context, limit int) ([]d
 		execution.SessionTerminated = row.SessionTerminated
 		executions = append(executions, execution)
 	}
-	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
+	branches, err := s.readLadoExecutionPRs(ctx, executions, false)
+	if err != nil {
 		return nil, err
 	}
 	if err := s.fillLadoVerification(ctx, executions); err != nil {
@@ -301,16 +308,49 @@ func (s *Store) ListLadoExecutionsToResolve(ctx context.Context, limit int) ([]d
 	}
 	candidates := make([]domain.LadoResolveCandidate, 0, len(rows))
 	for i, row := range rows {
+		execution := executions[i]
+		if pr, ok := resolvePR(execution); ok {
+			execution.PR, execution.Verification, execution.Integration = pr.PR, pr.Verification, pr.Integration
+		}
 		candidates = append(candidates, domain.LadoResolveCandidate{
-			Execution:          executions[i],
+			Execution:          execution,
 			ProjectID:          domain.ProjectID(row.ProjectID),
-			PRSourceBranch:     row.PRSourceBranch,
+			PRSourceBranch:     branches[ladoPRKey{execution.SessionID, execution.PR.URL}],
 			SessionLive:        row.SessionLive,
 			ResolveSessionLive: row.ResolveSessionLive,
-			Resolve:            resolves[executions[i].SessionID],
+			Resolve:            resolves[execution.SessionID],
 		})
 	}
 	return candidates, nil
+}
+
+// resolvePR picks the tracked PR a resolve worker of the execution works on
+// (issue #64): the one its resolve row names while that PR is still tracked,
+// else the first live one, in merge order, that is open with an observed
+// head and conflicts with its base or whose head's record failed with
+// base_overlap. It reports false for an execution without tracked PRs, whose
+// PR stays its newest one, and for one with none of those.
+func resolvePR(execution domain.LadoExecution) (domain.LadoExecutionTrackedPR, bool) {
+	tracked := execution.TrackedPRs()
+	if len(execution.PRs) == 0 {
+		return domain.LadoExecutionTrackedPR{}, false
+	}
+	if url := execution.Resolve.PRURL; url != "" {
+		for _, pr := range tracked {
+			if pr.PR.URL == url {
+				return pr, true
+			}
+		}
+	}
+	for _, pr := range tracked {
+		if pr.PR.Merged || pr.PR.Closed || pr.PR.HeadSHA == "" {
+			continue
+		}
+		if pr.PR.Mergeability == domain.MergeConflicting || (pr.Verification.HeadSHA == pr.PR.HeadSHA && pr.Verification.BaseOverlap) {
+			return pr, true
+		}
+	}
+	return domain.LadoExecutionTrackedPR{}, false
 }
 
 // LadoExecutionSessionsToObserve returns the sessions of the executions that
@@ -405,6 +445,7 @@ func ladoPRResolveFromGen(row gen.LadoPRResolf) domain.LadoPRResolve {
 		ExecutionSessionID: domain.SessionID(row.ExecutionSessionID),
 		TaskID:             domain.LadoTaskID(row.TaskID),
 		QueueEntryID:       domain.LadoQueueEntryID(row.QueueEntryID),
+		PRURL:              row.PRURL,
 		State:              domain.LadoResolveState(row.State),
 		Attempts:           int(row.Attempts),
 		Spawns:             int(row.Spawns),

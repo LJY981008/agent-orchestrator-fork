@@ -35,7 +35,7 @@ func (q *Queries) ClearLadoResolveSpawnRequest(ctx context.Context, arg ClearLad
 }
 
 const getLadoPRResolve = `-- name: GetLadoPRResolve :one
-SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at
+SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at, pr_url
 FROM lado_pr_resolves
 WHERE execution_session_id = ?
 `
@@ -61,12 +61,13 @@ func (q *Queries) GetLadoPRResolve(ctx context.Context, executionSessionID strin
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PRURL,
 	)
 	return i, err
 }
 
 const getLadoPRResolveBySpawnRequest = `-- name: GetLadoPRResolveBySpawnRequest :one
-SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at
+SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at, pr_url
 FROM lado_pr_resolves
 WHERE spawn_request = ?1 AND spawn_request <> ''
 `
@@ -92,6 +93,7 @@ func (q *Queries) GetLadoPRResolveBySpawnRequest(ctx context.Context, request st
 		&i.Version,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PRURL,
 	)
 	return i, err
 }
@@ -99,11 +101,11 @@ func (q *Queries) GetLadoPRResolveBySpawnRequest(ctx context.Context, request st
 const insertLadoPRResolve = `-- name: InsertLadoPRResolve :execrows
 INSERT INTO lado_pr_resolves (
     execution_session_id, task_id, queue_entry_id, state, attempts, session_id, start_head_sha, base_tip_sha,
-    done_seen_at, notified_head_sha, error, version, created_at, updated_at
+    done_seen_at, notified_head_sha, error, version, created_at, updated_at, pr_url
 ) VALUES (
     ?1, ?2, ?3, ?4, ?5,
     ?6, ?7, ?8, ?9,
-    ?10, ?11, 1, ?12, ?12
+    ?10, ?11, 1, ?12, ?12, ?13
 )
 ON CONFLICT (execution_session_id) DO NOTHING
 `
@@ -121,6 +123,7 @@ type InsertLadoPRResolveParams struct {
 	NotifiedHeadSha    string
 	Error              string
 	CreatedAt          time.Time
+	PRURL              string
 }
 
 // Starts the resolve row of an execution at version 1, unless it has one.
@@ -138,6 +141,7 @@ func (q *Queries) InsertLadoPRResolve(ctx context.Context, arg InsertLadoPRResol
 		arg.NotifiedHeadSha,
 		arg.Error,
 		arg.CreatedAt,
+		arg.PRURL,
 	)
 	if err != nil {
 		return 0, err
@@ -182,7 +186,7 @@ func (q *Queries) LinkLadoResolveSpawn(ctx context.Context, arg LinkLadoResolveS
 }
 
 const listExpiredLadoResolveSpawns = `-- name: ListExpiredLadoResolveSpawns :many
-SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at
+SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at, pr_url
 FROM lado_pr_resolves
 WHERE spawn_request <> '' AND spawn_expires_at <= ?1
 ORDER BY spawn_expires_at, execution_session_id
@@ -215,6 +219,7 @@ func (q *Queries) ListExpiredLadoResolveSpawns(ctx context.Context, now sql.Null
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PRURL,
 		); err != nil {
 			return nil, err
 		}
@@ -232,21 +237,37 @@ func (q *Queries) ListExpiredLadoResolveSpawns(ctx context.Context, now sql.Null
 const listLadoExecutionSessionsToObserve = `-- name: ListLadoExecutionSessionsToObserve :many
 SELECT e.session_id
 FROM lado_executions e
-JOIN pr p ON p.session_id = e.session_id
 WHERE e.role IN ('', 'integration')
-  AND p.pr_state IN ('open', 'draft')
-  AND NOT EXISTS (
-        SELECT 1 FROM pr newer
-        WHERE newer.session_id = p.session_id
-          AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
+  AND (
+        EXISTS (
+            SELECT 1 FROM lado_execution_prs x
+            JOIN pr p ON p.url = x.pr_url
+            WHERE x.execution_session_id = e.session_id AND x.replaced_at IS NULL
+              AND p.pr_state IN ('open', 'draft')
+        )
+        OR (
+            NOT EXISTS (SELECT 1 FROM lado_execution_prs x WHERE x.execution_session_id = e.session_id)
+            AND EXISTS (
+                SELECT 1 FROM pr p
+                WHERE p.session_id = e.session_id
+                  AND p.pr_state IN ('open', 'draft')
+                  AND NOT EXISTS (
+                        SELECT 1 FROM pr newer
+                        WHERE newer.session_id = p.session_id
+                          AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
+                    )
+                  AND NOT (e.settled_pr_url = p.url AND e.settled_pr_state = p.pr_state)
+            )
+        )
     )
-  AND NOT (e.settled_pr_url = p.url AND e.settled_pr_state = p.pr_state)
 ORDER BY e.session_id
 `
 
-// The sessions of the executions that ran a PR (role empty or integration) whose
-// newest PR is open, whether the session ended or not: AO keeps observing
-// those PRs for LADO.
+// The sessions of the executions that ran a PR (role empty or integration)
+// with a PR still open, whether the session ended or not: AO keeps observing
+// those PRs for LADO. An execution with tracked PRs stays while any live one
+// is open, so a second repository's PR is still observed after the first
+// merged (issue #64); one without looks at its session's newest PR.
 func (q *Queries) ListLadoExecutionSessionsToObserve(ctx context.Context) ([]string, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoExecutionSessionsToObserve)
 	if err != nil {
@@ -271,9 +292,8 @@ func (q *Queries) ListLadoExecutionSessionsToObserve(ctx context.Context) ([]str
 }
 
 const listLadoExecutionsToResolve = `-- name: ListLadoExecutionsToResolve :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha, e.pr_repos_json, e.pr_repos_firm,
     t.project_id AS project_id,
-    p.source_branch AS pr_source_branch,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated,
@@ -287,25 +307,46 @@ SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_app
     ) AS resolve_session_live
 FROM lado_executions e
 JOIN lado_tasks t ON t.id = e.task_id
-JOIN pr p ON p.session_id = e.session_id
 WHERE e.role IN ('', 'integration')
-  AND NOT EXISTS (
-        SELECT 1 FROM pr newer
-        WHERE newer.session_id = p.session_id
-          AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
-    )
   AND (
-        (p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> '' AND (
-            p.mergeability = 'conflicting'
-            OR EXISTS (
-                SELECT 1 FROM lado_verifications v
-                WHERE v.execution_session_id = e.session_id AND v.head_sha = p.head_sha AND v.pr_url = p.url
-                  AND v.content_json LIKE '%"kind":"base_branch"%' AND v.content_json LIKE '%"code":"base_overlap"%'
-            )
-        ))
-        OR EXISTS (
+        EXISTS (
             SELECT 1 FROM lado_pr_resolves r
             WHERE r.execution_session_id = e.session_id AND (r.state <> '' OR r.spawn_request <> '')
+        )
+        OR EXISTS (
+            SELECT 1 FROM lado_execution_prs x
+            JOIN pr p ON p.url = x.pr_url
+            WHERE x.execution_session_id = e.session_id AND x.replaced_at IS NULL
+              AND p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> ''
+              AND (
+                    p.mergeability = 'conflicting'
+                    OR EXISTS (
+                        SELECT 1 FROM lado_verifications v
+                        WHERE v.execution_session_id = e.session_id AND v.head_sha = p.head_sha AND v.pr_url = p.url
+                          AND v.content_json LIKE '%"kind":"base_branch"%' AND v.content_json LIKE '%"code":"base_overlap"%'
+                    )
+                )
+        )
+        OR (
+            NOT EXISTS (SELECT 1 FROM lado_execution_prs x WHERE x.execution_session_id = e.session_id)
+            AND EXISTS (
+                SELECT 1 FROM pr p
+                WHERE p.session_id = e.session_id
+                  AND NOT EXISTS (
+                        SELECT 1 FROM pr newer
+                        WHERE newer.session_id = p.session_id
+                          AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
+                    )
+                  AND p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> ''
+                  AND (
+                        p.mergeability = 'conflicting'
+                        OR EXISTS (
+                            SELECT 1 FROM lado_verifications v
+                            WHERE v.execution_session_id = e.session_id AND v.head_sha = p.head_sha AND v.pr_url = p.url
+                              AND v.content_json LIKE '%"kind":"base_branch"%' AND v.content_json LIKE '%"code":"base_overlap"%'
+                        )
+                    )
+            )
         )
     )
 ORDER BY e.started_at, e.session_id
@@ -315,19 +356,19 @@ LIMIT ?1
 type ListLadoExecutionsToResolveRow struct {
 	LadoExecution      LadoExecution
 	ProjectID          string
-	PRSourceBranch     string
 	SessionTerminated  bool
 	SessionLive        bool
 	ResolveSessionLive bool
 }
 
-// Executions that ran a PR (role empty or integration) whose session's newest PR
-// is open with a head AO observed and conflicts with its base, or whose
-// record of that head failed with base_overlap, and those whose resolve row
-// still has a state or a spawn request, whatever their PR. Each comes with
-// its task's project, the PR's source branch, whether its session ended, whether the session
-// still works (not ended, agent not exited) and whether the resolve row's
-// worker still works.
+// Executions that ran a PR (role empty or integration) with an open PR whose
+// head AO observed and that conflicts with its base, or whose record of that
+// head failed with base_overlap, and those whose resolve row still has a
+// state or a spawn request, whatever their PRs. An execution with tracked
+// PRs (lado_execution_prs, issue #64) looks at each live one; one without
+// looks at its session's newest PR. Each comes with its task's project,
+// whether its session ended, whether the session still works (not ended,
+// agent not exited) and whether the resolve row's worker still works.
 func (q *Queries) ListLadoExecutionsToResolve(ctx context.Context, maxExecutions int64) ([]ListLadoExecutionsToResolveRow, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoExecutionsToResolve, maxExecutions)
 	if err != nil {
@@ -362,8 +403,9 @@ func (q *Queries) ListLadoExecutionsToResolve(ctx context.Context, maxExecutions
 			&i.LadoExecution.PartID,
 			&i.LadoExecution.Branch,
 			&i.LadoExecution.StartSha,
+			&i.LadoExecution.PRReposJson,
+			&i.LadoExecution.PRReposFirm,
 			&i.ProjectID,
-			&i.PRSourceBranch,
 			&i.SessionTerminated,
 			&i.SessionLive,
 			&i.ResolveSessionLive,
@@ -395,13 +437,50 @@ FROM (
       AND et.cancelled_at IS NULL
       AND NOT EXISTS (
             SELECT 1 FROM lado_executions w
-            JOIN pr p ON p.session_id = w.session_id
             WHERE w.queue_entry_id = e.queue_entry_id AND w.role IN ('', 'integration')
-              AND p.pr_state IN ('merged', 'closed')
-              AND NOT EXISTS (
-                    SELECT 1 FROM pr newer
-                    WHERE newer.session_id = p.session_id
-                      AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
+              AND (
+                    (
+                        EXISTS (SELECT 1 FROM lado_execution_prs x WHERE x.execution_session_id = w.session_id)
+                        AND NOT EXISTS (
+                            SELECT 1 FROM lado_execution_prs x
+                            LEFT JOIN pr p ON p.url = x.pr_url
+                            WHERE x.execution_session_id = w.session_id AND x.replaced_at IS NULL
+                              AND (x.settled_at IS NULL OR p.pr_state IN ('open', 'draft'))
+                        )
+                        AND NOT (
+                            EXISTS (
+                                SELECT 1 FROM json_each(w.pr_repos_json) AS j
+                                WHERE NOT EXISTS (
+                                    SELECT 1 FROM lado_execution_prs x
+                                    WHERE x.execution_session_id = w.session_id AND x.replaced_at IS NULL
+                                      AND x.repo_key = CAST(j.value AS TEXT)
+                                )
+                            )
+                            AND (
+                                w.pr_repos_firm = 1
+                                OR (
+                                    EXISTS (SELECT 1 FROM sessions ws WHERE ws.id = w.session_id AND ws.is_terminated = 0)
+                                    AND COALESCE((
+                                        SELECT rp.state FROM reports rp WHERE rp.session_id = w.session_id
+                                        ORDER BY rp.created_at DESC, rp.id DESC LIMIT 1
+                                    ), '') <> 'done'
+                                )
+                            )
+                        )
+                    )
+                    OR (
+                        NOT EXISTS (SELECT 1 FROM lado_execution_prs x WHERE x.execution_session_id = w.session_id)
+                        AND EXISTS (
+                            SELECT 1 FROM pr p
+                            WHERE p.session_id = w.session_id
+                              AND p.pr_state IN ('merged', 'closed')
+                              AND NOT EXISTS (
+                                    SELECT 1 FROM pr newer
+                                    WHERE newer.session_id = p.session_id
+                                      AND (newer.updated_at > p.updated_at OR (newer.updated_at = p.updated_at AND newer.url > p.url))
+                                )
+                        )
+                    )
                 )
         )
     UNION
@@ -429,8 +508,13 @@ type ListLadoOverlapHoldersRow struct {
 
 // What holds a task's paths for overlap waiting: as ListLiveLadoRunTasks,
 // except that an execution no longer holds once it timed out, its entry or
-// task was cancelled, or its entry's PR worker's newest PR merged or closed,
-// even while its session runs.
+// task was cancelled, or its entry's PR worker is done with its PRs, even
+// while its session runs. A PR worker with tracked PRs is done once every
+// live one settled merged or closed and none is open again, and no
+// repository it is expected to open a PR in is without one (issue #64: a
+// declared repository stops counting once the worker reported done or its
+// session ended). One without tracked PRs is done once its session's newest
+// PR merged or closed.
 func (q *Queries) ListLadoOverlapHolders(ctx context.Context, now sql.NullTime) ([]ListLadoOverlapHoldersRow, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoOverlapHolders, now)
 	if err != nil {
@@ -460,7 +544,7 @@ func (q *Queries) ListLadoOverlapHolders(ctx context.Context, now sql.NullTime) 
 }
 
 const listLadoPRResolvesForSessions = `-- name: ListLadoPRResolvesForSessions :many
-SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at
+SELECT execution_session_id, task_id, queue_entry_id, state, attempts, spawns, session_id, start_head_sha, base_tip_sha, spawn_request, spawn_expires_at, done_seen_at, notified_head_sha, error, version, created_at, updated_at, pr_url
 FROM lado_pr_resolves
 WHERE execution_session_id IN (/*SLICE:session_ids*/?)
 `
@@ -502,6 +586,7 @@ func (q *Queries) ListLadoPRResolvesForSessions(ctx context.Context, sessionIds 
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PRURL,
 		); err != nil {
 			return nil, err
 		}
@@ -630,10 +715,11 @@ SET state = ?1,
     done_seen_at = ?6,
     notified_head_sha = ?7,
     error = ?8,
+    pr_url = ?9,
     version = lado_pr_resolves.version + 1,
-    updated_at = ?9
-WHERE lado_pr_resolves.execution_session_id = ?10
-  AND lado_pr_resolves.version = ?11
+    updated_at = ?10
+WHERE lado_pr_resolves.execution_session_id = ?11
+  AND lado_pr_resolves.version = ?12
 `
 
 type UpdateLadoPRResolveParams struct {
@@ -645,6 +731,7 @@ type UpdateLadoPRResolveParams struct {
 	DoneSeenAt         sql.NullTime
 	NotifiedHeadSha    string
 	Error              string
+	PRURL              string
 	UpdatedAt          time.Time
 	ExecutionSessionID string
 	OldVersion         int64
@@ -662,6 +749,7 @@ func (q *Queries) UpdateLadoPRResolve(ctx context.Context, arg UpdateLadoPRResol
 		arg.DoneSeenAt,
 		arg.NotifiedHeadSha,
 		arg.Error,
+		arg.PRURL,
 		arg.UpdatedAt,
 		arg.ExecutionSessionID,
 		arg.OldVersion,
