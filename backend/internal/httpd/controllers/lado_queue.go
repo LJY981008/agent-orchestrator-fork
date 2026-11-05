@@ -258,6 +258,18 @@ func ladoExecutionPRResponse(pr domain.LadoExecutionPR) *LadoExecutionPRResponse
 	return &LadoExecutionPRResponse{
 		URL: pr.URL, Number: pr.Number, Merged: pr.Merged, Closed: pr.Closed,
 		HeadSHA: pr.HeadSHA, TargetBranch: pr.TargetBranch, Title: pr.Title,
+		Mergeability: string(pr.Mergeability),
+	}
+}
+
+// ladoExecutionResolveResponse is the execution's resolve, nil while none
+// was needed: no worker ran and none failed.
+func ladoExecutionResolveResponse(resolve domain.LadoExecutionResolve) *LadoExecutionResolveResponse {
+	if resolve == (domain.LadoExecutionResolve{}) {
+		return nil
+	}
+	return &LadoExecutionResolveResponse{
+		State: string(resolve.State), Attempts: resolve.Attempts, SessionID: string(resolve.SessionID), Error: resolve.Error,
 	}
 }
 
@@ -308,6 +320,7 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 		State:        string(state),
 		StateReason:  reason,
 		PR:           ladoExecutionPRResponse(exec.PR),
+		Resolve:      ladoExecutionResolveResponse(exec.Resolve),
 	}
 }
 

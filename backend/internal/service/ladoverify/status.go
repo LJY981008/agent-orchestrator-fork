@@ -4,6 +4,7 @@ package ladoverify
 // docs/LJY-PRD/TDD.md §7.1). Once the developer approved a head, LADO posts a
 // success status on it, which a ruleset that requires the check turns into
 // the permission to merge. A post that failed is tried again by the loop.
+// Once LADO revoked the approval (#53), it posts a pending status instead.
 
 import (
 	"context"
@@ -52,10 +53,10 @@ func (s *Service) retryStatuses(ctx context.Context) error {
 	return errors.Join(problems...)
 }
 
-// postIntegrationStatus posts the lado/integration success status on the
-// approval's head and records how it went: posted, failed with one line of
-// the error and one more attempt, or not_applicable for a host LADO posts no
-// status to (GitLab). It returns the approval as recorded; an error means the
+// postIntegrationStatus posts the lado/integration success status, or
+// pending for a revoked approval, on the approval's head and records how it
+// went: posted, failed with one line of the error and one more attempt, or
+// not_applicable for a host LADO posts no status to (GitLab). It returns the approval as recorded; an error means the
 // approval's repository could not be read, the outcome could not be
 // recorded, or ctx ended. The integration approval calls it right after
 // recording an approval; the loop calls it again for those still pending or
@@ -70,7 +71,7 @@ func (s *Service) postIntegrationStatus(ctx context.Context, approval domain.Lad
 	}
 	state, attempts, postedAt, message := domain.LadoIntegrationStatusNotApplicable, approval.StatusAttempts, time.Time{}, ""
 	if repo.Provider != domain.TrackerProviderGitLab {
-		err := s.postStatus(ctx, repo, approval.HeadSHA)
+		err := s.postStatus(ctx, repo, approval)
 		if ctx.Err() != nil {
 			// The caller gave up; the answer says nothing about the host.
 			return approval, ctx.Err()
@@ -98,17 +99,22 @@ func (s *Service) postIntegrationStatus(ctx context.Context, approval domain.Lad
 	return approval, nil
 }
 
-// postStatus posts the success status on sha through the host's client.
-func (s *Service) postStatus(ctx context.Context, repo domain.TrackerRepo, sha string) error {
+// postStatus posts the approval's status on its head through the host's
+// client: success, or pending once the approval was revoked.
+func (s *Service) postStatus(ctx context.Context, repo domain.TrackerRepo, approval domain.LadoIntegrationApproval) error {
 	client, err := s.deps.Clients.ForRepo(ctx, repo)
 	if err != nil {
 		return err
 	}
-	return client.PostCommitStatus(ctx, repo, sha, ports.LadoCommitStatus{
+	status := ports.LadoCommitStatus{
 		State:       integrationStatusState,
 		Context:     domain.LadoIntegrationStatusContext,
 		Description: integrationStatusDescription,
-	})
+	}
+	if approval.Revoked() {
+		status.State, status.Description = "pending", revokedStatusDescription
+	}
+	return client.PostCommitStatus(ctx, repo, approval.HeadSHA, status)
 }
 
 // approvalRepo is the repository of the approval's PR: the one that holds the

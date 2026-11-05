@@ -11,6 +11,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -40,8 +41,21 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 		return closedDone()
 	}
 	provider := scmmulti.New(named...)
-	observer := scmobserve.New(provider, store, lcm, scmobserve.Config{Logger: logger, ScopedIdentityResolver: provider, BranchStates: branchStates})
+	observer := scmobserve.New(provider, store, lcm, scmObserverConfig(store, provider, branchStates, logger))
 	return observer.Start(ctx)
+}
+
+// scmObserverConfig is the observer's configuration. LADO fork (issue #53):
+// the open PRs of LADO executions that are not settled stay observed after
+// their worker session ended, so LADO sees their merges, heads and
+// conflicts and can start a resolve worker.
+func scmObserverConfig(store *sqlite.Store, resolver ports.ScopedIdentityResolver, branchStates scmobserve.BranchStateReconciler, logger *slog.Logger) scmobserve.Config {
+	return scmobserve.Config{
+		Logger:                 logger,
+		ScopedIdentityResolver: resolver,
+		BranchStates:           branchStates,
+		RetainedSessions:       store.LadoExecutionSessionsToObserve,
+	}
 }
 
 func newGitHubSCMProvider(logger *slog.Logger) (*scmgithub.Provider, error) {

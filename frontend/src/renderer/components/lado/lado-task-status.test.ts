@@ -64,6 +64,24 @@ describe("ladoTaskStatus", () => {
 		expect(ladoTaskReason(task("completed"), en, "en")).toBeNull();
 	});
 
+	it("says a moved base, a conflict and its resolve, and calls only an unresolved conflict to attention", () => {
+		const reasons = ["base_overlap", "merge_conflict", "resolving", "conflict_unresolved"] as const;
+		expect(reasons.map((reason) => ladoTaskReason(task("validating", reason), en, "en"))).toEqual([
+			"Base moved",
+			"Conflict",
+			"Resolving",
+			"Conflict needs resolving",
+		]);
+		expect(reasons.map((reason) => ladoTaskReason(task("validating", reason), ko, "ko"))).toEqual(["base 이동", "충돌", "해결 중", "충돌 해결 필요"]);
+		expect(reasons.map((reason) => ladoTaskStatus(task("validating", reason), en))).toEqual([
+			{ label: "Validating", tone: "validating" },
+			{ label: "Validating", tone: "validating" },
+			{ label: "Validating", tone: "validating" },
+			{ label: "Validating", tone: "attention" },
+		]);
+		expect(ladoTaskStatus(task("validating", "conflict_unresolved"), ko).label).toBe("검증 중");
+	});
+
 	it("names where a plan worker stands while a new plan is on its way", () => {
 		const draft = { ...task("draft"), execution: undefined };
 		const withWorker = (base: LadoTask, worker: NonNullable<LadoTask["plan"]["worker"]>, requestPending = true): LadoTask => ({

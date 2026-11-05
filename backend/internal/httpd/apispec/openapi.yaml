@@ -20159,6 +20159,7 @@ components:
           - stall_nudged
           - stalled
           - agent_unavailable
+          - conflict_unresolved
           type: string
         level:
           description: 1 past a cost threshold, 2 past twice it; the resume's number
@@ -20192,7 +20193,8 @@ components:
           type: integer
         value:
           description: Cents for a cost, a count for compactions, minutes for a stall,
-            the reset's Unix seconds for limited.
+            the reset's Unix seconds for limited, the failed resolve workers in a
+            row for conflict_unresolved.
           format: int64
           type: integer
       required:
@@ -20822,6 +20824,16 @@ components:
           description: The PR's head as AO last observed it, which LADO verifies;
             omitted until AO observed it.
           type: string
+        mergeability:
+          description: Whether the host can merge the PR into its target as AO last
+            observed it.
+          enum:
+          - unknown
+          - mergeable
+          - conflicting
+          - blocked
+          - unstable
+          type: string
         merged:
           type: boolean
         number:
@@ -20857,6 +20869,29 @@ components:
       - sha256
       - approvedAt
       type: object
+    LadoExecutionResolveResponse:
+      properties:
+        attempts:
+          description: Resolve workers that failed in a row; a resolved PR starts
+            again from 0.
+          type: integer
+        error:
+          description: The last failure, without secrets.
+          type: string
+        sessionId:
+          description: The newest resolve worker's AO session.
+          type: string
+        state:
+          description: 'resolving: a resolve worker runs, or LADO waits for its push
+            to show; needs_human: the workers failed twice in a row, or one asked
+            for a person. Omitted when none runs and none gave up.'
+          enum:
+          - resolving
+          - needs_human
+          type: string
+      required:
+      - attempts
+      type: object
     LadoExecutionResponse:
       properties:
         attempt:
@@ -20886,6 +20921,11 @@ components:
         pr:
           $ref: '#/components/schemas/LadoExecutionPRResponse'
           description: The newest PR of the worker session; omitted while it has none.
+        resolve:
+          $ref: '#/components/schemas/LadoExecutionResolveResponse'
+          description: What LADO's resolve workers did for the PR once it conflicted,
+            or its base moved under its head with a change to the same paths, while
+            the run's own session no longer ran; omitted while none was needed.
         role:
           description: 'What the worker does in a task split into parts: one part,
             the merge of one part, or the integration that opens the pull request;
@@ -20939,6 +20979,10 @@ components:
           - changes_requested
           - status_not_posted
           - merged_without_approval
+          - base_overlap
+          - merge_conflict
+          - resolving
+          - conflict_unresolved
           type: string
         task:
           $ref: '#/components/schemas/LadoExecutionTaskResponse'
@@ -24362,11 +24406,15 @@ components:
           type: string
         stateReason:
           description: Why the task needs review, is blocked or failed, or what its
-            queued plan waits for; for validating, verifying while LADO has not verified
-            the head yet, else the code of the verification item that fails or waits;
-            status_not_posted for integrating while LADO could not post the lado/integration
-            status; merged_without_approval for completed when the merged head had
-            no integration approval. For the app to translate.
+            queued plan waits for; for validating, conflict_unresolved when LADO's
+            resolve workers could not resolve the open PR, resolving while one takes
+            the base into it, merge_conflict while the PR conflicts with its base
+            and base_overlap when the base moved under the head with a change to the
+            same paths, all four before an approval; else verifying while LADO has
+            not verified the head yet, else the code of the verification item that
+            fails or waits; status_not_posted for integrating while LADO could not
+            post the lado/integration status; merged_without_approval for completed
+            when the merged head had no integration approval. For the app to translate.
           enum:
           - rules_changed
           - issue_edited
@@ -24406,6 +24454,10 @@ components:
           - changes_requested
           - status_not_posted
           - merged_without_approval
+          - base_overlap
+          - merge_conflict
+          - resolving
+          - conflict_unresolved
           type: string
       required:
       - id
@@ -24786,6 +24838,7 @@ components:
           - worktree_missing
           - commit_messages_failed
           - protected_path
+          - base_overlap
           - review_pending
           - changes_requested
           type: string
@@ -24873,6 +24926,14 @@ components:
       type: object
     LadoVerifyItemDetailsResponse:
       properties:
+        advanced:
+          description: 'base_branch: the remote base branch moved past the head''s
+            merge base.'
+          type: boolean
+        advancedTip:
+          description: 'base_branch: the remote base branch''s commit LADO compared
+            the head with.'
+          type: string
         alreadyOnBase:
           description: 'base_branch: the remote base held the head before any approval.'
           type: boolean
@@ -24949,6 +25010,16 @@ components:
           items:
             type: string
           type: array
+        overlap:
+          description: 'base_branch: the first files changed on the remote base branch
+            since the head''s merge base that the head changed or the plan names.'
+          items:
+            type: string
+          type: array
+        overlapCount:
+          description: 'base_branch: how many files changed on the remote base branch
+            overlap the head or the plan.'
+          type: integer
         prTitle:
           $ref: '#/components/schemas/LadoVerifyTextResponse'
           description: 'commit_messages: the PR title.'
@@ -25008,7 +25079,10 @@ components:
             worktree_changed: the worktree changed since LADO''s last check command
             on the head; head_unavailable: the head is not in the local repository
             and LADO could not fetch it; base_deleted: the local base branch that
-            existed at dispatch is gone.'
+            existed at dispatch is gone; base_advanced: the remote base branch moved
+            past the head''s merge base without touching its files; base_overlap:
+            it moved with a change to files the head changed or the plan names, so
+            the head must take in the base.'
           enum:
           - not_required
           - verifying
@@ -25033,6 +25107,8 @@ components:
           - reflog_off
           - already_on_base
           - no_local_branch
+          - base_advanced
+          - base_overlap
           - unprotected
           - protection_unknown
           - unprotected_gitlab

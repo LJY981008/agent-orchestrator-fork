@@ -61,9 +61,11 @@ ON CONFLICT (execution_session_id, head_sha) DO UPDATE SET
 
 -- name: ListLadoVerificationOutcomes :many
 -- The outcome and reason of the records of the given executions and heads,
--- with the PR each record verified. The caller keeps the (execution, head)
--- pairs it asked for, of the PR it reads.
-SELECT execution_session_id, head_sha, pr_url, outcome, reason
+-- with the PR each record verified and whether its base_branch item failed
+-- with base_overlap (no other kind has that code). The caller keeps the
+-- (execution, head) pairs it asked for, of the PR it reads.
+SELECT execution_session_id, head_sha, pr_url, outcome, reason,
+    CAST(content_json LIKE '%"code":"base_overlap"%' AS INTEGER) AS base_overlap
 FROM lado_verifications
 WHERE execution_session_id IN (sqlc.slice('session_ids'))
   AND head_sha IN (sqlc.slice('head_shas'));
@@ -120,7 +122,7 @@ ORDER BY name, created_at;
 -- name: ListLadoExecutionPRs :many
 -- The PRs of the given sessions, newest first within each session: by update
 -- time, then by URL, as ListLadoExecutionsToVerify picks the newest.
-SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title
+SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title, pr.mergeability
 FROM pr
 WHERE pr.session_id IN (sqlc.slice('session_ids'))
 ORDER BY pr.session_id, pr.updated_at DESC, pr.url DESC;
@@ -133,7 +135,7 @@ ORDER BY pr.session_id, pr.updated_at DESC, pr.url DESC;
 -- execution takes its turn however many there are.
 SELECT sqlc.embed(e),
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
-    p.target_branch AS pr_target_branch, p.title AS pr_title,
+    p.target_branch AS pr_target_branch, p.title AS pr_title, p.mergeability AS pr_mergeability,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated
@@ -166,14 +168,15 @@ WHERE lado_executions.session_id = sqlc.arg(session_id)
 -- name: InsertLadoIntegrationApproval :exec
 INSERT INTO lado_integration_approvals (
     id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error, approved_base_sha
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: ListLadoIntegrationApprovalsForHead :many
 -- The approvals of an execution's PR at one head, one per target branch,
 -- oldest first.
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
+    approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE execution_session_id = ? AND pr_url = ? AND head_sha = ?
 ORDER BY approved_at, id;
@@ -181,7 +184,8 @@ ORDER BY approved_at, id;
 -- name: ListLadoIntegrationApprovalsForPRHead :many
 -- The approvals of a PR at one head, whatever execution holds them.
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
+    approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE pr_url = ? AND head_sha = ?
 ORDER BY approved_at, id;
@@ -211,7 +215,8 @@ WHERE lado_integration_approvals.id = sqlc.arg(id);
 -- Approvals whose commit status is still to post, with attempts left, oldest
 -- first.
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
-    actor, approved_at, status_state, status_attempts, status_posted_at, status_error
+    actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
+    approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE status_state IN ('pending', 'failed') AND status_attempts < sqlc.arg(max_attempts)
 ORDER BY approved_at, id
@@ -219,9 +224,23 @@ LIMIT sqlc.arg(max_approvals);
 
 -- name: ListLadoIntegrationApprovalStates :many
 -- The PR, target branch and status state of the approvals of the given
--- executions and heads. The caller keeps the (execution, PR, head, target)
--- it asked for.
+-- executions and heads, revoked ones left out: they no longer count. The
+-- caller keeps the (execution, PR, head, target) it asked for.
 SELECT execution_session_id, pr_url, head_sha, target_branch, status_state
 FROM lado_integration_approvals
 WHERE execution_session_id IN (sqlc.slice('session_ids'))
-  AND head_sha IN (sqlc.slice('head_shas'));
+  AND head_sha IN (sqlc.slice('head_shas'))
+  AND revoked_at IS NULL;
+
+-- name: RevokeLadoIntegrationApproval :execrows
+-- Withdraws an approval that still holds. A posted commit status starts over
+-- as pending with no attempts, so the loop posts pending over success; an
+-- approval without a status to post (not_applicable) keeps it.
+UPDATE lado_integration_approvals
+SET revoked_at = sqlc.arg(revoked_at),
+    revoked_reason = sqlc.arg(revoked_reason),
+    status_state = CASE WHEN lado_integration_approvals.status_state = 'not_applicable' THEN 'not_applicable' ELSE 'pending' END,
+    status_attempts = CASE WHEN lado_integration_approvals.status_state = 'not_applicable' THEN lado_integration_approvals.status_attempts ELSE 0 END,
+    status_error = CASE WHEN lado_integration_approvals.status_state = 'not_applicable' THEN lado_integration_approvals.status_error ELSE '' END
+WHERE lado_integration_approvals.id = sqlc.arg(id)
+  AND lado_integration_approvals.revoked_at IS NULL;

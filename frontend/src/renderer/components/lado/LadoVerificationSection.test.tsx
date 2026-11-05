@@ -547,3 +547,55 @@ test("names a deleted local base branch and a check taken from one app only", ()
 	expect(within(row("protection")).getByText("Not protected: rulesets missing lado/integration from any source")).toBeInTheDocument();
 	expect(within(row("protection")).getByText(/set the check's source to “Any source”/)).toBeInTheDocument();
 });
+
+test("names a remote base that moved past the head, and the files it overlaps", () => {
+	const { unmount } = renderSection(
+		execution({
+			verification: verification({
+				items: items({
+					base_branch: {
+						outcome: "confirm",
+						code: "base_advanced",
+						details: { branch: "main", remote: "origin", moved: [], alreadyOnBase: false, advanced: true, advancedTip: "e".repeat(40) },
+					},
+				}),
+			}),
+		}),
+	);
+	expect(within(row("base_branch")).getByText("The remote main moved without touching this head's files")).toBeInTheDocument();
+	expect(within(row("base_branch")).queryByTestId("lado-verify-overlap")).not.toBeInTheDocument();
+	unmount();
+
+	renderSection(
+		execution({
+			verification: verification({
+				outcome: "fail",
+				reason: "base_overlap",
+				items: items({
+					base_branch: {
+						outcome: "fail",
+						code: "base_overlap",
+						details: {
+							branch: "main",
+							remote: "origin",
+							moved: [],
+							alreadyOnBase: false,
+							advanced: true,
+							advancedTip: "e".repeat(40),
+							overlap: ["frontend/src/a.ts", "backend/b.go"],
+							overlapCount: 5,
+						},
+					},
+				}),
+			}),
+		}),
+	);
+	const base = row("base_branch");
+	expect(within(base).getByText("5 files changed on the remote main overlap this head")).toBeInTheDocument();
+	const files = within(base).getByTestId("lado-verify-overlap");
+	expect(within(files).getByText("frontend/src/a.ts")).toHaveClass("font-mono");
+	expect(within(files).getByText("backend/b.go")).toBeInTheDocument();
+	expect(within(files).getByText("and 3 more files")).toBeInTheDocument();
+	expect(base).toHaveAttribute("data-outcome", "fail");
+	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Base moved");
+});

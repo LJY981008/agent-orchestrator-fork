@@ -131,15 +131,19 @@ func (s *Store) fillLadoQueueFacts(ctx context.Context, tasks []domain.LadoTask)
 	return nil
 }
 
-// fillLadoExecutionFacts sets each execution's newest PR and the
-// verification facts of that PR's head. Every read that gives an execution to
+// fillLadoExecutionFacts sets each execution's newest PR, the
+// verification facts of that PR's head and its PR's resolve. Every read that gives an execution to
 // a task's state goes through it, so the state is the same in task lists, one
 // task and the execution view.
 func (s *Store) fillLadoExecutionFacts(ctx context.Context, executions []domain.LadoExecution) error {
 	if err := s.fillLadoExecutionPRs(ctx, executions); err != nil {
 		return err
 	}
-	return s.fillLadoVerification(ctx, executions)
+	if err := s.fillLadoVerification(ctx, executions); err != nil {
+		return err
+	}
+	_, err := s.fillLadoResolves(ctx, executions)
+	return err
 }
 
 // fillLadoExecutionPRs sets each execution's newest PR, reading the PRs of
@@ -165,7 +169,7 @@ func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.La
 	}
 	for i := range executions {
 		if row, ok := newest[executions[i].SessionID]; ok {
-			executions[i].PR = ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title)
+			executions[i].PR = ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title, row.Mergeability)
 		}
 	}
 	return nil
@@ -206,9 +210,10 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 		key := head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}
 		verifiedPR[key] = row.PRURL
 		verified[key] = domain.LadoExecutionVerification{
-			HeadSHA: row.HeadSha,
-			Outcome: domain.LadoVerifyOutcome(row.Outcome),
-			Reason:  row.Reason,
+			HeadSHA:     row.HeadSha,
+			Outcome:     domain.LadoVerifyOutcome(row.Outcome),
+			Reason:      row.Reason,
+			BaseOverlap: row.BaseOverlap != 0,
 		}
 	}
 	approvals, err := s.qr.ListLadoIntegrationApprovalStates(ctx, gen.ListLadoIntegrationApprovalStatesParams{SessionIds: sessions, HeadShas: shas})
@@ -247,7 +252,7 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 }
 
 // ladoExecutionPR is the PR of an execution from AO's PR row.
-func ladoExecutionPR(url string, number int64, state domain.PRState, headSHA, targetBranch, title string) domain.LadoExecutionPR {
+func ladoExecutionPR(url string, number int64, state domain.PRState, headSHA, targetBranch, title string, mergeability domain.Mergeability) domain.LadoExecutionPR {
 	return domain.LadoExecutionPR{
 		URL:          url,
 		Number:       int(number),
@@ -256,6 +261,7 @@ func ladoExecutionPR(url string, number int64, state domain.PRState, headSHA, ta
 		HeadSHA:      headSHA,
 		TargetBranch: targetBranch,
 		Title:        title,
+		Mergeability: mergeability,
 	}
 }
 

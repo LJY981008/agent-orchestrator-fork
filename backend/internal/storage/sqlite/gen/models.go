@@ -563,6 +563,9 @@ type LadoIntegrationApproval struct {
 	StatusAttempts     int64
 	StatusPostedAt     sql.NullTime
 	StatusError        string
+	ApprovedBaseSha    string
+	RevokedAt          sql.NullTime
+	RevokedReason      string
 }
 
 type LadoNoticeState struct {
@@ -580,6 +583,26 @@ type LadoOrchestratorNotice struct {
 	SentAt     sql.NullTime
 	SentTo     string
 	DroppedAt  sql.NullTime
+}
+
+type LadoPRResolf struct {
+	ExecutionSessionID string
+	TaskID             string
+	QueueEntryID       string
+	State              string
+	Attempts           int64
+	Spawns             int64
+	SessionID          string
+	StartHeadSha       string
+	BaseTipSha         string
+	SpawnRequest       string
+	SpawnExpiresAt     sql.NullTime
+	DoneSeenAt         sql.NullTime
+	NotifiedHeadSha    string
+	Error              string
+	Version            int64
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type LadoPartRun struct {

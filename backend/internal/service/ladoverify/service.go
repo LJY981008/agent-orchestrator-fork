@@ -8,14 +8,24 @@ package ladoverify
 // and tells the worker once about each of LADO's own items that fails on the
 // head. A merged or closed PR is settled once. At the end the pass posts
 // again the lado/integration statuses that could not be posted.
+//
+// #53: the loop fetches each base branch at most every baseFetchEvery, so a
+// record sees another PR's merge into its base (base_advanced, or
+// base_overlap when it changed the same paths). A merge LADO settles fetches
+// its target at once, and the next pass verifies the open executions of that
+// target first, approved heads before the others. An approved head whose
+// record turns base_overlap loses its approval.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +51,13 @@ const (
 	// baseResolveTimeout bounds resolving a repository's base branch, as the
 	// dispatcher bounds it.
 	baseResolveTimeout = 30 * time.Second
+	// baseFetchEvery is how often the loop fetches one base branch of one
+	// repository from its remote; baseFetchTimeout bounds each fetch.
+	baseFetchEvery   = 2 * time.Minute
+	baseFetchTimeout = 30 * time.Second
+	// urgentListMax is how many executions a pass lists when a merge moved a
+	// target, so that the open executions of that target come first.
+	urgentListMax = 4 * verifyBatch
 )
 
 // Store is what the loop reads and writes in LADO's store (*store.Store).
@@ -72,6 +89,7 @@ type Store interface {
 	ListLadoIntegrationApprovalsForPR(ctx context.Context, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error)
 	LadoSessionsNamingPR(ctx context.Context, prURL string) ([]domain.SessionID, error)
 	ResetLadoIntegrationStatus(ctx context.Context, id string) error
+	RevokeLadoIntegrationApproval(ctx context.Context, id, reason string, at time.Time, audit domain.LadoAuditEvent) (bool, error)
 	LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error)
 	// The stage timings and investigation metrics (timings.go).
 	MarkLadoExecutionPRSeen(ctx context.Context, session domain.SessionID, prURL string, at time.Time) error
@@ -188,6 +206,12 @@ type Service struct {
 	// could not verify it.
 	headFetched map[string]time.Time
 	failedAt    map[domain.SessionID]time.Time
+	// baseFetched holds, by repository, remote and branch (fetchKey), when
+	// LADO last fetched a base branch; urgent holds the targets
+	// (targetKey) a settled merge moved, which the next pass fetches at
+	// once and verifies first.
+	baseFetched map[string]time.Time
+	urgent      map[string]bool
 	// prSeen and verified hold the executions whose first PR sighting and
 	// first verification this daemon stored (timings.go).
 	prSeen   map[domain.SessionID]bool
@@ -233,6 +257,8 @@ func New(deps Deps) *Service {
 		statusTried: map[string]time.Time{},
 		headFetched: map[string]time.Time{},
 		failedAt:    map[domain.SessionID]time.Time{},
+		baseFetched: map[string]time.Time{},
+		urgent:      map[string]bool{},
 		prSeen:      map[domain.SessionID]bool{},
 		verified:    map[domain.SessionID]bool{},
 	}
@@ -405,7 +431,9 @@ func (s *Service) baseBranchOf(ctx context.Context, place repoPlace) (string, er
 // else. Each execution is verified or settled on its own: what fails for one
 // is returned, joined with the others, after the rest ran, and the loop
 // leaves that execution for failedRetryAfter. A pass verifies up to
-// verifyBatch executions in the store's order.
+// verifyBatch executions in the store's order, except that after a merge
+// moved a target the open executions of that target come first, those with
+// an approved head before the others.
 func (s *Service) Tick(ctx context.Context) error {
 	s.passMu.Lock()
 	defer s.passMu.Unlock()
@@ -414,9 +442,18 @@ func (s *Service) Tick(ctx context.Context) error {
 	}
 	var problems []error
 	resting := s.resting()
-	executions, err := s.deps.Store.ListLadoExecutionsToVerify(ctx, verifyBatch+len(resting))
+	urgent := s.takeUrgent()
+	limit := verifyBatch
+	if len(urgent) > 0 {
+		limit = urgentListMax
+	}
+	executions, err := s.deps.Store.ListLadoExecutionsToVerify(ctx, limit+len(resting))
 	if err != nil {
 		problems = append(problems, fmt.Errorf("list the executions to verify: %w", err))
+	}
+	keys := map[domain.SessionID]string{}
+	if len(urgent) > 0 {
+		executions, keys = s.urgentFirst(ctx, executions, urgent)
 	}
 	verified := 0
 	for _, exec := range executions {
@@ -427,7 +464,14 @@ func (s *Service) Tick(ctx context.Context) error {
 			continue
 		}
 		verified++
-		err := s.verifyExecution(ctx, exec)
+		// The first open head of an urgent target fetches it; the others
+		// of that target compare with that fetch.
+		key := keys[exec.SessionID]
+		force := urgent[key] && !exec.PR.Merged && !exec.PR.Closed && exec.PR.HeadSHA != ""
+		if force {
+			urgent[key] = false
+		}
+		err := s.verifyExecutionIn(ctx, exec, force)
 		if ctx.Err() != nil {
 			break
 		}
@@ -493,6 +537,13 @@ func (s *Service) cancelLeftovers(ctx context.Context) error {
 // an open PR's head. A head AO has not observed yet waits for AO (the store
 // does not list it).
 func (s *Service) verifyExecution(ctx context.Context, exec domain.LadoExecution) error {
+	return s.verifyExecutionIn(ctx, exec, false)
+}
+
+// verifyExecutionIn is verifyExecution; urgent fetches the base branch past
+// baseFetchEvery, as after a merge into it. A head whose record turns
+// base_overlap loses its integration approvals.
+func (s *Service) verifyExecutionIn(ctx context.Context, exec domain.LadoExecution, urgent bool) error {
 	s.markPRSeen(ctx, exec)
 	switch {
 	case exec.PR.Merged || exec.PR.Closed:
@@ -500,8 +551,74 @@ func (s *Service) verifyExecution(ctx context.Context, exec domain.LadoExecution
 	case exec.PR.HeadSHA == "":
 		return nil
 	}
-	_, err := s.verifyHead(ctx, exec, verifyOptions{startWork: true})
+	record, err := s.verifyHead(ctx, exec, verifyOptions{startWork: true, loopFetch: true, forceFetch: urgent})
+	if err != nil {
+		return err
+	}
+	_, err = s.revokeOverlapped(ctx, exec, record)
 	return err
+}
+
+// targetKey names the target branch of an execution's PR on its remote in
+// the repository of its task's issue, which a merge into it moves.
+func targetKey(task domain.LadoTask, exec domain.LadoExecution) string {
+	return string(task.ProjectID) + "\x00" + domain.LadoRepoRef(task.Repo) + "\x00" + cmp.Or(exec.BaseRemote, "origin") + "\x00" +
+		strings.ToLower(cmp.Or(exec.PR.TargetBranch, exec.BaseBranch))
+}
+
+// markUrgent asks the next pass to fetch the execution's target at once and
+// to verify the open executions of that target first, and kicks it. Without
+// the execution's task it only kicks.
+func (s *Service) markUrgent(ctx context.Context, exec domain.LadoExecution) {
+	task, ok, err := s.deps.Tasks.LadoTask(ctx, exec.TaskID)
+	if err == nil && ok {
+		s.mu.Lock()
+		s.urgent[targetKey(task, exec)] = true
+		s.mu.Unlock()
+	}
+	s.Kick()
+}
+
+// takeUrgent returns the targets marked urgent and forgets them.
+func (s *Service) takeUrgent() map[string]bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	urgent := s.urgent
+	s.urgent = map[string]bool{}
+	return urgent
+}
+
+// urgentFirst orders the open executions of an urgent target first, those
+// whose head is approved before the others, and keeps the store's order
+// otherwise. It returns the target keys of the executions whose task it
+// could read.
+func (s *Service) urgentFirst(ctx context.Context, executions []domain.LadoExecution, urgent map[string]bool) ([]domain.LadoExecution, map[domain.SessionID]string) {
+	keys := map[domain.SessionID]string{}
+	tasks := map[domain.LadoTaskID]domain.LadoTask{}
+	for _, exec := range executions {
+		task, read := tasks[exec.TaskID]
+		if !read {
+			found, ok, err := s.deps.Tasks.LadoTask(ctx, exec.TaskID)
+			if err != nil || !ok {
+				// The pass reports it when it verifies the execution.
+				continue
+			}
+			task, tasks[exec.TaskID] = found, found
+		}
+		keys[exec.SessionID] = targetKey(task, exec)
+	}
+	rank := func(exec domain.LadoExecution) int {
+		switch {
+		case exec.PR.Merged || exec.PR.Closed || !urgent[keys[exec.SessionID]]:
+			return 2
+		case exec.Integration.HeadApproved:
+			return 0
+		}
+		return 1
+	}
+	executions = slices.Clone(executions)
+	slices.SortStableFunc(executions, func(a, b domain.LadoExecution) int { return cmp.Compare(rank(a), rank(b)) })
+	return executions, keys
 }
 
 func (s *Service) now() time.Time {

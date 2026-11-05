@@ -17,12 +17,14 @@ export type LadoRunState = Extract<LadoTask["state"], "validating" | "integratio
  * request state: LADO verifying it takes the validating color (DESIGN.md
  * §5, U8 of #15), waiting for the
  * integration approval takes the needs-you color, an approved head reads as
- * ready, and work merged without that approval needs the human's attention.
+ * ready, and work merged without that approval needs the human's attention,
+ * as does a conflict LADO's resolve workers could not resolve.
  */
 export function ladoRunStatus(state: LadoRunState, reason: string | undefined, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
 	switch (state) {
 		case "validating":
-			return { label: t("lado.task.state.validating"), tone: "validating" };
+			// LADO's resolve workers gave up on the PR's conflict: the developer resolves it.
+			return { label: t("lado.task.state.validating"), tone: reason === "conflict_unresolved" ? "attention" : "validating" };
 		case "integration_pending":
 			return { label: t("lado.task.state.integrationPending"), tone: "attention" };
 		case "integrating":

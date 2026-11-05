@@ -86,12 +86,15 @@ SELECT
     (SELECT COUNT(*) FROM lado_executions e JOIN sessions s ON s.id = e.session_id WHERE s.is_terminated = 0)
     + (SELECT COUNT(*) FROM lado_queue_entries q WHERE q.lease_token IS NOT NULL AND q.lease_expires_at > ?1)
     + (SELECT COUNT(*) FROM lado_queue_entries q
-        WHERE q.part_spawn_request <> '' AND q.part_spawn_expires_at > ?1) AS live
+        WHERE q.part_spawn_request <> '' AND q.part_spawn_expires_at > ?1)
+    + (SELECT COUNT(*) FROM lado_pr_resolves r
+        WHERE r.spawn_request <> '' AND r.spawn_expires_at > ?1) AS live
 `
 
 // What takes a worker slot: live execution sessions of every role, active
-// leases, and parts run workers the dispatcher is starting. A worker that
-// started but is not linked yet counts twice for a moment, never not at all.
+// leases, and parts run and resolve workers the dispatcher is starting. A
+// worker that started but is not linked yet counts twice for a moment, never
+// not at all.
 func (q *Queries) CountLiveLadoWorkers(ctx context.Context, now sql.NullTime) (int64, error) {
 	row := q.db.QueryRowContext(ctx, countLiveLadoWorkers, now)
 	var live int64

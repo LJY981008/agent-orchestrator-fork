@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +74,13 @@ func TestInstallLadoMergeGateGuardsAOsMerge(t *testing.T) {
 	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
 		t.Fatalf("write the merge request: %v", err)
 	}
+	// #53: the gate fetches the PR's target from the project's repository
+	// before an approved head merges, so the project gets a real one whose
+	// origin's main the approval was given against.
+	repoDir, baseTip := ladoGateRepo(t)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: repoDir, RepoOriginURL: "https://gitlab.com/acme/demo.git", RegisteredAt: at}); err != nil {
+		t.Fatalf("point the project at its repository: %v", err)
+	}
 	verify := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, slog.New(slog.DiscardHandler)).verify
 	scm := &ladoSCM{fetched: true}
 	actions := prsvc.NewActionService(prsvc.ActionDeps{Store: store, Reader: scm, Merger: scm})
@@ -106,13 +116,50 @@ func TestInstallLadoMergeGateGuardsAOsMerge(t *testing.T) {
 	proof := domain.LadoPresenceProof{Nonce: "BBBBBBBBBBBBBBBBBBBBBB", Action: domain.LadoPresenceIntegrationApprove, SubjectID: string(worker) + "@" + head, ExpiresAt: at.Add(time.Minute), UsedAt: at}
 	if err := store.ApproveLadoIntegration(ctx, domain.LadoIntegrationApproval{
 		ID: "lado-integration-1", ExecutionSessionID: worker, PRURL: url, HeadSHA: head, VerificationSHA256: sum,
-		Actor: "human", ApprovedAt: at, StatusState: domain.LadoIntegrationStatusNotApplicable,
+		Actor: "human", ApprovedAt: at, StatusState: domain.LadoIntegrationStatusNotApplicable, BaseTipSHA: baseTip,
 	}, proof, domain.LadoAuditEvent{At: at, Actor: "human", Action: "integration.approved", SubjectKind: "execution", SubjectID: string(worker), Payload: []byte("{}")}); err != nil {
 		t.Fatalf("ApproveLadoIntegration: %v", err)
 	}
+	// A target the gate cannot fetch refuses the merge (#53): it fails closed.
+	origin := ladoGit(t, repoDir, "remote", "get-url", "origin")
+	ladoGit(t, repoDir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "missing.git"))
+	if err := merge(); !errors.As(err, &apiErr) || apiErr.Code != "LADO_MERGE_GATE_FAILED" || scm.merges != 0 {
+		t.Fatalf("merge with an unreachable target = %v after %d merges; want LADO_MERGE_GATE_FAILED before any", err, scm.merges)
+	}
+	ladoGit(t, repoDir, "remote", "set-url", "origin", origin)
 	if err := merge(); err != nil || scm.merges != 1 {
 		t.Fatalf("merge of the approved head = %v after %d merges, want one merge", err, scm.merges)
 	}
+}
+
+// ladoGateRepo makes a bare origin with one commit on main and a clone of it,
+// and returns the clone and main's commit.
+func ladoGateRepo(t *testing.T) (string, string) {
+	t.Helper()
+	root := t.TempDir()
+	origin, dir := filepath.Join(root, "origin.git"), filepath.Join(root, "app")
+	ladoGit(t, root, "init", "-q", "--bare", "-b", "main", origin)
+	ladoGit(t, root, "clone", "-q", origin, dir)
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# app\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ladoGit(t, dir, "add", "-A")
+	ladoGit(t, dir, "-c", "user.name=LADO", "-c", "user.email=lado@example.com", "-c", "commit.gpgsign=false",
+		"commit", "-q", "--no-verify", "-m", "Start the app")
+	ladoGit(t, dir, "push", "-q", "origin", "HEAD:refs/heads/main")
+	return dir, ladoGit(t, dir, "rev-parse", "HEAD")
+}
+
+// ladoGit runs git in dir, prompts off, and returns its output trimmed.
+func ladoGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_NOSYSTEM=1")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // ladoLiveHeads reads a merge request through AO's SCM reader with the

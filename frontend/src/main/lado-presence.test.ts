@@ -2011,6 +2011,17 @@ describe("approving an integration", () => {
 			["base_deleted", ...confirmCodes],
 		);
 		expect(deleted).toContain("The local main was at ccccccc when the run started and is gone now.");
+
+		const advanced = await detailOf(
+			withItem({
+				kind: "base_branch",
+				outcome: "confirm",
+				code: "base_advanced",
+				details: { branch: "main", remote: "origin", moved: [], alreadyOnBase: false, advanced: true, advancedTip: "e".repeat(40) },
+			}),
+			["base_advanced", ...confirmCodes],
+		);
+		expect(advanced).toContain("The remote main moved to eeeeeee after this head branched off; no files overlap.");
 	});
 
 	it("words the confirmation from main's catalog in the current language", async () => {

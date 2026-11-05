@@ -66,6 +66,7 @@ func mustWriteLadoHeadPR(t *testing.T, s *sqlite.Store, session domain.SessionID
 		HeadSHA:      head,
 		TargetBranch: "main",
 		Title:        fmt.Sprintf("Change %d", number),
+		Mergeability: domain.MergeUnknown,
 	}
 	if err := s.WriteSCMObservation(context.Background(), domain.PullRequest{
 		URL: pr.URL, SessionID: session, Number: number, Draft: state == domain.PRStateDraft, Merged: pr.Merged, Closed: pr.Closed,

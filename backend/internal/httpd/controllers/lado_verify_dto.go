@@ -95,6 +95,10 @@ type LadoVerifyItemDetailsResponse struct {
 	AlreadyOnBase  bool                      `json:"alreadyOnBase,omitempty" description:"base_branch: the remote base held the head before any approval."`
 	DispatchCommit string                    `json:"dispatchCommit,omitempty" description:"base_branch: the local base branch's commit when the run was dispatched; omitted when it had none or LADO did not record it."`
 	Deleted        bool                      `json:"deleted,omitempty" description:"base_branch: the local base branch existed at dispatch and is gone."`
+	Advanced       bool                      `json:"advanced,omitempty" description:"base_branch: the remote base branch moved past the head's merge base."`
+	AdvancedTip    string                    `json:"advancedTip,omitempty" description:"base_branch: the remote base branch's commit LADO compared the head with."`
+	Overlap        []string                  `json:"overlap,omitempty" description:"base_branch: the first files changed on the remote base branch since the head's merge base that the head changed or the plan names."`
+	OverlapCount   int                       `json:"overlapCount,omitempty" description:"base_branch: how many files changed on the remote base branch overlap the head or the plan."`
 	// protection
 	Provider       string   `json:"provider,omitempty" enum:"github,gitlab" description:"protection: the repository's host."`
 	Repo           string   `json:"repo,omitempty" description:"protection: the repository, as owner/name."`
@@ -120,7 +124,7 @@ type LadoVerifyItemDetailsResponse struct {
 type LadoVerifyItemResponse struct {
 	Kind    string                        `json:"kind" enum:"required_checks,commands,commit_messages,paths,base_branch,protection,review,evidence"`
 	Outcome string                        `json:"outcome" enum:"pass,wait,fail,confirm,info" description:"info never decides; evidence is always info."`
-	Code    string                        `json:"code,omitempty" enum:"not_required,verifying,checks_pending,checks_failed,none_reported,commands_running,worktree_not_at_head,worktree_changed,commands_failed,command_timed_out,worktree_missing,no_tests,none_configured,head_unavailable,commit_messages_failed,commit_messages_unclear,protected_path,outside_plan,base_moved,base_deleted,reflog_off,already_on_base,no_local_branch,unprotected,protection_unknown,unprotected_gitlab,review_pending,changes_requested,review_inconclusive" description:"Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone."`
+	Code    string                        `json:"code,omitempty" enum:"not_required,verifying,checks_pending,checks_failed,none_reported,commands_running,worktree_not_at_head,worktree_changed,commands_failed,command_timed_out,worktree_missing,no_tests,none_configured,head_unavailable,commit_messages_failed,commit_messages_unclear,protected_path,outside_plan,base_moved,base_deleted,reflog_off,already_on_base,no_local_branch,base_advanced,base_overlap,unprotected,protection_unknown,unprotected_gitlab,review_pending,changes_requested,review_inconclusive" description:"Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone; base_advanced: the remote base branch moved past the head's merge base without touching its files; base_overlap: it moved with a change to files the head changed or the plan names, so the head must take in the base."`
 	Details LadoVerifyItemDetailsResponse `json:"details"`
 }
 
@@ -130,7 +134,7 @@ type LadoVerificationResponse struct {
 	HeadSHA string `json:"headSha"`
 	PRURL   string `json:"prUrl"`
 	Outcome string `json:"outcome" enum:"pass,wait,fail,confirm" description:"fail if any item fails, else wait if any waits, else confirm if any needs confirming, else pass."`
-	Reason  string `json:"reason,omitempty" enum:"verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested" description:"The code of the first item that fails, else of the first that waits; omitted otherwise."`
+	Reason  string `json:"reason,omitempty" enum:"verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,base_overlap,review_pending,changes_requested" description:"The code of the first item that fails, else of the first that waits; omitted otherwise."`
 	SHA256  string `json:"sha256" description:"The record's hash, which an integration approval signs as verificationSha256."`
 	// Items follow the record's order: required_checks, commands,
 	// commit_messages, paths, base_branch, protection, review, evidence.
