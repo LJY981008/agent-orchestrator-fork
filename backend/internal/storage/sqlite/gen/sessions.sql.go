@@ -1309,22 +1309,31 @@ func (q *Queries) RenameSessionIfDisplayName(ctx context.Context, arg RenameSess
 
 const replaceUnpersistedChatProvider = `-- name: ReplaceUnpersistedChatProvider :execrows
 UPDATE sessions SET
-    provider_conversation_id = ?1
-WHERE id = ?2
+    agent_session_id = CASE
+        WHEN agent_session_id <> '' AND agent_session_id = ?1
+        THEN ?2 ELSE agent_session_id END,
+    agent_session_id_launch_id = CASE
+        WHEN agent_session_id <> '' AND agent_session_id = ?1
+        THEN '' ELSE agent_session_id_launch_id END,
+    provider_conversation_id = ?2
+WHERE id = ?3
   AND session_mode = 'chat'
-  AND provider_conversation_id = ?3
+  AND provider_conversation_id = ?1
 `
 
 type ReplaceUnpersistedChatProviderParams struct {
+	ExpectedProviderConversationID string
 	ProviderConversationID         string
 	ID                             domain.SessionID
-	ExpectedProviderConversationID string
 }
 
 // Move a Chat from a provider id the provider never persisted to the fresh id
 // it started instead. Guarded on the old id so a newer owner is never replaced.
+// agent_session_id moves with it only when it still names the old id (a branch
+// activation or a hook reserved it); any other value, empty included, stays.
+// SQLite evaluates every SET expression against the old row.
 func (q *Queries) ReplaceUnpersistedChatProvider(ctx context.Context, arg ReplaceUnpersistedChatProviderParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, replaceUnpersistedChatProvider, arg.ProviderConversationID, arg.ID, arg.ExpectedProviderConversationID)
+	result, err := q.db.ExecContext(ctx, replaceUnpersistedChatProvider, arg.ExpectedProviderConversationID, arg.ProviderConversationID, arg.ID)
 	if err != nil {
 		return 0, err
 	}

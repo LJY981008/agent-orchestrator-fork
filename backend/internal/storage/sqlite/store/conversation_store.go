@@ -579,6 +579,32 @@ func (s *Store) CreateAndActivateConversationBranch(
 	})
 }
 
+// ClearedConversationBranchUntouched reports whether branchID is the active
+// branch a Chat /clear created for sessionID, still bound to
+// expectedProviderConversationID, with nothing recorded on it but the /clear
+// boundary row. It is the proof ReplaceUnpersistedChatProvider repeats inside
+// its swap, so a caller can decide to start fresh before it tries.
+func (s *Store) ClearedConversationBranchUntouched(
+	ctx context.Context,
+	sessionID domain.SessionID,
+	conversationID, branchID, expectedProviderConversationID string,
+) (bool, error) {
+	if sessionID == "" || conversationID == "" || branchID == "" || expectedProviderConversationID == "" {
+		return false, nil
+	}
+	untouched, err := s.qr.ClearedBranchUntouched(ctx, gen.ClearedBranchUntouchedParams{
+		BranchID:                       branchID,
+		ConversationID:                 conversationID,
+		ExpectedProviderConversationID: expectedProviderConversationID,
+		SessionID:                      &sessionID,
+		BoundaryProviderItemID:         domain.ConversationClearBoundaryProviderItemID(sessionID, branchID),
+	})
+	if err != nil {
+		return false, fmt.Errorf("check cleared branch %s: %w", branchID, err)
+	}
+	return untouched, nil
+}
+
 // CreateAndActivateReviewConversationBranch publishes a fresh provider branch
 // with the review's controller generation. Reviewer Chat does not own the
 // worker session controller, so its boundary must claim the review row.

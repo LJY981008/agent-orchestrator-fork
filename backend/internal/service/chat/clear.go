@@ -29,7 +29,7 @@ type ClearContextResult struct {
 // clearContextProviderItemID keys the boundary row on the session and the new
 // branch so a retried write updates one row instead of adding a second.
 func clearContextProviderItemID(id domain.SessionID, branchID string) string {
-	return domain.ConversationContextResetProviderItemID(id) + ":" + branchID
+	return domain.ConversationClearBoundaryProviderItemID(id, branchID)
 }
 
 // ClearContext is AO's /clear for Chat. The ACP adapter hides Claude Code's own
