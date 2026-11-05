@@ -3,6 +3,7 @@ package ladotask
 import (
 	"context"
 	"fmt"
+	"maps"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -107,42 +108,91 @@ func (pf *planFixture) pinLegacy(t *testing.T, content string) domain.LadoPlanRe
 	return pf.latest(t).Plan.Latest
 }
 
-func repoOutside(problems []domain.LadoPlanProblem) []domain.LadoPlanProblem {
+// repoCodes keeps the problems of the plan's repositories: its repos
+// list and its paths against the workspace's children.
+func repoCodes(problems []domain.LadoPlanProblem) []domain.LadoPlanProblem {
 	var out []domain.LadoPlanProblem
 	for _, p := range problems {
-		if p.Code == domain.LadoPlanPartRepoOutside {
+		switch p.Code {
+		case domain.LadoPlanPartRepoOutside, domain.LadoPlanReposMissing, domain.LadoPlanRepoUnknown, domain.LadoPlanReposInvalid:
 			out = append(out, p)
 		}
 	}
 	return out
 }
 
-// In a workspace, a plan with parts that touches another repository than
-// the issue's cannot be approved: LADO merges the parts in the issue's
-// repository only (#60).
-func TestWorkspacePartsPlanOutsideTheIssueRepositoryIsAProblem(t *testing.T) {
+// withRepos gives a plan file a repos list.
+func withRepos(content string, repos ...string) string {
+	var b strings.Builder
+	b.WriteString("repos:\n")
+	for _, repo := range repos {
+		fmt.Fprintf(&b, "  - %q\n", repo)
+	}
+	return strings.Replace(content, "test_commands:", b.String()+"test_commands:", 1)
+}
+
+// In a workspace, a plan whose paths lie in more than one child repository
+// needs a repos list that says the order of their pull requests (#64), with
+// or without parts, and a plan's paths lie inside the repositories it runs
+// in. Such a plan cannot be approved.
+func TestWorkspacePlanAcrossRepositoriesNeedsRepos(t *testing.T) {
+	missing := []domain.LadoPlanProblem{{Code: domain.LadoPlanReposMissing, Field: "repos", Detail: "back, front"}}
 	cases := []struct {
-		name       string
-		top, partB []string
-		want       []domain.LadoPlanProblem
+		name    string
+		content func(pf *planFixture) string
+		want    []domain.LadoPlanProblem
 	}{
 		{
-			name: "a part in front", top: []string{"back/**", "front/**"}, partB: []string{"front/**"},
+			name: "a part in front",
+			content: func(pf *planFixture) string {
+				return pf.partsPlanFile([]string{"back/**", "front/**"}, []string{"front/**"})
+			},
+			want: missing,
+		},
+		{
+			name: "the plan's paths in front",
+			content: func(pf *planFixture) string {
+				return pf.partsPlanFile([]string{"back/**", "front/src/**"}, []string{"back/web/**"})
+			},
+			want: missing,
+		},
+		{
+			name: "a plan without parts in back and front",
+			content: func(pf *planFixture) string {
+				return strings.Replace(pf.planFile("issue"), "  - backend/**\n", "  - back/**\n  - front/**\n", 1)
+			},
+			want: missing,
+		},
+		{
+			name: "repos [back] with a part in front",
+			content: func(pf *planFixture) string {
+				return withRepos(pf.partsPlanFile([]string{"back/**", "front/**"}, []string{"front/**"}), "back")
+			},
 			want: []domain.LadoPlanProblem{
 				{Code: domain.LadoPlanPartRepoOutside, Field: "affected_paths", Detail: "front/**"},
 				{Code: domain.LadoPlanPartRepoOutside, Field: "parts", Detail: "b: front/**"},
 			},
 		},
 		{
-			name: "the plan's paths in front", top: []string{"back/**", "front/src/**"}, partB: []string{"back/web/**"},
+			name: "repos [back] for a plan without parts in front",
+			content: func(pf *planFixture) string {
+				return withRepos(strings.Replace(pf.planFile("issue"), "  - backend/**\n", "  - back/**\n  - front/src/**\n", 1), "back")
+			},
 			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanPartRepoOutside, Field: "affected_paths", Detail: "front/src/**"}},
+		},
+		{
+			name: "a repos entry that is no child",
+			content: func(pf *planFixture) string {
+				return withRepos(pf.partsPlanFile([]string{"back/**", "side/**"}, []string{"side/**"}), "back", "side")
+			},
+			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: "side"}},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			pf, _, _ := workspacePlanFixture(t)
-			rev := pf.pinLegacy(t, pf.partsPlanFile(tc.top, tc.partB))
-			if rev.Valid() || !slices.Equal(repoOutside(rev.Problems), tc.want) {
+			rev := pf.pinLegacy(t, tc.content(pf))
+			if rev.Valid() || !slices.Equal(repoCodes(rev.Problems), tc.want) {
 				t.Fatalf("problems = %+v, want %+v", rev.Problems, tc.want)
 			}
 			if _, err := pf.svc.ApprovePlan(context.Background(), rev.ID, rev.SHA256, policyA, pf.proof(rev.ID)); apiCode(err) != "LADO_PLAN_INVALID" {
@@ -152,9 +202,11 @@ func TestWorkspacePartsPlanOutsideTheIssueRepositoryIsAProblem(t *testing.T) {
 	}
 }
 
-// A workspace plan with parts inside the issue's repository, or one without
-// parts, has no such problem, and the base resolves in that repository.
-func TestWorkspacePlanInsideTheIssueRepositoryIsValid(t *testing.T) {
+// A workspace plan with parts inside the issue's repository, one without
+// parts in one repository, and one across repositories with a repos list
+// that holds its paths are valid, and the base resolves in the issue's
+// repository.
+func TestWorkspacePlanInsideItsRepositoriesIsValid(t *testing.T) {
 	pf, git, root := workspacePlanFixture(t)
 	rev := pf.pinLegacy(t, pf.partsPlanFile([]string{"back/**"}, []string{"back/web/**"}))
 	if !rev.Valid() || rev.BaseSHA != strings.Repeat("c", 40) {
@@ -164,11 +216,29 @@ func TestWorkspacePlanInsideTheIssueRepositoryIsValid(t *testing.T) {
 		t.Fatalf("base resolved in %v, want %s", git.dirs, want)
 	}
 
-	// One worker runs a plan without parts in the whole workspace.
-	pf.now = pf.now.Add(time.Minute)
-	unsplit := strings.Replace(pf.planFile("issue"), "  - backend/**\n", "  - back/**\n  - front/**\n", 1)
-	if rev := pf.pinLegacy(t, unsplit); !rev.Valid() {
-		t.Fatalf("plan without parts: problems %+v", rev.Problems)
+	valid := map[string]string{
+		"a plan without parts in back":     strings.Replace(pf.planFile("issue"), "  - backend/**\n", "  - back/**\n", 1),
+		"a plan without parts in no child": pf.planFile("issue"),
+		"parts in back and front with repos": withRepos(
+			pf.partsPlanFile([]string{"back/**", "front/**"}, []string{"front/**"}), "back", "front"),
+		"a plan without parts in back and front with repos": withRepos(
+			strings.Replace(pf.planFile("issue"), "  - backend/**\n", "  - back/**\n  - front/**\n", 1), "back", "front"),
+	}
+	for _, name := range slices.Sorted(maps.Keys(valid)) {
+		pf.now = pf.now.Add(time.Minute)
+		if rev := pf.pinLegacy(t, valid[name]); !rev.Valid() {
+			t.Fatalf("%s: problems %+v", name, rev.Problems)
+		}
+	}
+}
+
+// A single repository takes no repos list.
+func TestSingleRepositoryPlanWithReposIsAProblem(t *testing.T) {
+	pf := newPlanFixture(t)
+	rev := pf.pinLegacy(t, withRepos(pf.planFile("issue"), "backend"))
+	want := []domain.LadoPlanProblem{{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: "backend"}}
+	if rev.Valid() || !slices.Equal(repoCodes(rev.Problems), want) {
+		t.Fatalf("problems = %+v, want %+v", rev.Problems, want)
 	}
 }
 

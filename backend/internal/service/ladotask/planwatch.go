@@ -6,7 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -191,21 +193,19 @@ func (s *Service) pinVersion(ctx context.Context, task domain.LadoTask, req doma
 	plan, problems := domain.ParseLadoPlan(content, domain.LadoPlanExpectations{
 		Task: task.ID, Issue: task.IssueRef, Comments: comments, SourceComment: req.SourceCommentID,
 	})
-	dir, relative, repoErr := s.repoDir(ctx, task)
+	layout, repoErr := s.repoLayout(ctx, task)
 	baseSHA := ""
 	if plan.BaseRef != "" && !hasProblem(problems, "base_ref") {
 		err := repoErr
 		if err == nil {
-			baseSHA, err = s.deps.Git.RevParse(ctx, dir, plan.BaseRef)
+			baseSHA, err = s.deps.Git.RevParse(ctx, layout.dir, plan.BaseRef)
 		}
 		if err != nil {
 			problems = append(problems, domain.LadoPlanProblem{Code: domain.LadoPlanUnknownBaseRef, Field: "base_ref", Detail: plan.BaseRef})
 		}
 	}
 	if repoErr == nil {
-		// A parts run merges in the issue's repository only (#60); a single
-		// repository's relative is empty and holds every path.
-		problems = append(problems, domain.LadoPlanOutsideRepo(plan, relative)...)
+		problems = append(problems, repoProblems(plan, layout)...)
 	}
 	reviewed, addressed, notAddressed := s.reviewProblems(ctx, req, plan)
 	problems = append(problems, reviewed...)
@@ -250,29 +250,80 @@ func hasProblem(problems []domain.LadoPlanProblem, field string) bool {
 	return false
 }
 
-// repoDir returns the checkout of the repository that holds the task's
-// issue: the project's folder, or the workspace child with that origin. It
-// also returns the child's folder relative to the project's, with slashes,
-// which is "" for a single repository. ladoqueue's workerBase uses the same
-// rule.
-func (s *Service) repoDir(ctx context.Context, task domain.LadoTask) (string, string, error) {
+// repoLayout is where a task's plan runs: the checkout of the repository
+// that holds the issue (dir) and its folder relative to the project's, with
+// slashes (relative, "" for a single repository), and, in a workspace, the
+// folders of every child repository (children).
+type repoLayout struct {
+	dir       string
+	relative  string
+	workspace bool
+	children  []string
+}
+
+// repoLayout returns the layout of the task's project: the project's folder,
+// or the workspace child whose origin holds the issue, beside the workspace's
+// children. ladoqueue's workerBase uses the same rule.
+func (s *Service) repoLayout(ctx context.Context, task domain.LadoTask) (repoLayout, error) {
 	project, err := s.project(ctx, task.ProjectID)
 	if err != nil {
-		return "", "", err
+		return repoLayout{}, err
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindWorkspace {
-		return project.Path, "", nil
+		return repoLayout{dir: project.Path}, nil
 	}
 	children, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
 	if err != nil {
-		return "", "", err
+		return repoLayout{}, err
 	}
+	layout := repoLayout{workspace: true}
+	found := false
 	for _, child := range children {
+		relative := filepath.ToSlash(child.RelativePath)
+		layout.children = append(layout.children, relative)
+		if found {
+			continue
+		}
 		repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL)
 		if err == nil && domain.LadoSameRepo(repo, task.Repo) {
-			relative := filepath.ToSlash(child.RelativePath)
-			return filepath.Join(project.Path, filepath.FromSlash(relative)), relative, nil
+			layout.dir = filepath.Join(project.Path, filepath.FromSlash(relative))
+			layout.relative = relative
+			found = true
 		}
 	}
-	return "", "", fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
+	if !found {
+		return repoLayout{}, fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(task.Repo))
+	}
+	return layout, nil
+}
+
+// repoProblems checks a plan's repos list and paths against the project's
+// repositories (#60, #64). A single repository takes no repos list, and its
+// paths are not checked against a folder. In a workspace, every repos entry
+// names a child repository; paths that lie in more than one child need a
+// repos list that says the order of their pull requests, with or without
+// parts; and the paths of a plan with parts or a repos list lie inside the
+// repositories it runs in, where LADO keeps its branches and expects the pull
+// requests.
+func repoProblems(plan domain.LadoPlan, layout repoLayout) []domain.LadoPlanProblem {
+	var problems []domain.LadoPlanProblem
+	if !layout.workspace {
+		for _, entry := range plan.Repos {
+			problems = append(problems, domain.LadoPlanProblem{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: entry})
+		}
+		return problems
+	}
+	for _, entry := range plan.Repos {
+		known := slices.ContainsFunc(layout.children, func(child string) bool {
+			return strings.EqualFold(strings.Trim(child, "/"), entry)
+		})
+		if !known {
+			problems = append(problems, domain.LadoPlanProblem{Code: domain.LadoPlanRepoUnknown, Field: "repos", Detail: entry})
+		}
+	}
+	repos, missing := domain.LadoPlanRepos(plan, layout.children, layout.relative)
+	if len(missing) > 0 {
+		return append(problems, missing...)
+	}
+	return append(problems, domain.LadoPlanOutsideRepos(plan, repos)...)
 }

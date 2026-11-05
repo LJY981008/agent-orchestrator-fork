@@ -72,6 +72,8 @@ acceptance_criteria:
   - <an outcome someone can check>
 affected_paths:
   - <a glob relative to the project's root folder>
+repos:
+  - <workspace projects only: the folder of a child repository the work changes, such as back; one pull request per repository, merged in this order, the database or API repository first; required when the paths lie in more than one child repository; leave repos out otherwise and in a single-repository project>
 test_commands:
   - <a command that checks the work; write [] when none applies>
 risk: <low, medium or high>
@@ -105,7 +107,7 @@ const partsGuidance = `Plan for parallel parts by default. LADO runs each part i
 - Give each part narrow affected_paths. Parts whose paths overlap do not run at once.
 - Leave the steps that check, document or publish the whole work (full checks, docs, pull request) out of every part: they are the integration steps.
 - Use 2 to 8 parts. When the work is small or can only be done in order, leave parts out and say why in one line of the plan's prose; one worker then does the whole plan.
-- In a workspace project, a plan with parts keeps its affected_paths and every part's inside the folder of the repository that holds the issue: LADO merges the parts in that repository only.
+- In a workspace project, a plan whose paths lie in more than one child repository lists their folders in repos, in the order their pull requests merge (the database or API repository first): LADO keeps an integration branch in each of them, and the work opens one pull request per repository that changed. A plan with parts or a repos list keeps its affected_paths and every part's inside those repositories; without repos, a plan with parts stays inside the one repository its paths lie in, or the repository that holds the issue.
 - A part whose worker reports done without a commit stops the run, unless the part sets allow_empty: true.
 
 `
