@@ -4,7 +4,9 @@ package ladoverify
 // closed, its verification ends. A merge of a head without an integration
 // approval went around LADO, which the audit log records, for an execution
 // dispatched under integration approval. A PR is settled per URL and state:
-// a closed PR that opens again and merges, or a newer PR, settles again.
+// a closed PR that opens again and merges, or a newer PR, settles again. An
+// execution with several tracked PRs (#64) settles each on its own; the
+// store settles the execution itself with the last of them.
 
 import (
 	"context"
@@ -40,7 +42,7 @@ func (s *Service) settle(ctx context.Context, exec domain.LadoExecution) error {
 			Payload:     payload,
 		}
 	}
-	if err := s.deps.Store.SettleLadoExecution(ctx, exec.SessionID, exec.PR.URL, state, now, audit); err != nil {
+	if err := s.deps.Store.SettleLadoExecutionPR(ctx, exec.SessionID, exec.PR.URL, state, now, audit); err != nil {
 		return fmt.Errorf("settle the execution: %w", err)
 	}
 	s.storeEntryMetrics(ctx, exec)

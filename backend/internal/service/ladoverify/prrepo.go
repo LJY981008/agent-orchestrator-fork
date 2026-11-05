@@ -46,10 +46,13 @@ type verifyPlace struct {
 // verifyRepo finds where the PR at prURL of the task's execution session is
 // verified. A single-repository project verifies in its folder, the task's
 // repository. A workspace project verifies in the child repository whose
-// origin is the PR's or, when there is no PR or its URL cannot be read
+// origin is the PR's (domain.LadoMatchWorkspaceRepo: the same repository or,
+// for a GitLab instance under a relative URL root, the one child whose path
+// ends the PR's, #64) or, when there is no PR or its URL cannot be read
 // (logged once per session and URL), the task's issue's, as the dispatcher
-// chose. A PR in a repository that is no child repository fails with a
-// *prRepoNotInWorkspaceError.
+// chose. A child matched by its path's end is verified as its origin names
+// it: its rules are read and its status posted there. A PR in a repository
+// that is no child repository fails with a *prRepoNotInWorkspaceError.
 func (s *Service) verifyRepo(ctx context.Context, task domain.LadoTask, session domain.SessionID, prURL string) (verifyPlace, error) {
 	project, ok, err := s.deps.Projects.GetProject(ctx, string(task.ProjectID))
 	switch {
@@ -75,13 +78,16 @@ func (s *Service) verifyRepo(ctx context.Context, task domain.LadoTask, session 
 	if err != nil {
 		return verifyPlace{}, fmt.Errorf("read the workspace repositories of project %s: %w", project.ID, err)
 	}
-	for _, child := range children {
-		repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL)
-		if err == nil && domain.LadoSameRepo(repo, place.repo) {
-			place.relative, place.configured = filepath.ToSlash(child.RelativePath), child.DefaultBranch
-			place.dir = filepath.Join(project.Path, filepath.FromSlash(child.RelativePath))
-			return place, nil
+	if child, ok := domain.LadoMatchWorkspaceRepo(place.repo, children); ok {
+		if repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL); err == nil && !domain.LadoSameRepo(repo, place.repo) {
+			place.repo = repo
+			// The issue's repository may be named under the same root.
+			issueChild, found := domain.LadoMatchWorkspaceRepo(task.Repo, children)
+			place.crossRepo = fromPR && (!found || issueChild.RelativePath != child.RelativePath)
 		}
+		place.relative, place.configured = filepath.ToSlash(child.RelativePath), child.DefaultBranch
+		place.dir = filepath.Join(project.Path, filepath.FromSlash(child.RelativePath))
+		return place, nil
 	}
 	if fromPR {
 		return place, &prRepoNotInWorkspaceError{repo: place.repo}

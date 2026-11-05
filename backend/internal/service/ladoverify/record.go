@@ -807,7 +807,7 @@ func (s *Service) reviewItem(ctx context.Context, in headInputs, opts verifyOpti
 			return domain.LadoVerifyItem{}, errors.New("no review service is wired")
 		}
 		var err error
-		if review.Rounds, err = s.deps.Store.ListLadoExecutionReviews(ctx, in.exec.SessionID); err != nil {
+		if review.Rounds, err = s.reviewRounds(ctx, in.exec); err != nil {
 			return domain.LadoVerifyItem{}, fmt.Errorf("read the review rounds: %w", err)
 		}
 		if review.Runs, err = s.deps.Reviews.Runs(ctx, in.exec.SessionID); err != nil {
@@ -825,6 +825,31 @@ func (s *Service) reviewItem(ctx context.Context, in headInputs, opts verifyOpti
 	return item, nil
 }
 
+// severalPRs reports whether the execution has, or expects, more than one
+// PR (#64): then each PR counts its own review rounds.
+func severalPRs(exec domain.LadoExecution) bool {
+	return len(exec.PRs) > 1 || len(exec.PRRepos) > 1
+}
+
+// reviewRounds reads the review rounds LADO started for the execution's PR:
+// the execution's, or with several PRs those of the PR (and those recorded
+// before rounds named a PR).
+func (s *Service) reviewRounds(ctx context.Context, exec domain.LadoExecution) ([]domain.LadoExecutionReview, error) {
+	if severalPRs(exec) {
+		return s.deps.Store.ListLadoExecutionPRReviews(ctx, exec.SessionID, exec.PR.URL)
+	}
+	return s.deps.Store.ListLadoExecutionReviews(ctx, exec.SessionID)
+}
+
+// addReviewRound records a review round of the execution's PR as
+// reviewRounds reads it.
+func (s *Service) addReviewRound(ctx context.Context, exec domain.LadoExecution, round domain.LadoExecutionReview) error {
+	if severalPRs(exec) {
+		return s.deps.Store.AddLadoExecutionPRReview(ctx, round, exec.PR.URL)
+	}
+	return s.deps.Store.AddLadoExecutionReview(ctx, round)
+}
+
 // reviewAction starts a review round, recording each run it created as the
 // execution's next round, or cancels a stalled LADO round. What fails is
 // logged: the next pass reads the review service's runs again.
@@ -839,7 +864,7 @@ func (s *Service) reviewAction(ctx context.Context, in headInputs, rounds []doma
 		}
 		for i, id := range ids {
 			round := domain.LadoExecutionReview{ReviewRunID: id, ExecutionSessionID: session, HeadSHA: in.head, Round: len(rounds) + 1 + i, CreatedAt: s.now()}
-			if err := s.deps.Store.AddLadoExecutionReview(ctx, round); err != nil {
+			if err := s.addReviewRound(ctx, in.exec, round); err != nil {
 				s.deps.Log.Warn("LADO could not record a review round", "session", session, "run", id, "err", err)
 			}
 		}

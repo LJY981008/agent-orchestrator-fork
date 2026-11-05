@@ -49,6 +49,14 @@ Plan.
 // linked as the plan's execution, as the dispatcher links it.
 func seedLadoVerifyExecution(t *testing.T, store *sqlite.Store, cfg config.Config, at time.Time) domain.SessionID {
 	t.Helper()
+	return seedLadoVerifyExecutionWith(t, store, cfg, at, domain.LadoExecution{})
+}
+
+// seedLadoVerifyExecutionWith is seedLadoVerifyExecution that links the
+// worker as link says, such as with the repositories it is expected to open
+// PRs in (#64); its session and start are the seed's.
+func seedLadoVerifyExecutionWith(t *testing.T, store *sqlite.Store, cfg config.Config, at time.Time, link domain.LadoExecution) domain.SessionID {
+	t.Helper()
 	ctx := context.Background()
 	origin := "https://gitlab.com/acme/demo.git"
 	repo, err := domain.LadoTrackerRepoFromOrigin(origin)
@@ -108,7 +116,8 @@ func seedLadoVerifyExecution(t *testing.T, store *sqlite.Store, cfg config.Confi
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	if err := store.LinkLadoExecution(ctx, claimed[0].ID, claimed[0].LeaseToken, domain.LadoExecution{SessionID: worker.ID, StartedAt: at}); err != nil {
+	link.SessionID, link.StartedAt = worker.ID, at
+	if err := store.LinkLadoExecution(ctx, claimed[0].ID, claimed[0].LeaseToken, link); err != nil {
 		t.Fatalf("LinkLadoExecution: %v", err)
 	}
 	return worker.ID
