@@ -27,6 +27,7 @@ import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { ladoClaudeChromeSessionQueryKey } from "../lib/lado-chrome";
+import { projectMemoQueryRoot } from "./useProjectMemo";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
 import type {
@@ -716,6 +717,12 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 	 *
 	 * The new controller started with the Claude in Chrome setting of this moment,
 	 * so the session's @browser state is read again too.
+	 *
+	 * LADO fork (#50): for an orchestrator the daemon first has the conversation
+	 * write the project memo, so the call can take minutes (the daemon allows the
+	 * route five). The renderer's API client sets no timeout of its own, so the
+	 * request simply waits. The response's `memo` says whether the memo was
+	 * saved; a failed memo still clears, so it is not an error here.
 	 */
 	const clear = useMutation({
 		mutationFn: async () => {
@@ -728,9 +735,11 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 			if (error) throw new Error(apiErrorMessage(error, "The agent's context could not be cleared. Try again."));
 			return data;
 		},
-		onSuccess: () => {
+		onSuccess: (data) => {
 			invalidate();
 			if (sessionId) void queryClient.invalidateQueries({ queryKey: ladoClaudeChromeSessionQueryKey(sessionId) });
+			// A saved memo is a new revision in Project settings → Orchestrator memo.
+			if (data?.memo?.status === "saved") void queryClient.invalidateQueries({ queryKey: projectMemoQueryRoot });
 		},
 	});
 

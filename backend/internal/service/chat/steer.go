@@ -232,7 +232,7 @@ func (c *Controller) PromoteQueuedTurn(
 	}
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return PromoteQueuedTurnResult{}, ErrControllerHandoff
 	}
 
@@ -399,7 +399,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return replaySteerDelivery(delivery, requestJSON)
 		}
 	}
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return c.rejectSteerBeforeDispatch(ctx, msg.ClientMessageID, requestJSON,
 			durableSteerRefusal{
 				kind:           domain.ConversationSteerRejectedInterfaceTransition,
@@ -552,6 +552,16 @@ func (c *Controller) SteerOrSend(
 		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
 	}
 
+	if c.memoHeld() {
+		// /clear is writing the project memo: the message waits in the queue
+		// and moves to the new branch with the other held work. Steering the
+		// memo turn or starting a turn beside it would break the clear.
+		turn, err := c.sendLocked(ctx, msg, true)
+		if err != nil {
+			return SteerOrSendResult{}, err
+		}
+		return SteerOrSendResult{Turn: turn}, nil
+	}
 	if _, active := c.awaitAcknowledgedTurn(ctx); active {
 		steered, err := c.steerLocked(ctx, msg)
 		if err == nil {

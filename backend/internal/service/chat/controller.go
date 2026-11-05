@@ -277,6 +277,16 @@ type Controller struct {
 	// stopped, so the move can say on that exact turn why it ended.
 	handoffInterrupted string
 	branchHandoffDone  chan struct{}
+	// memoHold is set while /clear asks an orchestrator for its project memo.
+	// Intake stays open and new messages queue durably, but nothing dispatches
+	// except the memo request itself. See clear_memo.go.
+	memoHold bool
+	// memoRequestInFlight marks the memo request dispatch, which must not carry
+	// the project memo resource. Read and written under sendMu.
+	memoRequestInFlight bool
+	// memo injects the project memo on an orchestrator's new provider
+	// conversation. Nil for workers and reviewers. See project_memo.go.
+	memo *controllerMemo
 	// preserveProviderOnStop is set before deliberate daemon detach. It prevents
 	// the closing controller from projecting a false provider exit or failing work
 	// that the detached host continues to run.
@@ -1455,6 +1465,10 @@ func (c *Controller) sendLocked(
 	if handoff {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
+	if !queueWhenBusy && !c.memoRequestInFlight && c.memoHeld() {
+		// Only the memo request itself may dispatch during a /clear memo hold.
+		queueWhenBusy = true
+	}
 
 	// Bind retries to the client request before adding durable continuation context.
 	var err error
@@ -1466,7 +1480,7 @@ func (c *Controller) sendLocked(
 	now := c.now()
 	turnID := c.newID()
 	markedSending := false
-	if !queueWhenBusy || !c.busy() {
+	if !queueWhenBusy || !c.busyOrHeld() {
 		c.setSendingTurn(turnID)
 		markedSending = true
 	}
@@ -1519,7 +1533,7 @@ func (c *Controller) sendLocked(
 		return domain.ConversationTurn{}, nil
 	}
 
-	if queueWhenBusy && c.busy() {
+	if queueWhenBusy && c.busyOrHeld() {
 		// AppendUserMessage wrote it as queued, which is exactly where it belongs
 		// until the running turn ends. drain picks it up from there.
 		c.mu.Lock()
@@ -1558,7 +1572,7 @@ func (c *Controller) sendLocked(
 func (c *Controller) RetryTurn(ctx context.Context, turnID string) (domain.ConversationTurn, error) {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return domain.ConversationTurn{}, ErrControllerHandoff
 	}
 
@@ -1799,6 +1813,13 @@ func (c *Controller) busy() bool {
 	return c.pendingTurnID != "" || c.compactionPending
 }
 
+// busyOrHeld is busy, or the /clear memo hold that keeps new work queued.
+func (c *Controller) busyOrHeld() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pendingTurnID != "" || c.compactionPending || c.memoHold
+}
+
 // dispatch hands a recorded turn to the provider. Callers must hold sendMu.
 func (c *Controller) dispatch(
 	ctx context.Context,
@@ -1811,6 +1832,7 @@ func (c *Controller) dispatch(
 	// setting that only applied when the user pressed send would silently stop
 	// applying exactly when they were not watching.
 	msg.Settings = c.turnSettings()
+	msg, memoDelivery := c.withProjectMemo(msg)
 	deferred, hasDeferredStart := c.conv.(ports.ChatDeferredTurnStarter)
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
 	// Move it out of the durable queue before crossing that boundary, or a live
@@ -1853,6 +1875,7 @@ func (c *Controller) dispatch(
 			CompletedAt:        &completedAt,
 		}, fmt.Errorf("send turn: %w", err)
 	}
+	c.markProjectMemoDelivered(memoDelivery)
 
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {
 		c.mu.Lock()
@@ -1964,6 +1987,7 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 	c.cancelQueuedAt = time.Time{}
 	busy := c.pendingTurnID != ""
 	handoff := c.handoff
+	held := c.memoHold
 	c.mu.Unlock()
 
 	if busy {
@@ -1983,7 +2007,8 @@ func (c *Controller) drainLocked(ctx context.Context, allowDispatch bool) error 
 	if handoff != controllerHandoffNone && handoff != controllerHandoffInterfaceDrain {
 		return nil
 	}
-	if !allowDispatch {
+	if !allowDispatch || held {
+		// The /clear memo hold keeps accepted work queued for the new branch.
 		return nil
 	}
 
@@ -2331,7 +2356,7 @@ func (c *Controller) Compact(ctx context.Context) (ports.ChatCompactionResult, e
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return ports.ChatCompactionResult{}, ErrControllerHandoff
 	}
 
@@ -2610,7 +2635,7 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return 0, ErrControllerHandoff
 	}
 
@@ -3736,7 +3761,7 @@ func (c *Controller) ReloadMCPServers(ctx context.Context) ([]domain.Conversatio
 
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
-	if c.handoffActive() {
+	if c.dispatchFenced() {
 		return nil, ErrControllerHandoff
 	}
 
@@ -3818,6 +3843,15 @@ func (c *Controller) handoffActive() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.handoff != controllerHandoffNone
+}
+
+// dispatchFenced is handoffActive, or the /clear memo hold. Commands that would
+// start or reshape provider work refuse while either is set; queue edits only
+// need handoffActive, because the hold carries the queue to the new branch.
+func (c *Controller) dispatchFenced() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.handoff != controllerHandoffNone || c.memoHold
 }
 
 // planItemID keys a turn's plan activity. The provider sends no item id with a plan

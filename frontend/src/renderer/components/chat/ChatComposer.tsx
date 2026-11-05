@@ -110,6 +110,26 @@ import { attachmentURL, IMAGE_ATTACHMENT_PATH, isInlineImagePath, proseBesideIma
 import { setChatDraftBoundary } from "../../lib/chat-draft-boundary";
 import { subscribeChatComposerReferences } from "../../lib/chat-context-bus";
 
+/** LADO fork (#50): what an orchestrator's `/clear` did with the project memo. */
+export type ClearMemoOutcome = { status: "saved" } | { status: "failed"; reason: string };
+
+/**
+ * Reads the memo outcome from a `/clear` response. Only saved and failed are
+ * worth a line: skipped (a worker, or nothing to hand off) and a daemon that
+ * does not write memos answer as before.
+ */
+export function clearMemoOutcome(result: unknown): ClearMemoOutcome | null {
+	if (typeof result !== "object" || result === null) return null;
+	const memo = (result as { memo?: { status?: unknown; code?: unknown; message?: unknown } | null }).memo;
+	if (!memo) return null;
+	if (memo.status === "saved") return { status: "saved" };
+	if (memo.status !== "failed") return null;
+	const reason = typeof memo.message === "string" && memo.message.trim()
+		? memo.message.trim().replace(/[.。]+$/u, "")
+		: typeof memo.code === "string" ? memo.code : "";
+	return { status: "failed", reason };
+}
+
 // These responses precede AppendUserMessage. Provider/transport errors can
 // follow durable acceptance and must keep the original delivery ID for recovery.
 const DEFINITIVE_SEND_REJECTIONS = new Set([
@@ -225,6 +245,8 @@ export const ChatComposer = memo(function ChatComposer({
 	compactBlocked,
 	onClear,
 	clearing,
+	clearWritesMemo = false,
+	onOpenProjectMemo,
 	autoFocusKey,
 	autoFocus = true,
 	draftSessionId,
@@ -345,6 +367,13 @@ export const ChatComposer = memo(function ChatComposer({
 	onClear?: () => void | Promise<unknown>;
 	/** A `/clear` is already replacing the agent's context. */
 	clearing?: boolean;
+	/**
+	 * LADO fork (#50): this is an orchestrator, whose `/clear` first has it write
+	 * the project memo. That takes up to a couple of minutes, so it is shown.
+	 */
+	clearWritesMemo?: boolean;
+	/** Opens the project memo the last `/clear` saved. */
+	onOpenProjectMemo?: () => void;
 	/** Changes when the owning chat surface should reclaim composer focus. */
 	autoFocusKey?: string;
 	/** Whether this composer is currently visible and should take focus. */
@@ -397,6 +426,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const [steerOutcomeNotice, setSteerOutcomeNotice] = useState<string | null>(null);
 	/** Guidance instead of a send or a chip: a terminal-only command, Chrome off. */
 	const [composerNotice, setComposerNotice] = useState<string | null>(null);
+	/** What the last `/clear` did with the project memo, until the next submit. */
+	const [clearMemo, setClearMemo] = useState<ClearMemoOutcome | null>(null);
 	const [deliveryRecoveryNotice, setDeliveryRecoveryNotice] = useState<string | null>(null);
 	const [deliveryUncertain, setDeliveryUncertain] = useState(
 		() =>
@@ -547,6 +578,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setSendError(null);
 		setSteerOutcomeNotice(null);
 		setComposerNotice(null);
+		setClearMemo(null);
 		setTextDraftPersistenceError(null);
 		setDeliveryRecoveryNotice(restoredDeliveryNotice(currentDraft?.composer.delivery));
 		setDeliveryUncertain(currentDraft?.composer.delivery?.state === "dispatching");
@@ -1291,6 +1323,7 @@ export const ChatComposer = memo(function ChatComposer({
 		setSendError(null);
 		setSteerOutcomeNotice(null);
 		setComposerNotice(null);
+		setClearMemo(null);
 
 		if (!recoveringDelivery && !savingQueuedEdit && body === "/compact" && onCompact) {
 			if (draftScope && !mutationToken) return;
@@ -1334,7 +1367,10 @@ export const ChatComposer = memo(function ChatComposer({
 					setSendError("The agent's context is already being cleared.");
 					return;
 				}
-				await onClear();
+				const cleared = await onClear();
+				// The context is cleared either way; a memo that could not be saved
+				// is a caveat to show, not a failed /clear.
+				setClearMemo(clearMemoOutcome(cleared));
 				clearAcceptedDraft(composerRevision.current, mutationToken);
 				mutationFinished = true;
 				setDismissedKey(null);
@@ -2037,6 +2073,33 @@ export const ChatComposer = memo(function ChatComposer({
 				{composerNotice ? (
 					<p role="status" className="px-1.5 text-xs leading-snug text-muted-foreground">
 						{composerNotice}
+					</p>
+				) : null}
+				{clearing && clearWritesMemo ? (
+					<p role="status" data-testid="clear-memo-pending" className="px-1.5 text-xs leading-snug text-muted-foreground">
+						Writing the project memo before clearing. This can take a minute or two.
+					</p>
+				) : null}
+				{clearMemo?.status === "failed" ? (
+					<p role="alert" data-testid="clear-memo-failed" className="px-1.5 text-xs leading-snug text-warning">
+						Context cleared, but the project memo was not saved{clearMemo.reason ? `: ${clearMemo.reason}` : ""}. The previous memo is kept.
+					</p>
+				) : null}
+				{clearMemo?.status === "saved" ? (
+					<p role="status" data-testid="clear-memo-saved" className="px-1.5 text-xs leading-snug text-muted-foreground">
+						Context cleared. Project memo saved.
+						{onOpenProjectMemo ? (
+							<>
+								{" "}
+								<button
+									type="button"
+									className="text-foreground underline underline-offset-2 hover:text-primary"
+									onClick={onOpenProjectMemo}
+								>
+									<span className="text-xs">Open memo</span>
+								</button>
+							</>
+						) : null}
 					</p>
 				) : null}
 				{fileAttachments.preparing ? (

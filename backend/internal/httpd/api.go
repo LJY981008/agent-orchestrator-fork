@@ -73,6 +73,9 @@ type APIDeps struct {
 	// LadoRelay relays a developer's instruction from an orchestrator to a
 	// running LADO worker (issue #49).
 	LadoRelay controllers.LadoRelayService
+	// ProjectMemos serves the orchestrator's project memo (issue #50). Nil
+	// builds the default over Projects and the config's data dir.
+	ProjectMemos controllers.ProjectMemoService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -163,6 +166,7 @@ type API struct {
 	shellTerms    *controllers.ShellTerminalsController
 	cues          *controllers.CuesController
 	lado          *controllers.LadoController
+	projectMemos  *controllers.ProjectMemoController
 	conversations *controllers.ConversationsController
 	settings      *controllers.SettingsController
 	dev           *controllers.DevController
@@ -226,6 +230,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
 		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Usage: deps.LadoUsage, Watch: deps.LadoWatch, Compact: deps.LadoCompact, Presence: deps.LadoPresence, Relay: deps.LadoRelay},
+		projectMemos:  &controllers.ProjectMemoController{Svc: projectMemoServiceFor(cfg, deps)},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},
@@ -241,7 +246,28 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 	}
 }
 
+// projectMemoServiceFor returns the injected memo service, or the default one
+// when the API has a project manager and a data dir.
+func projectMemoServiceFor(cfg config.Config, deps APIDeps) controllers.ProjectMemoService {
+	if deps.ProjectMemos != nil {
+		return deps.ProjectMemos
+	}
+	if svc := newProjectMemoService(deps.Projects, cfg.DataDir); svc != nil {
+		return svc
+	}
+	return nil
+}
+
 const attachmentUploadHeader = "X-AO-Attachment-Upload"
+
+// clearRouteTimeout is the floor of the /clear request budget. An
+// orchestrator's /clear first has the conversation write its project memo
+// (issue #50): the chat service's memo budget, the interrupt grace and the
+// clear itself must fit inside it.
+const clearRouteTimeout = 5 * time.Minute
+
+// clearConversationRoute is the /clear route, which waits for the memo step.
+const clearConversationRoute = "/api/v1/sessions/{sessionId}/conversation/clear"
 
 // Register mounts the bounded /api/v1 REST surface. Long-lived surfaces such
 // as muxed terminal streams stay outside this timeout group.
@@ -261,9 +287,14 @@ func (a *API) Register(root chi.Router) {
 			r.Use(func(next http.Handler) http.Handler {
 				ordinary := middleware.Timeout(timeout)(next)
 				upload := middleware.Timeout(max(timeout, 10*time.Minute))(next)
+				clearContext := middleware.Timeout(max(timeout, clearRouteTimeout))(next)
 				return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 					if attachmentUploadRoute(req) {
 						upload.ServeHTTP(w, req)
+						return
+					}
+					if req.Method == http.MethodPost && chi.RouteContext(req.Context()).RoutePattern() == clearConversationRoute {
+						clearContext.ServeHTTP(w, req)
 						return
 					}
 					// A managed preview carries the dev server's HMR socket and event
@@ -296,6 +327,7 @@ func (a *API) Register(root chi.Router) {
 			a.shellTerms.Register(r)
 			a.cues.Register(r)
 			a.lado.Register(r)
+			a.projectMemos.Register(r)
 			a.conversations.Register(r)
 			a.settings.Register(r)
 			a.dev.Register(r)

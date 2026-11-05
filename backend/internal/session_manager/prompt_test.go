@@ -382,6 +382,46 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	}
 }
 
+func TestBuildSystemPrompt_ProjectMemoSectionOnlyForOrchestrator(t *testing.T) {
+	const memoPath = "/data/project-memos/mer/current.json"
+	got := buildSystemPromptText(systemPromptConfig{
+		Role:            sessionPromptRoleOrchestrator,
+		Project:         promptProject{ID: "mer", Name: "Mercury"},
+		ProjectMemoPath: memoPath,
+	})
+	for _, want := range []string{
+		"## Project memo",
+		"`" + memoPath + "`",
+		"`ao://project/orchestrator-memo`",
+		"In chat, AO attaches the memo to the first turn of a new conversation",
+		"If no memo was attached (a terminal session, or an agent that cannot take attached context), read that file when a conversation starts or the session is restored.",
+		"Never put secrets",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("orchestrator prompt missing %q:\n%s", want, got)
+		}
+	}
+
+	// Without a path there is nothing to point at, so the section is left out.
+	noPath := buildSystemPromptText(systemPromptConfig{
+		Role:    sessionPromptRoleOrchestrator,
+		Project: promptProject{ID: "mer", Name: "Mercury"},
+	})
+	if strings.Contains(noPath, "## Project memo") {
+		t.Fatalf("orchestrator prompt without a memo path has the memo section:\n%s", noPath)
+	}
+
+	// Workers never get the orchestrator's memo, even if a path is set.
+	worker := buildSystemPromptText(systemPromptConfig{
+		Role:            sessionPromptRoleWorker,
+		Project:         promptProject{ID: "mer", Name: "Mercury"},
+		ProjectMemoPath: memoPath,
+	})
+	if strings.Contains(worker, "## Project memo") || strings.Contains(worker, memoPath) {
+		t.Fatalf("worker prompt has the project memo section:\n%s", worker)
+	}
+}
+
 // goldenOrchestratorConfig is a fixed orchestrator configuration whose prompt
 // is pinned below.
 func goldenOrchestratorConfig() systemPromptConfig {
