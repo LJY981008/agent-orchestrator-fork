@@ -228,8 +228,9 @@ func ladoWaitingDetail(entry domain.LadoQueueEntry, state domain.LadoQueueState)
 	return ""
 }
 
-func ladoTaskExecutionResponse(task domain.LadoTask) *LadoTaskExecutionResponse {
-	exec := task.Execution
+// ladoTaskExecutionResponse is exec, one of task's executions, as a task
+// read shows it; nil without an execution.
+func ladoTaskExecutionResponse(task domain.LadoTask, exec domain.LadoExecution) *LadoTaskExecutionResponse {
 	if exec.SessionID == "" {
 		return nil
 	}

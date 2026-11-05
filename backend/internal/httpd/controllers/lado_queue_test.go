@@ -561,20 +561,23 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 		worker              domain.SessionID
 		snapshot            string
 		revisionNumber      int
+		// previousWorker says the worker's run is history: it comes as
+		// previousExecution, and execution is absent.
+		previousWorker bool
 	}{
 		// The live run's PR is open and its head has no verification record
 		// yet.
-		{"lado-task-1", "validating", "verifying", "dispatched", "", 1, runningWorker, running.snapshot, 1},
-		{"lado-task-2", "failed", "timed_out", "dispatched", "", 1, timedOutWorker, timedOut.snapshot, 1},
+		{"lado-task-1", "validating", "verifying", "dispatched", "", 1, runningWorker, running.snapshot, 1, false},
+		{"lado-task-2", "failed", "timed_out", "dispatched", "", 1, timedOutWorker, timedOut.snapshot, 1, false},
 		// The newer revision hides the run's revision number from the task.
 		// The PR merged a head without an integration approval.
-		{"lado-task-3", "completed", "merged_without_approval", "dispatched", "", 1, mergedWorker, merged.snapshot, 0},
-		{"lado-task-4", "dispatching", "", "dispatching", "", 2, "", "", 0},
-		{"lado-task-5", "queued", "slot_global", "waiting", "slot_global", 0, "", "", 0},
-		{"lado-task-6", "blocked", "base_ref_mismatch", "blocked", "base_ref_mismatch", 1, "", "", 0},
-		// The run of the older approval keeps its revision but not the new
-		// approval's snapshot.
-		{"lado-task-7", "queued", "slot_global", "waiting", "slot_global", 0, endedWorker, "", 1},
+		{"lado-task-3", "completed", "merged_without_approval", "dispatched", "", 1, mergedWorker, merged.snapshot, 0, false},
+		{"lado-task-4", "dispatching", "", "dispatching", "", 2, "", "", 0, false},
+		{"lado-task-5", "queued", "slot_global", "waiting", "slot_global", 0, "", "", 0, false},
+		{"lado-task-6", "blocked", "base_ref_mismatch", "blocked", "base_ref_mismatch", 1, "", "", 0, false},
+		// The run of the older approval ended without a PR: it is history.
+		// It keeps its revision but not the new approval's snapshot.
+		{"lado-task-7", "queued", "slot_global", "waiting", "slot_global", 0, endedWorker, "", 1, true},
 	} {
 		got, ok := tasks[c.task]
 		if !ok {
@@ -585,13 +588,22 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 			t.Fatalf("%s: state %q (%q), queue %+v; want %q (%q) with entry %q (%q) after %d attempts and no next attempt",
 				c.task, got.State, got.StateReason, got.Queue, c.state, c.reason, c.queue, c.queueReason, c.attempts)
 		}
-		if c.worker == "" {
+		if c.worker == "" || c.previousWorker {
 			if got.Execution != nil {
 				t.Fatalf("%s: execution %+v, want none", c.task, got.Execution)
 			}
+		}
+		if !c.previousWorker && got.PreviousExecution != nil {
+			t.Fatalf("%s: previous execution %+v, want none", c.task, got.PreviousExecution)
+		}
+		if c.worker == "" {
 			continue
 		}
-		if exec := got.Execution; exec == nil || exec.SessionID != string(c.worker) || exec.PlanRevisionID != strings.Replace(c.task, "task", "plan", 1) ||
+		exec := got.Execution
+		if c.previousWorker {
+			exec = got.PreviousExecution
+		}
+		if exec == nil || exec.SessionID != string(c.worker) || exec.PlanRevisionID != strings.Replace(c.task, "task", "plan", 1) ||
 			exec.PlanRevisionNumber != c.revisionNumber || exec.PolicySHA256 != c.snapshot {
 			t.Fatalf("%s: execution %+v, want %s running %s (number %d) under snapshot %s", c.task, exec, c.worker,
 				strings.Replace(c.task, "task", "plan", 1), c.revisionNumber, c.snapshot)
@@ -609,7 +621,7 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 	if n := strings.Count(string(body), `"untrackedPrs"`); n != 1 {
 		t.Fatalf("body names untrackedPrs %d times, want once: only the run with another open PR has them", n)
 	}
-	if exec := tasks["lado-task-7"].Execution; !exec.SessionEnded || exec.TimedOut || exec.PR != nil {
+	if exec := tasks["lado-task-7"].PreviousExecution; exec == nil || !exec.SessionEnded || exec.TimedOut || exec.PR != nil {
 		t.Fatalf("ended execution %+v, want its session ended without a PR", exec)
 	}
 	if exec := tasks["lado-task-2"].Execution; !exec.TimedOut || exec.PR != nil {

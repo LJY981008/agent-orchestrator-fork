@@ -631,6 +631,22 @@ test("a failed task whose worker still runs cannot be approved, and says why", a
 	).toHaveAttribute("role", "status");
 });
 
+test("a task whose older run's session still lives cannot be approved again, and says why", async () => {
+	// The run of the older approval timed out but its session lives: the
+	// daemon refuses the approval while it does.
+	mockApproved(approvedTask({ state: "review_required", stateReason: "approved_before_queue", previousExecution: { ...execution, timedOut: true } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	expect(within(dialog).getByRole("button", { name: "Approve plan" })).toBeDisabled();
+	expect(
+		within(dialog).getByText("This task's worker still runs, LADO is verifying or integrating its work, or its work merged. LADO runs one worker per task, so no plan can be approved now."),
+	).toHaveAttribute("role", "status");
+	// The older run is not the task's run.
+	expect(within(dialog).queryByTestId("lado-run-status")).not.toBeInTheDocument();
+});
+
 test("a queued task shows where it waits instead of the approve button", async () => {
 	mockApproved(approvedTask({ stateReason: "slot_global", queue: { state: "waiting", attempts: 1, enqueuedAt, reason: "slot_global" } }));
 	renderDialog();
@@ -647,8 +663,8 @@ test("a queued task shows where it waits instead of the approve button", async (
 });
 
 test("a starting task shows that LADO starts its worker", async () => {
-	// The older run of a task approved again stays its newest execution.
-	mockApproved(approvedTask({ state: "dispatching", queue: { state: "dispatching", attempts: 1, enqueuedAt }, execution: { ...execution, sessionEnded: true } }));
+	// The older run of a task approved again comes as previousExecution.
+	mockApproved(approvedTask({ state: "dispatching", queue: { state: "dispatching", attempts: 1, enqueuedAt }, previousExecution: { ...execution, sessionEnded: true } }));
 	renderDialog();
 	const dialog = await screen.findByTestId("lado-task-dialog");
 	await within(dialog).findByTestId("lado-plan");

@@ -264,8 +264,15 @@ func ladoTaskResponse(task domain.LadoTask) LadoTaskResponse {
 		Model:     task.Model,
 		Plan:      ladoTaskPlanResponse(task.Plan),
 		Queue:     ladoTaskQueueResponse(task.Queue, time.Now()),
-		Execution: ladoTaskExecutionResponse(task),
 		CreatedAt: task.CreatedAt,
+	}
+	// The newest execution is the task's only while it still decides the
+	// state; a run of an older approval that ended without a merge is
+	// history and goes to previousExecution.
+	if exec, current := task.CurrentExecution(); current {
+		resp.Execution = ladoTaskExecutionResponse(task, exec)
+	} else {
+		resp.PreviousExecution = ladoTaskExecutionResponse(task, task.Execution)
 	}
 	if task.Parts.Total > 0 {
 		resp.Parts = &LadoTaskPartsSummaryResponse{Total: task.Parts.Total, Merged: task.Parts.Merged}
