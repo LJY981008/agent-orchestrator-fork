@@ -147,7 +147,8 @@ func (s *Store) fillLadoExecutionFacts(ctx context.Context, executions []domain.
 }
 
 // fillLadoExecutionPRs sets each execution's newest PR, reading the PRs of
-// all their sessions at once.
+// all their sessions at once, and the session's other open PRs, newest
+// first, as untracked.
 func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.LadoExecution) error {
 	if len(executions) == 0 {
 		return nil
@@ -162,15 +163,22 @@ func (s *Store) fillLadoExecutionPRs(ctx context.Context, executions []domain.La
 	}
 	// Rows come newest first within each session.
 	newest := make(map[domain.SessionID]gen.ListLadoExecutionPRsRow, len(rows))
+	untracked := map[domain.SessionID][]domain.LadoExecutionPR{}
 	for _, row := range rows {
 		if _, ok := newest[row.SessionID]; !ok {
 			newest[row.SessionID] = row
+			continue
+		}
+		pr := ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title, row.Mergeability)
+		if !pr.Merged && !pr.Closed {
+			untracked[row.SessionID] = append(untracked[row.SessionID], pr)
 		}
 	}
 	for i := range executions {
 		if row, ok := newest[executions[i].SessionID]; ok {
 			executions[i].PR = ladoExecutionPR(row.URL, row.Number, row.PRState, row.HeadSha, row.TargetBranch, row.Title, row.Mergeability)
 		}
+		executions[i].UntrackedPRs = untracked[executions[i].SessionID]
 	}
 	return nil
 }

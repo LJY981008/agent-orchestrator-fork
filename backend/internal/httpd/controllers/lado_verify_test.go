@@ -434,6 +434,39 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 		t.Fatalf("state = %s (%s), want validating (base_overlap)", got.State, got.StateReason)
 	}
 
+	// The PR is open in a repository that is none of the workspace's child
+	// repositories: the record fails on pr_repo_not_in_workspace and names
+	// that repository (issue #59).
+	elsewhere := ladoVerifyRecord(t, worker, prURL, ladoVerifyHead, now)
+	elsewhere.Items[4] = mustLadoItem(t, domain.LadoVerifyBaseBranch, domain.LadoVerifyFail, "pr_repo_not_in_workspace", domain.LadoBaseBranchDetails{
+		Branch: "main", PRRepo: "github:acme/web",
+	})
+	if _, err := store.UpsertLadoVerification(ctx, elsewhere); err != nil {
+		t.Fatalf("store the record of a PR outside the workspace: %v", err)
+	}
+	got = get()
+	if v := got.Verification; v == nil || v.Outcome != "fail" || v.Reason != "pr_repo_not_in_workspace" {
+		t.Fatalf("verification = %+v, want it to fail on pr_repo_not_in_workspace", got.Verification)
+	}
+	if base := got.Verification.Items[4]; base.Code != "pr_repo_not_in_workspace" || base.Details.Branch != "main" || base.Details.PRRepo != "github:acme/web" {
+		t.Fatalf("base_branch item = %+v, want the PR's repository and branch", base)
+	}
+
+	// The PR's repository's default branch is neither the PR's target nor
+	// the dispatch's base: the item asks for confirming and says both.
+	notDefault := ladoVerifyRecord(t, worker, prURL, ladoVerifyHead, now)
+	notDefault.Items[4] = mustLadoItem(t, domain.LadoVerifyBaseBranch, domain.LadoVerifyConfirm, "base_not_default", domain.LadoBaseBranchDetails{
+		Branch: "develop", Remote: "origin", DefaultBranch: "master", DispatchBranch: "main",
+	})
+	if _, err := store.UpsertLadoVerification(ctx, notDefault); err != nil {
+		t.Fatalf("store the record of a base that is not the default: %v", err)
+	}
+	got = get()
+	if base := got.Verification.Items[4]; base.Outcome != "confirm" || base.Code != "base_not_default" || base.Details.Branch != "develop" ||
+		base.Details.DefaultBranch != "master" || base.Details.DispatchBranch != "main" || base.Details.PRRepo != "" {
+		t.Fatalf("base_branch item = %+v, want the default and dispatch branches to confirm", base)
+	}
+
 	// Without verification wired, the execution has neither.
 	bare := newLadoTestServer(t, httpd.APIDeps{LadoQueue: ladoqueue.New(ladoqueue.Deps{Store: store})})
 	body, _, _ := doRequest(t, bare, "GET", "/api/v1/lado/executions/"+string(worker), "")
