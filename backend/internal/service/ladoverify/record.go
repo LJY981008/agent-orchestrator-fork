@@ -556,9 +556,10 @@ func headKey(session domain.SessionID, head string) string {
 }
 
 // fetchBase brings the remote-tracking base branch, and the PR's target
-// when it is another branch, up to date in the repository verified: each at most every baseFetchEvery unless force, within
-// baseFetchTimeout. A fetch that fails is logged: the items then compare
-// with what the last fetch brought.
+// when it is another branch, up to date in the repository verified: each
+// at most every baseFetchEvery unless force, within baseFetchTimeout. A
+// fetch that fails is logged: the items then compare with what the last
+// fetch brought.
 func (s *Service) fetchBase(ctx context.Context, in headInputs, force bool) {
 	for _, branch := range slices.Compact([]string{in.baseBranch, in.target}) {
 		if !s.fetchDue(fetchKey(in.dir, in.baseRemote, branch), force) {
