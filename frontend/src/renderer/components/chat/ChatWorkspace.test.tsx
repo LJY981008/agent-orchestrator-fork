@@ -716,6 +716,41 @@ describe("ChatWorkspace timeline", () => {
 		expect(within(screen.getByTestId("queued-message-dock")).getByLabelText("Delete queued message")).toBeInTheDocument();
 	});
 
+	// LADO fork (#50): an orchestrator's /clear moves a message queued during its
+	// memo step to the new branch with the client id plus ":after-clear".
+	it("matches a queued send moved by /clear to its row on the new branch", () => {
+		const snapshot = idleSnapshot(chatFixtureEmpty);
+		snapshot.turns.push({ id: "turn-memo", state: "running", requestedAt: "2026-09-09T00:00:00Z" });
+		const localEchos = [
+			{
+				clientMessageId: "held-send",
+				text: "Sent during the memo step",
+				createdAt: "2026-09-09T00:00:05Z",
+				queued: true,
+				turnId: "turn-held",
+			},
+		];
+		const durable = idleSnapshot(chatFixtureEmpty);
+		durable.turns.push({ id: "turn-carried", state: "queued", requestedAt: "2026-09-09T00:00:09Z" });
+		durable.items.push({
+			kind: "message",
+			id: "durable-carried",
+			turnId: "turn-carried",
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "human",
+			text: "Sent during the memo step",
+			clientMessageId: "held-send:after-clear",
+			streaming: false,
+			createdAt: "2026-09-09T00:00:09Z",
+		});
+
+		render(<ChatWorkspace snapshot={durable} localEchos={localEchos} />);
+
+		expect(screen.getAllByText("Sent during the memo step")).toHaveLength(1);
+	});
+
 	it("keeps a hibernated send looking normal while its queued turn wakes", () => {
 		const snapshot = { ...idleSnapshot(chatFixtureEmpty), controller: { state: "hibernated" as const } };
 		const localEchos = [

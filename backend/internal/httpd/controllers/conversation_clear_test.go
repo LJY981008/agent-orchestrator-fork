@@ -15,6 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/projectmemo"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
@@ -122,5 +123,44 @@ func TestClearConversationRouteIsNotImplementedWithoutTheCapability(t *testing.T
 	}
 	if status, body := clearRequest(t, nil); status != http.StatusNotImplemented {
 		t.Fatalf("status without a service = %d, want 501 (%s)", status, body)
+	}
+}
+
+func TestClearConversationRouteReportsTheMemoStep(t *testing.T) {
+	savedAt := time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		memo projectmemo.ClearOutcome
+		want string
+	}{
+		{"saved", projectmemo.SavedOutcome(projectmemo.Memo{Revision: "rev-1", UpdatedAt: savedAt}),
+			`"memo":{"status":"saved","updatedAt":"2026-11-04T09:00:00Z","revision":"rev-1"}`},
+		{"failed", projectmemo.FailedOutcome("memo_timeout", "the memo took too long"),
+			`"memo":{"status":"failed","code":"memo_timeout","message":"the memo took too long"}`},
+		{"skipped", projectmemo.SkippedOutcome(), `"memo":{"status":"skipped"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &clearingConversationService{
+				fakeConversationService: &fakeConversationService{},
+				result:                  chatsvc.ClearContextResult{ActiveBranchID: "branch-2", Cleared: true, Memo: tc.memo},
+			}
+			status, body := clearRequest(t, svc)
+			if status != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (%s)", status, body)
+			}
+			if !strings.Contains(string(body), tc.want) {
+				t.Fatalf("body = %s, want %s", body, tc.want)
+			}
+		})
+	}
+
+	// A service that ran no memo step leaves the field out.
+	status, body := clearRequest(t, &clearingConversationService{
+		fakeConversationService: &fakeConversationService{},
+		result:                  chatsvc.ClearContextResult{ActiveBranchID: "branch-2", Cleared: true},
+	})
+	if status != http.StatusOK || strings.Contains(string(body), `"memo"`) {
+		t.Fatalf("status = %d, body = %s, want no memo field", status, body)
 	}
 }

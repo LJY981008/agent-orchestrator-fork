@@ -3159,6 +3159,67 @@ describe("/clear", () => {
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("already being cleared"));
 	});
 
+	// LADO fork (#50): an orchestrator's /clear first writes the project memo.
+	it("says the orchestrator is writing the project memo while it clears", () => {
+		renderComposer({ onClear: vi.fn(), clearing: true, clearWritesMemo: true });
+		expect(screen.getByTestId("clear-memo-pending")).toHaveTextContent("Writing the project memo before clearing");
+	});
+
+	it("does not mention a memo while a worker clears", () => {
+		renderComposer({ onClear: vi.fn(), clearing: true });
+		expect(screen.queryByTestId("clear-memo-pending")).toBeNull();
+	});
+
+	it("treats a failed memo as a cleared context and says why the memo was not saved", async () => {
+		const onClear = vi.fn().mockResolvedValue({
+			activeBranchId: "b2",
+			cleared: true,
+			clearedAt: "2026-11-04T00:00:00Z",
+			memo: { status: "failed", code: "MEMO_TIMEOUT", message: "The orchestrator did not answer within 90 seconds." },
+		});
+		const { onSend, field } = renderComposer({ onClear, clearWritesMemo: true });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(screen.getByTestId("clear-memo-failed")).toHaveTextContent(
+			"Context cleared, but the project memo was not saved: The orchestrator did not answer within 90 seconds. The previous memo is kept.",
+		));
+		expect(onSend).not.toHaveBeenCalled();
+		// The clear itself succeeded: the draft is emptied, not kept for a retry.
+		await waitFor(() => expect(composerWireText(field).trim()).toBe(""));
+		expect(screen.queryByTestId("clear-memo-saved")).toBeNull();
+	});
+
+	it("falls back to the failure code when the daemon gives no message", async () => {
+		const onClear = vi.fn().mockResolvedValue({ cleared: true, memo: { status: "failed", code: "MEMO_BLOCK_MISSING" } });
+		const { field } = renderComposer({ onClear, clearWritesMemo: true });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(screen.getByTestId("clear-memo-failed")).toHaveTextContent("not saved: MEMO_BLOCK_MISSING."));
+	});
+
+	it("confirms a saved memo and opens it in settings", async () => {
+		const onOpenProjectMemo = vi.fn();
+		const onClear = vi.fn().mockResolvedValue({ cleared: true, memo: { status: "saved", revision: "r3", updatedAt: "2026-11-04T00:00:00Z" } });
+		const { field } = renderComposer({ onClear, clearWritesMemo: true, onOpenProjectMemo });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		const saved = await screen.findByTestId("clear-memo-saved");
+		expect(saved).toHaveTextContent("Context cleared. Project memo saved.");
+		await userEvent.click(within(saved).getByRole("button", { name: "Open memo" }));
+		expect(onOpenProjectMemo).toHaveBeenCalledTimes(1);
+	});
+
+	it("says nothing about a memo a worker's /clear skipped", async () => {
+		const onClear = vi.fn().mockResolvedValue({ cleared: true, memo: { status: "skipped" } });
+		const { field } = renderComposer({ onClear });
+		await typeInComposer(field, "/clear");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onClear).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(composerWireText(field).trim()).toBe(""));
+		expect(screen.queryByTestId("clear-memo-failed")).toBeNull();
+		expect(screen.queryByTestId("clear-memo-saved")).toBeNull();
+	});
+
 	it("saves a queued edit of /clear as text", async () => {
 		const onSend = vi.fn().mockResolvedValue(undefined);
 		const onClear = vi.fn();

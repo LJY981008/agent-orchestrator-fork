@@ -27,6 +27,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/projectmemo"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -6695,6 +6696,58 @@ func TestRestore_OrchestratorRederivesSystemPrompt(t *testing.T) {
 	wantPath := filepath.Join(dataDir, "prompts", "mer-1", "system.md")
 	if agent.lastRestore.SystemPromptFile != wantPath {
 		t.Fatalf("restore system prompt file = %q, want %q", agent.lastRestore.SystemPromptFile, wantPath)
+	}
+}
+
+// The orchestrator's spawn and restore prompts both name the project memo
+// file, so an agent that AO cannot attach the memo to can read it. Workers do
+// not get the orchestrator's memo.
+func TestSystemPrompt_OrchestratorProjectMemoSection(t *testing.T) {
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Config: testRoleAgents()}
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID: "mer-1", ProjectID: "mer", Kind: domain.KindOrchestrator, IsTerminated: true,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"},
+	}
+	agent := &recordingAgent{}
+	dataDir := t.TempDir()
+	lookPath := func(string) (string, error) { return "/bin/true", nil }
+	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, DataDir: dataDir, LookPath: lookPath})
+
+	memoPath, err := projectmemo.CurrentPath(dataDir, "mer")
+	if err != nil {
+		t.Fatalf("CurrentPath: %v", err)
+	}
+	wantPath := "`" + filepath.ToSlash(memoPath) + "`"
+	requireMemo := func(label, prompt string) {
+		t.Helper()
+		if !strings.Contains(prompt, "## Project memo") || !strings.Contains(prompt, wantPath) {
+			t.Fatalf("%s system prompt missing project memo section with %s:\n%s", label, wantPath, prompt)
+		}
+	}
+
+	if _, err := m.RestoreWithMode(ctx, "mer-1"); err != nil {
+		t.Fatalf("restore: %v", err)
+	}
+	requireMemo("restore", agent.lastRestore.SystemPrompt)
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindOrchestrator}); err != nil {
+		t.Fatalf("spawn orchestrator: %v", err)
+	}
+	requireMemo("spawn", agent.lastLaunch.SystemPrompt)
+
+	chatPrompt, err := m.buildSystemPrompt(ctx, domain.KindOrchestrator, "mer", "mer-2", "", true)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt chat: %v", err)
+	}
+	requireMemo("chat", chatPrompt)
+
+	workerPrompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-3", "", false)
+	if err != nil {
+		t.Fatalf("buildSystemPrompt worker: %v", err)
+	}
+	if strings.Contains(workerPrompt, "## Project memo") || strings.Contains(workerPrompt, filepath.ToSlash(memoPath)) {
+		t.Fatalf("worker system prompt has the project memo section:\n%s", workerPrompt)
 	}
 }
 

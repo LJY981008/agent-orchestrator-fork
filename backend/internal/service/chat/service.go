@@ -15,6 +15,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/projectmemo"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 )
 
@@ -104,6 +105,17 @@ type Service struct {
 	gates              map[domain.ConversationOwner]controllerGate
 	probeMu            sync.Mutex
 	probed             map[domain.AgentHarness]ports.ChatCapabilities
+
+	// memos is the orchestrator project memo store; nil without a data dir,
+	// which turns the /clear memo step and memo injection off.
+	memos       *projectmemo.Store
+	memoTracker *projectMemoTracker
+	// clearMemoBudget bounds the /clear memo step, shrink request included;
+	// clearMemoInterruptWait bounds the wait for an interrupted memo turn.
+	clearMemoBudget        time.Duration
+	clearMemoInterruptWait time.Duration
+	// clearHandoffLimit bounds the /clear source close and fresh start.
+	clearHandoffLimit time.Duration
 }
 
 // SetReportCoordinator installs the report piggyback hook after daemon wiring
@@ -215,6 +227,13 @@ func New(opts Options) *Service {
 		wakeRuns:               make(map[domain.SessionID]*wakeRun),
 		backgroundWakes:        make(map[domain.SessionID]bool),
 		promptSuggestionSlots:  make(chan struct{}, 2),
+		memoTracker:            newProjectMemoTracker(),
+		clearMemoBudget:        clearMemoBudget,
+		clearMemoInterruptWait: clearMemoInterruptWait,
+		clearHandoffLimit:      nativeEditHandoffLimit,
+	}
+	if opts.DataDir != "" {
+		svc.memos = projectmemo.New(opts.DataDir)
 	}
 	svc.sides = newSideManager(svc, newMemorySideStore(), opts.AppRunID)
 	return svc
@@ -919,6 +938,7 @@ func (s *Service) Start(ctx context.Context, cfg StartConfig) (*Controller, erro
 	// replaced can be told apart from the current one's.
 	controller := newController(
 		cfg.SessionID, owner, conversation, generation, cfg.Harness, conv, s.store, s.activity, s.log, s.newID, s.now, s.onAccountChanged, s.onCodexCapacityChanged, s.reader)
+	controller.memo = s.projectMemoFor(cfg, owner)
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		providerTurnID := controller.restoreLiveTurnOwnership(liveRows.Turns)
@@ -1581,6 +1601,9 @@ func (s *Service) Stop(ctx context.Context, id domain.SessionID) error {
 	delete(s.viewClosedAt, id)
 	delete(s.viewLeases, id)
 	s.viewMu.Unlock()
+	// The session is ending. Whatever restores it later starts a provider
+	// conversation that should read the project memo again.
+	s.memoTracker.forget(id)
 
 	s.mu.RLock()
 	controller, ok := s.controllers[id]

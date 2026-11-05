@@ -26,6 +26,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/projectmemo"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 	"github.com/aoagents/agent-orchestrator/backend/internal/skillassets"
@@ -5731,6 +5732,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	switch kind {
 	case domain.KindOrchestrator:
 		cfg.OrchestratorRules = project.Config.OrchestratorRules
+		cfg.ProjectMemoPath = m.projectMemoPath(projectID)
 	case domain.KindWorker:
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
@@ -5787,6 +5789,20 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 		cfg.AdditionalSections = append(cfg.AdditionalSections, artifactOutputPrompt)
 	}
 	return buildSystemPromptText(cfg), nil
+}
+
+// projectMemoPath is the orchestrator's project memo file, or "" when there is
+// no data dir or project to name one for.
+func (m *Manager) projectMemoPath(projectID domain.ProjectID) string {
+	if projectID == "" || strings.TrimSpace(m.dataDir) == "" {
+		return ""
+	}
+	path, err := projectmemo.CurrentPath(m.dataDir, projectID)
+	if err != nil {
+		m.logger.Warn("project memo path unavailable; leaving it out of the system prompt", "project", projectID, "err", err)
+		return ""
+	}
+	return path
 }
 
 // aoSkillPointer is appended to every agent system prompt. It points the agent

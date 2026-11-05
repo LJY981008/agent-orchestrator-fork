@@ -2360,6 +2360,17 @@ func TestHistoricalUserContentSuppressesOnlyMarkedInternalReplayResources(t *tes
 	if got := historicalUserContent(resource); got != "" {
 		t.Fatalf("marked internal replay resource = %q, want hidden", got)
 	}
+
+	// The orchestrator project memo is AO context too, never a user attachment.
+	memo := acpsdk.ResourceBlock(acpsdk.EmbeddedResourceResource{
+		TextResourceContents: &acpsdk.TextResourceContents{
+			Uri: ports.ChatProjectMemoResourceURI, Text: "# Project memo",
+			Meta: map[string]any{aoInternalReplayMetaKey: true},
+		},
+	})
+	if got := historicalUserContent(memo); got != "" {
+		t.Fatalf("marked project memo resource = %q, want hidden", got)
+	}
 }
 
 func TestACPDriverClosesTrailingUserOnlyHistoryAsRecovered(t *testing.T) {

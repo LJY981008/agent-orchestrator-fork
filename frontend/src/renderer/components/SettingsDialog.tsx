@@ -1,4 +1,4 @@
-import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, Play, ScrollText, ShieldCheck, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
+import { Bot, Coffee, FolderGit2, KeyRound, Loader2, MonitorCog, NotebookPen, Play, ScrollText, ShieldCheck, TriangleAlert, Wrench, X, type LucideIcon } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { createPortal } from "react-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -20,6 +20,7 @@ import { useCloudProjectsQuery, workspaceQueryOptions } from "../hooks/useWorksp
 import { CuesSettings } from "./CuesDialog";
 import { LadoProjectRulesSection } from "./lado/LadoProjectRulesSection";
 import { LadoProjectSection } from "./lado/LadoProjectSection";
+import { ProjectMemoSection } from "./settings/ProjectMemoSection";
 import { topbarDragStyle } from "./ShellTopbar";
 import { useAppShortcut } from "../hooks/useAppShortcut";
 import { type GlobalSettingsSection, type HarnessDiagnosticsRequest, type ProjectSettingsSection, type SettingsModal, useUiStore } from "../stores/ui-store";
@@ -120,6 +121,8 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 	if (!remoteHostId && !isCloudProjectSettings) {
 		projectSections.push({ id: "environment", label: t("settings.project.environment"), icon: KeyRound });
 		projectSections.push({ id: "cues", label: t("cues.title"), icon: Play });
+		// LADO fork: the orchestrator's project memo (#50), in or out of LADO mode.
+		projectSections.push({ id: "memo", label: t("settings.project.memo"), icon: NotebookPen });
 		if (ladoProjectId) projectSections.push({ id: "lado", label: t("lado.project.title"), icon: ShieldCheck });
 		if (ladoProject) projectSections.push({ id: "rules", label: t("lado.rules.title"), icon: ScrollText });
 	}
@@ -299,6 +302,9 @@ function useSettingsLayer(settingsModal: SettingsModal | null) {
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "environment") {
 				return <ProjectEnvironmentSettings projectId={displaySettings.projectId} onSaveState={setProjectSaveState} />;
+			}
+			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "memo") {
+				return <ProjectMemoSection projectId={displaySettings.projectId} />;
 			}
 			if (displaySettings?.scope === "project" && !remoteHostId && !isCloudProjectSettings && activeProjectSection === "lado") {
 				return <LadoProjectSection projectId={displaySettings.projectId} />;

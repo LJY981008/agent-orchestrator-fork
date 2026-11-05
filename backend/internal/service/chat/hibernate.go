@@ -378,7 +378,16 @@ func (s *Service) workingController(ctx context.Context, id domain.SessionID) (*
 			if controller, err := s.Controller(id); err == nil {
 				controller.mu.Lock()
 				handoff := controller.handoff
+				held := controller.memoHold && handoff == controllerHandoffNone &&
+					controller.state != ports.ChatControllerStopped
 				controller.mu.Unlock()
+				if held {
+					// /clear holds the gate while the orchestrator writes its memo.
+					// The controller stays live and queues new work durably, so admit
+					// it instead of blocking the sender for the whole memo step.
+					release := controller.beginOperation()
+					return controller, release, nil
+				}
 				if handoff != controllerHandoffNone && handoff != controllerHandoffHibernate {
 					return nil, nil, ErrControllerHandoff
 				}

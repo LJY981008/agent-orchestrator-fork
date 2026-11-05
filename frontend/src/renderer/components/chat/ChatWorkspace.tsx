@@ -476,6 +476,8 @@ export interface ChatWorkspaceProps {
 	onClear?: () => void | Promise<unknown>;
 	/** A `/clear` is replacing the agent's context. */
 	clearing?: boolean;
+	/** LADO fork (#50): opens Project settings → Orchestrator memo after an orchestrator's `/clear`. */
+	onOpenProjectMemo?: () => void;
 	/** The main chat's @browser state (Claude in Chrome); absent means no mention rows. */
 	browserMention?: BrowserMentionState;
 	/**
@@ -709,6 +711,7 @@ function ChatWorkspaceContent({
 	compactUnavailable,
 	onClear,
 	clearing,
+	onOpenProjectMemo,
 	browserMention,
 	onRollback,
 	rollbackPending,
@@ -1880,6 +1883,9 @@ function ChatWorkspaceContent({
 										// blocked new work hides it.
 										onClear={newWorkDisabled ? undefined : onClear}
 										clearing={clearing}
+										// LADO fork (#50): an orchestrator's /clear first has it write the project memo.
+										clearWritesMemo={sessionRole === "orchestrator"}
+										onOpenProjectMemo={onOpenProjectMemo}
 										browserMention={browserMention}
 										draftSessionId={draftPersistenceAvailable && !queueEdit ? draftScope.sessionId : undefined}
 										draftSessionIncarnation={draftPersistenceAvailable ? draftScope.incarnation : undefined}
@@ -4600,6 +4606,17 @@ const itemKey = (item: ConversationItem): string =>
 		? `client:${item.clientMessageId}`
 		: item.id;
 
+/**
+ * LADO fork (#50): whether a durable row's client id is this send's. An
+ * orchestrator's `/clear` cancels messages queued during its memo step and
+ * records them again on the new branch with the id plus `:after-clear`
+ * (`carriedClientMessageID` in the chat service), so a send the renderer never
+ * saw before the move still finds its row.
+ */
+export function isClientMessageRow(rowClientMessageId: string, sentClientMessageId: string): boolean {
+	return rowClientMessageId === sentClientMessageId || rowClientMessageId === `${sentClientMessageId}:after-clear`;
+}
+
 /** Whether a durable row is the one a local echo stands in for. */
 function echoMatchesItem(
 	echo: ConversationLocalEcho,
@@ -4609,7 +4626,7 @@ function echoMatchesItem(
 	if (item.kind !== "message" || item.role !== "user" || item.origin !== "human") return false;
 	// A background wake keeps its echo in the timeline while the durable turn sits queued.
 	if (echo.turnId && backgroundQueuedTurnIds.has(echo.turnId) && item.turnId === echo.turnId) return false;
-	if (item.clientMessageId) return item.clientMessageId === echo.clientMessageId;
+	if (item.clientMessageId) return isClientMessageRow(item.clientMessageId, echo.clientMessageId);
 	// Rows from a sender that supplied no key fall back to the turn id, then to text and time.
 	if (echo.turnId) return item.turnId === echo.turnId;
 	return item.text === echo.text && item.createdAt >= echo.createdAt;
