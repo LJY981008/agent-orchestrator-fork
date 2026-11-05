@@ -9,7 +9,6 @@ package ladorelay
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"regexp"
 	"slices"
@@ -22,19 +21,24 @@ import (
 // maxPathReasons caps the outside-plan paths a relay records.
 const maxPathReasons = 20
 
-// outsidePlan lists why the instruction may leave the plan of worker.
-func (s *Service) outsidePlan(ctx context.Context, worker domain.LadoExecution, instruction string, flagged bool) ([]string, error) {
+// outsidePlan lists why the instruction may leave the plan of worker. A plan
+// LADO cannot read (no pinned blob, a plan that does not parse, no affected
+// paths) does not stop the relay: outside plan is a mark, so the failure is
+// logged and recorded as the reason that the paths went unchecked.
+func (s *Service) outsidePlan(ctx context.Context, worker domain.LadoExecution, instruction string, flagged bool) []string {
 	var reasons []string
 	if flagged {
 		reasons = append(reasons, domain.LadoRelayFlaggedReason)
 	}
 	paths := mentionedPaths(instruction)
 	if len(paths) == 0 || s.deps.Plans == nil {
-		return reasons, nil
+		return reasons
 	}
 	plan, err := s.deps.Plans.ApprovedPlan(ctx, worker.PlanRevisionID)
 	if err != nil {
-		return nil, fmt.Errorf("read the approved plan of worker %s: %w", worker.SessionID, err)
+		s.deps.Log.Warn("LADO could not read the approved plan to check a relay's paths",
+			"worker", worker.SessionID, "revision", worker.PlanRevisionID, "err", err)
+		return append(reasons, domain.LadoRelayPlanUnreadReason)
 	}
 	patterns := planPaths(plan, worker)
 	for _, p := range paths {
@@ -45,7 +49,7 @@ func (s *Service) outsidePlan(ctx context.Context, worker domain.LadoExecution, 
 			reasons = append(reasons, domain.LadoRelayPathReason(p))
 		}
 	}
-	return reasons, nil
+	return reasons
 }
 
 // planPaths are the affected paths that bind worker: its part's for a part

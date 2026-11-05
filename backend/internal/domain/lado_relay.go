@@ -120,6 +120,12 @@ const (
 // itself marked the instruction as outside the approved plan.
 const LadoRelayFlaggedReason = "오케스트레이터가 계획 밖으로 표시"
 
+// LadoRelayPlanUnreadReason is the outside-plan reason when LADO could not
+// read the approved plan, so it could not check the paths the instruction
+// names. The relay still goes through: outside plan is a mark, never a
+// refusal.
+const LadoRelayPlanUnreadReason = "계획을 읽지 못해 경로를 확인하지 못함"
+
 // LadoRelayPathReason is the outside-plan reason for a path the instruction
 // names that no affected path of the plan (or the worker's part) covers.
 func LadoRelayPathReason(path string) string {

@@ -174,10 +174,7 @@ func (s *Service) check(ctx context.Context, req Request, now time.Time) (domain
 	if err != nil {
 		return domain.LadoRelay{}, err
 	}
-	reasons, err := s.outsidePlan(ctx, worker, instruction, req.OutsidePlan)
-	if err != nil {
-		return domain.LadoRelay{}, err
-	}
+	reasons := s.outsidePlan(ctx, worker, instruction, req.OutsidePlan)
 	return domain.LadoRelay{
 		ID:                    domain.LadoRelayID("lado-relay-" + s.deps.NewID()),
 		TaskID:                task.ID,

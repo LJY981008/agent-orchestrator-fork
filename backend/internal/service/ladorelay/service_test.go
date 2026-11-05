@@ -422,6 +422,53 @@ func TestRelayMarksAnInstructionOutsideThePlan(t *testing.T) {
 	}
 }
 
+// A plan LADO cannot read never stops a relay: outside plan is a mark, so
+// the relay is delivered with the reason that the paths went unchecked, and
+// the failure is logged.
+func TestRelayDeliversWhenThePlanCannotBeRead(t *testing.T) {
+	cases := []struct {
+		name        string
+		message     string
+		flagged     bool
+		wantReasons []string
+	}{
+		{name: "a path to check", message: "frontend/src/App.tsx 를 고치세요",
+			wantReasons: []string{domain.LadoRelayPlanUnreadReason}},
+		{name: "flagged with a path", message: "backend/internal/service/ladorelay/plan.go 를 고치세요", flagged: true,
+			wantReasons: []string{domain.LadoRelayFlaggedReason, domain.LadoRelayPlanUnreadReason}},
+		{name: "no path reads no plan", message: "테스트를 다시 돌리고 보고하세요"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			delete(f.plans, testRevision)
+			req := request()
+			req.Message, req.OutsidePlan = tc.message, tc.flagged
+			got, err := f.svc.Relay(context.Background(), req)
+			if err != nil {
+				t.Fatalf("Relay: %v", err)
+			}
+			if got.State != domain.LadoRelayDelivered || len(f.messenger.sent) != 1 {
+				t.Fatalf("relay = %s with %d messages, want delivered once", got.State, len(f.messenger.sent))
+			}
+			stored, _, _ := f.store.LadoRelay(context.Background(), got.ID)
+			if stored.OutsidePlan != (len(tc.wantReasons) > 0) || !slices.Equal(stored.OutsidePlanReasons, tc.wantReasons) {
+				t.Errorf("stored outside plan = %v %q, want %q", stored.OutsidePlan, stored.OutsidePlanReasons, tc.wantReasons)
+			}
+			text := f.messenger.sent[0].text
+			for _, reason := range tc.wantReasons {
+				if !strings.Contains(text, reason) {
+					t.Errorf("worker text lacks the reason %q:\n%s", reason, text)
+				}
+			}
+			unread := slices.Contains(tc.wantReasons, domain.LadoRelayPlanUnreadReason)
+			if logged := strings.Contains(f.logs.String(), "could not read the approved plan"); logged != unread {
+				t.Errorf("warning logged = %v, want %v: %s", logged, unread, f.logs.String())
+			}
+		})
+	}
+}
+
 func TestRelayRecordsAFailedDelivery(t *testing.T) {
 	f := newFixture(t)
 	f.messenger.err = errors.New("the worker is waiting for a decision")
