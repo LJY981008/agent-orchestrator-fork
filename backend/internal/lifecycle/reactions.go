@@ -165,6 +165,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	ident := prIdentity(o)
 	var nudges []pendingNudge
 	var ciPolicyErr error
+	var reviewRunErr error
 
 	if !needsInput {
 		reviews, err := m.store.ListPRReviews(ctx, o.URL)
@@ -200,9 +201,26 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		}
 
 		if hasUnresolvedComments(o.Comments) {
-			comments := unresolvedReviewComments(o.Comments)
-			for _, comment := range comments {
-				if !comment.AutoInjectReview {
+			unresolved := unresolvedReviewComments(o.Comments)
+			// The worker's own replies in a review thread are stored as
+			// unresolved comments too; leave them out so the worker is not fed
+			// its own answers (#48). The run list is read only when a comment
+			// would be injected. If it cannot be read, skip this poll's review
+			// comment nudges rather than inject the replies; the next poll
+			// retries.
+			var replies reviewReplyFilter
+			skipReviewComments := false
+			if lister, ok := m.store.(ReviewRunLister); ok && anyAutoInjectReview(unresolved) {
+				runs, err := lister.ListReviewRunsBySession(ctx, id)
+				if err != nil {
+					reviewRunErr = fmt.Errorf("list review runs for %s: %w", id, err)
+					skipReviewComments = true
+				} else {
+					replies = loadReviewReplyFilter(runs, o.URL, comments)
+				}
+			}
+			for _, comment := range unresolved {
+				if skipReviewComments || !comment.AutoInjectReview || replies.isWorkerReviewReply(comment) {
 					continue
 				}
 				commentSlice := []ports.PRCommentObservation{comment}
@@ -280,6 +298,9 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// nudges have been sent, so one failed lookup cannot hide another reaction.
 	if ciPolicyErr != nil {
 		return ciPolicyErr
+	}
+	if reviewRunErr != nil {
+		return reviewRunErr
 	}
 	if blockedCheckErr != nil {
 		return blockedCheckErr
@@ -744,6 +765,15 @@ func prIdentity(o ports.PRObservation) string {
 		id += fmt.Sprintf(" (%s → %s)", domain.SanitizeControlChars(o.SourceBranch), domain.SanitizeControlChars(o.TargetBranch))
 	}
 	return id
+}
+
+func anyAutoInjectReview(comments []ports.PRCommentObservation) bool {
+	for _, c := range comments {
+		if c.AutoInjectReview {
+			return true
+		}
+	}
+	return false
 }
 
 func hasUnresolvedComments(comments []ports.PRCommentObservation) bool {
