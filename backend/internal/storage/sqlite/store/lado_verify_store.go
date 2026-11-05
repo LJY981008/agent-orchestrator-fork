@@ -522,12 +522,6 @@ func (s *Store) ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]do
 	return executions, nil
 }
 
-// SettleLadoExecution settles the execution's PR prURL as
-// SettleLadoExecutionPR does.
-func (s *Store) SettleLadoExecution(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error {
-	return s.SettleLadoExecutionPR(ctx, session, prURL, state, at, audit)
-}
-
 // SettleLadoExecutionPR records that the loop settled the execution's PR
 // prURL in state (merged or closed) at at, with audit in the same
 // transaction when it is given. A PR the execution tracks (issue #64) is
@@ -590,13 +584,6 @@ func (s *Store) SettleLadoExecutionPR(ctx context.Context, session domain.Sessio
 		_, err = appendLadoAuditEventTx(ctx, q, *audit)
 		return err
 	})
-}
-
-// ApproveLadoIntegration records the integration approval a, the presence
-// proof it used and its audit event in one transaction, as
-// ApproveLadoIntegrations does with one approval.
-func (s *Store) ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error {
-	return s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{a}, proof, audit)
 }
 
 // ApproveLadoIntegrations records the integration approvals one presence

@@ -22,7 +22,10 @@ import (
 // run with its integration branch, one waiting row per part, and the entry's
 // parts_started_at, which clears its lease, in one transaction with the
 // run's audit event. When token no longer holds the entry nothing is written
-// and the error is domain.ErrLadoLeaseLost.
+// and the error is domain.ErrLadoLeaseLost. It writes no repository rows, as
+// a run started before migration 0015 has none: the dispatcher starts runs
+// with StartLadoPartRunRepos (#64), and this one stays to write that older
+// shape, which the reads still take as one repository.
 func (s *Store) StartLadoPartRun(ctx context.Context, token string, run domain.LadoPartRun, parts []domain.LadoTaskPart, event domain.LadoAuditEvent) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err

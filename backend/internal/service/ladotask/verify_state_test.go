@@ -139,8 +139,8 @@ func TestTaskStateFollowsVerificationThroughReads(t *testing.T) {
 		ExpiresAt: pf.now.Add(time.Minute), UsedAt: pf.now,
 	}
 	event := domain.LadoAuditEvent{At: pf.now, Actor: "human", Action: "integration.approved", SubjectKind: "execution", SubjectID: string(session), Payload: json.RawMessage(`{}`)}
-	if err := pf.store.ApproveLadoIntegration(ctx, approval, proof, event); err != nil {
-		t.Fatalf("ApproveLadoIntegration: %v", err)
+	if err := pf.store.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{approval}, proof, event); err != nil {
+		t.Fatalf("ApproveLadoIntegrations: %v", err)
 	}
 	pf.wantStateReason(t, domain.LadoTaskIntegrating, "")
 	if err := pf.store.SetLadoIntegrationStatus(ctx, approval.ID, domain.LadoIntegrationStatusFailed, 1, time.Time{}, "the host answered 403"); err != nil {

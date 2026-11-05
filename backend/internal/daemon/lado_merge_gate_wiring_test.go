@@ -116,11 +116,11 @@ func TestInstallLadoMergeGateGuardsAOsMerge(t *testing.T) {
 		t.Fatalf("UpsertLadoVerification: %v", err)
 	}
 	proof := domain.LadoPresenceProof{Nonce: "BBBBBBBBBBBBBBBBBBBBBB", Action: domain.LadoPresenceIntegrationApprove, SubjectID: string(worker) + "@" + head, ExpiresAt: at.Add(time.Minute), UsedAt: at}
-	if err := store.ApproveLadoIntegration(ctx, domain.LadoIntegrationApproval{
+	if err := store.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{domain.LadoIntegrationApproval{
 		ID: "lado-integration-1", ExecutionSessionID: worker, PRURL: url, HeadSHA: head, VerificationSHA256: sum,
 		Actor: "human", ApprovedAt: at, StatusState: domain.LadoIntegrationStatusNotApplicable, BaseTipSHA: baseTip,
-	}, proof, domain.LadoAuditEvent{At: at, Actor: "human", Action: "integration.approved", SubjectKind: "execution", SubjectID: string(worker), Payload: []byte("{}")}); err != nil {
-		t.Fatalf("ApproveLadoIntegration: %v", err)
+	}}, proof, domain.LadoAuditEvent{At: at, Actor: "human", Action: "integration.approved", SubjectKind: "execution", SubjectID: string(worker), Payload: []byte("{}")}); err != nil {
+		t.Fatalf("ApproveLadoIntegrations: %v", err)
 	}
 	// A target the gate cannot fetch refuses the merge (#53): it fails closed.
 	origin := ladoGit(t, repoDir, "remote", "get-url", "origin")

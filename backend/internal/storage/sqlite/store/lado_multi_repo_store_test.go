@@ -259,7 +259,7 @@ func TestSettleLadoExecutionPRSettlesTheExecutionLast(t *testing.T) {
 	// An execution without tracked PRs settles as before.
 	old := mustLadoExecution(t, s, "2", at, true)
 	oldPR := mustWriteLadoRepoPR(t, s, old.SessionID, "back", 9, domain.PRStateClosed, ladoHead('e'), domain.MergeMergeable, at)
-	if err := s.SettleLadoExecution(ctx, old.SessionID, oldPR, domain.PRStateClosed, at, nil); err != nil {
+	if err := s.SettleLadoExecutionPR(ctx, old.SessionID, oldPR, domain.PRStateClosed, at, nil); err != nil {
 		t.Fatalf("settle an untracked execution: %v", err)
 	}
 	if read := mustReadLadoExecution(t, s, old.SessionID); read.SettledAt.IsZero() || len(read.PRs) != 0 {
@@ -276,7 +276,7 @@ func TestTrackAndReplaceLadoExecutionPR(t *testing.T) {
 	at := ladoVerifyAt
 	exec := mustLadoExecution(t, s, "1", at, false)
 	merged := mustWriteLadoRepoPR(t, s, exec.SessionID, "back", 1, domain.PRStateMerged, ladoHead('a'), domain.MergeMergeable, at)
-	if err := s.SettleLadoExecution(ctx, exec.SessionID, merged, domain.PRStateMerged, at, nil); err != nil {
+	if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, merged, domain.PRStateMerged, at, nil); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
 	if candidates, _ := s.ListLadoExecutionPRsToTrack(ctx, 10); len(candidates) != 0 {

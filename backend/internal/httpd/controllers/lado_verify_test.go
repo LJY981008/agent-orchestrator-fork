@@ -420,7 +420,7 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 		ID: "lado-integration-1", ExecutionSessionID: worker, PRURL: prURL, HeadSHA: ladoVerifyHead, VerificationSHA256: ladoRecordSHA(t, record),
 		Acknowledged: record.ConfirmCodes(), Actor: "human", ApprovedAt: approvedAt, StatusState: domain.LadoIntegrationStatusPending,
 	}
-	if err := store.ApproveLadoIntegration(ctx, approval,
+	if err := store.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{approval},
 		domain.LadoPresenceProof{Nonce: "nonce-integration-1", Action: domain.LadoPresenceIntegrationApprove, SubjectID: string(worker) + "@" + ladoVerifyHead, ExpiresAt: approvedAt.Add(time.Minute), UsedAt: approvedAt},
 		domain.LadoAuditEvent{At: approvedAt, Actor: "human", Action: "integration.approved", SubjectKind: "execution", SubjectID: string(worker), Payload: []byte("{}")},
 	); err != nil {
