@@ -100,7 +100,7 @@ func (s *Service) approvedBaseHolds(ctx context.Context, pr domain.PullRequest, 
 	if pr.Number != 0 {
 		exec.PR.Number = pr.Number
 	}
-	in, err := s.headInputs(ctx, exec)
+	in, err := s.headInputs(ctx, exec, false)
 	if err != nil {
 		return s.mergeGateFailed(pr, head, err)
 	}

@@ -7,6 +7,7 @@ package ladoverify
 // Once LADO revoked the approval (#53), it posts a pending status instead.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -117,8 +118,9 @@ func (s *Service) postStatus(ctx context.Context, repo domain.TrackerRepo, appro
 	return client.PostCommitStatus(ctx, repo, approval.HeadSHA, status)
 }
 
-// approvalRepo is the repository of the approval's PR: the one that holds the
-// task's issue, which the worker's branch was cloned from.
+// approvalRepo is the repository of the approval's PR, as its record was
+// verified in (verifyRepo): in a workspace project the PR's own, which may
+// be another than the task's issue's (#59), else the task's.
 func (s *Service) approvalRepo(ctx context.Context, approval domain.LadoIntegrationApproval) (domain.TrackerRepo, error) {
 	exec, ok, err := s.deps.Store.LadoExecution(ctx, approval.ExecutionSessionID)
 	switch {
@@ -134,5 +136,9 @@ func (s *Service) approvalRepo(ctx context.Context, approval domain.LadoIntegrat
 	case !ok:
 		return domain.TrackerRepo{}, fmt.Errorf("task %s not found", exec.TaskID)
 	}
-	return task.Repo, nil
+	place, err := s.verifyRepo(ctx, task, exec.SessionID, cmp.Or(approval.PRURL, exec.PR.URL))
+	if err != nil {
+		return domain.TrackerRepo{}, err
+	}
+	return place.repo, nil
 }
