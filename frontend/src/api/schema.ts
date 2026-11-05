@@ -7276,10 +7276,10 @@ export interface components {
             plan: components["schemas"]["LadoExecutionPlanResponse"];
             /** @description The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
-            /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; empty when the plan named no order. */
-            prRepos: string[];
-            /** @description prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended. */
-            prReposFirm: boolean;
+            /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. */
+            prRepos?: string[];
+            /** @description Omitted when false. prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended. */
+            prReposFirm?: boolean;
             /** @description What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed. */
             resolve?: components["schemas"]["LadoExecutionResolveResponse"];
             /**
@@ -7308,8 +7308,8 @@ export interface components {
              * @description When LADO stopped the run at its deadline.
              */
             timedOutAt?: null | string;
-            /** @description The PRs LADO tracks for the run, one per repository, in merge order, each with its head's full record and approval when verification is wired; an execution LADO tracks no PR for yet lists its newest PR alone, and one without a PR none. The task's integration approval names the open ones together. */
-            trackedPrs: components["schemas"]["LadoExecutionTrackedPRResponse"][];
+            /** @description The PRs LADO tracks for the run, one per repository, in merge order, each with its head's full record and approval when verification is wired; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR. The task's integration approval names the open ones together. */
+            trackedPrs?: components["schemas"]["LadoExecutionTrackedPRResponse"][];
             /** @description The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none. */
             untrackedPrs?: components["schemas"]["LadoExecutionPRResponse"][];
             /** @description What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying. */
@@ -7450,7 +7450,7 @@ export interface components {
             /** @description The record's confirm codes, sorted: what an approval sends as acknowledge. */
             confirm: string[];
             /** @description Each PR the request named, in merge order; one for a request that named one. */
-            prs: components["schemas"]["LadoIntegrationApprovePRResponse"][];
+            prs?: components["schemas"]["LadoIntegrationApprovePRResponse"][];
             verification: components["schemas"]["LadoVerificationResponse"];
             verificationSha256: string;
         };
@@ -8689,8 +8689,8 @@ export interface components {
             policySha256?: string;
             /** @description The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none. */
             pr?: components["schemas"]["LadoExecutionPRResponse"];
-            /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; empty when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing. */
-            prRepos: string[];
+            /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing. */
+            prRepos?: string[];
             /** @description The worker session ended. While it lives, the task cannot be approved again. */
             sessionEnded: boolean;
             sessionId: string;
@@ -8698,8 +8698,8 @@ export interface components {
             startedAt: string;
             /** @description LADO stopped the run at its deadline. */
             timedOut: boolean;
-            /** @description The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone, and one without a PR none. */
-            trackedPrs: components["schemas"]["LadoExecutionTrackedPRResponse"][];
+            /** @description The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR. */
+            trackedPrs?: components["schemas"]["LadoExecutionTrackedPRResponse"][];
             /** @description The worker session's other open PRs, newest first, which LADO does not track or verify, such as a second open PR in a repository whose tracked PR is still open; omitted while it has none. */
             untrackedPrs?: components["schemas"]["LadoExecutionPRResponse"][];
         };
@@ -8749,7 +8749,7 @@ export interface components {
             /** @description The display phase, as the plan view shows it. */
             phase: number;
             /** @description How the part went in each of the run's repositories, in the run's order; one with an empty repo for a run in one repository. */
-            repos: components["schemas"]["LadoTaskPartRepoResponse"][];
+            repos?: components["schemas"]["LadoTaskPartRepoResponse"][];
             /** @description The part's newest worker session. */
             sessionId?: string;
             /** @description The integration branch's commit the part's branch started from. */
@@ -8781,8 +8781,8 @@ export interface components {
             /** @description Where LADO last moved the integration branch. */
             headSha?: string;
             parts: components["schemas"]["LadoTaskPartResponse"][];
-            /** @description The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Empty while the newest approval runs no parts. */
-            repos: components["schemas"]["LadoPartRunRepoResponse"][];
+            /** @description The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Omitted while the newest approval runs no parts. */
+            repos?: components["schemas"]["LadoPartRunRepoResponse"][];
             /** Format: date-time */
             startedAt?: null | string;
         };

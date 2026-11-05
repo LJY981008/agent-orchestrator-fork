@@ -106,8 +106,8 @@ type LadoTaskExecutionResponse struct {
 	PR                 *LadoExecutionPRResponse  `json:"pr,omitempty" description:"The first PR LADO tracks for the run in merge order, else the newest PR of the worker session; omitted while it has none."`
 	UntrackedPRs       []LadoExecutionPRResponse `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify, such as a second open PR in a repository whose tracked PR is still open; omitted while it has none."`
 	// TrackedPRs and PRRepos are the run's PRs across repositories (#64).
-	TrackedPRs []LadoExecutionTrackedPRResponse `json:"trackedPrs" description:"The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone, and one without a PR none."`
-	PRRepos    []string                         `json:"prRepos" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; empty when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing."`
+	TrackedPRs []LadoExecutionTrackedPRResponse `json:"trackedPrs,omitempty" description:"The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR."`
+	PRRepos    []string                         `json:"prRepos,omitempty" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing."`
 }
 
 // LadoSessionIDParam names an execution's session in
@@ -186,10 +186,10 @@ type LadoExecutionResponse struct {
 	Integration  *LadoIntegrationApprovalResponse `json:"integration,omitempty" description:"The integration approval of the PR's current head; omitted without one."`
 	Resolve      *LadoExecutionResolveResponse    `json:"resolve,omitempty" description:"What LADO's resolve workers did for the PR once it conflicted, or its base moved under its head with a change to the same paths, while the run's own session no longer ran; omitted while none was needed."`
 	// TrackedPRs and PRRepos are the run's PRs across repositories (#64).
-	TrackedPRs   []LadoExecutionTrackedPRResponse `json:"trackedPrs" description:"The PRs LADO tracks for the run, one per repository, in merge order, each with its head's full record and approval when verification is wired; an execution LADO tracks no PR for yet lists its newest PR alone, and one without a PR none. The task's integration approval names the open ones together."`
+	TrackedPRs   []LadoExecutionTrackedPRResponse `json:"trackedPrs,omitempty" description:"The PRs LADO tracks for the run, one per repository, in merge order, each with its head's full record and approval when verification is wired; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR. The task's integration approval names the open ones together."`
 	UntrackedPRs []LadoExecutionPRResponse        `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none."`
-	PRRepos      []string                         `json:"prRepos" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; empty when the plan named no order."`
-	PRReposFirm  bool                             `json:"prReposFirm" description:"prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended."`
+	PRRepos      []string                         `json:"prRepos,omitempty" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order."`
+	PRReposFirm  bool                             `json:"prReposFirm,omitempty" description:"Omitted when false. prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended."`
 }
 
 // LadoExecutionResolveResponse is where resolving an execution's PR stands:

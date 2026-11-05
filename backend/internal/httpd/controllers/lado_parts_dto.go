@@ -33,7 +33,7 @@ type LadoTaskPartResponse struct {
 	Error          string    `json:"error,omitempty" description:"Why the part's last worker did not finish it."`
 	UpdatedAt      time.Time `json:"updatedAt"`
 	// Repos is how the part went in each of the run's repositories (#64).
-	Repos []LadoTaskPartRepoResponse `json:"repos" description:"How the part went in each of the run's repositories, in the run's order; one with an empty repo for a run in one repository."`
+	Repos []LadoTaskPartRepoResponse `json:"repos,omitempty" description:"How the part went in each of the run's repositories, in the run's order; one with an empty repo for a run in one repository."`
 }
 
 // LadoTaskPartRepoResponse is how one part went in one repository of its
@@ -64,5 +64,5 @@ type LadoTaskPartsResponse struct {
 	Parts     []LadoTaskPartResponse `json:"parts"`
 	// Repos are the run's repositories (#64); the fields above are the
 	// first's.
-	Repos []LadoPartRunRepoResponse `json:"repos" description:"The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Empty while the newest approval runs no parts."`
+	Repos []LadoPartRunRepoResponse `json:"repos,omitempty" description:"The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Omitted while the newest approval runs no parts."`
 }

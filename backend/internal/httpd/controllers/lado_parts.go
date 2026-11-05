@@ -34,7 +34,7 @@ func (c *LadoController) getTaskParts(w http.ResponseWriter, r *http.Request) {
 }
 
 func ladoTaskPartsResponse(view ladoqueue.PartsView) LadoTaskPartsResponse {
-	resp := LadoTaskPartsResponse{Parts: make([]LadoTaskPartResponse, 0, len(view.Parts)), Repos: []LadoPartRunRepoResponse{}}
+	resp := LadoTaskPartsResponse{Parts: make([]LadoTaskPartResponse, 0, len(view.Parts))}
 	if view.Run.Branch != "" {
 		resp.Branch, resp.BaseSHA, resp.HeadSHA = view.Run.Branch, view.Run.BaseSHA, view.Run.HeadSHA
 		resp.StartedAt = ladoOptionalTime(view.Run.StartedAt)
@@ -45,7 +45,7 @@ func ladoTaskPartsResponse(view ladoqueue.PartsView) LadoTaskPartsResponse {
 		}
 	}
 	for _, part := range view.Parts {
-		repos := make([]LadoTaskPartRepoResponse, 0, len(view.PartRepos[part.PartID]))
+		var repos []LadoTaskPartRepoResponse
 		for _, repo := range view.PartRepos[part.PartID] {
 			repos = append(repos, LadoTaskPartRepoResponse{Repo: repo.Relative, StartSHA: repo.StartSHA, MergedSHA: repo.MergedSHA, Empty: repo.Empty()})
 		}

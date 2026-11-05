@@ -47,10 +47,10 @@ func TestLadoAPI_ExecutionListsTrackedPRs(t *testing.T) {
 		return decodeLadoJSON[controllers.LadoExecutionResponse](t, body), string(body)
 	}
 
-	// Before any PR the lists are empty, not null.
+	// Before any PR the run lists none, and the plan's repos.
 	got, raw := getExecution()
-	if !strings.Contains(raw, `"trackedPrs":[]`) || !reflect.DeepEqual(got.PRRepos, []string{"back", "front"}) || got.PRReposFirm {
-		t.Fatalf("execution without PRs = %s, want an empty trackedPrs and the plan's repos", raw)
+	if strings.Contains(raw, `"trackedPrs"`) || strings.Contains(raw, `null`) || !reflect.DeepEqual(got.PRRepos, []string{"back", "front"}) || got.PRReposFirm {
+		t.Fatalf("execution without PRs = %s, want no trackedPrs and the plan's repos", raw)
 	}
 
 	backHead, frontHead := strings.Repeat("b", 40), strings.Repeat("c", 40)

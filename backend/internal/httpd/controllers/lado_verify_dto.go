@@ -205,7 +205,7 @@ type LadoIntegrationApproveResponse struct {
 	VerificationSHA256 string                             `json:"verificationSha256"`
 	Confirm            []string                           `json:"confirm" description:"The record's confirm codes, sorted: what an approval sends as acknowledge."`
 	Approval           *LadoIntegrationApprovalResponse   `json:"approval,omitempty" description:"The recorded approval; omitted for a dry run."`
-	PRs                []LadoIntegrationApprovePRResponse `json:"prs" description:"Each PR the request named, in merge order; one for a request that named one."`
+	PRs                []LadoIntegrationApprovePRResponse `json:"prs,omitempty" description:"Each PR the request named, in merge order; one for a request that named one."`
 }
 
 // LadoIntegrationStatusQuery names the PR whose status is posted again.

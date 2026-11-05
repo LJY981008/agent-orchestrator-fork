@@ -265,7 +265,7 @@ func ladoTaskExecutionResponse(task domain.LadoTask, exec domain.LadoExecution) 
 		PR:             ladoExecutionPRResponse(exec.PR),
 		UntrackedPRs:   ladoUntrackedPRResponses(exec),
 		TrackedPRs:     ladoTrackedPRResponses(exec),
-		PRRepos:        ladoOrEmptyStrings(exec.PRRepos),
+		PRRepos:        exec.PRRepos,
 	}
 	if task.Plan.Latest.ID == exec.PlanRevisionID {
 		resp.PlanRevisionNumber = task.Plan.Latest.Number
@@ -301,11 +301,10 @@ func ladoUntrackedPRResponses(exec domain.LadoExecution) []LadoExecutionPRRespon
 
 // ladoTrackedPRResponses are the PRs LADO tracks for the execution in merge
 // order, each with the state it alone gives the task (#64); an execution
-// without tracked PRs gives its newest PR alone.
+// without tracked PRs gives its newest PR alone, and one without a PR nil.
 func ladoTrackedPRResponses(exec domain.LadoExecution) []LadoExecutionTrackedPRResponse {
-	tracked := exec.TrackedPRs()
-	resps := make([]LadoExecutionTrackedPRResponse, 0, len(tracked))
-	for _, pr := range tracked {
+	var resps []LadoExecutionTrackedPRResponse
+	for _, pr := range exec.TrackedPRs() {
 		base := ladoExecutionPRResponse(pr.PR)
 		if base == nil {
 			continue
@@ -393,7 +392,7 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 		Resolve:      ladoExecutionResolveResponse(exec.Resolve),
 		TrackedPRs:   ladoTrackedPRResponses(exec),
 		UntrackedPRs: ladoUntrackedPRResponses(exec),
-		PRRepos:      ladoOrEmptyStrings(exec.PRRepos),
+		PRRepos:      exec.PRRepos,
 		PRReposFirm:  exec.PRReposFirm,
 	}
 }

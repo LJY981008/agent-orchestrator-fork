@@ -21312,16 +21312,16 @@ components:
             newest PR of the worker session; omitted while it has none.
         prRepos:
           description: The repositories, as slash-separated folders under the workspace's,
-            the run is expected to open a PR in, in the order the PRs merge; empty
+            the run is expected to open a PR in, in the order the PRs merge; omitted
             when the plan named no order.
           items:
             type: string
           type: array
         prReposFirm:
-          description: prRepos are the repositories the run's parts changed (an integration
-            run), so each needs a PR; otherwise they are what the plan declared, and
-            one without a PR stops being waited for once the worker reported done
-            or its session ended.
+          description: Omitted when false. prRepos are the repositories the run's
+            parts changed (an integration run), so each needs a PR; otherwise they
+            are what the plan declared, and one without a PR stops being waited for
+            once the worker reported done or its session ended.
           type: boolean
         resolve:
           $ref: '#/components/schemas/LadoExecutionResolveResponse'
@@ -21399,9 +21399,9 @@ components:
         trackedPrs:
           description: The PRs LADO tracks for the run, one per repository, in merge
             order, each with its head's full record and approval when verification
-            is wired; an execution LADO tracks no PR for yet lists its newest PR alone,
-            and one without a PR none. The task's integration approval names the open
-            ones together.
+            is wired; an execution LADO tracks no PR for yet lists its newest PR alone.
+            Omitted while the run has no PR. The task's integration approval names
+            the open ones together.
           items:
             $ref: '#/components/schemas/LadoExecutionTrackedPRResponse'
           type: array
@@ -21425,9 +21425,6 @@ components:
       - startedAt
       - sessionEnded
       - state
-      - trackedPrs
-      - prRepos
-      - prReposFirm
       type: object
     LadoExecutionRuleResponse:
       properties:
@@ -21779,7 +21776,6 @@ components:
       - verification
       - verificationSha256
       - confirm
-      - prs
       type: object
     LadoInvestigationSummaryResponse:
       properties:
@@ -24864,7 +24860,7 @@ components:
             newest PR of the worker session; omitted while it has none.
         prRepos:
           description: The repositories, as slash-separated folders under the workspace's,
-            the run is expected to open a PR in, in the order the PRs merge; empty
+            the run is expected to open a PR in, in the order the PRs merge; omitted
             when the plan named no order. A repository among them without a tracked
             PR keeps the task validating with pr_missing.
           items:
@@ -24884,8 +24880,8 @@ components:
           type: boolean
         trackedPrs:
           description: The PRs LADO tracks for the run, one per repository, in merge
-            order; an execution LADO tracks no PR for yet lists its newest PR alone,
-            and one without a PR none.
+            order; an execution LADO tracks no PR for yet lists its newest PR alone.
+            Omitted while the run has no PR.
           items:
             $ref: '#/components/schemas/LadoExecutionTrackedPRResponse'
           type: array
@@ -24902,8 +24898,6 @@ components:
       - startedAt
       - timedOut
       - sessionEnded
-      - trackedPrs
-      - prRepos
       type: object
     LadoTaskIssueResponse:
       properties:
@@ -25074,7 +25068,6 @@ components:
       - attempts
       - mergeAttempts
       - updatedAt
-      - repos
       type: object
     LadoTaskPartsResponse:
       properties:
@@ -25095,8 +25088,8 @@ components:
         repos:
           description: The repositories the run has an integration branch in, each
             named branch, in the order the plan's repos give; branch, baseSha and
-            headSha above are the first's. Empty while the newest approval runs no
-            parts.
+            headSha above are the first's. Omitted while the newest approval runs
+            no parts.
           items:
             $ref: '#/components/schemas/LadoPartRunRepoResponse'
           type: array
@@ -25107,7 +25100,6 @@ components:
           - string
       required:
       - parts
-      - repos
       type: object
     LadoTaskPartsSummaryResponse:
       properties:
