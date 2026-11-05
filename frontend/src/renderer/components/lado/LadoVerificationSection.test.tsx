@@ -548,6 +548,47 @@ test("names a deleted local base branch and a check taken from one app only", ()
 	expect(within(row("protection")).getByText(/set the check's source to “Any source”/)).toBeInTheDocument();
 });
 
+// #59: the PR is open in another repository than the task's issue.
+test("names a PR repository outside the workspace, and a base that is not its default branch", () => {
+	const { unmount } = renderSection(
+		execution({
+			verification: verification({
+				outcome: "fail",
+				reason: "pr_repo_not_in_workspace",
+				items: items({
+					base_branch: {
+						outcome: "fail",
+						code: "pr_repo_not_in_workspace",
+						details: { branch: "main", remote: "", moved: [], alreadyOnBase: false, prRepo: "github:acme/other" },
+					},
+				}),
+			}),
+		}),
+	);
+	const outside = row("base_branch");
+	expect(within(outside).getByText("The PR is open in github:acme/other, which is none of this workspace's repositories")).toBeInTheDocument();
+	expect(outside).toHaveAttribute("data-outcome", "fail");
+	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("The PR is open in a repository outside this workspace");
+	unmount();
+
+	renderSection(
+		execution({
+			verification: verification({
+				items: items({
+					base_branch: {
+						outcome: "confirm",
+						code: "base_not_default",
+						details: { branch: "develop", remote: "origin", moved: [], alreadyOnBase: false, defaultBranch: "main", dispatchBranch: "master" },
+					},
+				}),
+			}),
+		}),
+	);
+	expect(
+		within(row("base_branch")).getByText("The PR targets develop and the run started from master, but the default branch of the PR's repository is main"),
+	).toBeInTheDocument();
+});
+
 test("names a remote base that moved past the head, and the files it overlaps", () => {
 	const { unmount } = renderSection(
 		execution({

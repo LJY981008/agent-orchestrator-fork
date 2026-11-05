@@ -2022,6 +2022,22 @@ describe("approving an integration", () => {
 			["base_advanced", ...confirmCodes],
 		);
 		expect(advanced).toContain("The remote main moved to eeeeeee after this head branched off; no files overlap.");
+
+		// The PR is in another repository than its issue (#59): the line has
+		// its own words, not the fallback that names an unknown code.
+		const notDefault = await detailOf(
+			withItem({
+				kind: "base_branch",
+				outcome: "confirm",
+				code: "base_not_default",
+				details: { branch: "develop", remote: "origin", moved: [], alreadyOnBase: false, defaultBranch: "main", dispatchBranch: "master" },
+			}),
+			["base_not_default", ...confirmCodes],
+		);
+		expect(notDefault).toContain(
+			"The PR targets develop and the run started from master, but the default branch of the PR's repository is main.",
+		);
+		expect(notDefault).not.toContain("Also to confirm");
 	});
 
 	it("words the confirmation from main's catalog in the current language", async () => {

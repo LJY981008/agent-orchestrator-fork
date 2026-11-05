@@ -718,6 +718,24 @@ test("a task whose PR LADO verifies says what it waits for, and offers no decisi
 	expect(within(dialog).getByText("Approved")).toBeInTheDocument();
 });
 
+// #59: the worker's other open PRs show as links LADO does not track.
+test("a run with more open PRs links the ones LADO does not track", async () => {
+	const untrackedPrs: lado.LadoExecutionPR[] = [
+		{ url: "https://github.com/acme/web/pull/12", number: 12, merged: false, closed: false },
+		{ url: "https://github.com/acme/api/pull/3", number: 3, merged: false, closed: false },
+	];
+	mockApproved(approvedTask({ state: "validating", stateReason: "checks_pending", execution: { ...execution, sessionEnded: true, pr: openPR, untrackedPrs } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+	await within(dialog).findByTestId("lado-plan");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	expect(within(run).getByRole("link", { name: "Open PR #45" })).toHaveAttribute("href", openPR.url);
+	expect(within(run).getByRole("link", { name: "Untracked PR #12" })).toHaveAttribute("href", "https://github.com/acme/web/pull/12");
+	expect(within(run).getByRole("link", { name: "Untracked PR #3" })).toHaveAttribute("href", "https://github.com/acme/api/pull/3");
+	expect(within(run).getByRole("status")).not.toHaveTextContent("Untracked");
+});
+
 test("a head waiting for its integration approval is approved from the footer; a cancel leaves it as it was", async () => {
 	vi.mocked(lado.approveLadoIntegration).mockResolvedValue(null);
 	mockApproved(approvedTask({ state: "integration_pending", execution: { ...execution, sessionEnded: true, pr: openPR } }));

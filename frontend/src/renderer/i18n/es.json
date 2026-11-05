@@ -4612,5 +4612,10 @@
 	"lado.error.knowledgeSessionEnded": "La sesión terminó, así que ya no puede escribir conocimiento.",
 	"lado.error.knowledgeNotLadoProject": "Solo las sesiones de un proyecto con el modo LADO activado escriben conocimiento.",
 	"lado.error.knowledgeReadOnly": "Un revisor de planes solo lee el conocimiento del proyecto.",
-	"lado.error.knowledgeForeign": "Esta carpeta de conocimiento la escribió otro repositorio ({{ownerPath}}). Continúala primero en los ajustes de LADO del proyecto."
+	"lado.error.knowledgeForeign": "Esta carpeta de conocimiento la escribió otro repositorio ({{ownerPath}}). Continúala primero en los ajustes de LADO del proyecto.",
+	"lado.view.untrackedPR": "PR sin seguimiento #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "El PR está abierto en un repositorio fuera de este espacio de trabajo",
+	"lado.verify.base.prRepoNotInWorkspace": "El PR está abierto en {{repo}}, que no es ninguno de los repositorios de este espacio de trabajo",
+	"lado.verify.base.notDefault": "El PR apunta a {{branch}} y la ejecución empezó desde {{dispatchBranch}}, pero la rama predeterminada del repositorio del PR es {{defaultBranch}}",
+	"lado.presence.integration.baseNotDefault": "El PR apunta a {{branch}} y la ejecución empezó desde {{dispatchBranch}}, pero la rama predeterminada del repositorio del PR es {{defaultBranch}}."
 }

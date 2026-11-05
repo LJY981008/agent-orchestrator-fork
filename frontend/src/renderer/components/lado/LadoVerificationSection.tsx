@@ -316,6 +316,17 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 					return t("lado.verify.base.advanced", { branch });
 				case "base_overlap":
 					return t("lado.verify.base.overlap", { count: Math.max(1, details.overlapCount ?? 0, details.overlap?.length ?? 0), branch });
+				// The PR's repository, not the issue's (#59).
+				case "pr_repo_not_in_workspace":
+					return details.prRepo ? t("lado.verify.base.prRepoNotInWorkspace", { repo: details.prRepo }) : fallback;
+				case "base_not_default":
+					return details.defaultBranch
+						? t("lado.verify.base.notDefault", {
+								branch,
+								dispatchBranch: details.dispatchBranch || branch,
+								defaultBranch: details.defaultBranch,
+							})
+						: fallback;
 			}
 			return code ? fallback : t("lado.verify.base.passed", { branch });
 		}

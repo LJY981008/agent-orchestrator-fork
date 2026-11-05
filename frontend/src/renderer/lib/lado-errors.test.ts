@@ -188,6 +188,8 @@ const reasons = [
 	"worktree_missing",
 	"commit_messages_failed",
 	"protected_path",
+	// The PR is open in none of the workspace's child repositories (#59).
+	"pr_repo_not_in_workspace",
 	"review_pending",
 	"changes_requested",
 	"status_not_posted",
@@ -291,6 +293,8 @@ describe("LADO queue errors and reasons", () => {
 		expect(ladoReasonText(en, "timed_out")).toBe("Stopped at the maximum run time");
 		expect(ladoReasonText(ko, "run_live")).toBe("이 작업의 이전 실행이 아직 돌고 있음");
 		expect(ladoReasonText(ko, "account_limited")).toBe("계정 사용 한도가 풀릴 때까지 대기");
+		expect(ladoReasonText(en, "pr_repo_not_in_workspace")).toBe("The PR is open in a repository outside this workspace");
+		expect(ladoReasonText(ko, "pr_repo_not_in_workspace")).toBe("PR이 이 워크스페이스 밖의 저장소에 열려 있음");
 		// A plan worker request waits for the same two holds.
 		expect(ladoPlanWaitingText(ko, "account_limited")).toBe("계정이 사용 한도에 걸려 있습니다");
 		expect(ladoPlanWaitingText(en, "agent_unavailable")).toBe("The agent cannot start");
