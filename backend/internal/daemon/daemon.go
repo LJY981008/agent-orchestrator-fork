@@ -614,7 +614,11 @@ func Run() error {
 	sessMgr = wiredSessMgr
 	// LADO fork: the worker gate goes in before anything can spawn or send
 	// (docs/LJY-PRD/TDD.md §6).
-	ladoProjects := wireLado(store, wiredSessMgr, chatSvc)
+	// The knowledge store (issue #24) goes into every LADO session's
+	// standing instructions and serves the API's knowledge routes.
+	ladoFolders := ladoDeviceFolders(codexHome)
+	ladoKnowledge := newLadoKnowledge(cfg, store, ladoFolders.claudeDir, log)
+	ladoProjects := wireLado(store, wiredSessMgr, chatSvc, ladoKnowledge, log)
 	agentAccountSvc := newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
@@ -684,7 +688,7 @@ func Run() error {
 	// LADO fork: repository connections clone through the project service;
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
 	lado := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
-		setup: ladoSetupDeps{folders: ladoDeviceFolders(codexHome), sessions: sessMgr, agents: agents}, reviews: reviewSvc, ladoModes: ladoProjects,
+		setup: ladoSetupDeps{folders: ladoFolders, sessions: sessMgr, agents: agents, knowledge: ladoKnowledge}, reviews: reviewSvc, ladoModes: ladoProjects,
 		accounts: agentAccountSvc, preflight: agentSvc}, log)
 	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup, ladoVerify := lado.connections, lado.tasks, lado.rules, lado.queue, lado.setup, lado.verify
 	ladoTasksDone := ladoTasks.Start(ctx)
@@ -1038,6 +1042,7 @@ func Run() error {
 		LadoUsage:          lado.watch.usage,
 		LadoWatch:          lado.watch.alerts,
 		LadoCompact:        lado.watch.launch,
+		LadoKnowledge:      ladoKnowledge,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

@@ -55,7 +55,7 @@ func TestWireLadoInstallsOneGateOnEverySendAndSpawnPath(t *testing.T) {
 	}
 	sessions, chat := &ladoGateSink{}, &ladoGateSink{}
 
-	projects := wireLado(store, sessions, chat)
+	projects := wireLado(store, sessions, chat, nil, nil)
 
 	if sessions.gate == nil || sessions.gate != chat.gate {
 		t.Fatalf("session manager gate %v, chat gate %v; want one gate on both", sessions.gate, chat.gate)
@@ -95,7 +95,7 @@ func TestWireLadoChangesLadoModeWithoutADevFlag(t *testing.T) {
 		t.Fatalf("seed project: %v", err)
 	}
 
-	projects := wireLado(store, &ladoGateSink{}, &ladoGateSink{})
+	projects := wireLado(store, &ladoGateSink{}, &ladoGateSink{}, nil, nil)
 
 	on, off := true, false
 	if settings, err := projects.UpdateSettings(ctx, "mer", ladoproject.UpdateInput{LadoMode: &on}); err != nil || !settings.LadoMode {
@@ -125,7 +125,7 @@ func TestWireLadoGivesADispatchedWorkerItsRules(t *testing.T) {
 	}
 	sessions := &ladoGateSink{}
 
-	wireLado(store, sessions, &ladoGateSink{})
+	wireLado(store, sessions, &ladoGateSink{}, nil, nil)
 
 	if section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID, domain.HarnessClaudeCode); err != nil || section != (domain.LadoStandingSection{Text: rules}) {
 		t.Fatalf("LADO prompt section for the dispatched worker = %+v, %v; want the snapshot's rules", section, err)

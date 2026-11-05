@@ -4,8 +4,10 @@ package cli
 // §5.1). A plan worker is read-only: AO's PreToolUse and PermissionRequest
 // hooks answer each of its Claude Code tool calls in place of a person, so a
 // write is refused without asking and nothing waits for an approval. Only
-// reading tools, a few read-only git and gh commands, and the submission in
-// the exact form LADO gives pass.
+// reading tools, a few read-only git and gh commands, the submission in the
+// exact form LADO gives, and a knowledge note written through LADO in the same
+// form pass. A note goes to LADO's store outside the repository, and the
+// daemon takes it only from the designer (#24).
 
 import (
 	"encoding/json"
@@ -21,8 +23,9 @@ import (
 // ladoPlanWorkerDenyMessage is what a refused plan worker reads.
 const ladoPlanWorkerDenyMessage = "LADO plan worker: you are read-only and nobody can approve a prompt. " +
 	"Allowed: Read, Grep, Glob; git log, show, diff, status, ls-files and ls-tree; gh issue view, gh pr view and gh pr diff, " +
-	"optionally piped into head, tail, wc or grep; and the ao lado plan submit command in the exact form LADO gave you, " +
-	"as one command with a quoted here-document. Redirections such as 2>&1, command lists, substitutions and globs are refused, " +
+	"optionally piped into head, tail, wc or grep; the ao lado plan submit command in the exact form LADO gave you, " +
+	"as one command with a quoted here-document; and, for the designer before its final plan submit, " +
+	"ao lado knowledge write --note <slug> [--base <revision>] <<'LADO_NOTE_EOF' with the note, then LADO_NOTE_EOF as the last line. Redirections such as 2>&1, command lists, substitutions and globs are refused, " +
 	"and so is everything else."
 
 // ladoPlanWorkerTools are the tools a plan worker uses without a check: they
@@ -40,6 +43,11 @@ var (
 // ladoPlanSubmitHead is the first line of a submission with a here-document:
 // the command, then a single-quoted delimiter, so the body is never expanded.
 var ladoPlanSubmitHead = regexp.MustCompile(`^(ao lado plan (?:critique )?submit(?: --(?:request [A-Za-z0-9_-]+|draft))+) <<'([A-Za-z_][A-Za-z0-9_]*)'$`)
+
+// ladoKnowledgeWriteHead is the first line of a knowledge note written with a
+// here-document: the command with a slug and an optional base revision, then
+// a single-quoted delimiter.
+var ladoKnowledgeWriteHead = regexp.MustCompile(`^(ao lado knowledge write --note [a-z0-9][a-z0-9-]{0,63}(?: --base [1-9][0-9]{0,8})?) <<'([A-Za-z_][A-Za-z0-9_]*)'$`)
 
 // ladoPlanSubmitPipe is a submission piped from printf '%s' and one
 // single-quoted literal, in which a quote is written as the four characters
@@ -70,10 +78,11 @@ func ladoPlanWorkerToolDecision(payload []byte) bool {
 }
 
 // ladoPlanWorkerCommand reports whether a Bash command is one a plan worker
-// may run: a submission in LADO's form, or a read-only command.
+// may run: a submission or a knowledge note in LADO's form, or a read-only
+// command.
 func ladoPlanWorkerCommand(command string) bool {
 	command = strings.TrimSuffix(strings.TrimSpace(command), "\n")
-	if ladoPlanSubmission(command) {
+	if ladoPlanSubmission(command) || ladoQuotedHereDocument(command, ladoKnowledgeWriteHead) {
 		return true
 	}
 	segments, ok := shellPipeline(command)
@@ -101,17 +110,28 @@ func ladoPlanSubmission(command string) bool {
 	if ladoPlanSubmitPipe.MatchString(command) {
 		return true
 	}
+	return ladoQuotedHereDocument(command, ladoPlanSubmitHead)
+}
+
+// ladoQuotedHereDocument reports whether command is one command whose first
+// line matches head, ending in a single-quoted here-document delimiter (head's
+// second group), and whose delimiter line comes once, last. A carriage return
+// is refused: the shell would not end the here-document at "EOF\r".
+func ladoQuotedHereDocument(command string, head *regexp.Regexp) bool {
+	if strings.ContainsRune(command, '\r') {
+		return false
+	}
 	lines := strings.Split(command, "\n")
 	if len(lines) < 2 {
 		return false
 	}
-	head := ladoPlanSubmitHead.FindStringSubmatch(lines[0])
-	if len(head) < 3 || lines[len(lines)-1] != head[2] {
+	match := head.FindStringSubmatch(lines[0])
+	if len(match) < 3 || lines[len(lines)-1] != match[2] {
 		return false
 	}
 	// The shell ends the here-document at the first line equal to its
 	// delimiter; anything after it would run as a command.
-	return !slices.Contains(lines[1:len(lines)-1], head[2])
+	return !slices.Contains(lines[1:len(lines)-1], match[2])
 }
 
 // ladoPlanReadCommand reports whether words are a read-only git or gh command.

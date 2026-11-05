@@ -4,11 +4,14 @@ import { aoBridge } from "./bridge";
 import {
 	approveLadoPlan,
 	changeLadoCeiling,
+	claimLadoKnowledge,
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
 	fetchLadoExecution,
+	fetchLadoKnowledge,
 	fetchLadoTaskTimings,
 	fetchLadoTimings,
+	importLadoKnowledge,
 	LadoApiError,
 	ladoTaskTimingsQueryKey,
 	ladoTaskViewQueryKey,
@@ -303,5 +306,50 @@ describe("LADO timings", () => {
 		const error = await fetchLadoTimings("demo", 500).catch((caught: unknown) => caught);
 		expect(error).toBeInstanceOf(LadoApiError);
 		expect((error as LadoApiError).message).toBe("limit must be 1 to 100");
+	});
+});
+
+// LADO fork: project knowledge (issue #24).
+describe("project knowledge", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+	});
+
+	const knowledge = { projectId: "demo", dir: "/k/demo", foreign: false, notes: [], truncated: false, importable: [] };
+	const path = { params: { path: { projectId: "demo" } } };
+
+	it("reads the folder and keeps the daemon's code on an error", async () => {
+		get.mockResolvedValueOnce({ data: knowledge, error: undefined });
+		await expect(fetchLadoKnowledge("demo")).resolves.toEqual(knowledge);
+		expect(get).toHaveBeenCalledWith("/api/v1/lado/projects/{projectId}/knowledge", path);
+		get.mockResolvedValueOnce({ data: undefined, error: { code: "LADO_KNOWLEDGE_PROJECT_NOT_FOUND", message: "no project" } });
+		const error = await fetchLadoKnowledge("demo").catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(LadoApiError);
+		expect((error as LadoApiError).code).toBe("LADO_KNOWLEDGE_PROJECT_NOT_FOUND");
+	});
+
+	it("sends only the fields of the chosen source", async () => {
+		const result = { imported: ["a"], skipped: [] };
+		post.mockResolvedValue({ data: result, error: undefined });
+		await expect(importLadoKnowledge("demo", { source: "claude_memory", path: "  " })).resolves.toEqual(result);
+		expect(post).toHaveBeenLastCalledWith("/api/v1/lado/projects/{projectId}/knowledge/imports", { ...path, body: { source: "claude_memory" } });
+		await importLadoKnowledge("demo", { source: "claude_memory", path: " /home/u/old ", fromProjectId: "x" });
+		expect(post).toHaveBeenLastCalledWith("/api/v1/lado/projects/{projectId}/knowledge/imports", {
+			...path,
+			body: { source: "claude_memory", path: "/home/u/old" },
+		});
+		await importLadoKnowledge("demo", { source: "project", fromProjectId: "old-demo", path: "/ignored" });
+		expect(post).toHaveBeenLastCalledWith("/api/v1/lado/projects/{projectId}/knowledge/imports", {
+			...path,
+			body: { source: "project", fromProjectId: "old-demo" },
+		});
+	});
+
+	it("takes the folder over and answers it as it is now", async () => {
+		post.mockResolvedValueOnce({ data: knowledge, error: undefined });
+		await expect(claimLadoKnowledge("demo")).resolves.toEqual(knowledge);
+		expect(post).toHaveBeenCalledWith("/api/v1/lado/projects/{projectId}/knowledge/claim", path);
+		post.mockResolvedValueOnce({ data: undefined, error: { code: "LADO_KNOWLEDGE_FAILED", message: "disk" } });
+		await expect(claimLadoKnowledge("demo")).rejects.toMatchObject({ code: "LADO_KNOWLEDGE_FAILED" });
 	});
 });

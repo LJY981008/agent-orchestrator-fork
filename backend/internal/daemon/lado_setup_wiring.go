@@ -93,6 +93,9 @@ type ladoSetupDeps struct {
 	// reviewerEnv installs the worker watch's values on AO reviewers
 	// (issue #42); nil uses review.SetLadoReviewerEnv.
 	reviewerEnv func(reviewcore.LadoReviewerEnv)
+	// knowledge reads the project knowledge the standing instructions
+	// carry (issue #24); nil leaves it out.
+	knowledge ladoKnowledgeIndex
 }
 
 // wireLadoSetup builds LADO's local setup service over the daemon's folders
@@ -126,7 +129,7 @@ func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store
 			return setup.CodexChatServers(ctx, rec.ID, rec.ClientRequestID, rec.ProjectID)
 		})
 		// This replaces wireLado's source, so it keeps the plan worker roles' rules.
-		deps.sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup}.Standing)
+		deps.sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup, Knowledge: deps.knowledge, Log: log}.Standing)
 		reviewers := deps.reviewers
 		if reviewers == nil {
 			reviewers = reviewcore.SetLadoSystemSection

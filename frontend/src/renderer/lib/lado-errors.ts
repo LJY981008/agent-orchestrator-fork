@@ -1,7 +1,7 @@
 // LADO fork: LADO's daemon errors, connection check problems, rules problems,
 // local setup's reasons, conflicts and warnings, check command and protected
-// path problems, and the reasons behind a task's or a queue entry's state in
-// the developer's language. The daemon
+// path problems, why a knowledge import skipped something, and the reasons
+// behind a task's or a queue entry's state in the developer's language. The daemon
 // answers in English with a stable code; the app translates the code and
 // fills in the details the daemon sends.
 import { agentLabel } from "@aoagents/product-ui";
@@ -11,6 +11,7 @@ import {
 	LadoApiError,
 	type LadoChangeKind,
 	type LadoConnectionCheck,
+	type LadoKnowledgeImportSkipReason,
 	type LadoPlanWorker,
 	type LadoPlanWorkerPhase,
 	type LadoQueueReason,
@@ -219,6 +220,20 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_CHECK_COMMANDS_CHANGED: "lado.error.checkCommandsChanged",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_SESSION_ID_INVALID: "lado.error.executionNotFound",
+	// Project knowledge (issue #24).
+	LADO_KNOWLEDGE_INVALID_NOTE: "lado.error.knowledgeInvalidNote",
+	LADO_KNOWLEDGE_SECRET: "lado.error.knowledgeSecret",
+	LADO_KNOWLEDGE_INVALID_IMPORT: "lado.error.knowledgeInvalidImport",
+	LADO_KNOWLEDGE_PROJECT_NOT_FOUND: "lado.error.projectNotFound",
+	LADO_KNOWLEDGE_SESSION_NOT_FOUND: "lado.error.knowledgeSessionNotFound",
+	LADO_KNOWLEDGE_IMPORT_NOT_FOUND: "lado.error.knowledgeImportNotFound",
+	LADO_KNOWLEDGE_EXISTS: "lado.error.knowledgeExists",
+	LADO_KNOWLEDGE_CHANGED: "lado.error.knowledgeChanged",
+	LADO_KNOWLEDGE_SESSION_ENDED: "lado.error.knowledgeSessionEnded",
+	LADO_KNOWLEDGE_NOT_LADO_PROJECT: "lado.error.knowledgeNotLadoProject",
+	LADO_KNOWLEDGE_READ_ONLY: "lado.error.knowledgeReadOnly",
+	LADO_KNOWLEDGE_FOREIGN: "lado.error.knowledgeForeign",
+	LADO_KNOWLEDGE_FAILED: "lado.error.internal",
 };
 
 // LADO_EXECUTION_FIXED also refuses restoring a run LADO stopped for good;
@@ -247,6 +262,9 @@ function errorKey(code: string, details: Record<string, unknown> | undefined): M
 		const problem = typeof details?.reason === "string" ? protectedPathProblemKeys[details.reason] : undefined;
 		return problem === "lado.protectedPaths.problem.tooMany" ? problem : problem && errorKeys[code];
 	}
+	// A path the import cannot read says so; any other refused import names
+	// the folder to choose.
+	if (code === "LADO_KNOWLEDGE_INVALID_IMPORT" && details?.field === "path") return "lado.error.knowledgeImportPathInvalid";
 	if (code === "LADO_EXECUTION_FIXED" && typeof details?.reason === "string") {
 		return restoreKeys[details.reason] ?? errorKeys[code];
 	}
@@ -340,6 +358,8 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 		tools: tools.join(", "),
 		pair: text("pair"),
 		paths: paths.join(", "),
+		revision: text("currentRevision"),
+		ownerPath: text("ownerPath"),
 	};
 }
 
@@ -923,4 +943,28 @@ export function ladoPartWaitingText(t: TFunction, reason: LadoTaskPartWaitingRea
 		default:
 			return ladoReasonText(t, reason);
 	}
+}
+
+type LadoKnowledgeSkipKey = Extract<MessageKey, `lado.knowledge.skip.${string}`>;
+
+const knowledgeSkipKeys: Record<LadoKnowledgeImportSkipReason, LadoKnowledgeSkipKey> = {
+	claude_memory_not_found: "lado.knowledge.skip.claudeMemoryNotFound",
+	exists: "lado.knowledge.skip.exists",
+	link: "lado.knowledge.skip.link",
+	not_a_file: "lado.knowledge.skip.notAFile",
+	too_large: "lado.knowledge.skip.tooLarge",
+	invalid_name: "lado.knowledge.skip.invalidName",
+	invalid_note: "lado.knowledge.skip.invalidNote",
+	secret: "lado.knowledge.skip.secret",
+	limit: "lado.knowledge.skip.limit",
+	unreadable: "lado.knowledge.skip.unreadable",
+};
+
+/**
+ * Why an import left something out, in the developer's language. A reason
+ * from a newer daemon reads as the daemon sent it.
+ */
+export function ladoKnowledgeSkipText(t: TFunction, reason: string): string {
+	const key = knowledgeSkipKeys[reason as LadoKnowledgeImportSkipReason];
+	return key ? t(key) : reason;
 }
