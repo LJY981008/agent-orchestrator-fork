@@ -48,9 +48,11 @@ type Store interface {
 
 // Conversations reads the project's orchestrator conversation.
 type Conversations interface {
-	// ProjectMessages are the messages of the project's orchestrator
-	// conversation, every role and origin, rows before a /clear boundary
-	// included; none when the project has no such conversation.
+	// ProjectMessages are messages of the project's orchestrator
+	// conversation, rows before a /clear boundary included; none when the
+	// project has no such conversation. The daemon returns only the
+	// developer's (role user, origin human); the service checks role and
+	// origin again, so an implementation that returns every row is safe.
 	ProjectMessages(ctx context.Context, project domain.ProjectID) ([]domain.ConversationMessage, error)
 }
 

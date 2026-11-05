@@ -13,15 +13,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/store"
 )
 
-// ladoRelayLabel is domain.LadoRelaySenderLabel, written out so this test
-// does not depend on the relay's domain file.
-const ladoRelayLabel = "LADO 전달 · 개발자 지시"
+// ladoRelayLabel is the label LADO's relay delivers with.
+const ladoRelayLabel = domain.LadoRelaySenderLabel
 
 func TestRelayWithDisplayNameStoresTheLabelWithoutASenderSession(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 
-	_, err := h.svc.RelaySessionChatTurn(ctx, testSession, "LADO 전달: 개발자 지시\n\n후속 2건을 이어서 하세요.", "",
+	_, err := h.svc.RelaySessionChatTurn(ctx, testSession, domain.LadoRelayHeader+"\n\n후속 2건을 이어서 하세요.", "",
 		ports.MessageDeliveryOptions{SenderDisplayName: "  " + ladoRelayLabel + " "})
 	if err != nil {
 		t.Fatalf("RelaySessionChatTurn: %v", err)

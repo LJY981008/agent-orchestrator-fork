@@ -74,7 +74,7 @@ func TestLadoSendOriginReadsTheDeliveryFacts(t *testing.T) {
 		{"report relay", report, ports.MessageDeliveryOptions{}, ports.SendOriginCoordination},
 		{"session sending a report envelope", report, ports.MessageDeliveryOptions{SenderSessionID: "mer-orchestrator-1"}, ports.SendOriginSession},
 		{"no sender facts", "CI failed on your PR", ports.MessageDeliveryOptions{}, ports.SendOriginDaemon},
-		{"LADO relay label only", "LADO 전달: 개발자 지시", ports.MessageDeliveryOptions{SenderDisplayName: ladoRelayLabel}, ports.SendOriginDaemon},
+		{"LADO relay label only", domain.LadoRelayHeader, ports.MessageDeliveryOptions{SenderDisplayName: ladoRelayLabel}, ports.SendOriginDaemon},
 		{"session that also carries LADO's label", "make it blue", ports.MessageDeliveryOptions{SenderSessionID: "mer-orchestrator-1", SenderDisplayName: ladoRelayLabel}, ports.SendOriginSession},
 	}
 	for _, tc := range cases {
@@ -184,9 +184,8 @@ func TestSendTellsTheWorkGateWhoSent(t *testing.T) {
 	}
 }
 
-// ladoRelayLabel is domain.LadoRelaySenderLabel, written out so these tests
-// do not depend on the relay's domain file.
-const ladoRelayLabel = "LADO 전달 · 개발자 지시"
+// ladoRelayLabel is the label LADO's relay delivers with.
+const ladoRelayLabel = domain.LadoRelaySenderLabel
 
 // ladoModeOn reads every project as in LADO mode.
 type ladoModeOn struct{}
@@ -221,7 +220,7 @@ func TestLadoRelayLabelPassesTheGateOnlyWithoutASenderSession(t *testing.T) {
 		t.Fatalf("delivered %q after a refusal, want nothing", msg.msgs)
 	}
 
-	err = m.SendWithOptions(ctx, "mer-1", "LADO 전달: 개발자 지시\n\n후속 2건을 이어서 하세요.", nil,
+	err = m.SendWithOptions(ctx, "mer-1", domain.LadoRelayHeader+"\n\n후속 2건을 이어서 하세요.", nil,
 		ports.MessageDeliveryOptions{SenderDisplayName: ladoRelayLabel})
 	if err != nil {
 		t.Fatalf("LADO relay: %v", err)
