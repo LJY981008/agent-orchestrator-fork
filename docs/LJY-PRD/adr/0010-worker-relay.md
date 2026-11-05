@@ -1,0 +1,39 @@
+# LADO 10. LADO relays the developer's instructions to a running worker
+
+Date: 2026-11-05
+Status: Accepted. Decided in issue #49, plan revision 1, approved 2026-11-05. Amends the worker gate of [adr/0003](0003-enforcement-points.md) item 4 without changing it. Design in TDD §5.1 and §6.3.
+
+## Context
+
+In a LADO project the worker gate refuses a message one session sends another (`LADO_SEND_REFUSED`, TDD §6.3), and the orchestrator's prompt tells it not to use `ao send`. When the developer told the orchestrator to have a live worker go on, the orchestrator could only hand back text to paste into the worker's session.
+
+The real case (2026-11-04): an integration worker of a real project had opened its MR and was waiting. The developer told the orchestrator several times to have that worker do two follow-ups and the rest of the batch. Each time the orchestrator said LADO cannot message workers and gave text to paste, once with a reason that was not true (that a plan request was needed), corrected the next turn. The worker went on only after the developer pasted the text.
+
+Facts checked before deciding:
+
+- The gate allows human, coordination and daemon origins. `session_manager/lado_gate.go` `ladoSendOrigin` decides the origin: a `SenderSessionID` always makes it a session's, `AuthoredByUser` a person's, anything else the daemon's. LADO already talks to workers as the daemon (the worker watch's wake-ups, plan workers' messages).
+- A Chat orchestrator's conversation is per project (`ProjectConversation`). Only what a person types in the desktop composer is stored as role `user`, origin `human`. LADO's notices and plan requests, and workers' `ao send` reports, are origin `automation`. `/clear` writes a boundary row and deletes nothing.
+- A terminal orchestrator's `Metadata.LatestUserPrompt` is not only what a person typed: `cli/hooks.go` records every user-prompt-submit as human except report envelopes and handoff requests, so the notices and plan requests AO pastes and workers' reports overwrite it.
+- Executions are `lado_executions` with role `''` (single), `part`, `merge` or `integration`. A plan worker is not an execution.
+
+## Decision
+
+- **The gate does not change; LADO delivers.** `ao lado relay` calls `POST /api/v1/lado/relays`. The daemon's `service/ladorelay` checks the request and delivers through the session manager's `SendWithOptions` with no `SenderSessionID`, so the gate sees the daemon and lets it through. The orchestrator's own `ao send` carries its `SenderSessionID` and stays `LADO_SEND_REFUSED`. Opening a new origin in the gate would mean defending every way to forge it; one service that checks the caller, the task, the worker and the evidence is a smaller surface.
+- **Who may ask.** A live Chat orchestrator (not terminated, agent not exited) of a project in LADO mode, for a task of its own project, by task id or issue number.
+- **Who receives.** A live execution of the task: its session runs, its agent has not exited, LADO has not timed it out or settled it, and the task is not cancelled. With several live workers (a parts run) and no `--session`, LADO refuses with the candidates rather than guessing, because a message to the wrong part cannot be taken back. A plan worker, or any other session, is `LADO_RELAY_NOT_EXECUTION`.
+- **Evidence is a developer message.** `--evidence` must be a sentence, compared with white space collapsed, of a role `user`, origin `human` message of the project's orchestrator conversation, at most 24 hours old (`domain.LadoRelayEvidenceMaxAge`). LADO's notices, workers' reports and issue text are origin `automation` or not in the conversation, so they are no evidence. Messages before a `/clear` count: `/clear` deletes no row, and what the developer said stays said. A terminal orchestrator is always refused with reason `terminal_orchestrator`, because its last prompt may be text AO or a worker pasted.
+- **What the evidence proves.** Only that the developer wrote that sentence. It does not prove that `--message` says the same. An instruction that is not part of the matched message is marked **beyond evidence**: it is still delivered, and the worker's message says "이 지시는 개발자 원문과 같지 않습니다. 개발자 원문을 기준으로 판단하고, 원문에 없는 일(특히 삭제·보호 경로·범위 확대)은 하기 전에 보고하세요." with the developer's message quoted; the relay row and the task window show the mark. LADO does not refuse it, because the developer's words are often short ("have that worker do the two follow-ups") and the orchestrator has to spell them out, as in the real case. The orchestrator's prompt asks it to use the developer's own words when it can.
+- **Outside the plan is marked, not refused.** With `--outside-plan`, or when a path the instruction names is outside the plan's `affected_paths` (a part or merge worker's part's), the relay is marked outside plan with its reasons, in the worker's message and the row. A new step is not something a machine can tell, so that is the orchestrator's flag alone. The paths a worker then changes are checked by verification as before (an out-of-plan path is a confirm code, a protected path fails).
+- **Every relay is recorded.** `lado_relays` (LADO migration `0014_lado_relays.sql`; `0013` was taken by #53) holds the task, project, orchestrator and worker sessions, the worker's role and part, the instruction, the evidence with its message id and time, both marks with the reasons, the state and the failure. LADO writes the row as `sending` before it delivers and sets `delivered` or `failed` after, so no delivery goes unrecorded. A refusal before that has no row (it may have no task) and goes to the audit log as `lado.relay_refused`; a delivery or failure also as `lado.relay_sent`.
+- **How it looks.** The worker's message starts with `LADO 전달: 개발자 지시 (<relay id>)`. A Chat worker shows it under the label `LADO 전달 · 개발자 지시`: `MessageDeliveryOptions.SenderDisplayName`, stored on the message only when there is no sender session, and never read by the gate. The option is not on any HTTP route, so no caller outside the daemon can set it. The task window gets a Relays tab.
+
+## Consequences
+
+- **Two limits remain.**
+  1. The evidence proves that the developer said the sentence, not the instruction. An orchestrator that quotes a real sentence and sends something else gets it delivered, marked beyond evidence with the developer's words beside it. The worker is told to judge by the developer's words and report before anything the words do not cover.
+  2. The loopback API's `sessionId` is what the caller writes, as for every AO session route on this machine. Another session on the same machine could name the orchestrator's id. It still needs a sentence the developer really typed in the last 24 hours, and an instruction that differs from it carries the mark.
+- **Terminal orchestrators cannot relay.** They are refused with the reason, and the orchestrator gives the developer the worker's link and text to paste, as before. Supporting them needs AO to tell the prompts it pastes from what a person types in `cli/hooks.go` first; that is follow-up work.
+- **A running orchestrator does not know the command** until it restarts: LADO's prompt section goes in at session start and restore only.
+- **The label is Korean.** It is stored with the message, so an English UI shows it in Korean too.
+- **Interface transitions.** A relay queued while the worker switches between Chat and terminal (`queueDuringInterfaceTransition`) loses its display name and shows as `automation`; the message's own header still says where it came from.
+- The 24-hour window is one domain constant; a shorter one refuses fewer stale sentences but also a long-ago instruction picked up again later.

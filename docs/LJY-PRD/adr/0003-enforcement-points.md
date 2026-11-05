@@ -1,7 +1,7 @@
 # LADO 3. Where LADO enforces approval
 
 Date: 2026-10-19
-Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3; items 1, 2, 3 and 7 amended 2026-10-27 while building step 8, and items 1, 2 and 3 again 2026-11-04 for #53 (end of this record).
+Status: Accepted. Item 6 amended 2026-10-19 after measurement; item 5 amended the same day while building step 3; items 1, 2, 3 and 7 amended 2026-10-27 while building step 8, items 1, 2 and 3 again 2026-11-04 for #53, and item 4 2026-11-05 for #49 (end of this record).
 
 ## Context
 
@@ -58,3 +58,12 @@ The owner runs overlapping tasks in parallel (`overlapWait` off) and settles the
 - **Item 3: the loop fetches the base.** The step-8 rule "the loop never fetches" no longer holds. The verification loop fetches each base branch of each repository at most every 2 minutes (30 s each), and at once after LADO settles a merge into it, verifying the open executions of that target first, approved heads first. The `base_branch` item compares the head with the remote target: a move past the head's merge base whose changed files include one the head changed or the plan names (the project's overlap ignore list left out) **fails** as `base_overlap`, the PR's owner gets one fix request, and the head cannot be approved; any other move is the confirm code `base_advanced`.
 - **Items 1 and 2: an approval holds for its base.** The approval records the remote target's commit (`approved_base_sha`). The loop revokes the approval of a head whose record turns `base_overlap` (the row stays, `revoked_at`; audit `integration.revoked`), and on GitHub posts `pending` in the same `lado/integration` context, which replaces the success. AO's merge gate fetches the target before an approved head merges; when the tip moved since the approval it computes the head's record again without starting a check command, and refuses with `LADO_INTEGRATION_REVOKED` when it is `base_overlap` (revoking it), or with `LADO_MERGE_GATE_FAILED` when the fetch or the computation fails. A revoked head cannot be approved again; only a new head can.
 - **Remaining gap: GitHub's own merge.** Between a merge on GitHub and the loop's pass that revokes the other approval and posts `pending`, GitHub's merge button can still merge the other PR, for a few seconds to tens of seconds; the immediate fetch after a settled merge shortens this. The ruleset option "Require branches to be up to date before merging" closes it, and LADO recommends it. A GitLab approval is `not_applicable` and only AO's gate stops it, as before.
+
+## Amended 2026-11-05 (#49)
+
+Item 4's message rule is unchanged, and LADO now delivers the developer's instructions itself ([0010](0010-worker-relay.md), TDD §6.3):
+
+- **Item 4: LADO's relay is a daemon message.** An orchestrator that the developer tells to have a running worker go on runs `ao lado relay`. The daemon's relay service checks the caller (a live Chat orchestrator of the project), the task, the worker (a live execution of the task, never a plan worker) and the evidence (a sentence of a message the developer typed in the orchestrator's conversation in the last 24 hours), then sends through `Manager.SendWithOptions` with no `SenderSessionID`. The gate reads that as the daemon's and allows it. The orchestrator's own `ao send` still carries its `SenderSessionID` and is still `LADO_SEND_REFUSED`, with or without a display name.
+- **Item 4: a display name is no origin.** `MessageDeliveryOptions.SenderDisplayName` labels the relayed message on a Chat worker (`LADO 전달 · 개발자 지시`). `ladoSendOrigin` never reads it, and no HTTP route sets it, so it cannot pass a message through the gate.
+- **Item 5: the orchestrator's prompt** names `ao lado relay` as the one way to instruct a running worker, keeps `ao send` and `ao spawn` forbidden, and asks the orchestrator to pass a refusal on as LADO gave it, in its first reply.
+- **What it does not guarantee.** The evidence proves that the developer wrote the sentence, not that the instruction says the same; an instruction beyond it is delivered with a mark and the developer's words quoted. A path outside the plan is marked, and verification judges the paths the worker then changes as before (item 7). Both limits, and the loopback API's caller-written `sessionId`, are in [0010](0010-worker-relay.md).
