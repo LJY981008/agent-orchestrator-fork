@@ -18,7 +18,7 @@ import (
 )
 
 // partsPlanText is a plan of task-1 with three parts: a and b at once, c
-// after a, and one integration step.
+// after a, which may end without a commit, and one integration step.
 const partsPlanText = `---
 task: task-1
 issue: "github:acme/app#12"
@@ -55,6 +55,7 @@ parts:
     steps: [3]
     affected_paths: ["docs/**"]
     depends_on: [a]
+    allow_empty: true
 ---
 
 # Plan
@@ -163,6 +164,17 @@ func (pf *partsFixture) reportDone(t *testing.T, id domain.SessionID, note strin
 		CreatedAt: at, AvailableAt: at, SettlementDeadline: at.Add(5 * time.Minute), RepeatCount: 1, DeliveryState: domain.ReportPending,
 	}); err != nil {
 		t.Fatalf("report done for %s: %v", id, err)
+	}
+}
+
+// commitParts commits a file of each part on its branch, inside the part's
+// paths, as its worker would before it reports done.
+func (pf *partsFixture) commitParts(t *testing.T, ids ...string) {
+	t.Helper()
+	files := map[string]string{"a": "svc/a.go", "b": "web/b.tsx", "c": "docs/c.md"}
+	parts := pf.parts(t, storeEntry)
+	for _, id := range ids {
+		commitOn(t, pf.repo, parts[id].Branch, map[string]string{files[id]: id + "\n"})
 	}
 }
 
@@ -297,7 +309,7 @@ func TestAPartsRunMergesItsPartsAndStartsTheIntegrationWorker(t *testing.T) {
 		t.Fatalf("part b = %+v, integration %s; want a fast-forward to %s", parts["b"], pf.branch(t, integration), resolved)
 	}
 
-	// c finishes without a commit: it merges as it is.
+	// c finishes without a commit, which its plan allows: it merges as it is.
 	pf.reportDone(t, parts["c"].SessionID, "nothing to change")
 	pf.tick(t, t0.Add(4*time.Minute))
 	parts = pf.parts(t, storeEntry)
@@ -746,9 +758,11 @@ func TestAnIntegrationWorkerThatDoesNotStartWaitsBeforeItTriesAgain(t *testing.T
 	pf.sessions.errs = []error{nil, nil, nil, errors.New("the chat driver is not ready")}
 	pf.tick(t, t0)
 	parts := pf.parts(t, storeEntry)
+	pf.commitParts(t, "a", "b")
 	pf.reportDone(t, parts["a"].SessionID, "nothing")
 	pf.reportDone(t, parts["b"].SessionID, "nothing")
 	pf.tick(t, t0.Add(time.Minute))
+	pf.commitParts(t, "c")
 	pf.reportDone(t, pf.parts(t, storeEntry)["c"].SessionID, "nothing")
 	pf.tick(t, t0.Add(2*time.Minute))
 	spawns := pf.sessions.spawned()

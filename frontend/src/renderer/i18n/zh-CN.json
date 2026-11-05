@@ -4236,6 +4236,7 @@
 	"lado.planProblem.part_step_shared": "两个部分引用了同一个步骤。",
 	"lado.planProblem.part_path_outside": "某个部分的路径不在计划的 affected_paths 之内。",
 	"lado.planProblem.part_missing_field": "某个部分缺少 title、steps 或 affected_paths。",
+	"lado.planProblem.part_repo_outside": "在工作区项目中，使用部分的计划，其路径必须位于该 Issue 所在的仓库文件夹之内。",
 	"lado.parts.title": "部分",
 	"lado.parts.state.waiting": "等待中",
 	"lado.parts.state.running": "运行中",

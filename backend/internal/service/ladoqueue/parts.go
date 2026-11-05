@@ -245,7 +245,8 @@ func (s *Service) writePart(ctx context.Context, part *domain.LadoTaskPart, next
 }
 
 // mergeDone merges a done part's branch into the integration branch. A part
-// whose branch has no commit after its start is merged as it is. Otherwise
+// whose branch has no commit after its start is merged as it is when the
+// plan marks it allow_empty, and fails the run otherwise. Otherwise
 // LADO records the merge it is about to make, then makes it.
 func (s *Service) mergeDone(ctx context.Context, r *partRun, i int) error {
 	part := &r.parts[i]
@@ -257,6 +258,16 @@ func (s *Service) mergeDone(ctx context.Context, r *partRun, i int) error {
 		return s.partAttemptFailed(ctx, r, i, "the part's branch is gone")
 	}
 	if tip == part.StartSHA {
+		// A part done without a commit merges nothing. Only a part the plan
+		// lets end so does; otherwise its work went elsewhere, as to
+		// another branch, and the run stops rather than lose it (#60).
+		allowed, err := s.allowsEmpty(ctx, r, part.PartID)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			return s.failRun(ctx, r, part.PartID, "the part's worker reported done, but its branch has no commit after its start")
+		}
 		next := *part
 		next.State, next.MergedSHA = domain.LadoPartMerged, r.run.HeadSHA
 		return s.recordMerged(ctx, r, i, next, domain.LadoPartDone, map[string]any{"empty": true})
@@ -267,6 +278,22 @@ func (s *Service) mergeDone(ctx context.Context, r *partRun, i int) error {
 		return err
 	}
 	return s.finishMerge(ctx, r, i)
+}
+
+// allowsEmpty reports whether the run's approved plan lets the part end
+// without a commit. The plan is read again rather than stored with the part.
+func (s *Service) allowsEmpty(ctx context.Context, r *partRun, partID string) (bool, error) {
+	in, err := s.input(ctx, r)
+	if err != nil {
+		return false, err
+	}
+	plan, _ := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{Task: r.task.ID, Issue: r.task.IssueRef})
+	for _, p := range plan.Parts {
+		if p.ID == partID {
+			return p.AllowEmpty, nil
+		}
+	}
+	return false, nil
 }
 
 // finishMerge makes or finds the merge a part records. While the integration
@@ -777,6 +804,9 @@ func (s *Service) startRunWorker(ctx context.Context, r *partRun, req domain.Lad
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName(roleLabel(req) + " " + r.task.Issue.Title),
 		Branch:            branch,
+		// LADO made the branch, or it is the integration branch: a
+		// workspace session must work on it, not on a new name (#60).
+		ReuseExistingBranch: true,
 	}
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
 	id := session.ID

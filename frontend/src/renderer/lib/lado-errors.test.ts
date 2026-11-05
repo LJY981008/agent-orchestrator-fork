@@ -5,6 +5,7 @@ import { LadoApiError } from "./lado";
 import {
 	ladoCheckCommandProblemText,
 	ladoErrorText,
+	ladoPlanProblemText,
 	ladoPlanWaitingText,
 	ladoPolicyProblemText,
 	ladoProtectedPathProblemText,
@@ -197,6 +198,26 @@ const reasons = [
 ];
 
 // LADO fork: the queue's and the runs' errors and reasons in the developer's language.
+describe("LADO plan problems", () => {
+	// A workspace project runs parts in the issue's repository only (#60):
+	// backend/internal/domain/lado_parts.go LadoPlanPartRepoOutside.
+	it("words a part plan whose paths leave the issue's repository", () => {
+		const problem = { code: "part_repo_outside", field: "parts", detail: "front: front/**" };
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			const text = ladoPlanProblemText(t, problem);
+			expect(text, locale).not.toBe(problem.code);
+			expect(text, locale).not.toMatch(/^lado\./);
+		}
+		expect(ladoPlanProblemText(createFullAppI18n("ko").t, problem)).toBe(
+			"워크스페이스 프로젝트에서 파트를 쓰는 계획의 경로는 이슈를 가진 저장소 폴더 안에 있어야 합니다.",
+		);
+		expect(ladoPlanProblemText(createFullAppI18n("en").t, { code: "part_repo_outside", field: "affected_paths" })).toBe(
+			"In a workspace project, a plan that uses parts must keep its paths inside the folder of the repository that has the issue.",
+		);
+	});
+});
+
 describe("LADO queue errors and reasons", () => {
 	it("translates the queue, run and dispatch settings codes", () => {
 		const daemon = "The daemon's English text";

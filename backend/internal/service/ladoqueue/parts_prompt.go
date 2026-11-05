@@ -62,6 +62,7 @@ func partPrompt(task domain.LadoTask, in ladotask.RunInput, part domain.LadoTask
 	}
 	fmt.Fprintf(&b, "- You work on branch `%s`. Commit your work there, following the repository's commit rules. Do not push it and do not open a pull request: LADO merges your branch.\n", branch)
 	b.WriteString("- Run the build and the tests that cover your change before you finish.\n")
+	b.WriteString("- Commit on that branch before you report done: a part reported done with no commit on its branch stops the whole run, unless the plan marks the part `allow_empty`.\n")
 	b.WriteString("- When your part is done and committed, run `ao report --done --note \"<one paragraph: what you changed, the files, the tests you ran, anything the integration worker must know>\"`. LADO reads that report; your session then ends.\n")
 	b.WriteString("- If you cannot go on without a decision, run `ao report --needs-input --note \"<what you need>\"` and wait.\n\n")
 	b.WriteString(planSection(in))

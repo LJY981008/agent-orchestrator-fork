@@ -15,6 +15,8 @@ func TestPlanRequestAsksForParallelParts(t *testing.T) {
 	for _, want := range []string{
 		"Plan for parallel parts by default", "same phase, which run at once", "depends_on", "integration steps or to one part",
 		"narrow affected_paths", "2 to 8 parts", "leave parts out and say why", "parts:\n  - id:",
+		"    allow_empty: <true only for a part that may end without a commit",
+		"inside the folder of the repository that holds the issue", "done without a commit stops the run, unless the part sets allow_empty: true",
 	} {
 		if !strings.Contains(message, want) {
 			t.Fatalf("plan request lacks %q:\n%s", want, message)
@@ -27,7 +29,7 @@ func TestPartProblemsReadAsText(t *testing.T) {
 	for _, code := range []string{
 		domain.LadoPlanPartCount, domain.LadoPlanPartInvalidID, domain.LadoPlanPartDuplicateID, domain.LadoPlanPartUnknownDependency,
 		domain.LadoPlanPartCycle, domain.LadoPlanPartStepOutOfRange, domain.LadoPlanPartStepShared, domain.LadoPlanPartPathOutside,
-		domain.LadoPlanPartMissing,
+		domain.LadoPlanPartMissing, domain.LadoPlanPartRepoOutside,
 	} {
 		if text := problemText(domain.LadoPlanProblem{Code: code}); text == code {
 			t.Fatalf("problem %s has no text", code)

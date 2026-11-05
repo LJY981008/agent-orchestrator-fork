@@ -4235,6 +4235,7 @@
 	"lado.planProblem.part_step_shared": "Two parts name the same step.",
 	"lado.planProblem.part_path_outside": "A part's path is not inside the plan's affected_paths.",
 	"lado.planProblem.part_missing_field": "A part lacks a title, steps or affected_paths.",
+	"lado.planProblem.part_repo_outside": "In a workspace project, a plan that uses parts must keep its paths inside the folder of the repository that has the issue.",
 	"lado.parts.title": "Parts",
 	"lado.parts.state.waiting": "Waiting",
 	"lado.parts.state.running": "Running",

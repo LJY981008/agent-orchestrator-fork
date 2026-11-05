@@ -261,3 +261,87 @@ func TestATaskRunningPartsIsRunning(t *testing.T) {
 		t.Fatalf("integration PR merged: %s, want completed", state)
 	}
 }
+
+// A part may say it can end without a commit; others leave allow_empty out.
+func TestParseLadoPlanReadsAllowEmpty(t *testing.T) {
+	parts := strings.Replace(validParts, "    depends_on: [backend, frontend]\n", "    depends_on: [backend, frontend]\n    allow_empty: true\n", 1)
+	plan, problems := parse(t, partsPlan(parts))
+	if len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none", problems)
+	}
+	if plan.Parts[0].AllowEmpty || plan.Parts[1].AllowEmpty || !plan.Parts[2].AllowEmpty {
+		t.Fatalf("parts = %+v, want only docs to allow an empty result", plan.Parts)
+	}
+}
+
+// A workspace plan with parts keeps the plan's paths and every part's inside
+// the folder of the repository that holds the issue.
+func TestLadoPlanOutsideRepo(t *testing.T) {
+	split := func(top []string, parts ...domain.LadoPlanPart) domain.LadoPlan {
+		return domain.LadoPlan{AffectedPaths: top, Parts: parts}
+	}
+	part := func(id string, paths ...string) domain.LadoPlanPart {
+		return domain.LadoPlanPart{ID: id, AffectedPaths: paths}
+	}
+	cases := []struct {
+		name     string
+		plan     domain.LadoPlan
+		relative string
+		want     []domain.LadoPlanProblem
+	}{
+		{
+			name: "inside the repository", relative: "back",
+			plan: split([]string{"back/**"}, part("a", "back/internal/**"), part("b", "back/go.mod")),
+		},
+		{
+			name: "another repository in a part", relative: "back",
+			plan: split([]string{"back/**"}, part("a", "back/internal/**"), part("b", "front/**")),
+			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanPartRepoOutside, Field: "parts", Detail: "b: front/**"}},
+		},
+		{
+			name: "another repository in the plan's paths", relative: "back",
+			plan: split([]string{"back/**", "front/src/**"}, part("a", "back/**"), part("b", "back/x/**")),
+			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanPartRepoOutside, Field: "affected_paths", Detail: "front/src/**"}},
+		},
+		{
+			name: "a glob of the whole workspace", relative: "back",
+			plan: split([]string{"**"}, part("a", "**/*.go"), part("b", "back/**")),
+			want: []domain.LadoPlanProblem{
+				{Code: domain.LadoPlanPartRepoOutside, Field: "affected_paths", Detail: "**"},
+				{Code: domain.LadoPlanPartRepoOutside, Field: "parts", Detail: "a: **/*.go"},
+			},
+		},
+		{
+			name: "a nested repository folder", relative: "services/app",
+			plan: split([]string{"services/app/**", "services/**"}, part("a", "services/app/api/**"), part("b", "services/web/**")),
+			want: []domain.LadoPlanProblem{
+				{Code: domain.LadoPlanPartRepoOutside, Field: "affected_paths", Detail: "services/**"},
+				{Code: domain.LadoPlanPartRepoOutside, Field: "parts", Detail: "b: services/web/**"},
+			},
+		},
+		{
+			name: "a sibling folder with the repository's name as a prefix", relative: "back",
+			plan: split([]string{"back/**"}, part("a", "back/**"), part("b", "backup/**")),
+			want: []domain.LadoPlanProblem{{Code: domain.LadoPlanPartRepoOutside, Field: "parts", Detail: "b: backup/**"}},
+		},
+		{
+			name: "case does not matter", relative: "Back/",
+			plan: split([]string{"back/**"}, part("a", "BACK/internal/**"), part("b", "back/README.md")),
+		},
+		{
+			name: "a plan without parts is not checked", relative: "back",
+			plan: split([]string{"front/**", "**"}),
+		},
+		{
+			name: "the project's root holds every path", relative: "",
+			plan: split([]string{"front/**"}, part("a", "front/**"), part("b", "**")),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := domain.LadoPlanOutsideRepo(tc.plan, tc.relative); !slices.Equal(got, tc.want) {
+				t.Fatalf("problems = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

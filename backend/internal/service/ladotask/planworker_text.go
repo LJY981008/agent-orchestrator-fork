@@ -323,6 +323,8 @@ func problemText(p domain.LadoPlanProblem) string {
 		what = "a part's path is not inside the plan's affected_paths"
 	case domain.LadoPlanPartMissing:
 		what = "a part lacks a title, steps or affected_paths"
+	case domain.LadoPlanPartRepoOutside:
+		what = "a path lies outside the folder of the workspace repository that holds the issue, the only repository a parts run merges in"
 	default:
 		what = p.Code
 	}
