@@ -317,3 +317,78 @@ func TestForeignByPathWithoutRootCommit(t *testing.T) {
 		t.Fatalf("a workspace project at another path is not foreign")
 	}
 }
+
+// A note file LADO cannot read keeps its record, and no write or import
+// replaces it: before, the record was dropped and a write without a base or
+// an import went over the file.
+func TestUnreadableNoteIsNotWrittenOver(t *testing.T) {
+	e := newEnv(t)
+	f := e.svc.folder("app")
+	e.mustWrite("app-1", "big", nil, note("원래", "map"))
+	big := strings.Repeat("x", maxReadBytes+1)
+	writeFile(t, f.notePath("big"), big)
+	// A file LADO never recorded, and a folder under a note's name.
+	writeFile(t, f.notePath("huge"), big)
+	if err := os.MkdirAll(f.notePath("dir"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if idx := e.index("app"); len(idx.Notes) != 0 {
+		t.Fatalf("unreadable notes listed: %+v", idx.Notes)
+	}
+	var records map[string]noteRecord
+	if _, err := readJSON(f.recordsPath(), &records); err != nil || records["big"].Revision != 1 {
+		t.Fatalf("records = %+v, %v", records, err)
+	}
+	for _, ev := range e.store.actions(AuditExternalEdit) {
+		if strings.Contains(string(ev.Payload), `"deleted"`) {
+			t.Fatalf("an unreadable note was taken as deleted: %+v", ev)
+		}
+	}
+
+	cases := []struct {
+		slug, why string
+		base      *int
+	}{
+		{"big", "larger than 256 KiB", nil},
+		{"big", "larger than 256 KiB", intp(1)},
+		{"huge", "larger than 256 KiB", nil},
+		{"dir", "not a regular file", nil},
+	}
+	for _, c := range cases {
+		_, err := e.write("app-1", c.slug, c.base, note("세션의 노트", "map"))
+		ae := wantCode(t, err, CodeExists)
+		if ae.Details["unreadable"] != true || !strings.Contains(ae.Message, c.why) || !strings.Contains(ae.Message, "notes/"+c.slug+".md") {
+			t.Fatalf("%s: %q %v", c.slug, ae.Message, ae.Details)
+		}
+	}
+	if data, err := os.ReadFile(f.notePath("big")); err != nil || string(data) != big {
+		t.Fatalf("big was written over (%d bytes, %v)", len(data), err)
+	}
+	if info, err := os.Stat(f.notePath("dir")); err != nil || !info.IsDir() {
+		t.Fatalf("dir = %v, %v", info, err)
+	}
+
+	// An import skips the unreadable slugs as existing.
+	for _, slug := range []string{"big", "huge"} {
+		writeFile(t, filepath.Join(e.state, "lado", "knowledge", "other", "notes", slug+".md"), "---\ntitle: 다른 곳\nkind: map\n---\n본문\n")
+	}
+	res, err := e.svc.ImportProject(context.Background(), "app", "other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Imported) != 0 || len(res.Skipped) != 2 || res.Skipped[0].Reason != SkipExists || res.Skipped[1].Reason != SkipExists {
+		t.Fatalf("import = %+v", res)
+	}
+	if data, _ := os.ReadFile(f.notePath("huge")); string(data) != big {
+		t.Fatalf("huge was written over (%d bytes)", len(data))
+	}
+
+	// Once the owner fixes the file, it is the next revision, from outside.
+	writeFile(t, f.notePath("big"), string(note("고친 노트", "map")))
+	idx := e.index("app")
+	if len(idx.Notes) != 1 || idx.Notes[0].Slug != "big" || idx.Notes[0].Revision != 2 || idx.Notes[0].Author != domain.LadoKnowledgeAuthorExternal {
+		t.Fatalf("index = %+v", idx.Notes)
+	}
+	e.mustWrite("app-1", "big", intp(2), note("합친 노트", "map"))
+}

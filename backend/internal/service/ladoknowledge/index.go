@@ -94,10 +94,11 @@ func checkable(sources []domain.LadoKnowledgeSource) bool {
 }
 
 // freshCache is the last base tree lookup of a project: the blobs of paths
-// at tip.
+// at tip. A lookup of some of those paths at the same tip, as the check
+// after a write makes, is answered from it and leaves it in place.
 type freshCache struct {
 	tip   string
-	paths string
+	paths map[string]bool
 	blobs map[string]string
 }
 
@@ -167,12 +168,11 @@ func (s *Service) baseBlobs(ctx context.Context, p domain.ProjectRecord, paths [
 	if tip == "" {
 		return nil, err
 	}
-	key := strings.Join(paths, "\x00")
 	projectID := domain.ProjectID(p.ID)
 	s.cacheMu.Lock()
 	c, ok := s.cache[projectID]
 	s.cacheMu.Unlock()
-	if ok && c.tip == tip && c.paths == key {
+	if ok && c.tip == tip && !slices.ContainsFunc(paths, func(path string) bool { return !c.paths[path] }) {
 		return c.blobs, nil
 	}
 	args := append([]string{"ls-tree", "-r", "-z", "--full-tree", tip, "--"}, paths...)
@@ -193,7 +193,11 @@ func (s *Service) baseBlobs(ctx context.Context, p domain.ProjectRecord, paths [
 		}
 	}
 	s.cacheMu.Lock()
-	s.cache[projectID] = freshCache{tip: tip, paths: key, blobs: blobs}
+	looked := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		looked[path] = true
+	}
+	s.cache[projectID] = freshCache{tip: tip, paths: looked, blobs: blobs}
 	s.cacheMu.Unlock()
 	return blobs, nil
 }

@@ -30,7 +30,9 @@ type WriteInput struct {
 //
 // A new note (no base) must not exist yet (LADO_KNOWLEDGE_EXISTS); an
 // update's base must be the note's revision after edits made outside LADO
-// were taken (LADO_KNOWLEDGE_CHANGED with currentRevision). A plan critic
+// were taken (LADO_KNOWLEDGE_CHANGED with currentRevision). A note file LADO
+// cannot read is never written over (LADO_KNOWLEDGE_EXISTS with
+// details.unreadable): the owner fixes or removes it first. A plan critic
 // only reads knowledge (LADO_KNOWLEDGE_READ_ONLY). Each source's blob is
 // what git hash-object gives for the file in the session's folder, changes
 // not yet committed included; a missing file refuses the note.
@@ -102,6 +104,11 @@ func (s *Service) writeLocked(f folder, cur Owner, note domain.LadoKnowledgeNote
 		return domain.LadoKnowledgeEntry{}, events, apierr.Internal(CodeFailed, "LADO could not read the knowledge folder")
 	}
 	prev, exists := snap.records[in.Slug]
+	if why, ok := snap.unreadable[in.Slug]; ok {
+		return domain.LadoKnowledgeEntry{}, events, apierr.Conflict(CodeExists,
+			fmt.Sprintf("notes/%s.md is in the knowledge folder, but LADO cannot read it: %s. Ask the owner to fix or remove that file, or write the note under another slug.", in.Slug, why),
+			map[string]any{"unreadable": true})
+	}
 	switch {
 	case in.BaseRevision == nil && exists:
 		return domain.LadoKnowledgeEntry{}, events, apierr.Conflict(CodeExists,
@@ -111,7 +118,7 @@ func (s *Service) writeLocked(f folder, cur Owner, note domain.LadoKnowledgeNote
 		return domain.LadoKnowledgeEntry{}, events, apierr.Conflict(CodeChanged,
 			fmt.Sprintf("The note is at revision %d now. Read it again, merge, and send it with revision %d as the base.", prev.Revision, prev.Revision),
 			map[string]any{"currentRevision": prev.Revision})
-	case !exists && len(snap.records) >= domain.LadoKnowledgeMaxNotes:
+	case !exists && snap.count() >= domain.LadoKnowledgeMaxNotes:
 		return domain.LadoKnowledgeEntry{}, events, apierr.Invalid(CodeInvalidNote,
 			"The project has the most notes LADO keeps. Update or merge existing notes instead.", map[string]any{"limit": domain.LadoKnowledgeMaxNotes})
 	}

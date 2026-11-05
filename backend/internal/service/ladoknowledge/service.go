@@ -273,18 +273,35 @@ func sha256Hex(data []byte) string {
 type snapshot struct {
 	records map[string]noteRecord
 	files   map[string][]byte
+	// unreadable holds the notes LADO cannot read, by slug, with why: a
+	// <slug>.md that is a link or a folder, is too large or fails to read.
+	// Their records stay, and writes and imports leave them alone.
+	unreadable map[string]string
+}
+
+// count is how many notes the folder holds, readable or not.
+func (snap snapshot) count() int {
+	n := len(snap.records)
+	for slug := range snap.unreadable {
+		if _, ok := snap.records[slug]; !ok {
+			n++
+		}
+	}
+	return n
 }
 
 // syncLocked reads the folder's notes and takes the ones changed outside
 // LADO: a file whose sha256 is not the recorded one becomes the next
 // revision, a file without a record revision 1, both by
 // domain.LadoKnowledgeAuthorExternal; a record whose file is gone is
-// dropped. It saves the records and the index when anything changed and
-// returns the audit events to append once the lock is released. Links,
-// folders and files that are not <slug>.md are not notes. The caller holds
+// dropped. A <slug>.md LADO cannot read (a link, a folder, too large, a
+// failed read) is not shown, keeps its record and goes in unreadable, so
+// nothing writes over it. It saves the records and the index when anything
+// changed and returns the audit events to append once the lock is
+// released. Files that are not <slug>.md are not notes. The caller holds
 // the project's lock.
 func (s *Service) syncLocked(projectID domain.ProjectID, f folder) (snapshot, []domain.LadoAuditEvent, error) {
-	snap := snapshot{records: map[string]noteRecord{}, files: map[string][]byte{}}
+	snap := snapshot{records: map[string]noteRecord{}, files: map[string][]byte{}, unreadable: map[string]string{}}
 	if _, err := readJSON(f.recordsPath(), &snap.records); err != nil {
 		// A damaged record file is not worth blocking the notes over: every
 		// note is taken again, as from outside.
@@ -300,11 +317,23 @@ func (s *Service) syncLocked(projectID domain.ProjectID, f folder) (snapshot, []
 	changed := false
 	for _, e := range entries {
 		slug, ok := strings.CutSuffix(e.Name(), ".md")
-		if !ok || !domain.ValidLadoKnowledgeSlug(slug) || !e.Type().IsRegular() {
+		if !ok || !domain.ValidLadoKnowledgeSlug(slug) {
+			continue
+		}
+		if !e.Type().IsRegular() {
+			snap.unreadable[slug] = "it is not a regular file"
+			s.log.Warn("LADO leaves a knowledge note out", "project", projectID, "note", slug, "err", "not a regular file")
 			continue
 		}
 		data, err := readRegular(f.notePath(slug), maxReadBytes)
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				continue // removed since the listing
+			}
+			snap.unreadable[slug] = "it cannot be read"
+			if info, ierr := e.Info(); ierr == nil && info.Size() > maxReadBytes {
+				snap.unreadable[slug] = fmt.Sprintf("it is larger than %d KiB", maxReadBytes/1024)
+			}
 			s.log.Warn("LADO leaves a knowledge note out", "project", projectID, "note", slug, "err", err)
 			continue
 		}
@@ -326,6 +355,9 @@ func (s *Service) syncLocked(projectID domain.ProjectID, f folder) (snapshot, []
 	}
 	for slug, rec := range snap.records {
 		if _, ok := snap.files[slug]; ok {
+			continue
+		}
+		if _, ok := snap.unreadable[slug]; ok {
 			continue
 		}
 		delete(snap.records, slug)

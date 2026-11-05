@@ -45,6 +45,15 @@ func TestFreshness(t *testing.T) {
 	if n := e.git.count("ls-tree"); n != 0 {
 		t.Fatalf("ls-tree ran %d times on a cached tip", n)
 	}
+	// A write's check of its own sources reads the cache and keeps it for
+	// the next index.
+	if entry := e.mustWrite("app-1", "again", nil, note("다시", "map", "a/b.go")); entry.State != domain.LadoKnowledgeStale {
+		t.Fatalf("entry = %+v", entry)
+	}
+	e.index("app")
+	if n := e.git.count("ls-tree"); n != 0 {
+		t.Fatalf("ls-tree ran %d times after a write of cached paths", n)
+	}
 
 	// git failing leaves every note unchecked; the index still answers.
 	e.git.reset(true)

@@ -55,6 +55,12 @@
 - CLI 는 오류 details 를 읽지 않고 데몬 메시지로 현재 revision 을 보인다(통합 검수 1).
 - 한글 경로 인코딩의 예시가 계획과 다르다(대시 5개, 파트가 확인한 사실).
 
+## AO 리뷰 (head `ee5a0f358`)
+
+AO 리뷰가 변경 요청 1건을 냈다. LADO 가 읽지 못한 노트 파일(256 KiB 초과, 링크, 폴더, 읽기 실패)은 `syncLocked` 가 목록에서 빼면서 기록(`notes.json`)까지 지웠다. 그래서 그 뒤 `--base` 없는 쓰기나 가져오기가 `EXISTS` 없이 그 파일을 덮어썼다. 이제 디스크에 `<slug>.md` 가 있는데 읽지 못하면 목록에서만 빼고 기록은 남긴다. 쓰기는 `--base` 와 상관없이 `LADO_KNOWLEDGE_EXISTS`(`details.unreadable`, 메시지에 파일과 이유)로 거절하고, 가져오기는 `exists` 로 건너뛴다. 노트 수 상한도 읽지 못한 파일을 센다. 소유자가 파일을 고치면 바깥 편집으로 다음 revision 이 된다. `TestUnreadableNoteIsNotWrittenOver` 가 확인한다(고치기 전에는 실패).
+
+선택 사항 중 하나도 고쳤다. 쓰기 끝의 신선도 확인이 노트 하나의 경로로 프로젝트의 캐시를 덮어써서, 다음 목차가 `git ls-tree` 를 다시 돌았다. 이제 같은 기준 tip 에서 캐시가 가진 경로만 묻는 조회는 캐시로 답하고 캐시를 그대로 둔다(`TestFreshness`). claim 의 presence 확인과 `LADO.md` 갱신은 후속으로 남긴다.
+
 ## CI: gitleaks
 
 PR #56 의 `scan` 이 실패했다. 비밀값 거절을 확인하는 테스트 두 곳(`domain/lado_knowledge_test.go`, `ladoknowledge/write_test.go`)이 본문 없는 OPENSSH·RSA 개인 키 머리말 줄을 그대로 적었고, CI 의 gitleaks 는 PR 의 커밋을 하나씩 보므로 앞선 파트 커밋의 그 줄도 잡는다. `.github/.gitleaks.toml` 허용 목록은 LADO 보호 경로라 쓰지 않는다(한 번 고쳤다가 LADO 경로 검사에 막혀 뺐다). 대신 테스트는 문자열 이어 붙이기(`"-----BEGIN RSA " + "PRIVATE KEY-----\n"`)로 바꾸고, 개발자 승인을 받아 브랜치를 origin/main `3ef1db761` 위 한 커밋으로 다시 써 `--force-with-lease` 로 push 했다(#55 와 같은 방식). 최종 코드는 다시 쓰기 전과 같고, 다른 점은 #57 과 겹친 8개 locale 파일의 끝(두 쪽 모두 새 키를 덧붙임)에서 두 쪽 키를 모두 둔 것뿐이다. 로컬 gitleaks v7.4.0 으로 CI 처럼 `--commits-file` 과 저장소 설정으로 새 커밋을 검사했다.

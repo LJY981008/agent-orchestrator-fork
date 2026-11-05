@@ -318,11 +318,12 @@ func (s *Service) importLocked(f folder, cur Owner, notes []pending, result *Imp
 	wrote := false
 	for _, n := range notes {
 		slug := n.note.Slug
-		if _, ok := snap.records[slug]; ok {
+		_, recorded := snap.records[slug]
+		if _, unreadable := snap.unreadable[slug]; recorded || unreadable {
 			result.Skipped = append(result.Skipped, ImportSkip{n.name, SkipExists})
 			continue
 		}
-		if len(snap.records) >= domain.LadoKnowledgeMaxNotes {
+		if snap.count() >= domain.LadoKnowledgeMaxNotes {
 			result.Skipped = append(result.Skipped, ImportSkip{n.name, SkipLimit})
 			continue
 		}
