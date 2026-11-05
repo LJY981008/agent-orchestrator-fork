@@ -720,14 +720,22 @@ type LadoIntegrationApproval struct {
 	// approved, empty when LADO did not read it. The merge gate verifies the
 	// head again once the target moved past it.
 	BaseTipSHA string
-	// RevokedAt is when LADO withdrew the approval because the base moved
-	// under the head with a change to the same paths, zero while it holds,
-	// and RevokedReason the record's code then (LadoCodeBaseOverlap). A
-	// revoked approval no longer counts, and the same head and target cannot
-	// be approved again: a new head can.
+	// RevokedAt is when LADO withdrew the approval, zero while it holds, and
+	// RevokedReason why: the record's code (LadoCodeBaseOverlap) when the
+	// base moved under the head with a change to the same paths, or
+	// LadoIntegrationSiblingRevoked when that happened to another PR of the
+	// same execution (#64). A revoked approval no longer counts. The same
+	// head and target cannot be approved again after a base overlap, only a
+	// new head can; after a sibling's revocation they can (Renewable).
 	RevokedAt     time.Time
 	RevokedReason string
 }
+
+// LadoIntegrationSiblingRevoked is the RevokedReason of an approval LADO
+// withdrew because the approval of another, unmerged PR of the same
+// execution was revoked for a base overlap (#64): the task's PRs are
+// approved together, so they are approved again together.
+const LadoIntegrationSiblingRevoked = "sibling_revoked"
 
 // LadoAuditIntegrationRevoked is the audit action of a revoked integration
 // approval.
@@ -735,6 +743,14 @@ const LadoAuditIntegrationRevoked = "integration.revoked"
 
 // Revoked reports whether LADO withdrew the approval.
 func (a LadoIntegrationApproval) Revoked() bool { return !a.RevokedAt.IsZero() }
+
+// Renewable reports whether the same head and target may be approved again
+// although LADO withdrew the approval: it was withdrawn for a sibling PR's
+// base overlap (LadoIntegrationSiblingRevoked), not for its own. A new
+// approval then renews the row in place.
+func (a LadoIntegrationApproval) Renewable() bool {
+	return a.Revoked() && a.RevokedReason == LadoIntegrationSiblingRevoked
+}
 
 // ErrLadoIntegrationRevoked means the PR's head had an integration approval
 // for the target branch that LADO withdrew: only a new head can be approved.

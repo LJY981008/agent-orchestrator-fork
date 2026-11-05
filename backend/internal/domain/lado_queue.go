@@ -254,20 +254,121 @@ type LadoExecution struct {
 	// had no such gate.
 	IntegrationGated bool
 	// SessionTerminated and PR are read with the execution from AO's session
-	// and PR rows.
+	// and PR rows. PR is the first tracked PR, PRs[0], while the execution
+	// tracks any; before LADO tracked PRs it was the session's newest PR, as
+	// it still is for an execution without tracked PRs.
 	SessionTerminated bool
 	PR                LadoExecutionPR
 	// UntrackedPRs are the session's other PRs that are still open, newest
-	// first: LADO tracks and verifies only PR (issue #59), so the task view
-	// shows these as untracked. Empty while the session has one PR.
+	// first: PRs LADO does not track (issues #59, #64), such as a second open
+	// PR in a repository whose tracked PR is still open. The task view shows
+	// them as untracked.
 	UntrackedPRs []LadoExecutionPR
 	// Verification and Integration are read with the execution from LADO's
-	// verification records and integration approvals.
+	// verification records and integration approvals, for PR.
 	Verification LadoExecutionVerification
 	Integration  LadoExecutionIntegration
 	// Resolve is what LADO's resolve workers did for the execution's PR,
 	// zero while none was needed.
 	Resolve LadoExecutionResolve
+	// PRs are the PRs LADO tracks for the execution (#64), one per
+	// repository and in Position order: each with its own verification and
+	// integration approval. Empty for an execution without tracked PRs, which
+	// PR, Verification and Integration describe.
+	PRs []LadoExecutionTrackedPR
+	// PRRepos are the repositories, slash-separated folders under the
+	// workspace's, where the execution is expected to open a PR, in the
+	// order the PRs merge. Empty when the plan named no order: a
+	// single-repository project, or a workspace plan in one repository.
+	PRRepos []string
+	// PRReposFirm says PRRepos are facts: an integration execution's, the
+	// repositories its parts changed. Without it they are what the plan
+	// declared, and a repository without a PR once the worker reported done
+	// or its session ended had nothing to change (MissingPRRepos).
+	PRReposFirm bool
+	// WorkerDone says the newest report of the execution's session is done.
+	WorkerDone bool
+}
+
+// LadoExecutionTrackedPR is one PR LADO tracks for an execution (#64): the
+// PR as AO last observed it, the repository it is open in (its
+// slash-separated folder under the workspace's, empty for a
+// single-repository project), its place in the merge order, the verification
+// and integration approval of its current head, and whether verification
+// settled it once it merged or closed.
+type LadoExecutionTrackedPR struct {
+	PR           LadoExecutionPR
+	Repo         string
+	Position     int
+	Verification LadoExecutionVerification
+	Integration  LadoExecutionIntegration
+	Settled      bool
+}
+
+// TrackedPRs returns the execution's tracked PRs in Position order. An
+// execution without tracked PRs that has a PR gives that PR as its only one,
+// with the execution's verification and integration, so callers can treat
+// both alike.
+func (e LadoExecution) TrackedPRs() []LadoExecutionTrackedPR {
+	if len(e.PRs) == 0 {
+		if e.PR.URL == "" {
+			return nil
+		}
+		return []LadoExecutionTrackedPR{{PR: e.PR, Verification: e.Verification, Integration: e.Integration, Settled: !e.SettledAt.IsZero()}}
+	}
+	prs := slices.Clone(e.PRs)
+	slices.SortStableFunc(prs, func(a, b LadoExecutionTrackedPR) int { return a.Position - b.Position })
+	return prs
+}
+
+// MissingPRRepos lists the repositories of PRRepos without a tracked PR, in
+// PRRepos order: the PRs the task still waits for. A repository the plan
+// declared (PRReposFirm false) stops being waited for once the worker
+// reported done or its session ended: the worker had nothing to change
+// there.
+func (e LadoExecution) MissingPRRepos() []string {
+	if !e.PRReposFirm && (e.WorkerDone || e.SessionTerminated) {
+		return nil
+	}
+	tracked := e.TrackedPRs()
+	var missing []string
+	for _, repo := range e.PRRepos {
+		if !slices.ContainsFunc(tracked, func(pr LadoExecutionTrackedPR) bool { return ladoSameRelative(pr.Repo, repo) }) {
+			missing = append(missing, repo)
+		}
+	}
+	return missing
+}
+
+// ladoSameRelative reports whether two slash-separated repository folders
+// are the same, a trailing "/" aside.
+func ladoSameRelative(a, b string) bool {
+	return strings.Trim(a, "/") == strings.Trim(b, "/")
+}
+
+// LadoMergeBlockers returns the tracked PRs that must merge before the PR at
+// prURL may (#64): those of repositories before its own in PRRepos that have
+// not merged yet, in that order. A PR outside PRRepos, or of an execution
+// without them, waits for none: only a plan's repos list sets an order.
+func LadoMergeBlockers(exec LadoExecution, prURL string) []LadoExecutionTrackedPR {
+	tracked := exec.TrackedPRs()
+	at := slices.IndexFunc(tracked, func(pr LadoExecutionTrackedPR) bool { return pr.PR.URL == prURL })
+	if at < 0 {
+		return nil
+	}
+	order := slices.IndexFunc(exec.PRRepos, func(repo string) bool { return ladoSameRelative(repo, tracked[at].Repo) })
+	if order < 0 {
+		return nil
+	}
+	var blockers []LadoExecutionTrackedPR
+	for _, repo := range exec.PRRepos[:order] {
+		for _, pr := range tracked {
+			if ladoSameRelative(pr.Repo, repo) && !pr.PR.Merged {
+				blockers = append(blockers, pr)
+			}
+		}
+	}
+	return blockers
 }
 
 // LadoExecutionPR is the newest PR of an execution's session, zero while the
