@@ -21189,6 +21189,7 @@ components:
           - worktree_missing
           - commit_messages_failed
           - protected_path
+          - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
           - status_not_posted
@@ -24405,6 +24406,12 @@ components:
         timedOut:
           description: LADO stopped the run at its deadline.
           type: boolean
+        untrackedPrs:
+          description: The worker session's other open PRs, newest first, which LADO
+            does not track or verify; omitted while it has none.
+          items:
+            $ref: '#/components/schemas/LadoExecutionPRResponse'
+          type: array
       required:
       - sessionId
       - planRevisionId
@@ -24788,6 +24795,7 @@ components:
           - worktree_missing
           - commit_messages_failed
           - protected_path
+          - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
           - status_not_posted
@@ -25177,6 +25185,7 @@ components:
           - commit_messages_failed
           - protected_path
           - base_overlap
+          - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
           type: string
@@ -25294,10 +25303,18 @@ components:
           items:
             $ref: '#/components/schemas/LadoEvidenceCriterionResponse'
           type: array
+        defaultBranch:
+          description: 'base_branch: for base_not_default, the default branch of the
+            PR''s repository.'
+          type: string
         deleted:
           description: 'base_branch: the local base branch existed at dispatch and
             is gone.'
           type: boolean
+        dispatchBranch:
+          description: 'base_branch: for base_not_default, the base branch the dispatcher
+            chose in the issue''s repository.'
+          type: string
         dispatchCommit:
           description: 'base_branch: the local base branch''s commit when the run
             was dispatched; omitted when it had none or LADO did not record it.'
@@ -25358,6 +25375,10 @@ components:
           description: 'base_branch: how many files changed on the remote base branch
             overlap the head or the plan.'
           type: integer
+        prRepo:
+          description: 'base_branch: for pr_repo_not_in_workspace, the PR''s repository,
+            as provider:[host/]owner/name.'
+          type: string
         prTitle:
           $ref: '#/components/schemas/LadoVerifyTextResponse'
           description: 'commit_messages: the PR title.'
@@ -25420,7 +25441,11 @@ components:
             existed at dispatch is gone; base_advanced: the remote base branch moved
             past the head''s merge base without touching its files; base_overlap:
             it moved with a change to files the head changed or the plan names, so
-            the head must take in the base.'
+            the head must take in the base; pr_repo_not_in_workspace: the PR is open
+            in a repository that is none of the workspace''s child repositories, so
+            LADO cannot verify it; base_not_default: the PR''s repository is not the
+            issue''s and the PR''s target or the dispatch''s base branch is not that
+            repository''s default branch.'
           enum:
           - not_required
           - verifying
@@ -25447,6 +25472,8 @@ components:
           - no_local_branch
           - base_advanced
           - base_overlap
+          - pr_repo_not_in_workspace
+          - base_not_default
           - unprotected
           - protection_unknown
           - unprotected_gitlab

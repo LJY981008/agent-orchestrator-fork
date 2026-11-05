@@ -63,13 +63,14 @@ type LadoTaskExecutionResponse struct {
 	// PlanRevisionNumber and PolicySHA256 come from the task's own plan
 	// facts, which name the latest revision and the newest approval's
 	// snapshot.
-	PlanRevisionNumber int                      `json:"planRevisionNumber,omitempty" description:"That revision's number; omitted once a newer revision is pinned. GET /api/v1/lado/executions/{sessionId} always has it."`
-	PolicySHA256       string                   `json:"policySha256,omitempty" description:"Hash of the rule snapshot the worker runs under; omitted for the run of an older approval. GET /api/v1/lado/executions/{sessionId} always has it."`
-	StartedAt          time.Time                `json:"startedAt"`
-	DeadlineAt         *time.Time               `json:"deadlineAt,omitempty" description:"When LADO stops the run; omitted without a limit."`
-	TimedOut           bool                     `json:"timedOut" description:"LADO stopped the run at its deadline."`
-	SessionEnded       bool                     `json:"sessionEnded" description:"The worker session ended. While it lives, the task cannot be approved again."`
-	PR                 *LadoExecutionPRResponse `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
+	PlanRevisionNumber int                       `json:"planRevisionNumber,omitempty" description:"That revision's number; omitted once a newer revision is pinned. GET /api/v1/lado/executions/{sessionId} always has it."`
+	PolicySHA256       string                    `json:"policySha256,omitempty" description:"Hash of the rule snapshot the worker runs under; omitted for the run of an older approval. GET /api/v1/lado/executions/{sessionId} always has it."`
+	StartedAt          time.Time                 `json:"startedAt"`
+	DeadlineAt         *time.Time                `json:"deadlineAt,omitempty" description:"When LADO stops the run; omitted without a limit."`
+	TimedOut           bool                      `json:"timedOut" description:"LADO stopped the run at its deadline."`
+	SessionEnded       bool                      `json:"sessionEnded" description:"The worker session ended. While it lives, the task cannot be approved again."`
+	PR                 *LadoExecutionPRResponse  `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
+	UntrackedPRs       []LadoExecutionPRResponse `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none."`
 }
 
 // LadoSessionIDParam names an execution's session in
@@ -141,7 +142,7 @@ type LadoExecutionResponse struct {
 	PartID       string                        `json:"partId,omitempty" description:"The part a part or merge worker works on."`
 	Branch       string                        `json:"branch,omitempty" description:"The branch LADO started the worker on; omitted when AO named it."`
 	State        string                        `json:"state" enum:"running,validating,integration_pending,integrating,failed,completed,closed_unmerged" description:"The state the run gives its task, as the daemon derives it: running without a PR, failed when it timed out or ended without one, and once a PR is open that PR's verification and integration."`
-	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,review_pending,changes_requested,status_not_posted,merged_without_approval,base_overlap,merge_conflict,resolving,conflict_unresolved" description:"Why the run is in its state, as the task's stateReason says it."`
+	StateReason  string                        `json:"stateReason,omitempty" enum:"timed_out,ended_without_pr,verifying,checks_pending,checks_failed,commands_running,worktree_not_at_head,worktree_changed,head_unavailable,commands_failed,command_timed_out,worktree_missing,commit_messages_failed,protected_path,pr_repo_not_in_workspace,review_pending,changes_requested,status_not_posted,merged_without_approval,base_overlap,merge_conflict,resolving,conflict_unresolved" description:"Why the run is in its state, as the task's stateReason says it."`
 	PR           *LadoExecutionPRResponse      `json:"pr,omitempty" description:"The newest PR of the worker session; omitted while it has none."`
 	// Verification and Integration are those of the PR's current head.
 	Verification *LadoVerificationResponse        `json:"verification,omitempty" description:"What LADO verified about the PR's current head; omitted until LADO computed it, while the task is validating with verifying."`

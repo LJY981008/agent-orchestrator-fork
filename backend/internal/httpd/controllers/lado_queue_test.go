@@ -483,6 +483,10 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 	// Each task is claimed before the next is seeded, so a claim takes it.
 	running := seedLadoQueued(t, store, "mer", 1, at)
 	runningWorker := runLado(t, store, "mer", running, now, domain.LadoExecution{DeadlineAt: now.Add(8 * time.Hour)})
+	// The running worker also opened PR 10 and merged PR 9 before PR 11:
+	// LADO tracks PR 11, and PR 10, still open, is untracked (issue #59).
+	writeLadoPR(t, store, runningWorker, 9, true, now.Add(-2*time.Minute))
+	writeLadoPR(t, store, runningWorker, 10, false, now.Add(-time.Minute))
 	writeLadoPR(t, store, runningWorker, 11, false, now)
 	timedOut := seedLadoQueued(t, store, "mer", 2, at)
 	timedOutWorker := runLado(t, store, "mer", timedOut, now.Add(-9*time.Hour), domain.LadoExecution{DeadlineAt: now.Add(-time.Hour)})
@@ -597,6 +601,13 @@ func TestLadoAPI_TaskCarriesQueueAndExecution(t *testing.T) {
 	if !exec.StartedAt.Equal(now) || exec.DeadlineAt == nil || !exec.DeadlineAt.Equal(now.Add(8*time.Hour)) ||
 		exec.TimedOut || exec.SessionEnded || exec.PR == nil || *exec.PR != (controllers.LadoExecutionPRResponse{URL: "https://github.com/acme/demo/pull/11", Number: 11, Mergeability: "unknown"}) {
 		t.Fatalf("running execution %+v (PR %+v), want the live run with its open PR", exec, exec.PR)
+	}
+	wantUntracked := []controllers.LadoExecutionPRResponse{{URL: "https://github.com/acme/demo/pull/10", Number: 10, Mergeability: "unknown"}}
+	if !reflect.DeepEqual(exec.UntrackedPRs, wantUntracked) {
+		t.Fatalf("untracked PRs = %+v, want %+v", exec.UntrackedPRs, wantUntracked)
+	}
+	if n := strings.Count(string(body), `"untrackedPrs"`); n != 1 {
+		t.Fatalf("body names untrackedPrs %d times, want once: only the run with another open PR has them", n)
 	}
 	if exec := tasks["lado-task-7"].Execution; !exec.SessionEnded || exec.TimedOut || exec.PR != nil {
 		t.Fatalf("ended execution %+v, want its session ended without a PR", exec)
