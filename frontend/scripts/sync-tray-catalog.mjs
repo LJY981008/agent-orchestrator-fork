@@ -87,6 +87,7 @@ const KEYS = [
 	"lado.presence.integration.alreadyOnBase",
 	"lado.presence.integration.baseDeleted",
 	"lado.presence.integration.baseAdvanced",
+	"lado.presence.integration.baseNotDefault",
 	"lado.presence.integration.unprotected",
 	"lado.presence.integration.protectionUnknown",
 	"lado.presence.integration.unprotectedGitlab",

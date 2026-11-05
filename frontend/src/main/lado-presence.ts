@@ -1540,6 +1540,15 @@ function confirmLine(t: Translate, item: VerifyItem): string {
 				branch: excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS),
 				commit: excerpt(String(details.advancedTip ?? ""), MAX_EXAMPLE_CHARS).slice(0, 7),
 			});
+		case "base_not_default": {
+			// The PR is in another repository than its issue (#59).
+			const branch = excerpt(String(details.branch ?? ""), MAX_EXAMPLE_CHARS);
+			return t("lado.presence.integration.baseNotDefault", {
+				branch,
+				dispatchBranch: excerpt(String(details.dispatchBranch ?? ""), MAX_EXAMPLE_CHARS) || branch,
+				defaultBranch: excerpt(String(details.defaultBranch ?? ""), MAX_EXAMPLE_CHARS),
+			});
+		}
 		case "unprotected": {
 			// The parts by name, as the run panel names them (U1 of #15).
 			const missing = stringList(details.missing);
