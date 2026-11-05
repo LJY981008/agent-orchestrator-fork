@@ -839,13 +839,36 @@ func (m *Manager) persistedNativeConversationID(
 	if strings.TrimSpace(id) == "" {
 		return "", nil
 	}
+	exists, err := m.nativeHistoryExists(ctx, rec, id, handoff)
+	if err != nil {
+		return "", err
+	}
+	if !exists {
+		agent, registered := m.agents.Agent(rec.Harness)
+		if registered && m.nativeConversationNotStarted(ctx, rec, agent) {
+			return "", nil
+		}
+		return "", fmt.Errorf("%w for %s", ErrNativeConversationMissing, rec.Harness)
+	}
+	return id, nil
+}
+
+// nativeHistoryExists asks the adapter whether provider history persists behind
+// id. An adapter without a history probe cannot tell, so its ids count as
+// persisted.
+func (m *Manager) nativeHistoryExists(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	id string,
+	handoff ports.AgentInterfaceHandoff,
+) (bool, error) {
 	probe, ok := handoff.(ports.AgentInterfaceHandoffHistoryProbe)
 	if !ok {
-		return id, nil
+		return true, nil
 	}
 	project, err := m.loadProject(ctx, rec.ProjectID)
 	if err != nil {
-		return "", err
+		return false, err
 	}
 	env := m.runtimeEnv(rec.ID, rec.ProjectID, rec.IssueID, project.Config.Env)
 	exists, err := probe.NativeConversationExists(ctx, ports.SessionRef{
@@ -857,16 +880,9 @@ func (m *Manager) persistedNativeConversationID(
 		},
 	}, id, env)
 	if err != nil {
-		return "", fmt.Errorf("inspect native conversation %s: %w", id, err)
+		return false, fmt.Errorf("inspect native conversation %s: %w", id, err)
 	}
-	if !exists {
-		agent, registered := m.agents.Agent(rec.Harness)
-		if registered && m.nativeConversationNotStarted(ctx, rec, agent) {
-			return "", nil
-		}
-		return "", fmt.Errorf("%w for %s", ErrNativeConversationMissing, rec.Harness)
-	}
-	return id, nil
+	return exists, nil
 }
 
 func (m *Manager) preflightInterfaceTarget(
