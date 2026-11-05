@@ -1461,6 +1461,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/knowledge/notes/{slug}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Write a knowledge note for a running session of a LADO mode project into that session's project; an update sends the revision it read as baseRevision */
+        put: operations["writeLadoKnowledgeNote"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/plan-requests/{requestId}/critique": {
         parameters: {
             query?: never;
@@ -1574,6 +1591,57 @@ export interface paths {
         get: operations["listLadoProjectIssues"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/knowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project's knowledge folder: its notes with their freshness against the base branch, whether the folder belongs to another repository, and the other knowledge folders it can import from */
+        get: operations["getLadoProjectKnowledge"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/knowledge/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make the project the owner of its knowledge folder when the folder came from another repository, and get the folder again */
+        post: operations["claimLadoProjectKnowledge"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/knowledge/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy notes into a project's knowledge from Claude Code's memory of a project path or from another knowledge folder; the source is only read and a slug the project has is skipped */
+        post: operations["importLadoProjectKnowledge"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6688,6 +6756,12 @@ export interface components {
             apiVersion: number;
             hostId: string;
         };
+        ImportLadoKnowledgeRequest: {
+            fromProjectId?: string;
+            path?: string;
+            /** @enum {string} */
+            source: "claude_memory" | "project";
+        };
         ImportLadoTasksRequest: {
             /** @description Canonical ids of the issues to import. */
             issueRefs: string[];
@@ -7296,6 +7370,48 @@ export interface components {
             state: "open" | "in_progress" | "review" | "done" | "cancelled";
             title: string;
             url: string;
+        };
+        LadoKnowledgeImportResponse: {
+            imported: string[];
+            skipped: components["schemas"]["LadoKnowledgeImportSkipResponse"][];
+        };
+        LadoKnowledgeImportSkipResponse: {
+            name: string;
+            /** @enum {string} */
+            reason: "claude_memory_not_found" | "exists" | "link" | "not_a_file" | "too_large" | "invalid_name" | "invalid_note" | "secret" | "limit" | "unreadable";
+        };
+        LadoKnowledgeImportableResponse: {
+            notes: number;
+            ownerPath?: string;
+            projectId: string;
+            registered: boolean;
+        };
+        LadoKnowledgeNoteResponse: {
+            author: string;
+            kind: string;
+            revision: number;
+            slug: string;
+            /** @enum {string} */
+            state: "fresh" | "stale" | "unchecked";
+            title: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LadoKnowledgeOwnerResponse: {
+            /** Format: date-time */
+            claimedAt: string;
+            path: string;
+            projectId: string;
+            rootCommit?: string;
+        };
+        LadoKnowledgeResponse: {
+            dir: string;
+            foreign: boolean;
+            importable: components["schemas"]["LadoKnowledgeImportableResponse"][];
+            notes: components["schemas"]["LadoKnowledgeNoteResponse"][];
+            owner?: components["schemas"]["LadoKnowledgeOwnerResponse"];
+            projectId: string;
+            truncated: boolean;
         };
         LadoLinkedProjectResponse: {
             id: string;
@@ -10752,6 +10868,11 @@ export interface components {
             status?: "unmodified" | "modified" | "added" | "deleted" | "renamed";
             /** @enum {string} */
             type: "file" | "dir";
+        };
+        WriteLadoKnowledgeNoteRequest: {
+            baseRevision?: number;
+            content: string;
+            sessionId: string;
         };
     };
     responses: never;
@@ -15703,6 +15824,78 @@ export interface operations {
             };
         };
     };
+    writeLadoKnowledgeNote: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The note's slug: 1 to 64 of a-z, 0-9 and '-', starting with a letter or digit. It is the file name notes/<slug>.md. */
+                slug: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WriteLadoKnowledgeNoteRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoKnowledgeNoteResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     submitLadoPlanCritique: {
         parameters: {
             query?: never;
@@ -16156,6 +16349,178 @@ export interface operations {
             };
             /** @description Service Unavailable */
             503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoProjectKnowledge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoKnowledgeResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    claimLadoProjectKnowledge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoKnowledgeResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importLadoProjectKnowledge: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportLadoKnowledgeRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoKnowledgeImportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
                 headers: {
                     [name: string]: unknown;
                 };

@@ -1,7 +1,7 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
 // approvals, rules, runs, their verification and integration, branch
-// protection, the dispatch settings, and the worker watch: usage, alerts and
-// their settings. Rule changes
+// protection, project knowledge, the dispatch settings, and the worker watch:
+// usage, alerts and their settings. Rule changes
 // that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -9,6 +9,7 @@ import {
 	approveLadoPlan,
 	cancelLadoTask,
 	changeLadoProtectedPaths,
+	claimLadoKnowledge,
 	createLadoTask,
 	deleteLadoRule,
 	fetchLadoAlerts,
@@ -17,6 +18,7 @@ import {
 	fetchLadoDispatchSettings,
 	fetchLadoEffective,
 	fetchLadoExecution,
+	fetchLadoKnowledge,
 	fetchLadoPlan,
 	fetchLadoProjectIssues,
 	fetchLadoProjectRepositories,
@@ -30,6 +32,7 @@ import {
 	fetchLadoTaskUsage,
 	fetchLadoTaskView,
 	fetchLadoWatchSettings,
+	importLadoKnowledge,
 	importLadoTasks,
 	invalidateLadoRuleQueries,
 	LadoApiError,
@@ -42,6 +45,7 @@ import {
 	ladoEffectiveQueryRoot,
 	ladoExecutionQueryKey,
 	ladoExecutionQueryRoot,
+	ladoKnowledgeQueryKey,
 	ladoPlanQueryKey,
 	ladoPlanQueryRoot,
 	ladoProjectIssuesQueryKey,
@@ -73,6 +77,7 @@ import {
 	type LadoAlertFilter,
 	type LadoCheckCommand,
 	type LadoDispatchSettingsInput,
+	type LadoKnowledgeImportInput,
 	type LadoProjectOverlapInput,
 	type LadoWatchSettingsValues,
 } from "../lib/lado";
@@ -205,6 +210,41 @@ export function useRefreshLadoProtection(projectId: string) {
 			// The protection item of every run's verification reads the same rules.
 			void queryClient.invalidateQueries({ queryKey: ladoExecutionQueryRoot });
 		},
+		retry: false,
+	});
+}
+
+/**
+ * A project's knowledge folder. Sessions write notes while they work, so the
+ * card reads it again when it comes back into view.
+ */
+export function useLadoKnowledge(projectId: string | undefined, enabled = true) {
+	return useQuery({
+		queryKey: ladoKnowledgeQueryKey(projectId ?? ""),
+		queryFn: () => fetchLadoKnowledge(projectId ?? ""),
+		enabled: enabled && Boolean(projectId),
+		staleTime: 15_000,
+		retry: false,
+	});
+}
+
+/** Copies notes in from Claude Code's memory or another knowledge folder, then reads the folder again. */
+export function useImportLadoKnowledge(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (input: LadoKnowledgeImportInput) => importLadoKnowledge(projectId, input),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ladoKnowledgeQueryKey(projectId) }),
+		retry: false,
+	});
+}
+
+/** Takes over a knowledge folder another repository wrote; the answer is the folder as it is now. */
+export function useClaimLadoKnowledge(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: () => claimLadoKnowledge(projectId),
+		onSuccess: (knowledge) => queryClient.setQueryData(ladoKnowledgeQueryKey(projectId), knowledge),
+		onError: () => queryClient.invalidateQueries({ queryKey: ladoKnowledgeQueryKey(projectId) }),
 		retry: false,
 	});
 }

@@ -24,6 +24,7 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoProjectSettings: vi.fn(),
 	fetchLadoProtection: vi.fn(),
 	fetchLadoWatchSettings: vi.fn(),
+	fetchLadoKnowledge: vi.fn(),
 }));
 
 /** The worker watch card below (issue #42), with nothing saved. */
@@ -95,6 +96,14 @@ describe("LadoProjectSection", () => {
 		vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue(off);
 		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({ projectId: "demo", repositories: [] });
 		vi.mocked(lado.fetchLadoWatchSettings).mockResolvedValue(watchSettings);
+		vi.mocked(lado.fetchLadoKnowledge).mockResolvedValue({
+			projectId: "demo",
+			dir: "/home/u/.ao/data/lado/knowledge/demo",
+			foreign: false,
+			notes: [],
+			truncated: false,
+			importable: [],
+		});
 		vi.spyOn(apiClient, "PUT").mockImplementation((async (_path: string, init: { body: Partial<lado.LadoProjectSettings> }) => ({
 			data: { ...off, ...init.body },
 			error: undefined,
@@ -142,6 +151,10 @@ describe("LadoProjectSection", () => {
 		expect(within(protection).getByRole("heading", { name: "Branch protection" })).toBeInTheDocument();
 		expect(await within(protection).findByText("Missing: Deletion blocked")).toBeInTheDocument();
 		expect(lado.fetchLadoProtection).toHaveBeenCalledWith("demo");
+		// The project's knowledge folder (issue #24) closes the page.
+		const knowledge = screen.getByTestId("lado-project-knowledge");
+		expect(await within(knowledge).findByText("/home/u/.ao/data/lado/knowledge/demo")).toBeInTheDocument();
+		expect(lado.fetchLadoKnowledge).toHaveBeenCalledWith("demo");
 		// The mode and the cap stay one card above them, under the page's own title.
 		expect(screen.queryByRole("heading", { name: "LADO" })).not.toBeInTheDocument();
 	});

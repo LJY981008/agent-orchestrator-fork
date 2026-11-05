@@ -40,16 +40,17 @@ type ladoSessionTarget interface {
 // wireLado installs one worker gate on the session manager and the chat
 // service, and LADO's section of a session's standing instructions: an
 // orchestrator's in a LADO project, the rules text of a worker LADO
-// dispatched, and a plan worker's role. It returns LADO's project settings service for the API. The
-// daemon calls it right after the session manager is built, before
+// dispatched, and a plan worker's role, each with the project's knowledge
+// when knowledge is set. It returns LADO's project settings service for the
+// API. The daemon calls it right after the session manager is built, before
 // automations, tracker intake or the API can spawn or send, and before
 // sessions restore.
-func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget) *ladoproject.Service {
+func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarget, knowledge ladoKnowledgeIndex, log *slog.Logger) *ladoproject.Service {
 	gate := ladogate.New(store, store, store, store, store)
 	gate.SetPlanWorkers(store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
-	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store}.Standing)
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Knowledge: knowledge, Log: log}.Standing)
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 

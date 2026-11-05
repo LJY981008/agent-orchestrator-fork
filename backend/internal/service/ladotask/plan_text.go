@@ -3,10 +3,12 @@ package ladotask
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoknowledge"
 )
 
 // issueTrustBoundary heads the pinned issue the orchestrator reads, like AO's
@@ -202,6 +204,14 @@ type PromptSource struct {
 	Rules interface {
 		LadoRule(ctx context.Context, id domain.LadoRuleID) (domain.LadoRule, bool, error)
 	}
+	// Knowledge reads the project's knowledge index (service/ladoknowledge);
+	// nil adds no knowledge section.
+	Knowledge interface {
+		Index(ctx context.Context, projectID domain.ProjectID) (ladoknowledge.Index, error)
+	}
+	// Log records a knowledge index LADO could not read; nil uses
+	// slog.Default.
+	Log *slog.Logger
 }
 
 // codexInstructionsHeading heads the instructions LADO manages for Codex in a
@@ -299,7 +309,7 @@ func (p PromptSource) CodexSection(ctx context.Context, projectID domain.Project
 }
 
 // Section is the text of Standing: CodexSection, then OrchestratorSection
-// for an orchestrator or WorkerSection for a worker.
+// for an orchestrator or WorkerSection for a worker, then KnowledgeSection.
 func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
 	standing, err := p.Standing(ctx, kind, projectID, sessionID, harness)
 	return standing.Text, err
@@ -308,7 +318,7 @@ func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, proj
 // Standing is the session manager's LADO section of a session's standing
 // instructions (sessionmanager.LadoPromptSection). Its text is CodexSection,
 // then OrchestratorSection for an orchestrator or WorkerSection for a
-// worker. It replaces AO's orchestrator role only for an orchestrator that
+// worker, then KnowledgeSection. It replaces AO's orchestrator role only for an orchestrator that
 // gets LADO's orchestrator section, that is in a project in LADO mode.
 func (p PromptSource) Standing(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (domain.LadoStandingSection, error) {
 	var section string
@@ -328,14 +338,13 @@ func (p PromptSource) Standing(ctx context.Context, kind domain.SessionKind, pro
 	if err != nil {
 		return domain.LadoStandingSection{}, err
 	}
-	text := section
-	switch {
-	case codex == "":
-	case section == "":
-		text = codex
-	default:
-		text = codex + "\n\n" + section
+	var parts []string
+	for _, part := range []string{codex, section, p.KnowledgeSection(ctx, kind, projectID, sessionID)} {
+		if part != "" {
+			parts = append(parts, part)
+		}
 	}
+	text := strings.Join(parts, "\n\n")
 	return domain.LadoStandingSection{
 		Text:                     text,
 		ReplacesOrchestratorRole: kind == domain.KindOrchestrator && section != "",

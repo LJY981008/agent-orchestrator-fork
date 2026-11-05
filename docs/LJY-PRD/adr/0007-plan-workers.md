@@ -45,5 +45,5 @@ TDD §5.1 has the details, HARNESS §12 the screens.
 - Plans no longer cost the orchestrator's context, and up to the cap run at once. Each costs real agent turns: a reviewed plan is two sessions, about 30–45 minutes by #33's medians.
 - A plan worker writes nothing in its worktree, so a plan can only describe the repository at the base AO's worktree starts from.
 - The hook decision is the third line of defence for Claude Code: a shell command it cannot read statically is refused, so a plan worker cannot run a build or a test to learn about the code.
-- Plan workers cannot see the project's Claude memory (#24); the facts they need come from the prompt, the repository's documents, or the Plan designer rule the owner edits.
+- Plan workers could not see the project's Claude memory (#24). From #24 they read the project knowledge index in their standing instructions and open the notes they need; the designer may write knowledge with one exact `ao lado knowledge write` form before its final submit, and the critic only reads ([adr/0010](0010-project-knowledge-store.md)).
 - LADO adds two submission routes, an `ao lado` command group and five small upstream hooks (TDD §1.2).

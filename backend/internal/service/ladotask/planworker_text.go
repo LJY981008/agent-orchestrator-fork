@@ -47,7 +47,9 @@ const readOnlyNote = "You are read-only. Read and search files with the Read, Gr
 	"(log, show, diff, status, ls-files, ls-tree) and gh issue view, gh pr view and gh pr diff, each as one command, optionally piped " +
 	"into head, tail, wc or grep. LADO refuses everything else without asking: shell commands such as ls or cat, redirections such as " +
 	"2>&1, command lists, editing or writing files, commits, pushes, pull requests, installing packages, and starting or messaging " +
-	"sessions. Submitting is the only thing you send, in the exact form shown, as one command with a quoted here-document."
+	"sessions. Submitting is the only thing you send, in the exact form shown, as one command with a quoted here-document. " +
+	"Only the plan designer may also write a project knowledge note, in the exact form its knowledge section shows, and only before the final " +
+	"`ao lado plan submit` (the one without --draft)."
 
 // planWorkerSection is a plan worker's standing instructions: what LADO asks
 // of the role, then the role's instructions from LADO's rules. It overrides
