@@ -13,7 +13,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
-import { useEffect, useId, useState } from "react";
+import { Fragment, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useApproveLadoPlan, useLadoPlan, useLadoTasks, useLadoTaskView, useRequestLadoPlan } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
@@ -530,6 +530,18 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 						</ProductExternalLink>
 					</>
 				) : null}
+				{/* The session's other open PRs, which LADO neither tracks nor verifies (#59); read by their text. */}
+				{(execution?.untrackedPrs ?? []).map((untracked) => (
+					<Fragment key={untracked.url}>
+						{separator}
+						<ProductExternalLink
+							href={untracked.url}
+							className="font-mono text-settings-muted hover:text-foreground"
+						>
+							{t("lado.view.untrackedPR", { number: untracked.number })}
+						</ProductExternalLink>
+					</Fragment>
+				))}
 				{execution && pr && action ? (
 					<span className="ml-auto">
 						<LadoIntegrationAction

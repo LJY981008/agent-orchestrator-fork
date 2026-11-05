@@ -4549,5 +4549,10 @@
 	"lado.error.knowledgeSessionEnded": "세션이 끝나 더는 지식을 쓸 수 없습니다.",
 	"lado.error.knowledgeNotLadoProject": "LADO 모드가 켜진 프로젝트의 세션만 지식을 씁니다.",
 	"lado.error.knowledgeReadOnly": "계획 검수자는 프로젝트 지식을 읽기만 합니다.",
-	"lado.error.knowledgeForeign": "이 지식 폴더는 다른 저장소({{ownerPath}})가 썼습니다. 먼저 프로젝트의 LADO 설정에서 이어 쓰기를 하세요."
+	"lado.error.knowledgeForeign": "이 지식 폴더는 다른 저장소({{ownerPath}})가 썼습니다. 먼저 프로젝트의 LADO 설정에서 이어 쓰기를 하세요.",
+	"lado.view.untrackedPR": "추적하지 않는 PR #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "PR이 이 워크스페이스 밖의 저장소에 열려 있음",
+	"lado.verify.base.prRepoNotInWorkspace": "PR이 {{repo}}에 열려 있지만, 이 워크스페이스의 저장소가 아닙니다",
+	"lado.verify.base.notDefault": "PR 대상은 {{branch}}, 실행 기준은 {{dispatchBranch}}이지만 PR 저장소의 기본 브랜치는 {{defaultBranch}}입니다",
+	"lado.presence.integration.baseNotDefault": "PR 대상은 {{branch}}, 실행 기준은 {{dispatchBranch}}이지만 PR 저장소의 기본 브랜치는 {{defaultBranch}}입니다."
 }

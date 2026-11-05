@@ -564,6 +564,8 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	worktree_missing: "lado.reason.worktree_missing",
 	commit_messages_failed: "lado.reason.commit_messages_failed",
 	protected_path: "lado.reason.protected_path",
+	// The PR is open in none of the workspace's child repositories (#59).
+	pr_repo_not_in_workspace: "lado.reason.pr_repo_not_in_workspace",
 	review_pending: "lado.reason.review_pending",
 	changes_requested: "lado.reason.changes_requested",
 	status_not_posted: "lado.reason.status_not_posted",

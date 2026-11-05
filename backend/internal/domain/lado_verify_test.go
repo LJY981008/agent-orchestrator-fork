@@ -371,3 +371,29 @@ func TestLadoCheckCommandsSHA256(t *testing.T) {
 		}
 	}
 }
+
+// #59 added prRepo, defaultBranch and dispatchBranch to the base_branch
+// details: left empty, a record's content and hash stay as they were; set,
+// they come last in that order.
+func TestLadoBaseBranchDetailsCrossRepoFieldsKeepOldHashes(t *testing.T) {
+	legacy := `{"branch":"main","remote":"origin","moved":[],"alreadyOnBase":false,"dispatchCommit":"","deleted":false}`
+	item, err := domain.NewLadoVerifyItem(domain.LadoVerifyBaseBranch, domain.LadoVerifyPass, domain.LadoCodeNoLocalBranch,
+		domain.LadoBaseBranchDetails{Branch: "main", Remote: "origin"})
+	if err != nil || string(item.Details) != legacy {
+		t.Fatalf("details = %s (%v), want %s", item.Details, err, legacy)
+	}
+	const wantSHA = "13c8fd899ec18cbd14d62756d40f53903f73fa31b95f1112bb01e905b76f12d3"
+	if got := ladoVerifySHA(t, fixedLadoVerification(t, fixedLadoVerifyDetails())); got != wantSHA {
+		t.Fatalf("SHA256 of the fixed record = %s, want %s", got, wantSHA)
+	}
+
+	set, err := domain.NewLadoVerifyItem(domain.LadoVerifyBaseBranch, domain.LadoVerifyConfirm, domain.LadoCodeBaseNotDefault,
+		domain.LadoBaseBranchDetails{Branch: "main", Remote: "origin", PRRepo: "github:acme/web", DefaultBranch: "develop", DispatchBranch: "main"})
+	want := `{"branch":"main","remote":"origin","moved":[],"alreadyOnBase":false,"dispatchCommit":"","deleted":false,"prRepo":"github:acme/web","defaultBranch":"develop","dispatchBranch":"main"}`
+	if err != nil || string(set.Details) != want {
+		t.Fatalf("details = %s (%v), want %s", set.Details, err, want)
+	}
+	if domain.LadoCodePRRepoNotInWorkspace != "pr_repo_not_in_workspace" || domain.LadoCodeBaseNotDefault != "base_not_default" {
+		t.Fatal("the #59 codes changed; the renderer and the API name them")
+	}
+}

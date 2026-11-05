@@ -1,6 +1,7 @@
 package ladoverify
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -618,10 +619,12 @@ func TestRefreshProtectionReadsEachBaseBranchAgain(t *testing.T) {
 	}
 }
 
-// verifyBranches resolves a repository folder's base branch.
+// verifyBranches resolves a repository folder's base branch, on remote
+// (origin when empty).
 type verifyBranches struct {
 	mu         sync.Mutex
 	byDir      map[string]string
+	remote     string
 	err        error
 	configured []string
 }
@@ -633,7 +636,7 @@ func (b *verifyBranches) ResolveDefaultBranch(_ context.Context, dir, configured
 	if b.err != nil {
 		return ports.WorkspaceDefaultBranch{}, b.err
 	}
-	return ports.WorkspaceDefaultBranch{Remote: "origin", Branch: b.byDir[dir]}, nil
+	return ports.WorkspaceDefaultBranch{Remote: cmp.Or(b.remote, "origin"), Branch: b.byDir[dir]}, nil
 }
 
 func (b *verifyBranches) setErr(err error) {

@@ -56,9 +56,14 @@ type headInputs struct {
 	exec domain.LadoExecution
 	task domain.LadoTask
 	head string
-	// dir is the repository that holds the issue, and prefix its folder in
-	// a workspace project, slash-separated (empty for a single repository):
-	// the plan's paths are relative to the project root.
+	// repo is the repository verified (verifyRepo): in a workspace project
+	// the PR's, else the task's. crossRepo says it is another repository
+	// than the task's issue (#59).
+	repo      domain.TrackerRepo
+	crossRepo bool
+	// dir is that repository's folder, and prefix its folder in a workspace
+	// project, slash-separated (empty for a single repository): the plan's
+	// paths are relative to the project root.
 	dir, prefix string
 	// owner is the session that takes the head's fix and pull requests: the
 	// execution's own session while it lives (domain.LadoSessionLive), else
@@ -84,8 +89,19 @@ type headInputs struct {
 	commands   []domain.LadoCheckCommand
 	timeout    time.Duration
 	// target is the branch the PR merges into. baseBranch and baseRemote are
-	// the base the dispatcher resolved, else the target on origin.
+	// the base the dispatcher resolved, else the target on origin. For a PR
+	// in another repository than its issue they are the target on the
+	// remote resolved for the PR's repository: the dispatcher's are the
+	// issue repository's (#59).
 	target, baseBranch, baseRemote string
+	// defaultBranch is the default branch of the PR's repository when it is
+	// another repository than the issue's and LADO could resolve it, and
+	// dispatchBranch the base branch the dispatcher started the worker from
+	// (#59).
+	defaultBranch, dispatchBranch string
+	// configured is the base branch the workspace configures for the
+	// repository, if any.
+	configured string
 	// baseTip is the remote-tracking target's commit right after an
 	// approval fetched it (verifyOptions.fetchBase), empty when git has none.
 	baseTip string
@@ -141,7 +157,12 @@ func (s *Service) verifyHead(ctx context.Context, exec domain.LadoExecution, opt
 func (s *Service) verifyHeadIn(ctx context.Context, exec domain.LadoExecution, opts verifyOptions) (domain.LadoVerification, headInputs, error) {
 	s.verifyMu.Lock()
 	defer s.verifyMu.Unlock()
-	in, err := s.headInputs(ctx, exec)
+	in, err := s.headInputs(ctx, exec, opts.fetchBase)
+	var notInWorkspace *prRepoNotInWorkspaceError
+	if errors.As(err, &notInWorkspace) {
+		record, err := s.storeRepoMissing(ctx, in, notInWorkspace.repo)
+		return record, in, err
+	}
 	if err != nil {
 		return domain.LadoVerification{}, in, err
 	}
@@ -197,9 +218,52 @@ func (s *Service) verifyHeadIn(ctx context.Context, exec domain.LadoExecution, o
 	return record, in, nil
 }
 
+// storeRepoMissing stores the record of a head whose PR is in a repository
+// that is none of the workspace's child repositories (#59): base_branch
+// fails as pr_repo_not_in_workspace with the target and the PR's
+// repository, and the other items wait, for nothing can be read. The worker
+// is not asked to fix it: the project's repositories are the developer's.
+func (s *Service) storeRepoMissing(ctx context.Context, in headInputs, repo domain.TrackerRepo) (domain.LadoVerification, error) {
+	record := domain.LadoVerification{
+		ExecutionSessionID: in.exec.SessionID,
+		HeadSHA:            in.head,
+		PRURL:              in.exec.PR.URL,
+		Notified:           []string{},
+		ComputedAt:         s.now(),
+	}
+	for _, kind := range domain.LadoVerifyKinds() {
+		if kind != domain.LadoVerifyBaseBranch {
+			record.Items = append(record.Items, verifyingItem(kind))
+			continue
+		}
+		item, err := domain.NewLadoVerifyItem(kind, domain.LadoVerifyFail, domain.LadoCodePRRepoNotInWorkspace,
+			domain.LadoBaseBranchDetails{Branch: in.target, PRRepo: domain.LadoRepoRef(repo)})
+		if err != nil {
+			return domain.LadoVerification{}, err
+		}
+		record.Items = append(record.Items, item)
+	}
+	previous, found, err := s.deps.Store.GetLadoVerification(ctx, in.exec.SessionID, in.head)
+	if err != nil {
+		return domain.LadoVerification{}, fmt.Errorf("read the record of head %s: %w", in.head, err)
+	}
+	if found && previous.Notified != nil {
+		record.Notified = previous.Notified
+	}
+	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
+		return domain.LadoVerification{}, fmt.Errorf("store the record of head %s: %w", in.head, err)
+	}
+	s.markVerified(ctx, record)
+	return record, nil
+}
+
 // headInputs reads the inputs of the execution's PR head. Without its task,
-// project, plan, rule snapshot or check settings no item can be computed.
-func (s *Service) headInputs(ctx context.Context, exec domain.LadoExecution) (headInputs, error) {
+// project, plan, rule snapshot or check settings no item can be computed. A
+// PR in a repository that is none of the workspace's child repositories
+// fails with a *prRepoNotInWorkspaceError, the inputs holding the task and
+// the target. forceResolve resolves the default branch of a PR's repository
+// past the cache (resolveBase), as an integration approval does.
+func (s *Service) headInputs(ctx context.Context, exec domain.LadoExecution, forceResolve bool) (headInputs, error) {
 	in := headInputs{exec: exec, head: exec.PR.HeadSHA}
 	task, ok, err := s.deps.Tasks.LadoTask(ctx, exec.TaskID)
 	switch {
@@ -209,6 +273,10 @@ func (s *Service) headInputs(ctx context.Context, exec domain.LadoExecution) (he
 		return in, fmt.Errorf("task %s not found", exec.TaskID)
 	}
 	in.task = task
+	in.target = cmp.Or(exec.PR.TargetBranch, exec.BaseBranch)
+	if in.target == "" {
+		return in, errors.New("the PR has no target branch yet")
+	}
 	if err := s.readPlaces(ctx, &in); err != nil {
 		return in, err
 	}
@@ -228,48 +296,30 @@ func (s *Service) headInputs(ctx context.Context, exec domain.LadoExecution) (he
 		return in, fmt.Errorf("read the project's LADO settings: %w", err)
 	}
 	in.ignore = settings.OverlapIgnoreOrDefault()
-	in.target = cmp.Or(exec.PR.TargetBranch, exec.BaseBranch)
 	in.baseBranch = cmp.Or(exec.BaseBranch, in.target)
 	in.baseRemote = cmp.Or(exec.BaseRemote, "origin")
-	if in.target == "" {
-		return in, errors.New("the PR has no target branch yet")
+	if in.crossRepo {
+		// The dispatcher's base and its local commit are the issue
+		// repository's; the PR's repository has its own.
+		in.dispatchBranch = exec.BaseBranch
+		in.defaultBranch, in.baseRemote = s.resolveBase(ctx, in.dir, in.configured, forceResolve)
+		in.baseBranch = in.target
 	}
 	return in, nil
 }
 
-// readPlaces finds the repository that holds the issue as the dispatcher
-// does (the project's folder, or in a workspace project the child repository
-// with the issue's origin), the execution's worktree of it, whether the
-// worker session lives, and the project's environment.
+// readPlaces finds the repository the PR is verified in (verifyRepo: the
+// project's folder or, in a workspace project, the child repository with
+// the PR's origin, else the issue's), the execution's worktree of it,
+// whether the worker session lives, and the project's environment.
 func (s *Service) readPlaces(ctx context.Context, in *headInputs) error {
-	project, ok, err := s.deps.Projects.GetProject(ctx, string(in.task.ProjectID))
-	switch {
-	case err != nil:
-		return fmt.Errorf("read project %s: %w", in.task.ProjectID, err)
-	case !ok:
-		return fmt.Errorf("project %s not found", in.task.ProjectID)
+	place, err := s.verifyRepo(ctx, in.task, in.exec.SessionID, in.exec.PR.URL)
+	if err != nil {
+		return err
 	}
-	in.dir, in.env = project.Path, project.Config.Env
-	relative := ""
-	if project.Kind.WithDefault() == domain.ProjectKindWorkspace {
-		children, err := s.deps.Projects.ListWorkspaceRepos(ctx, project.ID)
-		if err != nil {
-			return fmt.Errorf("read the workspace repositories of project %s: %w", project.ID, err)
-		}
-		found := false
-		for _, child := range children {
-			repo, err := domain.LadoTrackerRepoFromOrigin(child.RepoOriginURL)
-			if err == nil && domain.LadoSameRepo(repo, in.task.Repo) {
-				relative, found = child.RelativePath, true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("no workspace repository has the origin %s", domain.LadoRepoRef(in.task.Repo))
-		}
-		in.dir, in.prefix = filepath.Join(project.Path, filepath.FromSlash(relative)), filepath.ToSlash(relative)
-	}
-	return s.readOwner(ctx, in, relative)
+	in.repo, in.crossRepo, in.configured = place.repo, place.crossRepo, place.configured
+	in.dir, in.prefix, in.env = place.dir, place.relative, place.project.Config.Env
+	return s.readOwner(ctx, in, place.relative)
 }
 
 // readOwner finds the session that takes the head's requests and the
@@ -367,7 +417,7 @@ func (s *Service) readValidators(ctx context.Context, exec domain.LadoExecution)
 // holds every item.
 func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOptions) evaluation {
 	var ev evaluation
-	read := s.protection.Read(ctx, in.task.Repo, in.target, opts.forceProtection)
+	read := s.protection.Read(ctx, in.repo, in.target, opts.forceProtection)
 	ev.protectionError = read.ErrorMessage()
 	required, named := RequiredContexts(read.Rules)
 	checks, checksErr := s.deps.Store.ListLadoCommitChecks(ctx, in.exec.PR.URL, in.head)
@@ -422,10 +472,16 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 			})
 		}},
 		{domain.LadoVerifyBaseBranch, func() (domain.LadoVerifyItem, error) {
+			// The dispatcher's local commit is of the issue's repository.
+			dispatchLocal := in.exec.DispatchLocalBaseSHA
+			if in.crossRepo {
+				dispatchLocal = ""
+			}
 			return EvaluateBase(ctx, s.deps.Git, BaseInput{
 				Dir: in.dir, Branch: in.baseBranch, Remote: in.baseRemote, HeadSHA: in.head, StartedAt: in.exec.StartedAt,
-				DispatchLocalSHA: in.exec.DispatchLocalBaseSHA, Target: in.target, Prefix: in.prefix,
+				DispatchLocalSHA: dispatchLocal, Target: in.target, Prefix: in.prefix,
 				Affected: in.plan.AffectedPaths, Ignore: in.ignore,
+				DefaultBranch: in.defaultBranch, DispatchBranch: in.dispatchBranch,
 			})
 		}},
 		{domain.LadoVerifyProtection, func() (domain.LadoVerifyItem, error) {
@@ -455,8 +511,8 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 	return ev
 }
 
-// ensureHead reports whether the repository that holds the issue has the
-// head. When it lacks it, as after GitHub's Update branch, an applied
+// ensureHead reports whether the repository verified (headInputs.repo) has
+// the head. When it lacks it, as after GitHub's Update branch, an applied
 // suggestion or a bot's push, LADO fetches the head ref the host keeps for
 // the PR from the base remote (prompts off, 30 seconds): the loop at most
 // once per head every headFetchEvery, an integration approval and its dry
@@ -467,7 +523,7 @@ func (s *Service) ensureHead(ctx context.Context, in headInputs, force bool) boo
 	if err != nil || has {
 		return true
 	}
-	ref := PullHeadRef(in.task.Repo.Provider, in.exec.PR.Number)
+	ref := PullHeadRef(in.repo.Provider, in.exec.PR.Number)
 	if ref == "" {
 		return false
 	}
@@ -500,10 +556,10 @@ func headKey(session domain.SessionID, head string) string {
 }
 
 // fetchBase brings the remote-tracking base branch, and the PR's target
-// when it is another branch, up to date in the repository that holds the
-// issue: each at most every baseFetchEvery unless force, within
-// baseFetchTimeout. A fetch that fails is logged: the items then compare
-// with what the last fetch brought.
+// when it is another branch, up to date in the repository verified: each
+// at most every baseFetchEvery unless force, within baseFetchTimeout. A
+// fetch that fails is logged: the items then compare with what the last
+// fetch brought.
 func (s *Service) fetchBase(ctx context.Context, in headInputs, force bool) {
 	for _, branch := range slices.Compact([]string{in.baseBranch, in.target}) {
 		if !s.fetchDue(fetchKey(in.dir, in.baseRemote, branch), force) {

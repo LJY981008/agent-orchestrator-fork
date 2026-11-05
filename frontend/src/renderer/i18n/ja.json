@@ -4549,5 +4549,10 @@
 	"lado.error.knowledgeSessionEnded": "セッションが終了したため、知識を書けません。",
 	"lado.error.knowledgeNotLadoProject": "知識を書けるのは LADO モードがオンのプロジェクトのセッションだけです。",
 	"lado.error.knowledgeReadOnly": "計画レビュアーはプロジェクトの知識を読むだけです。",
-	"lado.error.knowledgeForeign": "この知識フォルダーは別のリポジトリ（{{ownerPath}}）が書きました。先にプロジェクトの LADO 設定で引き継いでください。"
+	"lado.error.knowledgeForeign": "この知識フォルダーは別のリポジトリ（{{ownerPath}}）が書きました。先にプロジェクトの LADO 設定で引き継いでください。",
+	"lado.view.untrackedPR": "追跡していない PR #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "PR がこのワークスペース外のリポジトリで開かれている",
+	"lado.verify.base.prRepoNotInWorkspace": "PR は {{repo}} で開かれていますが、このワークスペースのリポジトリではありません",
+	"lado.verify.base.notDefault": "PR の対象は {{branch}}、実行の基準は {{dispatchBranch}} ですが、PR のリポジトリのデフォルトブランチは {{defaultBranch}} です",
+	"lado.presence.integration.baseNotDefault": "PR の対象は {{branch}}、実行の基準は {{dispatchBranch}} ですが、PR のリポジトリのデフォルトブランチは {{defaultBranch}} です。"
 }

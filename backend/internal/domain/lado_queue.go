@@ -257,6 +257,10 @@ type LadoExecution struct {
 	// and PR rows.
 	SessionTerminated bool
 	PR                LadoExecutionPR
+	// UntrackedPRs are the session's other PRs that are still open, newest
+	// first: LADO tracks and verifies only PR (issue #59), so the task view
+	// shows these as untracked. Empty while the session has one PR.
+	UntrackedPRs []LadoExecutionPR
 	// Verification and Integration are read with the execution from LADO's
 	// verification records and integration approvals.
 	Verification LadoExecutionVerification

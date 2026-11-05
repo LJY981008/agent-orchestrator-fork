@@ -4530,5 +4530,10 @@
 	"lado.error.knowledgeSessionEnded": "The session has ended, so it can no longer write knowledge.",
 	"lado.error.knowledgeNotLadoProject": "Only sessions of a project with LADO mode on write knowledge.",
 	"lado.error.knowledgeReadOnly": "A plan critic only reads project knowledge.",
-	"lado.error.knowledgeForeign": "This knowledge folder was written by another repository ({{ownerPath}}). Continue it in the project's LADO settings first."
+	"lado.error.knowledgeForeign": "This knowledge folder was written by another repository ({{ownerPath}}). Continue it in the project's LADO settings first.",
+	"lado.view.untrackedPR": "Untracked PR #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "The PR is open in a repository outside this workspace",
+	"lado.verify.base.prRepoNotInWorkspace": "The PR is open in {{repo}}, which is none of this workspace's repositories",
+	"lado.verify.base.notDefault": "The PR targets {{branch}} and the run started from {{dispatchBranch}}, but the default branch of the PR's repository is {{defaultBranch}}",
+	"lado.presence.integration.baseNotDefault": "The PR targets {{branch}} and the run started from {{dispatchBranch}}, but the default branch of the PR's repository is {{defaultBranch}}."
 }

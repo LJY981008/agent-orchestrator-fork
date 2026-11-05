@@ -4549,5 +4549,10 @@
 	"lado.error.knowledgeSessionEnded": "Die Sitzung ist beendet und kann kein Wissen mehr schreiben.",
 	"lado.error.knowledgeNotLadoProject": "Nur Sitzungen eines Projekts mit eingeschaltetem LADO-Modus schreiben Wissen.",
 	"lado.error.knowledgeReadOnly": "Ein Plan-Prüfer liest Projektwissen nur.",
-	"lado.error.knowledgeForeign": "Dieser Wissensordner wurde von einem anderen Repository ({{ownerPath}}) geschrieben. Führen Sie ihn zuerst in den LADO-Einstellungen des Projekts weiter."
+	"lado.error.knowledgeForeign": "Dieser Wissensordner wurde von einem anderen Repository ({{ownerPath}}) geschrieben. Führen Sie ihn zuerst in den LADO-Einstellungen des Projekts weiter.",
+	"lado.view.untrackedPR": "Nicht verfolgter PR #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "Der PR ist in einem Repository außerhalb dieses Workspaces geöffnet",
+	"lado.verify.base.prRepoNotInWorkspace": "Der PR ist in {{repo}} geöffnet, das keines der Repositories dieses Workspaces ist",
+	"lado.verify.base.notDefault": "Der PR zielt auf {{branch}} und der Lauf begann auf {{dispatchBranch}}, aber der Standard-Branch des PR-Repositorys ist {{defaultBranch}}",
+	"lado.presence.integration.baseNotDefault": "Der PR zielt auf {{branch}} und der Lauf begann auf {{dispatchBranch}}, aber der Standard-Branch des PR-Repositorys ist {{defaultBranch}}."
 }

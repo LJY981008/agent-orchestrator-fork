@@ -4531,5 +4531,10 @@
 	"lado.error.knowledgeSessionEnded": "会话已结束，无法再写入知识。",
 	"lado.error.knowledgeNotLadoProject": "只有开启 LADO 模式的项目的会话才能写入知识。",
 	"lado.error.knowledgeReadOnly": "计划审查者只读取项目知识。",
-	"lado.error.knowledgeForeign": "此知识文件夹由其他仓库（{{ownerPath}}）写入。请先在项目的 LADO 设置中继续使用它。"
+	"lado.error.knowledgeForeign": "此知识文件夹由其他仓库（{{ownerPath}}）写入。请先在项目的 LADO 设置中继续使用它。",
+	"lado.view.untrackedPR": "未跟踪的 PR #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "PR 开在此工作区之外的仓库中",
+	"lado.verify.base.prRepoNotInWorkspace": "PR 开在 {{repo}} 中，它不是此工作区的任何仓库",
+	"lado.verify.base.notDefault": "PR 的目标是 {{branch}}，运行起始于 {{dispatchBranch}}，但 PR 所在仓库的默认分支是 {{defaultBranch}}",
+	"lado.presence.integration.baseNotDefault": "PR 的目标是 {{branch}}，运行起始于 {{dispatchBranch}}，但 PR 所在仓库的默认分支是 {{defaultBranch}}。"
 }

@@ -243,6 +243,11 @@ func ladoTaskExecutionResponse(task domain.LadoTask, exec domain.LadoExecution) 
 		SessionEnded:   exec.SessionTerminated,
 		PR:             ladoExecutionPRResponse(exec.PR),
 	}
+	for _, pr := range exec.UntrackedPRs {
+		if untracked := ladoExecutionPRResponse(pr); untracked != nil {
+			resp.UntrackedPRs = append(resp.UntrackedPRs, *untracked)
+		}
+	}
 	if task.Plan.Latest.ID == exec.PlanRevisionID {
 		resp.PlanRevisionNumber = task.Plan.Latest.Number
 	}

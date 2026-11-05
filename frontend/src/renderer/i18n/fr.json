@@ -4630,5 +4630,10 @@
 	"lado.error.knowledgeSessionEnded": "La session est terminée : elle ne peut plus écrire de connaissances.",
 	"lado.error.knowledgeNotLadoProject": "Seules les sessions d’un projet en mode LADO écrivent des connaissances.",
 	"lado.error.knowledgeReadOnly": "Un relecteur de plan lit seulement les connaissances du projet.",
-	"lado.error.knowledgeForeign": "Ce dossier de connaissances a été écrit par un autre dépôt ({{ownerPath}}). Reprenez-le d’abord dans les réglages LADO du projet."
+	"lado.error.knowledgeForeign": "Ce dossier de connaissances a été écrit par un autre dépôt ({{ownerPath}}). Reprenez-le d’abord dans les réglages LADO du projet.",
+	"lado.view.untrackedPR": "PR non suivie #{{number}}",
+	"lado.reason.pr_repo_not_in_workspace": "La PR est ouverte dans un dépôt hors de cet espace de travail",
+	"lado.verify.base.prRepoNotInWorkspace": "La PR est ouverte dans {{repo}}, qui n’est aucun des dépôts de cet espace de travail",
+	"lado.verify.base.notDefault": "La PR cible {{branch}} et l’exécution est partie de {{dispatchBranch}}, mais la branche par défaut du dépôt de la PR est {{defaultBranch}}",
+	"lado.presence.integration.baseNotDefault": "La PR cible {{branch}} et l’exécution est partie de {{dispatchBranch}}, mais la branche par défaut du dépôt de la PR est {{defaultBranch}}."
 }

@@ -113,6 +113,15 @@ const (
 	// head's merge base with a change to a file the head changed or the plan
 	// names: the head must take in the base and be verified again.
 	LadoCodeBaseOverlap = "base_overlap" // fail
+	// LadoCodePRRepoNotInWorkspace means the PR is in a repository that is
+	// none of the workspace project's child repositories, so LADO has no
+	// repository to verify it in (#59). The other items wait.
+	LadoCodePRRepoNotInWorkspace = "pr_repo_not_in_workspace" // fail
+	// LadoCodeBaseNotDefault means the PR is in another repository than the
+	// task's issue, and the branch it merges into, or the base branch the
+	// dispatcher started its worker from, is not that repository's default
+	// branch (#59).
+	LadoCodeBaseNotDefault = "base_not_default" // confirm
 
 	// protection
 	LadoCodeUnprotected       = "unprotected"        // confirm
@@ -311,6 +320,13 @@ type LadoPathsDetails struct {
 // changed or the plan names, at most a page of OverlapCount. These four come
 // last and are left out while empty, so a record whose base did not move
 // keeps the hash it had before them.
+//
+// #59: PRRepo is the PR's repository (LadoRepoRef) when it is none of the
+// workspace's child repositories; DefaultBranch and DispatchBranch are the
+// PR repository's default branch and the dispatcher's base branch when the
+// PR is in another repository than the issue and either the target or that
+// base branch is not the default. They come after the others and are left
+// out while empty too, so the records before them keep their hashes.
 type LadoBaseBranchDetails struct {
 	Branch         string            `json:"branch"`
 	Remote         string            `json:"remote"`
@@ -322,6 +338,9 @@ type LadoBaseBranchDetails struct {
 	AdvancedTip    string            `json:"advancedTip,omitempty"`
 	Overlap        []string          `json:"overlap,omitempty"`
 	OverlapCount   int               `json:"overlapCount,omitempty"`
+	PRRepo         string            `json:"prRepo,omitempty"`
+	DefaultBranch  string            `json:"defaultBranch,omitempty"`
+	DispatchBranch string            `json:"dispatchBranch,omitempty"`
 }
 
 // LadoReflogEntry is one reflog entry of the local base branch.

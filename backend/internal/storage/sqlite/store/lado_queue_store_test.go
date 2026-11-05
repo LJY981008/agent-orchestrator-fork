@@ -1067,6 +1067,45 @@ func TestLadoExecutionReadsTheSessionFacts(t *testing.T) {
 	}
 }
 
+// A session with more than one PR tracks its newest; its other open PRs
+// come back as untracked, newest first, and its merged or closed ones not at
+// all (issue #59).
+func TestLadoExecutionUntrackedPRs(t *testing.T) {
+	s, _ := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	mustLadoMode(t, s, "mer", true)
+	id := mustQueuedLadoTask(t, s, "1", "mer", ladoQueueAt)
+	now := ladoQueueAt.Add(time.Hour)
+	claim := mustClaimLadoQueue(t, s, now, 1, ladoTokens("token"), id)[0]
+	session := mustLadoSession(t, s, "mer", false).ID
+	if err := s.LinkLadoExecution(ctx, id, claim.LeaseToken, domain.LadoExecution{SessionID: session, StartedAt: now}); err != nil {
+		t.Fatalf("link: %v", err)
+	}
+
+	// One PR alone is tracked, and nothing is untracked.
+	tracked := mustWriteLadoPR(t, s, session, 9, false, false, now.Add(5*time.Hour))
+	got, ok, err := s.LadoExecution(ctx, session)
+	if err != nil || !ok || got.PR != tracked || len(got.UntrackedPRs) != 0 {
+		t.Fatalf("LadoExecution = %+v (%v, %v), want PR %+v and none untracked", got, ok, err, tracked)
+	}
+
+	// The update times fix which PR is the newest and so tracked.
+	mustWriteLadoPR(t, s, session, 5, true, false, now.Add(4*time.Hour))
+	older := mustWriteLadoPR(t, s, session, 6, false, false, now.Add(3*time.Hour))
+	mustWriteLadoPR(t, s, session, 7, false, true, now.Add(2*time.Hour))
+	oldest := mustWriteLadoPR(t, s, session, 8, false, false, now.Add(time.Hour))
+	want := []domain.LadoExecutionPR{older, oldest}
+	got, ok, err = s.LadoExecution(ctx, session)
+	if err != nil || !ok || got.PR != tracked || !reflect.DeepEqual(got.UntrackedPRs, want) {
+		t.Fatalf("LadoExecution = PR %+v untracked %+v (%v, %v), want PR %+v untracked %+v", got.PR, got.UntrackedPRs, ok, err, tracked, want)
+	}
+	task, ok, err := s.LadoTask(ctx, "lado-task-1")
+	if err != nil || !ok || task.Execution.PR != tracked || !reflect.DeepEqual(task.Execution.UntrackedPRs, want) {
+		t.Fatalf("LadoTask execution = PR %+v untracked %+v (%v, %v), want PR %+v untracked %+v", task.Execution.PR, task.Execution.UntrackedPRs, ok, err, tracked, want)
+	}
+}
+
 func TestCountLiveLadoExecutions(t *testing.T) {
 	s, _ := openLadoQueueStore(t)
 	ctx := context.Background()
