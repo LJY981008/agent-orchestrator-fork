@@ -324,7 +324,13 @@ func problemText(p domain.LadoPlanProblem) string {
 	case domain.LadoPlanPartMissing:
 		what = "a part lacks a title, steps or affected_paths"
 	case domain.LadoPlanPartRepoOutside:
-		what = "a path lies outside the folder of the workspace repository that holds the issue, the only repository a parts run merges in"
+		what = "a path lies outside the repositories the plan runs in: its repos list, or without one the workspace repository its paths lie in or that holds the issue"
+	case domain.LadoPlanReposInvalid:
+		what = "a repos entry is blank, starts with /, has a . or .. segment, or repeats another"
+	case domain.LadoPlanReposMissing:
+		what = "the paths lie in more than one workspace repository: list them in repos, in the order their pull requests merge"
+	case domain.LadoPlanRepoUnknown:
+		what = "a repos entry is not a child repository of this workspace; a single-repository project takes no repos list"
 	default:
 		what = p.Code
 	}
