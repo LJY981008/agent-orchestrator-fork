@@ -4251,6 +4251,7 @@
 	"lado.planProblem.part_step_shared": "2 つのパートが同じステップを指しています。",
 	"lado.planProblem.part_path_outside": "パートのパスが計画の affected_paths の外にあります。",
 	"lado.planProblem.part_missing_field": "パートに title、steps、affected_paths のいずれかがありません。",
+	"lado.planProblem.part_repo_outside": "ワークスペースプロジェクトでパートを使う計画のパスは、Issue を持つリポジトリのフォルダー内にある必要があります。",
 	"lado.parts.title": "パート",
 	"lado.parts.state.waiting": "待機中",
 	"lado.parts.state.running": "実行中",

@@ -4251,6 +4251,7 @@
 	"lado.planProblem.part_step_shared": "두 파트가 같은 단계를 가리킵니다.",
 	"lado.planProblem.part_path_outside": "파트의 경로가 계획의 affected_paths 밖에 있습니다.",
 	"lado.planProblem.part_missing_field": "파트에 title, steps, affected_paths 중 빠진 것이 있습니다.",
+	"lado.planProblem.part_repo_outside": "워크스페이스 프로젝트에서 파트를 쓰는 계획의 경로는 이슈를 가진 저장소 폴더 안에 있어야 합니다.",
 	"lado.parts.title": "파트",
 	"lado.parts.state.waiting": "대기",
 	"lado.parts.state.running": "실행 중",
