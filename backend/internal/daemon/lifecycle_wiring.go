@@ -38,6 +38,10 @@ import (
 
 const startupReconcileWorkers = 4
 
+// The lifecycle manager filters workers' own review-thread replies only when
+// its store lists review runs (#48); keep the production store on that path.
+var _ lifecycle.ReviewRunLister = (*sqlite.Store)(nil)
+
 type notificationSink interface {
 	Notify(context.Context, ports.NotificationIntent) error
 	Resolve(context.Context, ports.NotificationResolution) error
