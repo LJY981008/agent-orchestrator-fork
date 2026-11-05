@@ -12044,3 +12044,60 @@ func TestOrchestratorWorkspaceBranchCollision(t *testing.T) {
 		})
 	}
 }
+
+// LADO #60: a workspace-project spawn hands ReuseExistingBranch to the adapter
+// so a branch LADO made first is used as is, without a "-2" suffix.
+func TestSpawn_WorkspaceProjectPassesReuseExistingBranch(t *testing.T) {
+	for _, reuse := range []bool{true, false} {
+		st := newFakeStore()
+		st.projects["mer"] = domain.ProjectRecord{
+			ID: "mer", Path: filepath.Join(string(filepath.Separator), "repo", "mer"),
+			Kind: domain.ProjectKindWorkspace, Config: testRoleAgents(),
+		}
+		st.workspaceRepo["mer"] = []domain.WorkspaceRepoRecord{{Name: "back", RelativePath: "back"}}
+		ws := &fakeWorkspace{path: filepath.Join(string(filepath.Separator), "managed", "mer-1")}
+		m := New(Deps{
+			Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: ws, Store: st,
+			Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+			LookPath: func(string) (string, error) { return "/bin/true", nil },
+		})
+		if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID: "mer", Kind: domain.KindWorker, Branch: "lado/t/e/a", ReuseExistingBranch: reuse,
+		}); err != nil {
+			t.Fatalf("reuse=%v: %v", reuse, err)
+		}
+		if got := ws.lastProjectCfg.ReuseExistingBranch; got != reuse {
+			t.Fatalf("workspace project ReuseExistingBranch = %v, want %v", got, reuse)
+		}
+		if got := ws.lastProjectCfg.Branch; got != "lado/t/e/a" {
+			t.Fatalf("workspace project branch = %q, want lado/t/e/a", got)
+		}
+		if ws.lastProjectCfg.FreshBranch {
+			t.Fatalf("reuse=%v: workspace project spawn asked for a fresh branch", reuse)
+		}
+	}
+}
+
+// LADO #60: the single-repo path already reuses an existing branch, so the
+// flag leaves its WorkspaceConfig exactly as an ordinary spawn builds it.
+func TestSpawn_SingleRepoIgnoresReuseExistingBranch(t *testing.T) {
+	configs := make([]ports.WorkspaceConfig, 0, 2)
+	for _, reuse := range []bool{false, true} {
+		m, _, _, ws := newManager()
+		if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+			ProjectID: "mer", Kind: domain.KindWorker, Branch: "lado/t/e/a", ReuseExistingBranch: reuse,
+		}); err != nil {
+			t.Fatalf("reuse=%v: %v", reuse, err)
+		}
+		if ws.createCount != 1 {
+			t.Fatalf("reuse=%v: Create calls = %d, want 1", reuse, ws.createCount)
+		}
+		configs = append(configs, ws.lastCfg)
+	}
+	if !reflect.DeepEqual(configs[0], configs[1]) {
+		t.Fatalf("single-repo WorkspaceConfig changed with ReuseExistingBranch:\nwithout %+v\nwith    %+v", configs[0], configs[1])
+	}
+	if configs[1].Branch != "lado/t/e/a" || configs[1].FreshBranch {
+		t.Fatalf("single-repo WorkspaceConfig = %+v, want branch lado/t/e/a without a fresh branch", configs[1])
+	}
+}
