@@ -4524,6 +4524,65 @@ paths:
         takes them
       tags:
       - lado
+  /api/v1/lado/relays:
+    post:
+      operationId: createLadoRelay
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLadoRelayRequest'
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRelayResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Relay a developer's instruction from a LADO project's Chat orchestrator
+        to a running execution worker of a task; LADO checks the caller, the task,
+        the worker and that the evidence is a sentence the developer typed in the
+        orchestrator's conversation, marks an instruction beyond that evidence or
+        outside the approved plan, sends it as LADO and records the relay
+      tags:
+      - lado
   /api/v1/lado/rules:
     get:
       operationId: listLadoRules
@@ -6033,6 +6092,46 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: List a task's plan requests, revisions and approvals
+      tags:
+      - lado
+  /api/v1/lado/tasks/{taskId}/relays:
+    get:
+      operationId: listLadoTaskRelays
+      parameters:
+      - description: LADO task id.
+        in: path
+        name: taskId
+        required: true
+        schema:
+          description: LADO task id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoRelayListResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the developer instructions LADO relayed to a task's workers, newest
+        first
       tags:
       - lado
   /api/v1/lado/tasks/{taskId}/timings:
@@ -18888,6 +18987,38 @@ components:
             it faithfully.
           type: string
       type: object
+    CreateLadoRelayRequest:
+      properties:
+        evidence:
+          description: The developer's sentence the instruction rests on, quoted as
+            the developer typed it in the orchestrator's conversation.
+          type: string
+        message:
+          description: The instruction the worker receives; best the developer's own
+            words.
+          type: string
+        outsidePlan:
+          description: The orchestrator marks the instruction as leaving the approved
+            plan (a new step or another path).
+          type: boolean
+        sessionId:
+          description: The orchestrator asking (AO_SESSION_ID); it must be a live
+            Chat orchestrator of a project in LADO mode.
+          type: string
+        task:
+          description: 'The task: its id (lado-task-…), an issue number (#49 or 49)
+            or a canonical issue id of the orchestrator''s project.'
+          type: string
+        workerSessionId:
+          description: The worker to relay to, an execution of the task; omitted picks
+            the task's one live worker.
+          type: string
+      required:
+      - sessionId
+      - task
+      - message
+      - evidence
+      type: object
     CreateLadoRuleRequest:
       properties:
         category:
@@ -22070,6 +22201,100 @@ components:
       - selector
       - commit
       - subject
+      type: object
+    LadoRelayListResponse:
+      properties:
+        relays:
+          items:
+            $ref: '#/components/schemas/LadoRelayResponse'
+          type: array
+      required:
+      - relays
+      type: object
+    LadoRelayResponse:
+      properties:
+        beyondEvidence:
+          description: The instruction is not part of the developer's message; the
+            worker was told to judge by the developer's words.
+          type: boolean
+        createdAt:
+          format: date-time
+          type: string
+        deliveredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        evidence:
+          description: The developer's sentence the instruction rests on, as the orchestrator
+            quoted it.
+          type: string
+        evidenceAt:
+          description: When the developer wrote that message.
+          format: date-time
+          type: string
+        evidenceMessageId:
+          description: The developer's message of the orchestrator's conversation
+            that contains the evidence.
+          type: string
+        failure:
+          description: Why a failed relay was not delivered.
+          type: string
+        id:
+          type: string
+        instruction:
+          description: What the worker was told.
+          type: string
+        orchestratorSessionId:
+          description: The orchestrator that asked for the relay.
+          type: string
+        outsidePlan:
+          description: The instruction may leave the approved plan; outsidePlanReasons
+            say why.
+          type: boolean
+        outsidePlanReasons:
+          items:
+            type: string
+          type: array
+        partId:
+          description: The part of a part or merge worker.
+          type: string
+        projectId:
+          type: string
+        state:
+          enum:
+          - sending
+          - delivered
+          - failed
+          type: string
+        taskId:
+          type: string
+        workerRole:
+          description: What the worker does in a task split into parts; omitted for
+            a task's one worker.
+          enum:
+          - part
+          - merge
+          - integration
+          type: string
+        workerSessionId:
+          description: The execution worker that received it.
+          type: string
+      required:
+      - id
+      - taskId
+      - projectId
+      - orchestratorSessionId
+      - workerSessionId
+      - instruction
+      - evidence
+      - evidenceMessageId
+      - evidenceAt
+      - beyondEvidence
+      - outsidePlan
+      - outsidePlanReasons
+      - state
+      - createdAt
       type: object
     LadoRepositoryFailureResponse:
       properties:

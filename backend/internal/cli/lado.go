@@ -5,7 +5,7 @@ package cli
 // or its findings (docs/LJY-PRD/TDD.md §5.1). A plan worker writes no files:
 // it pipes the text in, and the daemon checks that the calling session is the
 // request's designer or running critic. `ao lado timings` is in
-// lado_timings.go.
+// lado_timings.go and `ao lado relay` in lado_relay.go.
 
 import (
 	"encoding/json"
@@ -55,14 +55,14 @@ type ladoPlanSubmitResponse struct {
 func newLadoCommand(ctx *commandContext) *cobra.Command {
 	lado := &cobra.Command{
 		Use:   "lado",
-		Short: "LADO commands: hand LADO a plan or a review, and show how long tasks took",
+		Short: "LADO commands: hand LADO a plan or a review, relay the developer's instruction to a worker, and show how long tasks took",
 	}
 	plan := &cobra.Command{
 		Use:   "plan",
 		Short: "Hand LADO a plan or a review of one",
 	}
 	plan.AddCommand(newLadoPlanSubmitCommand(ctx), newLadoCritiqueCommand(ctx))
-	lado.AddCommand(plan, newLadoTimingsCommand(ctx))
+	lado.AddCommand(plan, newLadoRelayCommand(ctx), newLadoTimingsCommand(ctx))
 	return lado
 }
 

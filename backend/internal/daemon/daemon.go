@@ -1038,6 +1038,7 @@ func Run() error {
 		LadoUsage:          lado.watch.usage,
 		LadoWatch:          lado.watch.alerts,
 		LadoCompact:        lado.watch.launch,
+		LadoRelay:          lado.relay,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

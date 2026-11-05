@@ -1684,6 +1684,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/relays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Relay a developer's instruction from a LADO project's Chat orchestrator to a running execution worker of a task; LADO checks the caller, the task, the worker and that the evidence is a sentence the developer typed in the orchestrator's conversation, marks an instruction beyond that evidence or outside the approved plan, sends it as LADO and records the relay */
+        post: operations["createLadoRelay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/rules": {
         parameters: {
             query?: never;
@@ -2041,6 +2058,23 @@ export interface paths {
         };
         /** List a task's plan requests, revisions and approvals */
         get: operations["listLadoPlans"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/tasks/{taskId}/relays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the developer instructions LADO relayed to a task's workers, newest first */
+        get: operations["listLadoTaskRelays"];
         put?: never;
         post?: never;
         delete?: never;
@@ -6362,6 +6396,20 @@ export interface components {
             /** @description An issue comment that holds the plan; the plan worker converts it faithfully. */
             sourceCommentId?: string;
         };
+        CreateLadoRelayRequest: {
+            /** @description The developer's sentence the instruction rests on, quoted as the developer typed it in the orchestrator's conversation. */
+            evidence: string;
+            /** @description The instruction the worker receives; best the developer's own words. */
+            message: string;
+            /** @description The orchestrator marks the instruction as leaving the approved plan (a new step or another path). */
+            outsidePlan?: boolean;
+            /** @description The orchestrator asking (AO_SESSION_ID); it must be a live Chat orchestrator of a project in LADO mode. */
+            sessionId: string;
+            /** @description The task: its id (lado-task-…), an issue number (#49 or 49) or a canonical issue id of the orchestrator's project. */
+            task: string;
+            /** @description The worker to relay to, an execution of the task; omitted picks the task's one live worker. */
+            workerSessionId?: string;
+        };
         CreateLadoRuleRequest: {
             category?: string;
             /** @description Rules that cannot be on together with this one. */
@@ -7641,6 +7689,49 @@ export interface components {
             selector: string;
             /** @description The reflog entry's message. */
             subject: string;
+        };
+        LadoRelayListResponse: {
+            relays: components["schemas"]["LadoRelayResponse"][];
+        };
+        LadoRelayResponse: {
+            /** @description The instruction is not part of the developer's message; the worker was told to judge by the developer's words. */
+            beyondEvidence: boolean;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deliveredAt?: null | string;
+            /** @description The developer's sentence the instruction rests on, as the orchestrator quoted it. */
+            evidence: string;
+            /**
+             * Format: date-time
+             * @description When the developer wrote that message.
+             */
+            evidenceAt: string;
+            /** @description The developer's message of the orchestrator's conversation that contains the evidence. */
+            evidenceMessageId: string;
+            /** @description Why a failed relay was not delivered. */
+            failure?: string;
+            id: string;
+            /** @description What the worker was told. */
+            instruction: string;
+            /** @description The orchestrator that asked for the relay. */
+            orchestratorSessionId: string;
+            /** @description The instruction may leave the approved plan; outsidePlanReasons say why. */
+            outsidePlan: boolean;
+            outsidePlanReasons: string[];
+            /** @description The part of a part or merge worker. */
+            partId?: string;
+            projectId: string;
+            /** @enum {string} */
+            state: "sending" | "delivered" | "failed";
+            taskId: string;
+            /**
+             * @description What the worker does in a task split into parts; omitted for a task's one worker.
+             * @enum {string}
+             */
+            workerRole?: "part" | "merge" | "integration";
+            /** @description The execution worker that received it. */
+            workerSessionId: string;
         };
         LadoRepositoryFailureResponse: {
             problem: string;
@@ -16547,6 +16638,84 @@ export interface operations {
             };
         };
     };
+    createLadoRelay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateLadoRelayRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRelayResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listLadoRules: {
         parameters: {
             query?: {
@@ -18431,6 +18600,56 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["LadoPlanHistoryResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoTaskRelays: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description LADO task id. */
+                taskId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoRelayListResponse"];
                 };
             };
             /** @description Not Found */
