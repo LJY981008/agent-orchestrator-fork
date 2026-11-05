@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoproject"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladorelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoverify"
@@ -66,6 +67,9 @@ type ladoWork struct {
 	// watch is the worker watch (issue #42), whose loop the daemon starts
 	// with startLadoWatch.
 	watch ladoWatchServices
+	// relay relays a developer's instruction from an orchestrator to a
+	// running worker (issue #49).
+	relay *ladorelay.Service
 }
 
 // wireLadoWork builds LADO's repository connections, the local setup it
@@ -74,7 +78,8 @@ type ladoWork struct {
 // notices reach the orchestrators, whose approvals fix the rules and the
 // setup and queue the plans, the dispatcher that starts the queued plans'
 // workers and stops the worker of a cancelled task, and the loop that
-// verifies the workers' PRs. The daemon calls it once AO's project service
+// verifies the workers' PRs, and the relay of the developer's instructions
+// from an orchestrator to a running worker. The daemon calls it once AO's project service
 // exists, after installLadoCredentials opened the token store and before
 // sessions restore, and starts the dispatcher, then the verification loop,
 // once workers may spawn. Without AO's session service the dispatcher only
@@ -148,7 +153,8 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	tasks.SetPlanQueue(queue)
 	verify := wireLadoVerify(store, blobs, clients, work, log)
 	chrome := wireLadoClaudeChrome(cfg, store, work.setup.sessions, log)
-	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch}
+	relay := wireLadoRelay(store, blobs, work.sender, log)
+	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch, relay: relay}
 }
 
 // ladoQueueSender is how the dispatcher tells a running resolve worker about

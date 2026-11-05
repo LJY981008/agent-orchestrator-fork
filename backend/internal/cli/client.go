@@ -31,6 +31,9 @@ type apiError struct {
 	Message   string `json:"message"`
 	Code      string `json:"code"`
 	RequestID string `json:"requestId"`
+	// Details is the envelope's details object, for the commands that show
+	// part of it (LADO fork: ao lado relay's candidates).
+	Details json.RawMessage `json:"details,omitempty"`
 }
 
 type apiResponseError struct {

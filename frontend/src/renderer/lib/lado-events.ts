@@ -13,6 +13,7 @@ import {
 	ladoRuleQueryRoot,
 	ladoRulesQueryRoot,
 	ladoTaskForSession,
+	ladoTaskRelaysQueryKey,
 	ladoTasksQueryKey,
 	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
@@ -189,8 +190,12 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 				invalidate(ladoTasksQueryKey(projectId));
 			}
 			setupProjects.clear();
-			// The task's open Rules tab.
-			for (const { projectId, taskId } of tasks.values()) invalidate(ladoEffectiveQueryKey(projectId, taskId));
+			// The task's open Rules tab, and its Relays tab: a relay's row is a
+			// task event when LADO records it and when it is delivered or fails.
+			for (const { projectId, taskId } of tasks.values()) {
+				invalidate(ladoEffectiveQueryKey(projectId, taskId));
+				invalidate(ladoTaskRelaysQueryKey(taskId));
+			}
 			tasks.clear();
 			// The run's panel with its check output, and its task's lanes, board
 			// card and open view.

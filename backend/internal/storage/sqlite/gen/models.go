@@ -774,6 +774,27 @@ type LadoQueueEntry struct {
 	WaitingDetail        string
 }
 
+type LadoRelay struct {
+	ID                     string
+	TaskID                 string
+	ProjectID              string
+	OrchestratorSessionID  string
+	WorkerSessionID        string
+	WorkerRole             string
+	PartID                 string
+	Instruction            string
+	Evidence               string
+	EvidenceMessageID      string
+	EvidenceAt             time.Time
+	BeyondEvidence         int64
+	OutsidePlan            int64
+	OutsidePlanReasonsJson string
+	State                  string
+	Failure                string
+	CreatedAt              time.Time
+	DeliveredAt            sql.NullTime
+}
+
 type LadoRule struct {
 	ID         string
 	Builtin    int64

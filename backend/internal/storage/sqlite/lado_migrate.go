@@ -147,6 +147,11 @@ END`,
 	ladoExecutionChildCDCTrigger("lado_cdc_pr_resolves_insert", "AFTER INSERT ON lado_pr_resolves", ""),
 	ladoExecutionChildCDCTrigger("lado_cdc_pr_resolves_update", "AFTER UPDATE ON lado_pr_resolves",
 		"WHEN OLD.state IS NOT NEW.state OR OLD.attempts IS NOT NEW.attempts OR OLD.session_id IS NOT NEW.session_id OR OLD.error IS NOT NEW.error"),
+	// A relay of a developer instruction publishes its task's change when it
+	// is recorded and when it is delivered or fails, so the task view's relay
+	// tab follows (issue #49).
+	ladoPlanCDCTrigger("lado_cdc_relays_insert", "AFTER INSERT ON lado_relays", ""),
+	ladoPlanCDCTrigger("lado_cdc_relays_update", "AFTER UPDATE ON lado_relays", "WHEN OLD.state IS NOT NEW.state"),
 	// Rules apply in every LADO project, so a rule, a new version or a Global
 	// binding publishes a lado_rules change in each project with LADO mode on.
 	// Versions never change, and their deletes follow the rule's.
