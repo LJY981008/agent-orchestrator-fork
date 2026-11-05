@@ -109,6 +109,16 @@ export type LadoProjectProtection = components["schemas"]["LadoProjectProtection
 export type LadoBranchProtection = components["schemas"]["LadoBranchProtectionResponse"];
 export type LadoCheckCommand = components["schemas"]["LadoCheckCommandBody"];
 type LadoIntegrationInput = components["schemas"]["ApproveLadoIntegrationRequest"];
+/** A project's knowledge folder: its notes, its owner and the folders it can import from (issue #24). */
+export type LadoKnowledge = components["schemas"]["LadoKnowledgeResponse"];
+export type LadoKnowledgeNote = components["schemas"]["LadoKnowledgeNoteResponse"];
+export type LadoKnowledgeNoteState = LadoKnowledgeNote["state"];
+export type LadoKnowledgeImportable = components["schemas"]["LadoKnowledgeImportableResponse"];
+export type LadoKnowledgeImportResult = components["schemas"]["LadoKnowledgeImportResponse"];
+export type LadoKnowledgeImportSkip = components["schemas"]["LadoKnowledgeImportSkipResponse"];
+export type LadoKnowledgeImportSkipReason = LadoKnowledgeImportSkip["reason"];
+/** Where an import reads notes from: Claude Code's memory of a path, or another knowledge folder. */
+export type LadoKnowledgeImportInput = components["schemas"]["ImportLadoKnowledgeRequest"];
 
 /** The protected rule whose globs keep workers away from protected paths. */
 export const LADO_PROTECTED_PATHS_RULE_ID = "paths.protected";
@@ -173,6 +183,7 @@ export const ladoExecutionQueryKey = (sessionId: string) => ["lado", "execution"
 export const ladoCheckLogSessionQueryKey = (sessionId: string) => ["lado", "check-log", sessionId] as const;
 export const ladoCheckLogQueryKey = (sessionId: string, checkRunId: string, status = "") => ["lado", "check-log", sessionId, checkRunId, status] as const;
 export const ladoProtectionQueryKey = (projectId: string) => ["lado", "protection", projectId] as const;
+export const ladoKnowledgeQueryKey = (projectId: string) => ["lado", "knowledge", projectId] as const;
 export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
 /** Under the task view's key, so LADO's task events refresh it as well. */
 export const ladoTaskUsageQueryKey = (taskId: string) => ["lado", "task", taskId, "usage"] as const;
@@ -701,6 +712,49 @@ export async function fetchLadoProtection(projectId: string, refresh = false): P
 		params: { path: { projectId }, query: refresh ? { refresh: true } : {} },
 	});
 	if (error) throw ladoError(error, "Could not read the branch protection");
+	return data;
+}
+
+/**
+ * A project's knowledge folder (docs/LJY-PRD/adr/0010-project-knowledge-store.md):
+ * its notes with their freshness against the base branch, whether the folder
+ * belongs to another repository, and the other folders it can import from.
+ */
+export async function fetchLadoKnowledge(projectId: string): Promise<LadoKnowledge> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/projects/{projectId}/knowledge", {
+		params: { path: { projectId } },
+	});
+	if (error) throw ladoError(error, "Could not read the project's knowledge");
+	return data;
+}
+
+/**
+ * Copies notes into the project's knowledge from Claude Code's memory (of the
+ * given path, or of the project's path when none is given) or from another
+ * knowledge folder. The source is only read; a slug the project has is skipped.
+ */
+export async function importLadoKnowledge(projectId: string, input: LadoKnowledgeImportInput): Promise<LadoKnowledgeImportResult> {
+	const body: LadoKnowledgeImportInput = { source: input.source };
+	const path = input.path?.trim();
+	if (input.source === "claude_memory" && path) body.path = path;
+	if (input.source === "project" && input.fromProjectId) body.fromProjectId = input.fromProjectId;
+	const { data, error } = await apiClient.POST("/api/v1/lado/projects/{projectId}/knowledge/imports", {
+		params: { path: { projectId } },
+		body,
+	});
+	if (error) throw ladoError(error, "Could not import the notes");
+	return data;
+}
+
+/**
+ * Makes the project the owner of a knowledge folder another repository wrote,
+ * so its sessions read and write it again; answers the folder as it is now.
+ */
+export async function claimLadoKnowledge(projectId: string): Promise<LadoKnowledge> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/projects/{projectId}/knowledge/claim", {
+		params: { path: { projectId } },
+	});
+	if (error) throw ladoError(error, "Could not take over the knowledge folder");
 	return data;
 }
 

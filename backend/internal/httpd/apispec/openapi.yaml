@@ -3770,6 +3770,66 @@ paths:
         again, its attempts started over; needs no presence proof
       tags:
       - lado
+  /api/v1/lado/knowledge/notes/{slug}:
+    put:
+      operationId: writeLadoKnowledgeNote
+      parameters:
+      - description: 'The note''s slug: 1 to 64 of a-z, 0-9 and ''-'', starting with
+          a letter or digit. It is the file name notes/<slug>.md.'
+        in: path
+        name: slug
+        required: true
+        schema:
+          description: 'The note''s slug: 1 to 64 of a-z, 0-9 and ''-'', starting
+            with a letter or digit. It is the file name notes/<slug>.md.'
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WriteLadoKnowledgeNoteRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoKnowledgeNoteResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Write a knowledge note for a running session of a LADO mode project
+        into that session's project; an update sends the revision it read as baseRevision
+      tags:
+      - lado
   /api/v1/lado/plan-requests/{requestId}/critique:
     post:
       operationId: submitLadoPlanCritique
@@ -4152,6 +4212,146 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
       summary: List the open issues without a task in each of a project's repositories
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/knowledge:
+    get:
+      operationId: getLadoProjectKnowledge
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoKnowledgeResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get a project''s knowledge folder: its notes with their freshness
+        against the base branch, whether the folder belongs to another repository,
+        and the other knowledge folders it can import from'
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/knowledge/claim:
+    post:
+      operationId: claimLadoProjectKnowledge
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoKnowledgeResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Make the project the owner of its knowledge folder when the folder
+        came from another repository, and get the folder again
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/knowledge/imports:
+    post:
+      operationId: importLadoProjectKnowledge
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportLadoKnowledgeRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoKnowledgeImportResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Copy notes into a project's knowledge from Claude Code's memory of
+        a project path or from another knowledge folder; the source is only read and
+        a slug the project has is skipped
       tags:
       - lado
   /api/v1/lado/projects/{projectId}/protection:
@@ -19944,6 +20144,20 @@ components:
       - hostId
       - apiVersion
       type: object
+    ImportLadoKnowledgeRequest:
+      properties:
+        fromProjectId:
+          type: string
+        path:
+          type: string
+        source:
+          enum:
+          - claude_memory
+          - project
+          type: string
+      required:
+      - source
+      type: object
     ImportLadoTasksRequest:
       properties:
         issueRefs:
@@ -21454,6 +21668,130 @@ components:
       - body
       - state
       - url
+      type: object
+    LadoKnowledgeImportResponse:
+      properties:
+        imported:
+          items:
+            type: string
+          type: array
+        skipped:
+          items:
+            $ref: '#/components/schemas/LadoKnowledgeImportSkipResponse'
+          type: array
+      required:
+      - imported
+      - skipped
+      type: object
+    LadoKnowledgeImportSkipResponse:
+      properties:
+        name:
+          type: string
+        reason:
+          enum:
+          - claude_memory_not_found
+          - exists
+          - link
+          - not_a_file
+          - too_large
+          - invalid_name
+          - invalid_note
+          - secret
+          - limit
+          - unreadable
+          type: string
+      required:
+      - name
+      - reason
+      type: object
+    LadoKnowledgeImportableResponse:
+      properties:
+        notes:
+          type: integer
+        ownerPath:
+          type: string
+        projectId:
+          type: string
+        registered:
+          type: boolean
+      required:
+      - projectId
+      - notes
+      - registered
+      type: object
+    LadoKnowledgeNoteResponse:
+      properties:
+        author:
+          type: string
+        kind:
+          type: string
+        revision:
+          type: integer
+        slug:
+          type: string
+        state:
+          enum:
+          - fresh
+          - stale
+          - unchecked
+          type: string
+        title:
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - slug
+      - title
+      - kind
+      - revision
+      - updatedAt
+      - author
+      - state
+      type: object
+    LadoKnowledgeOwnerResponse:
+      properties:
+        claimedAt:
+          format: date-time
+          type: string
+        path:
+          type: string
+        projectId:
+          type: string
+        rootCommit:
+          type: string
+      required:
+      - projectId
+      - path
+      - claimedAt
+      type: object
+    LadoKnowledgeResponse:
+      properties:
+        dir:
+          type: string
+        foreign:
+          type: boolean
+        importable:
+          items:
+            $ref: '#/components/schemas/LadoKnowledgeImportableResponse'
+          type: array
+        notes:
+          items:
+            $ref: '#/components/schemas/LadoKnowledgeNoteResponse'
+          type: array
+        owner:
+          $ref: '#/components/schemas/LadoKnowledgeOwnerResponse'
+        projectId:
+          type: string
+        truncated:
+          type: boolean
+      required:
+      - projectId
+      - dir
+      - foreign
+      - notes
+      - truncated
+      - importable
       type: object
     LadoLinkedProjectResponse:
       properties:
@@ -30366,6 +30704,18 @@ components:
       - name
       - path
       - type
+      type: object
+    WriteLadoKnowledgeNoteRequest:
+      properties:
+        baseRevision:
+          type: integer
+        content:
+          type: string
+        sessionId:
+          type: string
+      required:
+      - sessionId
+      - content
       type: object
 tags:
 - description: Supported and locally runnable agent adapters

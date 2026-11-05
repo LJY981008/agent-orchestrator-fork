@@ -39,6 +39,8 @@ type LadoController struct {
 	// auto-compact off, for the effective view (issue #42). Nil leaves the
 	// view's compact fields at the default window without warnings.
 	Compact LadoCompactService
+	// Knowledge is the projects' knowledge store (issue #24).
+	Knowledge LadoKnowledgeService
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
@@ -99,6 +101,7 @@ func (c *LadoController) Register(r chi.Router) {
 	c.registerSetup(r)
 	c.registerVerify(r)
 	c.registerWatch(r)
+	c.registerKnowledge(r)
 	c.registerRelay(r)
 }
 

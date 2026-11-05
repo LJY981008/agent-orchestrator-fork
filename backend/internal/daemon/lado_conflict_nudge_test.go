@@ -230,7 +230,7 @@ func newLadoConflictDaemon(t *testing.T, store *sqlite.Store) ladoConflictDaemon
 	// wireLado builds the daemon's gate; the session manager gets it wrapped
 	// so the test sees which origin each send was authorized as.
 	built := &ladoGateSink{}
-	wireLado(store, built, &ladoGateSink{})
+	wireLado(store, built, &ladoGateSink{}, nil, nil)
 	if built.gate == nil {
 		t.Fatal("wireLado installed no gate")
 	}
