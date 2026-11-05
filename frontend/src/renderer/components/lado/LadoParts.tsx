@@ -1,7 +1,9 @@
 // LADO fork: parallel parts (docs/LJY-PRD/TDD.md §5.4). The plan view lists a
 // plan's parts by phase, the parts of one phase running at once, then the
 // integration; the task view shows how far each part of the running task got,
-// with its session and the merge into the integration branch.
+// with its session and the merge into the integration branch. A workspace
+// run across repositories (#64) has an integration branch in each, and a
+// part's merge can conflict in one of them.
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useLadoTaskParts } from "../../hooks/useLado";
@@ -124,6 +126,8 @@ export function LadoPartsProgress({ task, onClose }: { task: LadoTask; onClose: 
 	}
 	const data = parts.data;
 	const integration = task.execution;
+	// A run in one repository keeps the one branch line it always had.
+	const manyRepos = (data?.repos?.length ?? 0) > 1;
 	return (
 		<section className="flex flex-col gap-2" aria-label={t("lado.parts.title")} data-testid="lado-parts-progress">
 			<div className="flex min-w-0 items-baseline gap-2">
@@ -133,10 +137,24 @@ export function LadoPartsProgress({ task, onClose }: { task: LadoTask; onClose: 
 				</span>
 				{data?.branch ? (
 					<span className="ml-auto min-w-0 truncate font-mono text-2xs text-muted-foreground" title={data.branch}>
-						{data.branch} {data.headSha ? data.headSha.slice(0, 7) : ""}
+						{data.branch} {data.headSha && !manyRepos ? data.headSha.slice(0, 7) : ""}
 					</span>
 				) : null}
 			</div>
+			{manyRepos && data?.repos ? (
+				<ul className="flex flex-col gap-0.5 text-2xs text-muted-foreground" aria-label={t("lado.parts.repos")} data-testid="lado-parts-repos">
+					{data.repos.map((repo) => (
+						<li key={repo.repo} className="flex min-w-0 items-center gap-2" data-testid="lado-parts-repo" data-repo={repo.repo}>
+							<span className="font-mono text-foreground">{repo.repo}</span>
+							<span className="font-mono">
+								{repo.baseSha.slice(0, 7)}
+								{repo.headSha !== repo.baseSha ? ` → ${repo.headSha.slice(0, 7)}` : ""}
+							</span>
+							{repo.headSha === repo.baseSha ? <span>{t("lado.parts.repoUnchanged")}</span> : null}
+						</li>
+					))}
+				</ul>
+			) : null}
 			{!data ? (
 				<p className="text-caption leading-4 text-settings-muted" role="status">
 					{t("common.loading")}
@@ -177,6 +195,8 @@ function PartProgressRow({ part, onOpen }: { part: LadoTaskPart; onOpen: (sessio
 	const { t } = useTranslation();
 	const waiting = ladoPartWaitingText(t, part.waitingReason, part.waitingDetail);
 	const why = waiting || (part.state === "failed" ? part.error : "");
+	const repos = part.repos ?? [];
+	const manyRepos = repos.length > 1;
 	return (
 		<li className="flex min-w-0 flex-col gap-0.5 px-3 py-2 text-xs leading-5" data-testid="lado-part" data-part-id={part.id} data-state={part.state}>
 			<div className="flex min-w-0 flex-wrap items-center gap-x-2">
@@ -197,7 +217,28 @@ function PartProgressRow({ part, onOpen }: { part: LadoTaskPart; onOpen: (sessio
 					{why}
 				</span>
 			) : null}
-			{part.startSha ? (
+			{part.mergeRepo ? (
+				<span className="pl-3.5 text-settings-muted" data-testid="lado-part-merge-repo">
+					{t("lado.parts.conflictRepo", { repo: part.mergeRepo })}
+				</span>
+			) : null}
+			{manyRepos ? (
+				<ul className="flex flex-col pl-3.5 text-2xs text-muted-foreground">
+					{repos.map((repo) => (
+						<li key={repo.repo} className="flex min-w-0 items-center gap-2" data-testid="lado-part-repo" data-repo={repo.repo}>
+							<span className="font-mono text-foreground">{repo.repo}</span>
+							{repo.empty ? (
+								<span>{t("lado.parts.repoUnchanged")}</span>
+							) : repo.startSha ? (
+								<span className="font-mono">
+									{repo.startSha.slice(0, 7)}
+									{repo.mergedSha ? ` → ${repo.mergedSha.slice(0, 7)}` : ""}
+								</span>
+							) : null}
+						</li>
+					))}
+				</ul>
+			) : part.startSha ? (
 				<span className="pl-3.5 font-mono text-2xs text-muted-foreground">
 					{part.startSha.slice(0, 7)}
 					{part.mergedSha ? ` → ${part.mergedSha.slice(0, 7)}` : ""}

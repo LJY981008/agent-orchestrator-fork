@@ -490,11 +490,14 @@ export function useApproveLadoIntegration(projectId: string, sessionId: string) 
 	});
 }
 
-/** Posts the approved head's lado/integration status again, its attempts started over. */
+/**
+ * Posts the approved head's lado/integration status again, its attempts
+ * started over: of the PR prUrl names, else of the run's first open PR.
+ */
 export function useRepostLadoIntegrationStatus(projectId: string, sessionId: string) {
 	const invalidate = useInvalidateLadoRun(projectId, sessionId);
 	return useMutation({
-		mutationFn: () => repostLadoIntegrationStatus(sessionId),
+		mutationFn: (prUrl?: string) => (prUrl ? repostLadoIntegrationStatus(sessionId, prUrl) : repostLadoIntegrationStatus(sessionId)),
 		onSettled: () => invalidate(),
 		retry: false,
 	});

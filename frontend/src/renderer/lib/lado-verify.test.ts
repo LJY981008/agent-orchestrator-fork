@@ -146,6 +146,36 @@ describe("approveLadoIntegration", () => {
 		]);
 	});
 
+	// #64: a workspace task's pull requests are approved together.
+	it("names every open tracked PR in one dry run and one approval, in a browser", async () => {
+		const BACK = "https://github.com/acme/back/pull/3";
+		const FRONT = "https://github.com/acme/front/pull/5";
+		const tracked = (url: string, position: number, headSha: string, fields = {}) => ({
+			url, position, headSha, number: position + 3, repo: position === 0 ? "back" : "front", merged: false, closed: false, settled: false,
+			state: "integration_pending", integration: { headApproved: false }, ...fields,
+		});
+		const run = {
+			...execution,
+			trackedPrs: [tracked(FRONT, 1, "c".repeat(40)), tracked(BACK, 0, "b".repeat(40)), tracked("https://github.com/acme/docs/pull/9", 2, "d".repeat(40), { merged: true })],
+		} as unknown as LadoExecution;
+		const answer = (prUrl: string, headSha: string, sum: string) => ({ prUrl, confirm: ["outside_plan"], verificationSha256: sum, verification: { ...preview.verification, prUrl, headSha } });
+		approveIntegrationMock.mockResolvedValue(null);
+		get.mockResolvedValue({ data: run, error: undefined });
+		post
+			.mockResolvedValueOnce({ data: { ...preview, prs: [answer(BACK, "b".repeat(40), "1".repeat(64)), answer(FRONT, "c".repeat(40), "2".repeat(64))] }, error: undefined })
+			.mockResolvedValueOnce({ data: approved, error: undefined });
+		await expect(approveLadoIntegration("demo-7")).resolves.toEqual(approved);
+		expect(post.mock.calls.map((call) => call[1].body)).toEqual([
+			{ prs: [{ prUrl: BACK, headSha: "b".repeat(40) }, { prUrl: FRONT, headSha: "c".repeat(40) }], dryRun: true },
+			{
+				prs: [
+					{ prUrl: BACK, headSha: "b".repeat(40), verificationSha256: "1".repeat(64), acknowledge: ["outside_plan"] },
+					{ prUrl: FRONT, headSha: "c".repeat(40), verificationSha256: "2".repeat(64), acknowledge: ["outside_plan"] },
+				],
+			},
+		]);
+	});
+
 	it("says a run has no pull request to integrate before it asks the daemon, in a browser", async () => {
 		approveIntegrationMock.mockResolvedValue(null);
 		get.mockResolvedValue({ data: { ...execution, pr: { ...execution.pr, merged: true } }, error: undefined });

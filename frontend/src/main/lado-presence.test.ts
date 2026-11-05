@@ -2052,6 +2052,190 @@ describe("approving an integration", () => {
 	});
 });
 
+// A workspace task with a pull request in each of several repositories
+// approves them together (#64).
+describe("approving a task's pull requests together", () => {
+	type TrackedPR = components["schemas"]["LadoExecutionTrackedPRResponse"];
+	type PRAnswer = components["schemas"]["LadoIntegrationApprovePRResponse"];
+	const executionPath = "/api/v1/lado/executions/demo-7";
+	const approvePath = `${executionPath}/integration-approve`;
+	const BACK_URL = "https://github.com/acme/back/pull/3";
+	const FRONT_URL = "https://github.com/acme/front/pull/5";
+	const BACK_HEAD = "b".repeat(40);
+	const FRONT_HEAD = "c".repeat(40);
+	const BACK_SHA = "1".repeat(64);
+	const FRONT_SHA = "2".repeat(64);
+
+	function tracked(overrides: Partial<TrackedPR> & Pick<TrackedPR, "url" | "repo" | "position" | "number">): TrackedPR {
+		return {
+			closed: false,
+			merged: false,
+			settled: false,
+			state: "integration_pending",
+			targetBranch: "main",
+			integration: { headApproved: false },
+			...overrides,
+		};
+	}
+	const back = tracked({ url: BACK_URL, repo: "back", position: 0, number: 3, headSha: BACK_HEAD });
+	const front = tracked({ url: FRONT_URL, repo: "front", position: 1, number: 5, headSha: FRONT_HEAD });
+	// The daemon lists them in merge order; main does not rely on it.
+	const execution = (prs: TrackedPR[] = [front, back]) =>
+		executionResponse({
+			pr: { closed: false, headSha: BACK_HEAD, merged: false, number: 3, targetBranch: "main", url: BACK_URL },
+			trackedPrs: prs,
+			prRepos: ["back", "front"],
+		});
+
+	function answer(prUrl: string, headSha: string, sum: string, overrides: Partial<PRAnswer> = {}): PRAnswer {
+		const preview = integrationPreview({ headSha });
+		return {
+			prUrl,
+			confirm: confirmCodes,
+			verification: { ...preview.verification, prUrl, sha256: sum },
+			verificationSha256: sum,
+			...overrides,
+		};
+	}
+	const approval = (headSha: string, sum: string) => ({ ...integrationApproved.approval!, headSha, verificationSha256: sum });
+	const answers = (prs: PRAnswer[]) => json(200, { ...integrationPreview(), prs });
+
+	it("sends one dry run, lists every open PR in one confirmation, then signs one request naming each head", async () => {
+		const approved = {
+			...integrationApproved,
+			prs: [
+				answer(BACK_URL, BACK_HEAD, BACK_SHA, { approval: approval(BACK_HEAD, BACK_SHA) }),
+				answer(FRONT_URL, FRONT_HEAD, FRONT_SHA, { approval: approval(FRONT_HEAD, FRONT_SHA) }),
+			],
+		};
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{
+				execution: () => json(200, execution()),
+				integrationPreview: () => answers([answer(FRONT_URL, FRONT_HEAD, FRONT_SHA), answer(BACK_URL, BACK_HEAD, BACK_SHA)]),
+				integration: () => json(200, approved),
+			},
+		);
+
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toEqual({ status: "approved", integration: approved });
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${executionPath}`],
+			["POST", `${BASE}${approvePath}`],
+			["POST", `${BASE}${approvePath}`],
+		]);
+		expectUnsigned(
+			calls[1]!,
+			"POST",
+			JSON.stringify({ prs: [{ prUrl: BACK_URL, headSha: BACK_HEAD }, { prUrl: FRONT_URL, headSha: FRONT_HEAD }], dryRun: true }),
+		);
+		expect(dialogOptions(dialog).message).toBe("Approve the integration of this task's 2 pull requests?");
+		const blocks = dialogOptions(dialog).detail?.split("\n\n") ?? [];
+		expect(blocks[0]).toBe("Task: Fix the flaky login test");
+		expect(blocks[1]?.split("\n").slice(0, 3)).toEqual(["PR #3 in back into main", "Head: bbbbbbbbbbbb", "Passed: 3 of 6 verification items"]);
+		expect(blocks[2]?.split("\n").slice(0, 2)).toEqual(["PR #5 in front into main", "Head: cccccccccccc"]);
+		expect(blocks[3]).toBe(
+			"On approval, LADO posts the lado/integration status on each head; LADO itself never merges. Merge them in the order listed. " +
+				"Some of these repositories are not protected: LADO only detects a merge without approval there.",
+		);
+		// One proof over the bytes that name both heads, in merge order.
+		expectSigned(
+			calls[2]!,
+			"POST",
+			JSON.stringify({
+				prs: [
+					{ prUrl: BACK_URL, headSha: BACK_HEAD, verificationSha256: BACK_SHA, acknowledge: confirmCodes },
+					{ prUrl: FRONT_URL, headSha: FRONT_HEAD, verificationSha256: FRONT_SHA, acknowledge: confirmCodes },
+				],
+			}),
+		);
+	});
+
+	it("does not ask while one PR's head waits or fails", async () => {
+		const waiting: VerifyItem[] = [
+			{ kind: "required_checks", outcome: "wait", code: "checks_pending", details: { required: ["ci"], rulesetRead: true, checks: [] } },
+		];
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{
+				execution: () => json(200, execution()),
+				integrationPreview: () =>
+					answers([
+						answer(BACK_URL, BACK_HEAD, BACK_SHA),
+						answer(FRONT_URL, FRONT_HEAD, FRONT_SHA, {
+							confirm: [],
+							verification: { ...answer(FRONT_URL, FRONT_HEAD, FRONT_SHA).verification, items: waiting, outcome: "wait" },
+						}),
+					]),
+			},
+		);
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_INTEGRATION_NOT_READY",
+			details: { reasons: ["checks_pending"] },
+		});
+		expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(calls).toHaveLength(2);
+	});
+
+	it("names a head approved already and still sends it, and refuses when every head is", async () => {
+		const approvedBack = { ...back, integration: { headApproved: true, statusState: "posted" as const } };
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{
+				execution: () => json(200, execution([approvedBack, front])),
+				integrationPreview: () => answers([answer(BACK_URL, BACK_HEAD, BACK_SHA), answer(FRONT_URL, FRONT_HEAD, FRONT_SHA)]),
+				integration: () =>
+					json(200, {
+						...integrationApproved,
+						prs: [
+							answer(BACK_URL, BACK_HEAD, BACK_SHA, { approval: approval(BACK_HEAD, BACK_SHA) }),
+							answer(FRONT_URL, FRONT_HEAD, FRONT_SHA, { approval: approval(FRONT_HEAD, FRONT_SHA) }),
+						],
+					}),
+			},
+		);
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({ status: "approved" });
+		expect(dialogOptions(dialog).detail?.split("\n\n")[1]).toContain("This head is approved already; LADO leaves its approval as it is.");
+		expect(JSON.parse(String(calls[2]!.init.body)).prs.map((pr: { prUrl: string }) => pr.prUrl)).toEqual([BACK_URL, FRONT_URL]);
+
+		const both = setup(
+			{},
+			{ execution: () => json(200, execution([approvedBack, { ...front, integration: { headApproved: true } }])) },
+		);
+		await expect(both.approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_INTEGRATION_ALREADY_APPROVED",
+		});
+		expect(both.calls).toHaveLength(1);
+	});
+
+	it("approves the open PR alone, as a run with one PR, once the other merged", async () => {
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{
+				execution: () => json(200, execution([{ ...back, merged: true, state: "completed" }, front])),
+				integrationPreview: () => json(200, { ...integrationPreview({ headSha: FRONT_HEAD }), verification: answer(FRONT_URL, FRONT_HEAD, VERIFY_SHA).verification }),
+			},
+		);
+		await approveIntegration({ sessionId: "demo-7" });
+		expectUnsigned(calls[1]!, "POST", JSON.stringify({ prUrl: FRONT_URL, headSha: FRONT_HEAD, dryRun: true }));
+		expect(dialogOptions(dialog).message).toBe("Approve the integration of PR #5 into main?");
+		expectSigned(
+			calls[2]!,
+			"POST",
+			JSON.stringify({ prUrl: FRONT_URL, headSha: FRONT_HEAD, verificationSha256: VERIFY_SHA, acknowledge: confirmCodes }),
+		);
+	});
+
+	it("refuses a dry run that leaves a PR out or names another", async () => {
+		for (const prs of [[answer(BACK_URL, BACK_HEAD, BACK_SHA)], [answer(BACK_URL, BACK_HEAD, BACK_SHA), answer(BACK_URL, BACK_HEAD, BACK_SHA)]]) {
+			const { approveIntegration, dialog } = setup({}, { execution: () => json(200, execution()), integrationPreview: () => answers(prs) });
+			await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({ status: "error", code: "LADO_PRESENCE_ANSWER_UNREADABLE" });
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+});
+
 // LADO fork: a project's check commands run outside any agent sandbox, so
 // only the human may change them.
 describe("changing check commands", () => {

@@ -110,7 +110,10 @@ export type LadoPresenceSetupChangeResult =
 
 /**
  * The run whose pull request head to approve for integration. Main reads the
- * run, sends the dry run itself and signs what that dry run verified.
+ * run, sends the dry run itself and signs what that dry run verified. A
+ * workspace task with an open pull request in each of several repositories
+ * (#64) approves them all at once: one dry run, one confirmation listing
+ * each, one signed request naming each head in prs.
  */
 export type LadoPresenceIntegrationRequest = { sessionId: string };
 

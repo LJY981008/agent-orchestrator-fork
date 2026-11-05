@@ -752,6 +752,82 @@ test("a run with more open PRs links the ones LADO does not track", async () => 
 	expect(within(run).getByRole("status")).not.toHaveTextContent("Untracked");
 });
 
+// #64: a workspace task with a pull request in each of two repositories.
+function trackedPR(fields: Partial<lado.LadoExecutionTrackedPR> & Pick<lado.LadoExecutionTrackedPR, "url" | "repo" | "position" | "number">): lado.LadoExecutionTrackedPR {
+	return { closed: false, merged: false, settled: false, state: "integration_pending", targetBranch: "main", integration: { headApproved: false }, ...fields };
+}
+const backPR = trackedPR({ url: "https://github.com/acme/back/pull/3", repo: "back", position: 0, number: 3, headSha: "b".repeat(40) });
+const frontPR = trackedPR({ url: "https://github.com/acme/front/pull/5", repo: "front", position: 1, number: 5, headSha: "c".repeat(40) });
+
+test("a task with a PR in each of two repositories lists both and approves them with one button", async () => {
+	vi.mocked(lado.approveLadoIntegration).mockResolvedValue(null);
+	mockApproved(
+		approvedTask({
+			state: "integration_pending",
+			execution: {
+				...execution,
+				sessionEnded: true,
+				pr: { url: backPR.url, number: 3, merged: false, closed: false, headSha: backPR.headSha },
+				// Listed out of merge order; the view sorts them.
+				trackedPrs: [frontPR, { ...backPR, state: "validating", stateReason: "checks_pending" }],
+				prRepos: ["back", "front"],
+			},
+		}),
+	);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	const run = await within(dialog).findByTestId("lado-run-status");
+	const rows = within(run).getAllByTestId("lado-run-pr");
+	expect(rows.map((row) => row.dataset.repo)).toEqual(["back", "front"]);
+	expect(within(rows[0]!).getByRole("link", { name: "Open PR #3" })).toHaveAttribute("href", backPR.url);
+	expect(rows[0]).toHaveTextContent("Validating");
+	expect(rows[0]).toHaveTextContent("checks");
+	expect(within(rows[1]!).getByRole("link", { name: "Open PR #5" })).toHaveAttribute("href", frontPR.url);
+	expect(rows[1]).toHaveTextContent("Integration pending");
+	// One approval names them both.
+	expect(within(run).getAllByRole("button", { name: /Approve/ })).toHaveLength(1);
+	fireEvent.click(within(run).getByRole("button", { name: "Approve task integration…" }));
+	await waitFor(() => expect(lado.approveLadoIntegration).toHaveBeenCalledWith("demo-7"));
+	cleanup();
+
+	// Both approved and back merged: front merges next; a repository without a PR is named while the task waits for it.
+	vi.mocked(lado.mergeLadoPR).mockResolvedValue(undefined as never);
+	mockApproved(
+		approvedTask({
+			state: "integrating",
+			execution: {
+				...execution,
+				sessionEnded: true,
+				pr: { url: backPR.url, number: 3, merged: true, closed: false },
+				trackedPrs: [
+					{ ...backPR, merged: true, state: "completed", integration: { headApproved: true } },
+					{ ...frontPR, state: "integrating", integration: { headApproved: true, statusState: "posted" } },
+				],
+				prRepos: ["back", "front"],
+			},
+		}),
+	);
+	renderDialog();
+	const merging = await within(await screen.findByTestId("lado-task-dialog")).findByTestId("lado-run-status");
+	fireEvent.click(within(merging).getByRole("button", { name: "Merge" }));
+	await waitFor(() => expect(lado.mergeLadoPR).toHaveBeenCalledWith({ number: 5, url: frontPR.url, headSha: frontPR.headSha }));
+	cleanup();
+
+	mockApproved(
+		approvedTask({
+			state: "validating",
+			stateReason: "pr_missing",
+			execution: { ...execution, pr: { url: backPR.url, number: 3, merged: false, closed: false }, trackedPrs: [backPR], prRepos: ["back", "front"] },
+		}),
+	);
+	renderDialog();
+	const waiting = await within(await screen.findByTestId("lado-task-dialog")).findByTestId("lado-run-status");
+	expect(within(waiting).getByRole("link", { name: "Open PR #3" })).toBeInTheDocument();
+	expect(within(waiting).queryAllByTestId("lado-run-pr")).toHaveLength(0);
+	expect(within(waiting).getByTestId("lado-run-pr-missing")).toHaveTextContent("frontNo pull request yet");
+});
+
 test("a head waiting for its integration approval is approved from the footer; a cancel leaves it as it was", async () => {
 	vi.mocked(lado.approveLadoIntegration).mockResolvedValue(null);
 	mockApproved(approvedTask({ state: "integration_pending", execution: { ...execution, sessionEnded: true, pr: openPR } }));

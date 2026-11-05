@@ -127,6 +127,43 @@ describe("LadoPartsProgress", () => {
 		expect(navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId: "demo-12" } });
 	});
 
+	// #64: a workspace run with an integration branch in each of two repositories.
+	it("shows each repository's integration branch, a part's commits there and where its merge conflicts", async () => {
+		const sha = (c: string) => c.repeat(40);
+		vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({
+			...partsRun,
+			baseSha: sha("1"),
+			headSha: sha("2"),
+			repos: [
+				{ repo: "back", position: 0, baseSha: sha("1"), headSha: sha("2"), baseBranch: "main" },
+				{ repo: "front", position: 1, baseSha: sha("3"), headSha: sha("3"), baseBranch: "main" },
+			],
+			parts: [
+				{
+					...partsRun.parts[0]!,
+					repos: [
+						{ repo: "back", empty: false, startSha: sha("1"), mergedSha: sha("2") },
+						{ repo: "front", empty: true, startSha: sha("3") },
+					],
+				},
+				{ ...partsRun.parts[1]!, mergeRepo: "front", repos: [{ repo: "back", empty: false, startSha: sha("2") }, { repo: "front", empty: false, startSha: sha("3") }] },
+			],
+		});
+		renderWithClient(<LadoPartsProgress task={runningTask} onClose={() => undefined} />);
+		const rows = await screen.findAllByTestId("lado-part");
+		const repos = screen.getAllByTestId("lado-parts-repo");
+		expect(repos.map((repo) => repo.dataset.repo)).toEqual(["back", "front"]);
+		expect(repos[0]).toHaveTextContent("back1111111 → 2222222");
+		expect(repos[1]).toHaveTextContent("front3333333unchanged");
+		// The branch line no longer names one repository's head.
+		expect(screen.getByTestId("lado-parts-progress")).not.toHaveTextContent("lado/c14c6be2/integration 2222222");
+
+		const first = within(rows[0]!).getAllByTestId("lado-part-repo");
+		expect(first[0]).toHaveTextContent("back1111111 → 2222222");
+		expect(first[1]).toHaveTextContent("frontunchanged");
+		expect(within(rows[1]!).getByTestId("lado-part-merge-repo")).toHaveTextContent("Merge conflict in front");
+	});
+
 	it("reads nothing for a task without parts", () => {
 		const { parts: _parts, ...single } = runningTask;
 		const { container } = renderWithClient(<LadoPartsProgress task={single} onClose={() => undefined} />);

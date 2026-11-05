@@ -191,6 +191,7 @@ const reasons = [
 	"protected_path",
 	// The PR is open in none of the workspace's child repositories (#59).
 	"pr_repo_not_in_workspace",
+	"pr_missing",
 	"review_pending",
 	"changes_requested",
 	"status_not_posted",
@@ -199,9 +200,9 @@ const reasons = [
 
 // LADO fork: the queue's and the runs' errors and reasons in the developer's language.
 describe("LADO plan problems", () => {
-	// A workspace project runs parts in the issue's repository only (#60):
-	// backend/internal/domain/lado_parts.go LadoPlanPartRepoOutside.
-	it("words a part plan whose paths leave the issue's repository", () => {
+	// A plan's or part's path outside the plan's repos (#60, #64):
+	// backend/internal/domain/lado_parts.go LadoPlanOutsideRepos.
+	it("words a plan whose paths leave the plan's repos", () => {
 		const problem = { code: "part_repo_outside", field: "parts", detail: "front: front/**" };
 		for (const locale of APP_LOCALES) {
 			const t = createFullAppI18n(locale).t;
@@ -209,11 +210,23 @@ describe("LADO plan problems", () => {
 			expect(text, locale).not.toBe(problem.code);
 			expect(text, locale).not.toMatch(/^lado\./);
 		}
-		expect(ladoPlanProblemText(createFullAppI18n("ko").t, problem)).toBe(
-			"워크스페이스 프로젝트에서 파트를 쓰는 계획의 경로는 이슈를 가진 저장소 폴더 안에 있어야 합니다.",
-		);
+		expect(ladoPlanProblemText(createFullAppI18n("ko").t, problem)).toBe("계획 또는 파트의 경로가 계획 repos에 적은 저장소 밖에 있습니다.");
 		expect(ladoPlanProblemText(createFullAppI18n("en").t, { code: "part_repo_outside", field: "affected_paths" })).toBe(
-			"In a workspace project, a plan that uses parts must keep its paths inside the folder of the repository that has the issue.",
+			"A path of the plan or of one of its parts is outside the repositories the plan's repos lists.",
+		);
+	});
+
+	// A workspace plan's repos (#64): backend/internal/domain/lado_parts.go LadoPlanRepos.
+	it("words the problems of a plan's repos in every language", () => {
+		for (const code of ["repos_invalid", "repos_missing", "repo_unknown"]) {
+			for (const locale of APP_LOCALES) {
+				const text = ladoPlanProblemText(createFullAppI18n(locale).t, { code, field: "repos" });
+				expect(text, `${locale} ${code}`).not.toBe(code);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\.|{{|}}/);
+			}
+		}
+		expect(ladoPlanProblemText(createFullAppI18n("ko").t, { code: "repos_missing", field: "repos" })).toBe(
+			"계획의 경로가 워크스페이스의 여러 저장소에 걸칩니다. PR이 병합될 순서대로 repos에 적으세요.",
 		);
 	});
 });
@@ -691,6 +704,9 @@ const verifyCodes = [
 	"LADO_INTEGRATION_TARGET_CHANGED",
 	"LADO_INTEGRATION_NOT_APPROVED",
 	"LADO_CHECK_COMMANDS_CHANGED",
+	// A workspace task's pull requests across repositories (#64).
+	"LADO_INTEGRATION_PRS_CHANGED",
+	"LADO_INTEGRATION_MERGE_ORDER",
 ];
 
 // LADO fork: verification, check commands, protected paths, the integration
@@ -810,5 +826,33 @@ describe("LADO verification errors", () => {
 		expect(ladoReasonText(ko, "status_not_posted")).toBe("LADO가 아직 통합 상태를 게시하지 못함");
 		// A refused plan approval also names verification and integration.
 		expect(en("lado.error.taskRunning")).toContain("verifying or integrating");
+	});
+});
+
+// A workspace task's pull requests across repositories (#64).
+describe("LADO multi-repository errors", () => {
+	it("names the PRs a merge waits for by number", () => {
+		const error = new LadoApiError("merge them in order", "LADO_INTEGRATION_MERGE_ORDER", {
+			prUrl: "https://github.com/acme/front/pull/5",
+			waitingFor: ["https://github.com/acme/back/pull/3", "https://gitlab.example.com/gitlab/group/api/-/merge_requests/12"],
+		});
+		expect(ladoErrorText(createFullAppI18n("en").t, error)).toBe("The plan merges the task's pull requests in order: merge #3, #12 first.");
+		expect(ladoErrorText(createFullAppI18n("ko").t, error)).toBe("계획이 정한 순서대로 작업의 PR을 병합합니다. #3, #12을(를) 먼저 병합하세요.");
+	});
+
+	it("says a task's PRs changed since the developer saw them", () => {
+		const error = new LadoApiError("changed", "LADO_INTEGRATION_PRS_CHANGED", { prUrls: [], currentPrUrls: [] });
+		expect(ladoErrorText(createFullAppI18n("en").t, error)).toBe(
+			"The task's pull requests changed. Review them again, then approve the task's integration.",
+		);
+	});
+
+	it("reads pr_missing as a reason that holds the task", () => {
+		expect(ladoReasonText(createFullAppI18n("en").t, "pr_missing")).toBe("Waiting for a pull request in each repository");
+		expect(ladoReasonText(createFullAppI18n("ko").t, "pr_missing")).toBe("저장소별 PR 대기");
+		const notReady = new LadoApiError("not ready", "LADO_INTEGRATION_NOT_READY", { reasons: ["pr_missing"] });
+		expect(ladoErrorText(createFullAppI18n("en").t, notReady)).toBe(
+			"LADO cannot approve this integration yet: Waiting for a pull request in each repository.",
+		);
 	});
 });

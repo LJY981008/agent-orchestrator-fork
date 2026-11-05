@@ -21,6 +21,7 @@ import type { MessageKey } from "../../i18n/messages";
 import type {
 	LadoEvidenceCriterion,
 	LadoExecution,
+	LadoExecutionTrackedPR,
 	LadoVerification,
 	LadoVerifyCommandRun,
 	LadoVerifyItem,
@@ -31,7 +32,15 @@ import { LADO_PROTECTION_ANY_SOURCE, ladoErrorText, ladoProtectionPartText, lado
 import { cn } from "../../lib/utils";
 import { formatDuration } from "../SessionMemoryPanel";
 import { Button } from "../ui/button";
-import { type LadoRunState, ladoRunStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import {
+	ladoMergeable,
+	ladoMissingPRRepos,
+	type LadoRunState,
+	ladoRunStatus,
+	ladoTaskToneDotClass,
+	ladoTrackedPRs,
+	ladoTrackedPRStatus,
+} from "./lado-task-status";
 
 // LADO asks AO's reviewer at most this often per run (domain.LadoReviewRoundCap).
 const REVIEW_ROUNDS = 3;
@@ -57,7 +66,10 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 	const run = ladoRunState(execution);
 	const { pr, verification, integration } = execution;
 	if (!run || !pr) return null;
+	const tracked = ladoTrackedPRs(execution);
+	if (tracked.length > 1) return <TrackedPRsVerification execution={execution} projectId={projectId} run={run} tracked={tracked} />;
 	const status = ladoRunStatus(run.state, run.reason, t);
+	const missing = ladoMissingPRRepos(execution, run.reason);
 	const open = !pr.merged && !pr.closed;
 	const head = verification?.headSha ?? pr.headSha ?? "";
 	return (
@@ -89,6 +101,7 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 						</span>
 					) : null}
 				</div>
+				{missing.length > 0 ? <MissingRepos repos={missing} /> : null}
 				{/* A merged or closed PR needs no status any more. */}
 				{integration?.statusState === "failed" && open ? (
 					<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
@@ -114,6 +127,170 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 				) : null}
 			</div>
 		</InspectorSection>
+	);
+}
+
+/**
+ * The task's state, then each pull request LADO tracks for it in merge order
+ * with its repository, its own state and its head's verification, then the
+ * one approval that names them all. Only the next pull request in merge
+ * order offers its merge.
+ */
+function TrackedPRsVerification({
+	execution,
+	projectId,
+	run,
+	tracked,
+}: {
+	execution: LadoExecution;
+	projectId: string;
+	run: { state: LadoRunState; reason?: string };
+	tracked: readonly LadoExecutionTrackedPR[];
+}) {
+	const { t } = useTranslation();
+	const status = ladoRunStatus(run.state, run.reason, t);
+	const missing = ladoMissingPRRepos(execution, run.reason);
+	const open = tracked.filter((pr) => !pr.merged && !pr.closed);
+	// LADO runs the check commands again for the first open PR only.
+	const first = open[0];
+	return (
+		<InspectorSection title={t("lado.verify.title")}>
+			<div className="flex flex-col gap-3" data-testid="lado-verification">
+				<p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm" role="status" data-testid="lado-verify-state">
+					<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
+					<span className="font-medium text-foreground">{status.label}</span>
+					{run.reason ? (
+						<>
+							{/* Spaces for the text read aloud; the flex gap lays the row out. */}
+							{" "}
+							<span aria-hidden="true" className="text-passive">·</span>{" "}
+							<span className="text-muted-foreground">{ladoReasonText(t, run.reason)}</span>
+						</>
+					) : null}
+				</p>
+				{missing.length > 0 ? <MissingRepos repos={missing} /> : null}
+				<ul className="flex flex-col gap-3" data-testid="lado-verify-prs">
+					{tracked.map((pr) => (
+						<TrackedPRVerification
+							key={pr.url}
+							execution={execution}
+							projectId={projectId}
+							pr={pr}
+							canRun={pr === first}
+							mergeable={ladoMergeable(execution, pr)}
+						/>
+					))}
+				</ul>
+				{run.state === "integration_pending" && first ? (
+					<LadoIntegrationAction projectId={projectId} sessionId={execution.sessionId} action="approve" pr={first} task />
+				) : null}
+			</div>
+		</InspectorSection>
+	);
+}
+
+/** One tracked pull request: its repository, number, state and head, then its verification items. */
+function TrackedPRVerification({
+	execution,
+	projectId,
+	pr,
+	canRun,
+	mergeable,
+}: {
+	execution: LadoExecution;
+	projectId: string;
+	pr: LadoExecutionTrackedPR;
+	canRun: boolean;
+	mergeable: boolean;
+}) {
+	const { t } = useTranslation();
+	const status = ladoTrackedPRStatus(pr, t);
+	const open = !pr.merged && !pr.closed;
+	const record = pr.record;
+	const head = record?.headSha ?? pr.headSha ?? "";
+	const revoked = open && !pr.integration.headApproved ? pr.integration.revokedReason : undefined;
+	return (
+		<li
+			className="flex min-w-0 flex-col gap-2 border-t border-[var(--color-border-settings-dialog)] pt-2.5"
+			data-testid="lado-verify-pr"
+			data-repo={pr.repo}
+			data-state={pr.state}
+		>
+			<div className="flex min-w-0 items-start gap-3">
+				<p className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-0.5 text-sm">
+					<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[status.tone])} aria-hidden="true" />
+					{pr.repo ? <span className="font-mono text-foreground">{pr.repo}</span> : null}
+					<span className="text-foreground">{t("lado.view.prNumber", { number: pr.number })}</span>
+					{" "}
+					<span aria-hidden="true" className="text-passive">·</span>{" "}
+					<span className="font-medium text-foreground">{status.label}</span>
+					{pr.stateReason ? (
+						<>
+							{" "}
+							<span aria-hidden="true" className="text-passive">·</span>{" "}
+							<span className="text-muted-foreground">{ladoReasonText(t, pr.stateReason)}</span>
+						</>
+					) : null}
+				</p>
+				{head ? (
+					<span className="shrink-0 pt-0.5 text-xs text-muted-foreground" title={head}>
+						{t("lado.verify.head")} <span className="font-mono">{head.slice(0, 7)}</span>
+					</span>
+				) : null}
+			</div>
+			{revoked ? (
+				<p className="pl-3.5 text-xs text-[var(--color-status-in-review)]" data-testid="lado-verify-revoked">
+					{t(revoked === "sibling_revoked" ? "lado.verify.revoked.sibling" : "lado.verify.revoked.baseOverlap")}
+				</p>
+			) : null}
+			{pr.approval?.statusState === "failed" && open ? (
+				<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
+					{pr.approval.statusError ? (
+						<p className="w-full truncate text-xs text-muted-foreground" title={pr.approval.statusError}>
+							{pr.approval.statusError}
+						</p>
+					) : null}
+					<LadoRepostStatus projectId={projectId} sessionId={execution.sessionId} prUrl={pr.url} />
+				</div>
+			) : null}
+			{record ? (
+				<ul className="flex flex-col gap-2" data-testid="lado-verify-items">
+					{record.items.map((item) => (
+						<VerifyItemRow
+							key={item.kind}
+							item={item}
+							execution={execution}
+							verification={record}
+							projectId={projectId}
+							canRun={open && canRun}
+						/>
+					))}
+				</ul>
+			) : open ? (
+				<p className="pl-3.5 text-xs text-muted-foreground" role="status">
+					{t("lado.verify.checking")}
+				</p>
+			) : null}
+			{mergeable ? (
+				<LadoIntegrationAction
+					projectId={projectId}
+					sessionId={execution.sessionId}
+					action="merge"
+					pr={pr}
+					headSha={pr.approval?.headSha ?? pr.headSha}
+				/>
+			) : null}
+		</li>
+	);
+}
+
+/** The repositories the task still waits for a pull request in. */
+function MissingRepos({ repos }: { repos: readonly string[] }) {
+	const { t } = useTranslation();
+	return (
+		<p className="pl-3.5 text-xs text-muted-foreground" data-testid="lado-verify-missing">
+			{t("lado.verify.prMissingRepos", { repos: repos.join(", ") })}
+		</p>
 	);
 }
 
@@ -371,7 +548,7 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
  * Posts the approved head's lado/integration status again, as after its token
  * was fixed: the daemon stops trying after twelve failed posts (S8 of #15).
  */
-export function LadoRepostStatus({ projectId, sessionId }: { projectId: string; sessionId: string }) {
+export function LadoRepostStatus({ projectId, sessionId, prUrl }: { projectId: string; sessionId: string; prUrl?: string }) {
 	const { t } = useTranslation();
 	const repost = useRepostLadoIntegrationStatus(projectId, sessionId);
 	return (
@@ -383,7 +560,7 @@ export function LadoRepostStatus({ projectId, sessionId }: { projectId: string; 
 				size="sm"
 				className="-ml-2 h-6 px-2 text-muted-foreground hover:text-foreground"
 				disabled={repost.isPending}
-				onClick={() => repost.mutate()}
+				onClick={() => repost.mutate(prUrl)}
 				data-testid="lado-repost-status"
 			>
 				{/* The app styles buttons outside Tailwind's layers, so the type sits on the span. */}
@@ -618,6 +795,7 @@ export function LadoIntegrationAction({
 	action,
 	pr,
 	headSha,
+	task = false,
 	variant = "primary",
 	className,
 }: {
@@ -626,6 +804,8 @@ export function LadoIntegrationAction({
 	action: "approve" | "merge";
 	pr: { number: number; url: string };
 	headSha?: string;
+	/** The approval names every open pull request of the task together (#64). */
+	task?: boolean;
 	variant?: "primary" | "footer-primary";
 	className?: string;
 }) {
@@ -642,7 +822,9 @@ export function LadoIntegrationAction({
 		action === "approve"
 			? approve.isPending
 				? t("lado.verify.approving")
-				: t("lado.verify.approve")
+				: task
+					? t("lado.verify.approveTask")
+					: t("lado.verify.approve")
 			: merge.isPending
 				? t("lado.verify.merging")
 				: merged
