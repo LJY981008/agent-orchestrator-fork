@@ -212,6 +212,12 @@ type Service struct {
 	// once and verifies first.
 	baseFetched map[string]time.Time
 	urgent      map[string]bool
+	// baseResolved holds, by repository folder, the default branch and
+	// remote LADO last resolved for a PR in another repository than its
+	// issue (#59); prURLWarned the sessions and PR URLs whose repository
+	// LADO could not read and said so.
+	baseResolved map[string]resolvedBase
+	prURLWarned  map[string]bool
 	// prSeen and verified hold the executions whose first PR sighting and
 	// first verification this daemon stored (timings.go).
 	prSeen   map[domain.SessionID]bool
@@ -251,16 +257,18 @@ func New(deps Deps) *Service {
 		deps.Interval = defaultInterval
 	}
 	return &Service{
-		deps:        deps,
-		protection:  NewProtection(deps.Clients, deps.Clock, protectionTTL),
-		kick:        make(chan struct{}, 1),
-		statusTried: map[string]time.Time{},
-		headFetched: map[string]time.Time{},
-		failedAt:    map[domain.SessionID]time.Time{},
-		baseFetched: map[string]time.Time{},
-		urgent:      map[string]bool{},
-		prSeen:      map[domain.SessionID]bool{},
-		verified:    map[domain.SessionID]bool{},
+		deps:         deps,
+		protection:   NewProtection(deps.Clients, deps.Clock, protectionTTL),
+		kick:         make(chan struct{}, 1),
+		statusTried:  map[string]time.Time{},
+		headFetched:  map[string]time.Time{},
+		failedAt:     map[domain.SessionID]time.Time{},
+		baseFetched:  map[string]time.Time{},
+		urgent:       map[string]bool{},
+		baseResolved: map[string]resolvedBase{},
+		prURLWarned:  map[string]bool{},
+		prSeen:       map[domain.SessionID]bool{},
+		verified:     map[domain.SessionID]bool{},
 	}
 }
 
@@ -559,10 +567,20 @@ func (s *Service) verifyExecutionIn(ctx context.Context, exec domain.LadoExecuti
 	return err
 }
 
-// targetKey names the target branch of an execution's PR on its remote in
-// the repository of its task's issue, which a merge into it moves.
+// targetKey names the target branch of an execution's PR in its project's
+// repository, which a merge into it moves: the PR's repository when its URL
+// can be read (#59), else the task's. The repository and the branch compare
+// without case, and the remote does not count: the repository names the
+// target, and a PR in another repository than its issue fetches from the
+// remote resolved for it, not the dispatcher's.
 func targetKey(task domain.LadoTask, exec domain.LadoExecution) string {
-	return string(task.ProjectID) + "\x00" + domain.LadoRepoRef(task.Repo) + "\x00" + cmp.Or(exec.BaseRemote, "origin") + "\x00" +
+	repo := task.Repo
+	if exec.PR.URL != "" {
+		if pr, err := domain.LadoPRRepo(exec.PR.URL); err == nil {
+			repo = pr
+		}
+	}
+	return string(task.ProjectID) + "\x00" + strings.ToLower(domain.LadoRepoRef(repo)) + "\x00" +
 		strings.ToLower(cmp.Or(exec.PR.TargetBranch, exec.BaseBranch))
 }
 

@@ -18,13 +18,14 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// BaseInput is what the base_branch item reads: the repository that holds
-// the issue (in a workspace project, its child repository), the base branch
+// BaseInput is what the base_branch item reads: the repository verified (in
+// a workspace project, the child repository of the PR), the base branch
 // and remote the dispatcher resolved, the pull request's head, when the
 // execution started and the local branch's commit the dispatcher recorded
 // (empty when the branch did not exist or LADO did not record it).
@@ -34,12 +35,18 @@ import (
 // in a workspace project, slash-separated; Affected are the plan's
 // affected_paths and Ignore the project's overlap ignore globs, both from
 // the project root.
+//
+// #59: DefaultBranch is the default branch of the PR's repository when the
+// PR is in another repository than its issue and LADO resolved it, else
+// empty; DispatchBranch is the base branch the dispatcher started the worker
+// from, in the issue's repository.
 type BaseInput struct {
-	Dir, Branch, Remote, HeadSHA string
-	StartedAt                    time.Time
-	DispatchLocalSHA             string
-	Target, Prefix               string
-	Affected, Ignore             []string
+	Dir, Branch, Remote, HeadSHA  string
+	StartedAt                     time.Time
+	DispatchLocalSHA              string
+	Target, Prefix                string
+	Affected, Ignore              []string
+	DefaultBranch, DispatchBranch string
 }
 
 // EvaluateBase computes the base_branch item. It does not fetch: it compares
@@ -61,8 +68,12 @@ type BaseInput struct {
 // it, the files changed on it since that the head changed too or the plan
 // names, except those an ignore glob matches, fail the item as
 // base_overlap; without such a file the move needs confirming as
-// base_advanced. Codes rank base_overlap, already_on_base, base_deleted,
-// base_moved, reflog_off, then base_advanced.
+// base_advanced.
+//
+// With DefaultBranch, a target or a dispatcher's base branch other than it
+// (case aside) needs confirming as base_not_default, with both branches in
+// the details. Codes rank base_overlap, already_on_base, base_deleted,
+// base_moved, reflog_off, base_not_default, then base_advanced.
 func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerifyItem, error) {
 	if in.Dir == "" || in.Branch == "" {
 		return domain.LadoVerifyItem{}, errors.New("evaluate the base branch: no repository or branch")
@@ -94,6 +105,10 @@ func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerify
 	if err := baseAdvance(ctx, git, in, &details); err != nil {
 		return domain.LadoVerifyItem{}, fmt.Errorf("evaluate the base branch: %w", err)
 	}
+	notDefault := notDefaultBase(in)
+	if notDefault {
+		details.DefaultBranch, details.DispatchBranch = in.DefaultBranch, in.DispatchBranch
+	}
 	outcome, code := domain.LadoVerifyPass, ""
 	switch {
 	case details.OverlapCount > 0:
@@ -106,12 +121,27 @@ func EvaluateBase(ctx context.Context, git Git, in BaseInput) (domain.LadoVerify
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseMoved
 	case reflogOff:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeReflogOff
+	case notDefault:
+		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseNotDefault
 	case details.Advanced:
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeBaseAdvanced
 	case local == "":
 		code = domain.LadoCodeNoLocalBranch
 	}
 	return domain.NewLadoVerifyItem(domain.LadoVerifyBaseBranch, outcome, code, details)
+}
+
+// notDefaultBase reports whether the PR's target or the dispatcher's base
+// branch is not the known default branch of the PR's repository. Without a
+// default branch there is nothing to compare: what git cannot tell does not
+// stop the integration.
+func notDefaultBase(in BaseInput) bool {
+	if in.DefaultBranch == "" {
+		return false
+	}
+	target := cmp.Or(in.Target, in.Branch)
+	return !strings.EqualFold(target, in.DefaultBranch) ||
+		(in.DispatchBranch != "" && !strings.EqualFold(in.DispatchBranch, in.DefaultBranch))
 }
 
 // baseAdvance sets details.Advanced, AdvancedTip, Overlap and OverlapCount

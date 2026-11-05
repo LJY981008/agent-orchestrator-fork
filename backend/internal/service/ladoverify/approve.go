@@ -95,7 +95,7 @@ func (s *Service) ApproveIntegration(ctx context.Context, in ApproveInput) (Appr
 	if err := s.approvable(ctx, in, record, target, sum, result.Confirm); err != nil {
 		return ApproveResult{}, err
 	}
-	approval, err := s.recordApproval(ctx, exec, record, sum, result.Confirm, proof, inputs.baseTip)
+	approval, err := s.recordApproval(ctx, exec, record, sum, result.Confirm, proof, inputs)
 	if err != nil {
 		return ApproveResult{}, err
 	}
@@ -227,21 +227,18 @@ func (s *Service) approvable(ctx context.Context, in ApproveInput, record domain
 
 // recordApproval records the approval with its proof and audit event, then
 // posts its status once on GitHub. GitLab gets no status: its approvals are
-// not_applicable. baseTip is the remote target's commit the record was
-// computed against, which the merge gate compares with (#53).
-func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution, record domain.LadoVerification, sum string, acknowledged []string, proof domain.LadoPresenceProof, baseTip string) (domain.LadoIntegrationApproval, error) {
-	task, ok, err := s.deps.Tasks.LadoTask(ctx, exec.TaskID)
-	if err != nil || !ok {
-		s.deps.Log.Error("LADO could not read the task of an integration approval", "task", exec.TaskID, "found", ok, "err", err)
-		return domain.LadoIntegrationApproval{}, verifyFailed()
-	}
+// not_applicable. in are the inputs the record was computed from: the
+// repository verified, whose host takes the status (#59), and the remote
+// target's commit the record was computed against, which the merge gate
+// compares with (#53).
+func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution, record domain.LadoVerification, sum string, acknowledged []string, proof domain.LadoPresenceProof, in headInputs) (domain.LadoIntegrationApproval, error) {
 	now := s.now()
 	actor := "human"
 	if proof.Dev {
 		actor = "human:dev-presence"
 	}
 	state := domain.LadoIntegrationStatusPending
-	if task.Repo.Provider == domain.TrackerProviderGitLab {
+	if in.repo.Provider == domain.TrackerProviderGitLab {
 		state = domain.LadoIntegrationStatusNotApplicable
 	}
 	approval := domain.LadoIntegrationApproval{
@@ -256,7 +253,7 @@ func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution,
 		Actor:              actor,
 		ApprovedAt:         now,
 		StatusState:        state,
-		BaseTipSHA:         baseTip,
+		BaseTipSHA:         in.baseTip,
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"task":         exec.TaskID,
@@ -269,7 +266,7 @@ func (s *Service) recordApproval(ctx context.Context, exec domain.LadoExecution,
 		"proof":        proof.Nonce,
 		"dev":          proof.Dev,
 	})
-	err = s.deps.Store.ApproveLadoIntegration(ctx, approval, proof, domain.LadoAuditEvent{
+	err := s.deps.Store.ApproveLadoIntegration(ctx, approval, proof, domain.LadoAuditEvent{
 		At:          now,
 		Actor:       actor,
 		Action:      "integration.approved",
