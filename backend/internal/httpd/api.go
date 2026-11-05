@@ -70,6 +70,9 @@ type APIDeps struct {
 	// LadoPresence checks the human-presence proofs LADO's approval routes
 	// need (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 	LadoPresence controllers.LadoPresence
+	// LadoRelay relays a developer's instruction from an orchestrator to a
+	// running LADO worker (issue #49).
+	LadoRelay controllers.LadoRelayService
 	// Conversations is nil until a Chat driver is wired; the controller then
 	// answers 501 rather than panicking, matching the other optional surfaces.
 	Conversations controllers.ConversationService
@@ -222,7 +225,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Usage: deps.LadoUsage, Watch: deps.LadoWatch, Compact: deps.LadoCompact, Presence: deps.LadoPresence},
+		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Usage: deps.LadoUsage, Watch: deps.LadoWatch, Compact: deps.LadoCompact, Presence: deps.LadoPresence, Relay: deps.LadoRelay},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
 		dev:           &controllers.DevController{Import: deps.DevImport},

@@ -42,6 +42,9 @@ type LadoController struct {
 	// Presence checks the human-presence proofs approval routes need. Nil
 	// refuses every such route.
 	Presence LadoPresence
+	// Relay relays a developer's instruction from an orchestrator to a
+	// running worker and lists a task's relays (issue #49).
+	Relay LadoRelayService
 }
 
 const (
@@ -96,6 +99,7 @@ func (c *LadoController) Register(r chi.Router) {
 	c.registerSetup(r)
 	c.registerVerify(r)
 	c.registerWatch(r)
+	c.registerRelay(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {

@@ -105,6 +105,9 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoTaskPartResponse":              "LadoTaskPartResponse",
 	"ControllersLadoTaskPartsSummaryResponse":      "LadoTaskPartsSummaryResponse",
 	"ControllersLadoTimingsQuery":                  "LadoTimingsQuery",
+	"ControllersCreateLadoRelayRequest":            "CreateLadoRelayRequest",
+	"ControllersLadoRelayResponse":                 "LadoRelayResponse",
+	"ControllersLadoRelayListResponse":             "LadoRelayListResponse",
 	"ControllersLadoTimingPointResponse":           "LadoTimingPointResponse",
 	"ControllersLadoTaskTimelineResponse":          "LadoTaskTimelineResponse",
 	"ControllersLadoSessionMetricsResponse":        "LadoSessionMetricsResponse",
@@ -427,6 +430,18 @@ func ladoOperations() []operation {
 			summary:    "Get how long a task's stages took, from intake to merge, and what each of its plan and execution sessions spent on investigation",
 			pathParams: []any{controllers.LadoTaskIDParam{}},
 			resps:      ladoResps(http.StatusOK, controllers.LadoTaskTimingsResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/relays", id: "createLadoRelay", tag: "lado",
+			summary: "Relay a developer's instruction from a LADO project's Chat orchestrator to a running execution worker of a task; LADO checks the caller, the task, the worker and that the evidence is a sentence the developer typed in the orchestrator's conversation, marks an instruction beyond that evidence or outside the approved plan, sends it as LADO and records the relay",
+			reqBody: controllers.CreateLadoRelayRequest{},
+			resps:   ladoResps(http.StatusCreated, controllers.LadoRelayResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/tasks/{taskId}/relays", id: "listLadoTaskRelays", tag: "lado",
+			summary:    "List the developer instructions LADO relayed to a task's workers, newest first",
+			pathParams: []any{controllers.LadoTaskIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoRelayListResponse{}, http.StatusNotFound),
 		},
 		{
 			method: http.MethodGet, path: "/api/v1/lado/tasks/{taskId}/usage", id: "getLadoTaskUsage", tag: "lado",
