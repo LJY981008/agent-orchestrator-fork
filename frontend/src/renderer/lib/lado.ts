@@ -72,6 +72,8 @@ export type LadoTaskUsageSummary = components["schemas"]["LadoTaskUsageSummaryRe
 export type LadoSessionUsage = components["schemas"]["LadoSessionUsageResponse"];
 export type LadoUsageTotals = components["schemas"]["LadoUsageTotalsResponse"];
 export type LadoProjectUsage = components["schemas"]["LadoProjectUsageResponse"];
+export type LadoRelay = components["schemas"]["LadoRelayResponse"];
+export type LadoRelayState = LadoRelay["state"];
 export type LadoAlert = components["schemas"]["LadoAlertResponse"];
 export type LadoUnseenAlertCounts = components["schemas"]["LadoUnseenAlertCountsResponse"];
 export type LadoAlertKind = LadoAlert["kind"];
@@ -174,6 +176,11 @@ export const ladoProtectionQueryKey = (projectId: string) => ["lado", "protectio
 export const ladoDispatchSettingsQueryKey = ["lado", "dispatch-settings"] as const;
 /** Under the task view's key, so LADO's task events refresh it as well. */
 export const ladoTaskUsageQueryKey = (taskId: string) => ["lado", "task", taskId, "usage"] as const;
+/**
+ * A task's relays of developer instructions (issue #49). Not under the task
+ * view's key: LADO's task events refresh it by name (lado-events.ts).
+ */
+export const ladoTaskRelaysQueryKey = (taskId: string) => ["lado", "task-relays", taskId] as const;
 export const ladoProjectUsageQueryKey = (projectId: string) => ["lado", "usage", projectId] as const;
 /** Every alert list of a project: the board's unseen ones and each task's. */
 export const ladoAlertsProjectQueryKey = (projectId: string) => ["lado", "alerts", projectId] as const;
@@ -740,6 +747,15 @@ export async function fetchLadoTaskUsage(taskId: string): Promise<LadoTaskUsage>
 	});
 	if (error) throw ladoError(error, "Could not load the task's usage");
 	return data;
+}
+
+/** The developer instructions LADO relayed to a task's workers, newest first (issue #49). */
+export async function fetchLadoTaskRelays(taskId: string): Promise<LadoRelay[]> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/tasks/{taskId}/relays", {
+		params: { path: { taskId } },
+	});
+	if (error) throw ladoError(error, "Could not load the task's relays");
+	return data.relays;
 }
 
 /** The usage totals of each of a project's tasks, for its board. */
