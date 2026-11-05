@@ -318,13 +318,7 @@ func (e LadoExecution) taskState() (LadoTaskState, string) {
 	states := make([]LadoTaskState, len(tracked))
 	reasons := make([]string, len(tracked))
 	for i, pr := range tracked {
-		one := e
-		one.PRs, one.PRRepos = nil, nil
-		one.PR, one.Verification, one.Integration = pr.PR, pr.Verification, pr.Integration
-		if e.Resolve.PRURL != "" && e.Resolve.PRURL != pr.PR.URL {
-			one.Resolve = LadoExecutionResolve{}
-		}
-		states[i], reasons[i] = one.prState()
+		states[i], reasons[i] = e.TrackedPRState(pr)
 	}
 	missing := len(e.MissingPRRepos()) > 0
 	if slices.Contains(states, LadoTaskClosedUnmerged) {
@@ -353,6 +347,19 @@ func (e LadoExecution) taskState() (LadoTaskState, string) {
 		}
 	}
 	return LadoTaskIntegrating, ""
+}
+
+// TrackedPRState is the state one tracked PR of the execution gives its
+// task on its own (#64): the PR with its verification and integration
+// approval, and the execution's resolve when it is for that PR.
+func (e LadoExecution) TrackedPRState(pr LadoExecutionTrackedPR) (LadoTaskState, string) {
+	one := e
+	one.PRs, one.PRRepos = nil, nil
+	one.PR, one.Verification, one.Integration = pr.PR, pr.Verification, pr.Integration
+	if e.Resolve.PRURL != "" && e.Resolve.PRURL != pr.PR.URL {
+		one.Resolve = LadoExecutionResolve{}
+	}
+	return one.prState()
 }
 
 // prState is the state one PR of an execution gives its task: e.PR, with

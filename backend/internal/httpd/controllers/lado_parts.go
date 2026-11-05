@@ -34,19 +34,28 @@ func (c *LadoController) getTaskParts(w http.ResponseWriter, r *http.Request) {
 }
 
 func ladoTaskPartsResponse(view ladoqueue.PartsView) LadoTaskPartsResponse {
-	resp := LadoTaskPartsResponse{Parts: make([]LadoTaskPartResponse, 0, len(view.Parts))}
+	resp := LadoTaskPartsResponse{Parts: make([]LadoTaskPartResponse, 0, len(view.Parts)), Repos: []LadoPartRunRepoResponse{}}
 	if view.Run.Branch != "" {
 		resp.Branch, resp.BaseSHA, resp.HeadSHA = view.Run.Branch, view.Run.BaseSHA, view.Run.HeadSHA
 		resp.StartedAt = ladoOptionalTime(view.Run.StartedAt)
+		for _, repo := range view.Repos {
+			resp.Repos = append(resp.Repos, LadoPartRunRepoResponse{
+				Repo: repo.Relative, Position: repo.Position, BaseSHA: repo.BaseSHA, HeadSHA: repo.HeadSHA, BaseBranch: repo.BaseBranch,
+			})
+		}
 	}
 	for _, part := range view.Parts {
+		repos := make([]LadoTaskPartRepoResponse, 0, len(view.PartRepos[part.PartID]))
+		for _, repo := range view.PartRepos[part.PartID] {
+			repos = append(repos, LadoTaskPartRepoResponse{Repo: repo.Relative, StartSHA: repo.StartSHA, MergedSHA: repo.MergedSHA, Empty: repo.Empty()})
+		}
 		resp.Parts = append(resp.Parts, LadoTaskPartResponse{
 			ID: part.PartID, Title: part.Title, Phase: part.Phase, Steps: orEmptyInts(part.Steps),
 			AffectedPaths: orEmptyStrings(part.AffectedPaths), DependsOn: orEmptyStrings(part.DependsOn),
 			State: string(part.State), WaitingReason: ladoPartWaiting(part), WaitingDetail: ladoPartWaitingDetail(part),
 			Attempts: part.Attempts, SessionID: string(part.SessionID), Branch: part.Branch, StartSHA: part.StartSHA,
 			MergedSHA: part.MergedSHA, MergeSessionID: string(part.MergeSessionID), MergeAttempts: part.MergeAttempts,
-			Summary: part.Summary, Error: part.Error, UpdatedAt: part.UpdatedAt,
+			MergeRepo: part.MergeRepo, Summary: part.Summary, Error: part.Error, UpdatedAt: part.UpdatedAt, Repos: repos,
 		})
 	}
 	return resp

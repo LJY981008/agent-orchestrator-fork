@@ -56,6 +56,11 @@ func TestLadoAPI_TaskParts(t *testing.T) {
 	if api := got.Parts[0]; api.WaitingReason != "" || len(api.DependsOn) != 0 {
 		t.Fatalf("part api = %+v, want no wait and an empty list", api)
 	}
+	// A run in one repository lists it alone, without a folder (#64).
+	if len(got.Repos) != 1 || got.Repos[0] != (controllers.LadoPartRunRepoResponse{BaseSHA: base, HeadSHA: base}) ||
+		got.Parts[0].MergeRepo != "" || len(got.Parts[0].Repos) != 1 || got.Parts[0].Repos[0].Repo != "" {
+		t.Fatalf("repos = %+v, part repos %+v; want the run's one repository", got.Repos, got.Parts[0].Repos)
+	}
 }
 
 // A task approved again after its worker ended without a PR runs the new

@@ -3719,9 +3719,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Approve the integration of the head of an execution's PR with a human-presence
-        proof, or preview it with dryRun; LADO then posts the lado/integration status
-        and never merges
+      summary: Approve the integration of the heads of an execution's open PRs together
+        with one human-presence proof, or preview it with dryRun; LADO then posts
+        each lado/integration status and never merges
       tags:
       - lado
   /api/v1/lado/executions/{sessionId}/integration-status:
@@ -3734,6 +3734,14 @@ paths:
         required: true
         schema:
           description: AO session id of the worker.
+          type: string
+      - description: The open PR LADO tracks for the execution whose approved head's
+          status is posted again; the first in merge order when omitted.
+        in: query
+        name: prUrl
+        schema:
+          description: The open PR LADO tracks for the execution whose approved head's
+            status is posted again; the first in merge order when omitted.
           type: string
       responses:
         "200":
@@ -3766,7 +3774,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
-      summary: Post the lado/integration status of the PR's approved current head
+      summary: Post the lado/integration status of an open PR's approved current head
         again, its attempts started over; needs no presence proof
       tags:
       - lado
@@ -16671,19 +16679,14 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
-    ApproveLadoIntegrationRequest:
+    ApproveLadoIntegrationPR:
       properties:
         acknowledge:
-          description: 'The confirm codes the developer acknowledged: exactly the
-            record''s, from the dry run''s confirm. A dry run needs none.'
+          description: The head record's confirm codes the developer acknowledged,
+            from the dry run's confirm. A dry run needs none.
           items:
             type: string
           type: array
-        dryRun:
-          description: Read the PR's live head, the base branch and its rules again
-            and answer the head's record, its hash and the codes to confirm, without
-            a presence proof and without approving.
-          type: boolean
         headSha:
           description: The head the developer approves; another live head refuses
             the approval.
@@ -16693,12 +16696,47 @@ components:
           minLength: 1
           type: string
         verificationSha256:
-          description: The hash of the record the developer saw, from the dry run;
-            another record refuses the approval. A dry run needs none.
+          description: The hash of the head's record the developer saw, from the dry
+            run; another record refuses the approval. A dry run needs none.
           type: string
       required:
       - prUrl
       - headSha
+      type: object
+    ApproveLadoIntegrationRequest:
+      properties:
+        acknowledge:
+          description: 'The confirm codes the developer acknowledged: exactly the
+            record''s, from the dry run''s confirm. A dry run needs none.'
+          items:
+            type: string
+          type: array
+        dryRun:
+          description: Read each PR's live head, the base branch and its rules again
+            and answer each head's record, its hash and the codes to confirm, without
+            a presence proof and without approving.
+          type: boolean
+        headSha:
+          description: The head the developer approves, without prs; another live
+            head refuses the approval.
+          minLength: 40
+          type: string
+        prUrl:
+          description: The PR approved, without prs.
+          minLength: 1
+          type: string
+        prs:
+          description: 'The PRs approved together: every open PR LADO tracks for the
+            execution (#64), else LADO_INTEGRATION_PRS_CHANGED; a dry run may name
+            any of them. Leave prUrl, headSha, verificationSha256 and acknowledge
+            out when sending it.'
+          items:
+            $ref: '#/components/schemas/ApproveLadoIntegrationPR'
+          type: array
+        verificationSha256:
+          description: The hash of the record the developer saw, from the dry run;
+            another record refuses the approval. A dry run needs none.
+          type: string
       type: object
     ApproveLadoPlanRequest:
       properties:
@@ -21223,6 +21261,11 @@ components:
         error:
           description: The last failure, without secrets.
           type: string
+        prUrl:
+          description: The tracked PR the resolve is for, the first in merge order
+            that conflicts or whose base overlaps; omitted for a resolve recorded
+            before LADO tracked several PRs, which is for the run's PR.
+          type: string
         sessionId:
           description: The newest resolve worker's AO session.
           type: string
@@ -21265,7 +21308,21 @@ components:
           $ref: '#/components/schemas/LadoExecutionPlanResponse'
         pr:
           $ref: '#/components/schemas/LadoExecutionPRResponse'
-          description: The newest PR of the worker session; omitted while it has none.
+          description: The first PR LADO tracks for the run in merge order, else the
+            newest PR of the worker session; omitted while it has none.
+        prRepos:
+          description: The repositories, as slash-separated folders under the workspace's,
+            the run is expected to open a PR in, in the order the PRs merge; empty
+            when the plan named no order.
+          items:
+            type: string
+          type: array
+        prReposFirm:
+          description: prRepos are the repositories the run's parts changed (an integration
+            run), so each needs a PR; otherwise they are what the plan declared, and
+            one without a PR stops being waited for once the worker reported done
+            or its session ended.
+          type: boolean
         resolve:
           $ref: '#/components/schemas/LadoExecutionResolveResponse'
           description: What LADO's resolve workers did for the PR once it conflicted,
@@ -21329,6 +21386,7 @@ components:
           - merge_conflict
           - resolving
           - conflict_unresolved
+          - pr_missing
           type: string
         task:
           $ref: '#/components/schemas/LadoExecutionTaskResponse'
@@ -21338,6 +21396,21 @@ components:
           type:
           - "null"
           - string
+        trackedPrs:
+          description: The PRs LADO tracks for the run, one per repository, in merge
+            order, each with its head's full record and approval when verification
+            is wired; an execution LADO tracks no PR for yet lists its newest PR alone,
+            and one without a PR none. The task's integration approval names the open
+            ones together.
+          items:
+            $ref: '#/components/schemas/LadoExecutionTrackedPRResponse'
+          type: array
+        untrackedPrs:
+          description: The worker session's other open PRs, newest first, which LADO
+            does not track or verify; omitted while it has none.
+          items:
+            $ref: '#/components/schemas/LadoExecutionPRResponse'
+          type: array
         verification:
           $ref: '#/components/schemas/LadoVerificationResponse'
           description: What LADO verified about the PR's current head; omitted until
@@ -21352,6 +21425,9 @@ components:
       - startedAt
       - sessionEnded
       - state
+      - trackedPrs
+      - prRepos
+      - prReposFirm
       type: object
     LadoExecutionRuleResponse:
       properties:
@@ -21463,6 +21539,114 @@ components:
       - issueRef
       - issueUrl
       type: object
+    LadoExecutionTrackedPRResponse:
+      properties:
+        approval:
+          $ref: '#/components/schemas/LadoIntegrationApprovalResponse'
+          description: The integration approval of the PR's current head that holds;
+            only GET /api/v1/lado/executions/{sessionId} reads it, and omits it without
+            one.
+        closed:
+          description: Closed without a merge.
+          type: boolean
+        headSha:
+          description: The PR's head as AO last observed it, which LADO verifies;
+            omitted until AO observed it.
+          type: string
+        integration:
+          $ref: '#/components/schemas/LadoTrackedPRIntegrationResponse'
+        mergeability:
+          description: Whether the host can merge the PR into its target as AO last
+            observed it.
+          enum:
+          - unknown
+          - mergeable
+          - conflicting
+          - blocked
+          - unstable
+          type: string
+        merged:
+          type: boolean
+        number:
+          type: integer
+        position:
+          description: 'The PR''s place in the merge order, from 0: the order of the
+            plan''s repos, else the order LADO began tracking the PRs.'
+          type: integer
+        record:
+          $ref: '#/components/schemas/LadoVerificationResponse'
+          description: The full verification record of the PR's current head; only
+            GET /api/v1/lado/executions/{sessionId} reads it, and omits it until LADO
+            computed it.
+        repo:
+          description: The repository the PR is open in, as its slash-separated folder
+            under the workspace's; empty for a single-repository project.
+          type: string
+        settled:
+          description: LADO's verification settled the PR once it merged or closed.
+          type: boolean
+        state:
+          description: 'The state this PR alone gives its task: validating while LADO
+            verifies its head or it conflicts, integration_pending while its head
+            waits for the developer''s approval, integrating once that head is approved,
+            completed once it merged, closed_unmerged once it closed without a merge.'
+          enum:
+          - running
+          - validating
+          - integration_pending
+          - integrating
+          - failed
+          - completed
+          - closed_unmerged
+          type: string
+        stateReason:
+          description: Why the PR is in its state, as the task's stateReason says
+            it.
+          enum:
+          - verifying
+          - checks_pending
+          - checks_failed
+          - commands_running
+          - worktree_not_at_head
+          - worktree_changed
+          - head_unavailable
+          - commands_failed
+          - command_timed_out
+          - worktree_missing
+          - commit_messages_failed
+          - protected_path
+          - pr_repo_not_in_workspace
+          - review_pending
+          - changes_requested
+          - status_not_posted
+          - merged_without_approval
+          - base_overlap
+          - merge_conflict
+          - resolving
+          - conflict_unresolved
+          type: string
+        targetBranch:
+          description: The branch the PR merges into.
+          type: string
+        title:
+          type: string
+        url:
+          type: string
+        verification:
+          $ref: '#/components/schemas/LadoTrackedPRVerificationResponse'
+          description: What LADO verified about the PR's current head, in short; omitted
+            until LADO computed it.
+      required:
+      - url
+      - number
+      - merged
+      - closed
+      - repo
+      - position
+      - state
+      - settled
+      - integration
+      type: object
     LadoImpactProjectResponse:
       properties:
         id:
@@ -21546,6 +21730,30 @@ components:
       - statusState
       - statusAttempts
       type: object
+    LadoIntegrationApprovePRResponse:
+      properties:
+        approval:
+          $ref: '#/components/schemas/LadoIntegrationApprovalResponse'
+          description: 'The head''s approval: recorded now, or recorded before for
+            a head approved already; omitted for a dry run.'
+        confirm:
+          description: 'The record''s confirm codes, sorted: what an approval sends
+            as this PR''s acknowledge.'
+          items:
+            type: string
+          type: array
+        prUrl:
+          type: string
+        verification:
+          $ref: '#/components/schemas/LadoVerificationResponse'
+        verificationSha256:
+          type: string
+      required:
+      - prUrl
+      - verification
+      - verificationSha256
+      - confirm
+      type: object
     LadoIntegrationApproveResponse:
       properties:
         approval:
@@ -21557,6 +21765,12 @@ components:
           items:
             type: string
           type: array
+        prs:
+          description: Each PR the request named, in merge order; one for a request
+            that named one.
+          items:
+            $ref: '#/components/schemas/LadoIntegrationApprovePRResponse'
+          type: array
         verification:
           $ref: '#/components/schemas/LadoVerificationResponse'
         verificationSha256:
@@ -21565,6 +21779,7 @@ components:
       - verification
       - verificationSha256
       - confirm
+      - prs
       type: object
     LadoInvestigationSummaryResponse:
       properties:
@@ -21810,6 +22025,33 @@ components:
       - id
       - name
       - path
+      type: object
+    LadoPartRunRepoResponse:
+      properties:
+        baseBranch:
+          description: The repository's base branch the dispatch resolved.
+          type: string
+        baseSha:
+          description: The commit the repository's integration branch started from.
+          type: string
+        headSha:
+          description: Where LADO last moved the repository's integration branch;
+            its base while no part changed the repository.
+          type: string
+        position:
+          description: 'The repository''s place in the run''s order, from 0: the order
+            of the plan''s repos, in which the PRs merge.'
+          type: integer
+        repo:
+          description: The repository's slash-separated folder under the workspace's;
+            empty for a single-repository project, or a run in the issue's repository
+            alone that started before runs had repositories.
+          type: string
+      required:
+      - repo
+      - position
+      - baseSha
+      - headSha
       type: object
     LadoPermissionResponse:
       properties:
@@ -24618,7 +24860,16 @@ components:
           type: string
         pr:
           $ref: '#/components/schemas/LadoExecutionPRResponse'
-          description: The newest PR of the worker session; omitted while it has none.
+          description: The first PR LADO tracks for the run in merge order, else the
+            newest PR of the worker session; omitted while it has none.
+        prRepos:
+          description: The repositories, as slash-separated folders under the workspace's,
+            the run is expected to open a PR in, in the order the PRs merge; empty
+            when the plan named no order. A repository among them without a tracked
+            PR keeps the task validating with pr_missing.
+          items:
+            type: string
+          type: array
         sessionEnded:
           description: The worker session ended. While it lives, the task cannot be
             approved again.
@@ -24631,9 +24882,17 @@ components:
         timedOut:
           description: LADO stopped the run at its deadline.
           type: boolean
+        trackedPrs:
+          description: The PRs LADO tracks for the run, one per repository, in merge
+            order; an execution LADO tracks no PR for yet lists its newest PR alone,
+            and one without a PR none.
+          items:
+            $ref: '#/components/schemas/LadoExecutionTrackedPRResponse'
+          type: array
         untrackedPrs:
           description: The worker session's other open PRs, newest first, which LADO
-            does not track or verify; omitted while it has none.
+            does not track or verify, such as a second open PR in a repository whose
+            tracked PR is still open; omitted while it has none.
           items:
             $ref: '#/components/schemas/LadoExecutionPRResponse'
           type: array
@@ -24643,6 +24902,8 @@ components:
       - startedAt
       - timedOut
       - sessionEnded
+      - trackedPrs
+      - prRepos
       type: object
     LadoTaskIssueResponse:
       properties:
@@ -24685,6 +24946,28 @@ components:
       required:
       - tasks
       type: object
+    LadoTaskPartRepoResponse:
+      properties:
+        empty:
+          description: 'The part left the repository as it found it: it has no commits
+            there.'
+          type: boolean
+        mergedSha:
+          description: The repository's integration branch commit once the part was
+            merged there.
+          type: string
+        repo:
+          description: The repository's slash-separated folder under the workspace's;
+            empty for a run in one repository.
+          type: string
+        startSha:
+          description: The repository's integration branch commit the part's branch
+            started from there.
+          type: string
+      required:
+      - repo
+      - empty
+      type: object
     LadoTaskPartResponse:
       properties:
         affectedPaths:
@@ -24707,6 +24990,11 @@ components:
           type: string
         mergeAttempts:
           type: integer
+        mergeRepo:
+          description: The repository, as its slash-separated folder under the workspace's,
+            whose merge of the part conflicted and where its merge worker resolves
+            it; omitted while no merge conflicts and for a run in one repository.
+          type: string
         mergeSessionId:
           description: The merge worker resolving the part's conflict.
           type: string
@@ -24716,6 +25004,12 @@ components:
         phase:
           description: The display phase, as the plan view shows it.
           type: integer
+        repos:
+          description: How the part went in each of the run's repositories, in the
+            run's order; one with an empty repo for a run in one repository.
+          items:
+            $ref: '#/components/schemas/LadoTaskPartRepoResponse'
+          type: array
         sessionId:
           description: The part's newest worker session.
           type: string
@@ -24780,6 +25074,7 @@ components:
       - attempts
       - mergeAttempts
       - updatedAt
+      - repos
       type: object
     LadoTaskPartsResponse:
       properties:
@@ -24787,8 +25082,8 @@ components:
           description: The approved base commit the integration branch started from.
           type: string
         branch:
-          description: The integration branch; omitted while the newest approval runs
-            no parts.
+          description: The integration branch, named the same in each of the run's
+            repositories; omitted while the newest approval runs no parts.
           type: string
         headSha:
           description: Where LADO last moved the integration branch.
@@ -24797,6 +25092,14 @@ components:
           items:
             $ref: '#/components/schemas/LadoTaskPartResponse'
           type: array
+        repos:
+          description: The repositories the run has an integration branch in, each
+            named branch, in the order the plan's repos give; branch, baseSha and
+            headSha above are the first's. Empty while the newest approval runs no
+            parts.
+          items:
+            $ref: '#/components/schemas/LadoPartRunRepoResponse'
+          type: array
         startedAt:
           format: date-time
           type:
@@ -24804,6 +25107,7 @@ components:
           - string
       required:
       - parts
+      - repos
       type: object
     LadoTaskPartsSummaryResponse:
       properties:
@@ -24984,15 +25288,17 @@ components:
           type: string
         stateReason:
           description: Why the task needs review, is blocked or failed, or what its
-            queued plan waits for; for validating, conflict_unresolved when LADO's
-            resolve workers could not resolve the open PR, resolving while one takes
-            the base into it, merge_conflict while the PR conflicts with its base
-            and base_overlap when the base moved under the head with a change to the
-            same paths, all four before an approval; else verifying while LADO has
-            not verified the head yet, else the code of the verification item that
-            fails or waits; status_not_posted for integrating while LADO could not
-            post the lado/integration status; merged_without_approval for completed
-            when the merged head had no integration approval. For the app to translate.
+            queued plan waits for; for validating, pr_missing while a repository the
+            task is expected to open a pull request in has none yet (a workspace task
+            across repositories), conflict_unresolved when LADO's resolve workers
+            could not resolve the open PR, resolving while one takes the base into
+            it, merge_conflict while the PR conflicts with its base and base_overlap
+            when the base moved under the head with a change to the same paths, all
+            four before an approval; else verifying while LADO has not verified the
+            head yet, else the code of the verification item that fails or waits;
+            status_not_posted for integrating while LADO could not post the lado/integration
+            status; merged_without_approval for completed when the merged head had
+            no integration approval. For the app to translate.
           enum:
           - rules_changed
           - issue_edited
@@ -25037,6 +25343,7 @@ components:
           - merge_conflict
           - resolving
           - conflict_unresolved
+          - pr_missing
           type: string
       required:
       - id
@@ -25316,6 +25623,56 @@ components:
       - entered
       - stored
       - permissions
+      type: object
+    LadoTrackedPRIntegrationResponse:
+      properties:
+        headApproved:
+          description: The PR's current head has an integration approval into its
+            target that holds.
+          type: boolean
+        revokedReason:
+          description: 'Why LADO withdrew the head''s approval, while it has none
+            that holds: base_overlap when the base moved under this head with a change
+            to the same paths (only a new head can be approved), sibling_revoked when
+            that happened to another unmerged PR of the same task, which approves
+            the PRs again together, this head included. Only GET /api/v1/lado/executions/{sessionId}
+            reads it.'
+          enum:
+          - base_overlap
+          - sibling_revoked
+          type: string
+        statusState:
+          description: How posting that approval's lado/integration status went; omitted
+            without an approval.
+          enum:
+          - pending
+          - posted
+          - failed
+          - not_applicable
+          type: string
+      required:
+      - headApproved
+      type: object
+    LadoTrackedPRVerificationResponse:
+      properties:
+        headSha:
+          description: The head the record verified; another head than the PR's means
+            LADO has not verified its current head yet.
+          type: string
+        outcome:
+          enum:
+          - pass
+          - wait
+          - fail
+          - confirm
+          type: string
+        reason:
+          description: The code of the first item that fails, else of the first that
+            waits, as LadoVerificationResponse's reason; omitted otherwise.
+          type: string
+      required:
+      - headSha
+      - outcome
       type: object
     LadoUnseenAlertCountResponse:
       properties:

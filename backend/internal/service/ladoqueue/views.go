@@ -192,6 +192,11 @@ type PartsView struct {
 	Entry domain.LadoQueueEntry
 	Run   domain.LadoPartRun
 	Parts []domain.LadoTaskPart
+	// Repos are the run's repositories in order, each with its integration
+	// branch's base and head (#64), and PartRepos how each part went in each
+	// of them, by part id.
+	Repos     []domain.LadoPartRunRepo
+	PartRepos map[string][]domain.LadoTaskPartRepo
 }
 
 // TaskParts returns the parts run of the task's newest approval.
@@ -212,6 +217,12 @@ func (s *Service) TaskParts(ctx context.Context, id domain.LadoTaskID) (PartsVie
 	if err == nil && ok {
 		view.Run = run
 		view.Parts, err = s.deps.Store.LadoTaskParts(ctx, task.Queue.ID)
+		if err == nil {
+			view.Repos, err = s.deps.Store.LadoPartRunRepos(ctx, task.Queue.ID)
+		}
+		if err == nil {
+			view.PartRepos, err = s.deps.Store.LadoTaskPartRepos(ctx, task.Queue.ID)
+		}
 	}
 	if err != nil {
 		s.deps.Log.Error("LADO could not read a task's parts", "task", id, "err", err)
