@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -158,6 +159,9 @@ const (
 	// LadoMaxResolveAttempts times in a row, or one asked for a person: the
 	// owner resolves the PR.
 	LadoValidatingConflictUnresolved = "conflict_unresolved"
+	// LadoValidatingPRMissing means a repository the execution is expected
+	// to open a PR in has none yet (#64, LadoExecution.MissingPRRepos).
+	LadoValidatingPRMissing = "pr_missing"
 )
 
 // State derives the task's state now, as StateAt does.
@@ -293,12 +297,71 @@ func (e LadoExecution) State() (LadoTaskState, string) {
 	return e.taskState()
 }
 
-// taskState is the state an execution gives its task. A PR decides once
-// there is one: a run stopped at its deadline while its PR opened still has
-// the PR to review, as the run time limit stops once a PR is open. A merge
-// without an integration approval counts only for an execution dispatched
-// under integration approval.
+// taskState is the state an execution gives its task. An execution with at
+// most one tracked PR and at most one expected repository gets its PR's state
+// (prState). One with more gathers its tracked PRs' states (#64), in merge
+// order: a closed PR makes it Closed unmerged, and it is Completed once every
+// PR merged and none is missing, without approval when any merged head had
+// none. Otherwise the first open PR that is Validating gives its reason, then
+// a repository still without a PR keeps it Validating (LadoValidatingPRMissing),
+// then a PR waiting for its approval makes it Integration pending, and it is
+// Integrating once every open PR's head is approved. Before any PR opens it
+// is Running or Failed as with one PR.
 func (e LadoExecution) taskState() (LadoTaskState, string) {
+	if len(e.PRs) <= 1 && len(e.PRRepos) <= 1 {
+		return e.prState()
+	}
+	tracked := e.TrackedPRs()
+	if len(tracked) == 0 {
+		return e.prState()
+	}
+	states := make([]LadoTaskState, len(tracked))
+	reasons := make([]string, len(tracked))
+	for i, pr := range tracked {
+		one := e
+		one.PRs, one.PRRepos = nil, nil
+		one.PR, one.Verification, one.Integration = pr.PR, pr.Verification, pr.Integration
+		if e.Resolve.PRURL != "" && e.Resolve.PRURL != pr.PR.URL {
+			one.Resolve = LadoExecutionResolve{}
+		}
+		states[i], reasons[i] = one.prState()
+	}
+	missing := len(e.MissingPRRepos()) > 0
+	if slices.Contains(states, LadoTaskClosedUnmerged) {
+		return LadoTaskClosedUnmerged, ""
+	}
+	if !missing && !slices.ContainsFunc(states, func(s LadoTaskState) bool { return s != LadoTaskCompleted }) {
+		for i := range states {
+			if reasons[i] == LadoCompletedWithoutApproval {
+				return LadoTaskCompleted, LadoCompletedWithoutApproval
+			}
+		}
+		return LadoTaskCompleted, ""
+	}
+	if i := slices.Index(states, LadoTaskValidating); i >= 0 {
+		return LadoTaskValidating, reasons[i]
+	}
+	if missing {
+		return LadoTaskValidating, LadoValidatingPRMissing
+	}
+	if slices.Contains(states, LadoTaskIntegrationPending) {
+		return LadoTaskIntegrationPending, ""
+	}
+	for i := range states {
+		if states[i] == LadoTaskIntegrating && reasons[i] != "" {
+			return LadoTaskIntegrating, reasons[i]
+		}
+	}
+	return LadoTaskIntegrating, ""
+}
+
+// prState is the state one PR of an execution gives its task: e.PR, with
+// e.Verification, e.Integration and e.Resolve. A PR decides once there is
+// one: a run stopped at its deadline while its PR opened still has the PR to
+// review, as the run time limit stops once a PR is open. A merge without an
+// integration approval counts only for an execution dispatched under
+// integration approval.
+func (e LadoExecution) prState() (LadoTaskState, string) {
 	switch {
 	case e.PR.Merged && e.IntegrationGated && !e.Integration.MergedHeadApproved:
 		return LadoTaskCompleted, LadoCompletedWithoutApproval

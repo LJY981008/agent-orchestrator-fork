@@ -38,12 +38,15 @@ const (
 
 // LadoExecutionResolve is what an execution read carries of its PR's
 // resolve: the state, the failed attempts in a row, the newest resolve
-// worker's session and the last failure.
+// worker's session and the last failure. PRURL is the tracked PR the resolve
+// is for (#64), empty for a row written before LADO tracked several PRs,
+// which is for the execution's PR.
 type LadoExecutionResolve struct {
 	State     LadoResolveState
 	Attempts  int
 	SessionID SessionID
 	Error     string
+	PRURL     string
 }
 
 // LadoPRResolve is LADO's row for resolving one execution's PR
@@ -54,7 +57,11 @@ type LadoPRResolve struct {
 	ExecutionSessionID SessionID
 	TaskID             LadoTaskID
 	QueueEntryID       LadoQueueEntryID
-	State              LadoResolveState
+	// PRURL is the tracked PR the resolve worker works on (#64): the first
+	// one, in merge order, that conflicts or whose base overlaps. It is empty
+	// for a row written before LADO tracked several PRs.
+	PRURL string
+	State LadoResolveState
 	// Attempts counts the resolve workers that failed in a row.
 	Attempts int
 	// Spawns counts the resolve workers LADO started for the PR; the next
@@ -88,7 +95,7 @@ type LadoPRResolve struct {
 
 // Execution is the resolve as an execution read carries it.
 func (r LadoPRResolve) Execution() LadoExecutionResolve {
-	return LadoExecutionResolve{State: r.State, Attempts: r.Attempts, SessionID: r.SessionID, Error: r.Error}
+	return LadoExecutionResolve{State: r.State, Attempts: r.Attempts, SessionID: r.SessionID, Error: r.Error, PRURL: r.PRURL}
 }
 
 // ladoResolveID is the middle of a resolve worker's client request id. A part
