@@ -7,6 +7,8 @@
 // Once approved, the footer follows the queue and the run: what the queued
 // plan waits for, then the worker's session and PR, or why the run failed,
 // and once LADO verified the PR's head, its integration approval and merge.
+// A workspace task with a pull request in each of several repositories (#64)
+// lists them, and one approval names them all.
 // The Timings tab shows how long each stage took; the Usage tab what its
 // sessions spend and the alerts LADO raised (issue #42). The Relays tab lists
 // the developer instructions LADO relayed to the task's workers (issue #49).
@@ -45,7 +47,16 @@ import {
 } from "../ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
-import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import {
+	ladoMergeable,
+	ladoMissingPRRepos,
+	ladoOpenPlanWorker,
+	ladoTaskReason,
+	ladoTaskStatus,
+	ladoTaskToneDotClass,
+	ladoTrackedPRs,
+	ladoTrackedPRStatus,
+} from "./lado-task-status";
 import { LadoPartsProgress, LadoPlanParts } from "./LadoParts";
 import { LadoPlanReview } from "./LadoPlanReview";
 import { LadoPlanWorkerStatus } from "./LadoPlanWorkerStatus";
@@ -479,8 +490,22 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 	const reason = failed ? ladoReasonText(t, task.stateReason) : notPosted ? "" : (ladoTaskReason(task, t, i18n.language) ?? "");
 	const error = failed && task.queue?.error ? ladoQueueErrorText(t, task.queue.error) : "";
 	const execution = task.execution;
-	const pr = execution?.pr && !execution.pr.merged && !execution.pr.closed ? execution.pr : undefined;
+	const tracked = execution ? ladoTrackedPRs(execution) : [];
+	const many = tracked.length > 1;
+	const missing = execution ? ladoMissingPRRepos(execution, task.stateReason) : [];
+	// The task's PRs approve together; the next in merge order merges.
+	const next = many && execution ? tracked.find((one) => ladoMergeable(execution, one)) : undefined;
+	const firstOpen = tracked.find((one) => !one.merged && !one.closed);
+	const pr = many
+		? task.state === "integration_pending"
+			? firstOpen
+			: next
+		: execution?.pr && !execution.pr.merged && !execution.pr.closed
+			? execution.pr
+			: undefined;
 	const action = !pr ? null : task.state === "integration_pending" ? "approve" : task.state === "integrating" ? "merge" : null;
+	// The open PR whose approved head's status LADO could not post.
+	const notPostedPR = tracked.find((one) => !one.merged && !one.closed && one.integration.statusState === "failed");
 	// Spaces for the text read aloud; the flex gap lays the row out.
 	const separator = (
 		<>
@@ -518,7 +543,7 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 						</button>
 					</>
 				) : null}
-				{execution?.pr ? (
+				{execution?.pr && !many ? (
 					<>
 						{separator}
 						<ProductExternalLink
@@ -550,18 +575,56 @@ function RunStatus({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 							action={action}
 							pr={pr}
 							headSha={pr.headSha}
+							task={many && action === "approve"}
 							variant="footer-primary"
 							className={compactButtonClass}
 						/>
 					</span>
 				) : null}
 			</div>
+			{many || missing.length > 0 ? (
+				<ul className="flex min-w-0 flex-col gap-0.5 pl-3.5" data-testid="lado-run-prs">
+					{(many ? tracked : []).map((one) => {
+						const prStatus = ladoTrackedPRStatus(one, t);
+						return (
+							<li key={one.url} className="flex min-w-0 flex-wrap items-center gap-x-2" data-testid="lado-run-pr" data-repo={one.repo}>
+								<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass[prStatus.tone])} aria-hidden="true" />
+								{one.repo ? <span className="font-mono text-foreground">{one.repo}</span> : null}
+								<ProductExternalLink
+									href={one.url}
+									ariaLabel={t("lado.view.openPR", { number: one.number })}
+									className="font-mono text-settings-muted hover:text-foreground"
+								>
+									{t("lado.view.prNumber", { number: one.number })}
+								</ProductExternalLink>
+								{separator}
+								<span className="text-foreground">{prStatus.label}</span>
+								{one.stateReason ? (
+									<>
+										{separator}
+										<span className="text-settings-muted">{ladoReasonText(t, one.stateReason)}</span>
+									</>
+								) : null}
+							</li>
+						);
+					})}
+					{missing.map((repo) => (
+						<li key={`missing:${repo}`} className="flex min-w-0 flex-wrap items-center gap-x-2" data-testid="lado-run-pr-missing" data-repo={repo}>
+							<span className={cn("size-1.5 shrink-0 rounded-full", ladoTaskToneDotClass.muted)} aria-hidden="true" />
+							<span className="font-mono text-foreground">{repo}</span>
+							<span className="text-settings-muted">{t("lado.view.noPR")}</span>
+						</li>
+					))}
+				</ul>
+			) : null}
 			{notPosted ? (
 				<div className="flex min-w-0 flex-col items-start gap-0.5 pl-3.5">
 					<p className="text-[var(--color-status-in-review)]" data-testid="lado-run-not-posted">
 						{ladoReasonText(t, "status_not_posted")}
 					</p>
-					{execution && pr ? <LadoRepostStatus projectId={task.projectId} sessionId={execution.sessionId} /> : null}
+					{execution && (many ? notPostedPR : pr) ? (
+						<LadoRepostStatus projectId={task.projectId} sessionId={execution.sessionId} prUrl={many ? notPostedPR?.url : undefined} />
+					) : null}
 				</div>
 			) : null}
 			{/* Under the label, past the dot and its gap; the whole text on hover. */}

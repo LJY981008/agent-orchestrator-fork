@@ -103,6 +103,12 @@ const KEYS = [
 	"lado.presence.integration.nextStatus",
 	"lado.presence.integration.nextUnprotected",
 	"lado.presence.integration.approve",
+	// LADO fork: approving a workspace task's pull requests together (#64).
+	"lado.presence.integration.titleMany",
+	"lado.presence.integration.prLine",
+	"lado.presence.integration.approvedAlready",
+	"lado.presence.integration.nextStatusMany",
+	"lado.presence.integration.nextUnprotectedMany",
 	"lado.presence.checks.title",
 	"lado.presence.checks.detail",
 	"lado.presence.checks.added",

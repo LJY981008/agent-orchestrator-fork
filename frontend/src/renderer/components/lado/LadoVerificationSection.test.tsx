@@ -640,3 +640,132 @@ test("names a remote base that moved past the head, and the files it overlaps", 
 	expect(base).toHaveAttribute("data-outcome", "fail");
 	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Base moved");
 });
+
+// A workspace task with a pull request in each of two repositories (#64).
+const BACK_URL = "https://github.com/acme/back/pull/3";
+const FRONT_URL = "https://github.com/acme/front/pull/5";
+const BACK_HEAD = "b".repeat(40);
+const FRONT_HEAD = "c".repeat(40);
+
+function trackedPR(fields: Partial<lado.LadoExecutionTrackedPR> & Pick<lado.LadoExecutionTrackedPR, "url" | "repo" | "position" | "number">): lado.LadoExecutionTrackedPR {
+	return {
+		closed: false,
+		merged: false,
+		settled: false,
+		state: "integration_pending",
+		targetBranch: "main",
+		integration: { headApproved: false },
+		...fields,
+	};
+}
+
+function twoPRs(back: Partial<lado.LadoExecutionTrackedPR> = {}, front: Partial<lado.LadoExecutionTrackedPR> = {}, fields: Partial<lado.LadoExecution> = {}) {
+	const backPR = trackedPR({ url: BACK_URL, repo: "back", position: 0, number: 3, headSha: BACK_HEAD, record: verification({ headSha: BACK_HEAD, prUrl: BACK_URL }), ...back });
+	const frontPR = trackedPR({
+		url: FRONT_URL,
+		repo: "front",
+		position: 1,
+		number: 5,
+		headSha: FRONT_HEAD,
+		record: verification({ headSha: FRONT_HEAD, prUrl: FRONT_URL, items: items({ paths: { outcome: "pass", code: undefined, details: { protected: [] } } }) }),
+		...front,
+	});
+	return execution({
+		pr: { url: BACK_URL, number: 3, merged: backPR.merged, closed: false, headSha: BACK_HEAD, targetBranch: "main" },
+		verification: backPR.record,
+		// The daemon lists them in merge order; the app does not rely on it.
+		trackedPrs: [frontPR, backPR],
+		prRepos: ["back", "front"],
+		state: "integration_pending",
+		...fields,
+	});
+}
+
+test("shows each tracked PR with its repository, state and own verification, and one approval for the task", async () => {
+	vi.mocked(lado.approveLadoIntegration).mockResolvedValueOnce(null);
+	renderSection(twoPRs());
+
+	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Integration pending");
+	const prs = screen.getAllByTestId("lado-verify-pr");
+	expect(prs.map((element) => element.dataset.repo)).toEqual(["back", "front"]);
+	expect(prs[0]).toHaveTextContent("backPR #3");
+	expect(within(prs[0]!).getByText(BACK_HEAD.slice(0, 7))).toBeInTheDocument();
+	expect(within(prs[1]!).getByText(FRONT_HEAD.slice(0, 7))).toBeInTheDocument();
+	// Each PR's own record: front changed nothing outside the plan.
+	const outcomes = prs.map((element) =>
+		within(element).getAllByTestId("lado-verify-item").find((item) => item.dataset.kind === "paths")?.dataset.outcome,
+	);
+	expect(outcomes).toEqual(["confirm", "pass"]);
+	// The check commands run again for the first open PR only.
+	expect(within(prs[0]!).getAllByRole("button", { name: "Run again" })).toHaveLength(1);
+	expect(within(prs[1]!).queryByRole("button", { name: "Run again" })).not.toBeInTheDocument();
+
+	expect(screen.getAllByRole("button", { name: /Approve/ })).toHaveLength(1);
+	fireEvent.click(screen.getByRole("button", { name: "Approve task integration…" }));
+	await waitFor(() => expect(lado.approveLadoIntegration).toHaveBeenCalledWith("demo-7"));
+});
+
+test("offers the merge of the next PR in the plan's order only, and names a withdrawn approval", () => {
+	const approvedBack = { state: "integrating" as const, integration: { headApproved: true, statusState: "posted" as const }, approval: { ...approval, headSha: BACK_HEAD } };
+	const approvedFront = { state: "integrating" as const, integration: { headApproved: true, statusState: "posted" as const }, approval: { ...approval, headSha: FRONT_HEAD } };
+	renderSection(twoPRs(approvedBack, approvedFront, { state: "integrating" }));
+	let prs = screen.getAllByTestId("lado-verify-pr");
+	expect(within(prs[0]!).getByRole("button", { name: "Merge" })).toBeInTheDocument();
+	expect(within(prs[1]!).queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument();
+	cleanup();
+
+	// back merged: front merges next.
+	renderSection(twoPRs({ ...approvedBack, merged: true, state: "completed" }, approvedFront, { state: "integrating" }));
+	prs = screen.getAllByTestId("lado-verify-pr");
+	expect(within(prs[0]!).queryByRole("button", { name: "Merge" })).not.toBeInTheDocument();
+	expect(within(prs[1]!).getByRole("button", { name: "Merge" })).toBeInTheDocument();
+	cleanup();
+
+	// back's base moved: LADO withdrew front's approval with it.
+	renderSection(
+		twoPRs(
+			{ state: "validating", stateReason: "base_overlap", integration: { headApproved: false, revokedReason: "base_overlap" } },
+			{ integration: { headApproved: false, revokedReason: "sibling_revoked" } },
+			{ state: "validating", stateReason: "base_overlap" },
+		),
+	);
+	prs = screen.getAllByTestId("lado-verify-pr");
+	expect(within(prs[1]!).getByTestId("lado-verify-revoked")).toHaveTextContent(
+		"LADO withdrew this head's approval because the base of another pull request of the task moved. Approve the task again.",
+	);
+	expect(within(prs[0]!).getByTestId("lado-verify-revoked")).toHaveTextContent("its base moved with a change to the same paths");
+	expect(within(prs[0]!).getByText("Base moved")).toBeInTheDocument();
+});
+
+test("reposts the status of the PR whose post failed, and names a repository still without a PR", async () => {
+	vi.mocked(lado.repostLadoIntegrationStatus).mockResolvedValue({ ...approval, statusState: "posted" });
+	renderSection(
+		twoPRs(
+			{},
+			{
+				state: "integrating",
+				integration: { headApproved: true, statusState: "failed" },
+				approval: { ...approval, headSha: FRONT_HEAD, statusState: "failed", statusError: "token expired" },
+			},
+		),
+	);
+	const front = screen.getAllByTestId("lado-verify-pr")[1]!;
+	expect(within(front).getByText("token expired")).toBeInTheDocument();
+	fireEvent.click(within(front).getByTestId("lado-repost-status"));
+	await waitFor(() => expect(lado.repostLadoIntegrationStatus).toHaveBeenCalledWith("demo-7", FRONT_URL));
+	cleanup();
+
+	// One PR so far, and the task waits for front's.
+	renderSection(
+		execution({
+			trackedPrs: [trackedPR({ url: PR_URL, repo: "back", position: 0, number: 45, headSha: HEAD, state: "integration_pending" })],
+			prRepos: ["back", "front"],
+			state: "validating",
+			stateReason: "pr_missing",
+		}),
+	);
+	expect(screen.queryByTestId("lado-verify-prs")).not.toBeInTheDocument();
+	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Waiting for a pull request in each repository");
+	expect(screen.getByTestId("lado-verify-missing")).toHaveTextContent("No pull request yet in: front");
+});
