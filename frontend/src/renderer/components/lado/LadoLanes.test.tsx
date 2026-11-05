@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
 import { TooltipProvider } from "../ui/tooltip";
@@ -18,6 +19,7 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoProjectRepositories: vi.fn(),
 	cancelLadoTask: vi.fn(),
 	fetchLadoTaskView: vi.fn(),
+	fetchLadoTaskParts: vi.fn(),
 }));
 
 const demo: lado.LadoRepository = { ref: "github:acme/demo", name: "demo", provider: "github", host: "github.com", path: "acme/demo" };
@@ -58,6 +60,7 @@ function renderLane() {
 beforeEach(() => {
 	vi.resetAllMocks();
 	vi.mocked(lado.fetchLadoProjectRepositories).mockResolvedValue([demo]);
+	vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({ parts: [] });
 });
 
 afterEach(cleanup);
@@ -495,4 +498,108 @@ test("a task running its parts stays in Queued and says how many are merged", as
 	expect(within(queued).getByTestId("lado-task-state")).toHaveTextContent("Running");
 	expect(within(queued).getByTestId("lado-task-reason")).toHaveTextContent("Parts 2/4");
 	expect(within(screen.getByTestId("lado-plan-lane")).queryByText("Split work")).not.toBeInTheDocument();
+});
+
+// Issue #61: a task approved again after an earlier run ended. The daemon may
+// still send that earlier run as the execution; the queue entry says the parts run.
+test("a parts run stays in Queued whatever run came before it, and a started worker still leaves the lanes", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	const earlier: lado.LadoTaskExecution = { sessionId: "demo-3", planRevisionId: "lado-plan-0", startedAt: "2026-10-18T08:30:00Z", sessionEnded: true, timedOut: false };
+	const integration: lado.LadoTaskExecution = { sessionId: "demo-12", planRevisionId: revision.id, startedAt: "2026-10-19T10:30:00Z", sessionEnded: false, timedOut: false };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-again", state: "running", plan: approvedPlan, parts: { total: 6, merged: 1 }, queue: entry({ state: "running_parts" }), execution: earlier, issue: { ...task.issue, title: "Approved again" } },
+		// One worker, no parts: its session card carries it.
+		{ ...task, id: "lado-task-single", state: "running", plan: approvedPlan, queue: entry({ state: "dispatched" }), execution: { ...integration, sessionId: "demo-7" }, issue: { ...task.issue, title: "Single run" } },
+		// Every part merged and the integration worker started.
+		{ ...task, id: "lado-task-integrating", state: "running", plan: approvedPlan, parts: { total: 3, merged: 3 }, queue: entry({ state: "dispatched" }), execution: integration, issue: { ...task.issue, title: "Integration started" } },
+	]);
+	renderLane();
+
+	const queued = await screen.findByTestId("lado-queued-lane");
+	const card = (await within(queued).findByText("Approved again")).closest("[data-testid='lado-task-card']") as HTMLElement;
+	expect(within(card).getByTestId("lado-task-state")).toHaveTextContent("Running");
+	expect(within(card).getByTestId("lado-task-reason")).toHaveTextContent("Parts 1/6");
+	expect(within(queued).getAllByTestId("lado-task-card").map((item) => item.getAttribute("data-task-id"))).toEqual(["lado-task-again"]);
+	expect(within(screen.getByTestId("lado-plan-lane")).queryAllByTestId("lado-task-card")).toHaveLength(0);
+	for (const title of ["Single run", "Integration started"]) expect(screen.queryByText(title), title).not.toBeInTheDocument();
+});
+
+/** A part as the parts API sends it; waiting unless said otherwise. */
+function part(id: string, fields: Partial<lado.LadoTaskPart> = {}): lado.LadoTaskPart {
+	return { id, title: id.toUpperCase(), phase: 1, steps: [1], affectedPaths: [`${id}/**`], dependsOn: [], state: "waiting", attempts: 0, mergeAttempts: 0, updatedAt: "2026-10-19T10:00:00Z", ...fields };
+}
+
+const partsTask: lado.LadoTask = {
+	...task,
+	id: "lado-task-parts",
+	state: "running",
+	plan: { requestPending: false, latest: revision, approvedRevisionId: revision.id },
+	parts: { total: 3, merged: 1 },
+	queue: entry({ state: "running_parts" }),
+	issue: { ...task.issue, title: "Split work" },
+};
+
+const sessionRoute = (sessionId: string) => ({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "demo", sessionId } });
+
+test("a parts run's card opens its one live part worker, not the task view", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([partsTask]);
+	vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({ parts: [
+		part("api", { state: "merged", sessionId: "demo-8" }),
+		part("web", { state: "running", sessionId: "demo-9" }),
+		part("docs"),
+	] });
+	renderLane();
+
+	const link = await screen.findByRole("button", { name: "Open part worker web" });
+	expect(link).toHaveTextContent("Open part worker");
+	expect(lado.fetchLadoTaskParts).toHaveBeenCalledWith("lado-task-parts");
+	fireEvent.click(link);
+	expect(navigate).toHaveBeenCalledWith(sessionRoute("demo-9"));
+	expect(lado.fetchLadoTaskView).not.toHaveBeenCalled();
+});
+
+test("a parts run's card lists its live part and merge workers in a menu", async () => {
+	const user = userEvent.setup();
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([partsTask]);
+	vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({ parts: [
+		part("api", { state: "running", sessionId: "demo-8" }),
+		part("web", { state: "conflict", sessionId: "demo-9", mergeSessionId: "demo-11", mergeAttempts: 1 }),
+		part("docs", { state: "merged", sessionId: "demo-10" }),
+	] });
+	renderLane();
+
+	await user.click(await screen.findByRole("button", { name: "Part workers 2" }));
+	expect((await screen.findAllByRole("menuitem")).map((item) => item.textContent)).toEqual(["api · API", "web · WEB · Merge worker"]);
+	await user.click(screen.getByRole("menuitem", { name: "web · WEB · Merge worker" }));
+	expect(navigate).toHaveBeenCalledWith(sessionRoute("demo-11"));
+	expect(lado.fetchLadoTaskView).not.toHaveBeenCalled();
+	expect(screen.queryByTestId("lado-task-dialog")).not.toBeInTheDocument();
+});
+
+test("a parts run's card links no worker while none runs", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([partsTask]);
+	vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({ parts: [
+		part("api", { state: "merged", sessionId: "demo-8" }),
+		// A conflict whose merge worker has not started yet.
+		part("web", { state: "conflict", sessionId: "demo-9" }),
+		part("docs"),
+	] });
+	renderLane();
+
+	const card = (await screen.findByText("Split work")).closest("[data-testid='lado-task-card']") as HTMLElement;
+	await waitFor(() => expect(lado.fetchLadoTaskParts).toHaveBeenCalledWith("lado-task-parts"));
+	await waitFor(() => expect(within(card).getByTestId("lado-task-reason")).toHaveTextContent("Parts 1/3"));
+	expect(within(card).queryByRole("button", { name: /Open part worker|Part workers/ })).not.toBeInTheDocument();
+});
+
+test("a card not running parts does not read the parts", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-queued", state: "queued", plan: partsTask.plan, parts: { total: 3, merged: 0 }, queue: entry(), issue: { ...task.issue, title: "Next" } },
+		{ ...task, plan: { requestPending: true, worker: { requestId: "r1", phase: "designing", designerSessionId: "demo-plan-1" } } },
+	]);
+	renderLane();
+
+	await screen.findByText("Next");
+	await screen.findByRole("button", { name: "Open plan worker" });
+	expect(lado.fetchLadoTaskParts).not.toHaveBeenCalled();
 });
