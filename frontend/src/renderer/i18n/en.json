@@ -3563,6 +3563,7 @@
 	"lado.reason.attempts_exhausted": "The worker did not start after 3 attempts",
 	"lado.reason.timed_out": "Stopped at the maximum run time",
 	"lado.reason.ended_without_pr": "The worker ended without a PR",
+	"lado.reason.reported_pr_untracked": "The reported pull request is not tracked",
 	"lado.reason.slot_global": "Waiting for a free run slot",
 	"lado.reason.slot_project": "Waiting for a free run slot in this project",
 	"lado.reason.memory_tight": "Waiting while memory is tight",

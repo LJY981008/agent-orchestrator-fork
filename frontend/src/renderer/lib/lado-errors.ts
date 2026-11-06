@@ -553,6 +553,8 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	attempts_exhausted: "lado.reason.attempts_exhausted",
 	timed_out: "lado.reason.timed_out",
 	ended_without_pr: "lado.reason.ended_without_pr",
+	// The worker reported a PR its session does not track (#71).
+	reported_pr_untracked: "lado.reason.reported_pr_untracked",
 	slot_global: "lado.reason.slot_global",
 	slot_project: "lado.reason.slot_project",
 	slot_workers: "lado.reason.slot_workers",

@@ -21361,10 +21361,12 @@ components:
           type: string
         stateReason:
           description: Why the run is in its state, as the task's stateReason says
-            it.
+            it; reported_pr_untracked while the worker reported a pull request its
+            session does not track.
           enum:
           - timed_out
           - ended_without_pr
+          - reported_pr_untracked
           - verifying
           - checks_pending
           - checks_failed
@@ -25280,17 +25282,19 @@ components:
           type: string
         stateReason:
           description: Why the task needs review, is blocked or failed, or what its
-            queued plan waits for; for validating, pr_missing while a repository the
-            task is expected to open a pull request in has none yet (a workspace task
-            across repositories), conflict_unresolved when LADO's resolve workers
-            could not resolve the open PR, resolving while one takes the base into
-            it, merge_conflict while the PR conflicts with its base and base_overlap
-            when the base moved under the head with a change to the same paths, all
-            four before an approval; else verifying while LADO has not verified the
-            head yet, else the code of the verification item that fails or waits;
-            status_not_posted for integrating while LADO could not post the lado/integration
-            status; merged_without_approval for completed when the merged head had
-            no integration approval. For the app to translate.
+            queued plan waits for; reported_pr_untracked for running while the worker
+            reported a pull request its session does not track, and for validating
+            while LADO still tries to track one before an approval; for validating,
+            pr_missing while a repository the task is expected to open a pull request
+            in has none yet (a workspace task across repositories), conflict_unresolved
+            when LADO's resolve workers could not resolve the open PR, resolving while
+            one takes the base into it, merge_conflict while the PR conflicts with
+            its base and base_overlap when the base moved under the head with a change
+            to the same paths, all four before an approval; else verifying while LADO
+            has not verified the head yet, else the code of the verification item
+            that fails or waits; status_not_posted for integrating while LADO could
+            not post the lado/integration status; merged_without_approval for completed
+            when the merged head had no integration approval. For the app to translate.
           enum:
           - rules_changed
           - issue_edited
@@ -25302,6 +25306,7 @@ components:
           - attempts_exhausted
           - timed_out
           - ended_without_pr
+          - reported_pr_untracked
           - slot_global
           - slot_project
           - slot_workers

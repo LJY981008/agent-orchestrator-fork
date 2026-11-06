@@ -3634,6 +3634,7 @@
 	"lado.reason.attempts_exhausted": "El worker no arrancó tras 3 intentos",
 	"lado.reason.timed_out": "Detenido al llegar al tiempo máximo de ejecución",
 	"lado.reason.ended_without_pr": "El worker terminó sin un PR",
+	"lado.reason.reported_pr_untracked": "El pull request informado no se está siguiendo",
 	"lado.reason.slot_global": "Esperando un hueco de ejecución libre",
 	"lado.reason.slot_project": "Esperando un hueco de ejecución libre en este proyecto",
 	"lado.reason.memory_tight": "Esperando mientras la memoria está justa",
