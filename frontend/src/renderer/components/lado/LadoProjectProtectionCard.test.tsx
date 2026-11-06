@@ -121,6 +121,44 @@ describe("LadoProjectProtectionCard", () => {
 
 		await waitFor(() => expect(screen.getAllByTestId("lado-protection-repository")).toHaveLength(2));
 		expect(screen.queryByTestId("lado-protection-guide")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("lado-protection-guide-gitlab")).not.toBeInTheDocument();
+	});
+
+	// #21: LADO reads a GitLab branch's protection and the project's merge settings.
+	it("names what a GitLab branch lacks and how to set it in GitLab", async () => {
+		const gitlabOpen = branch({
+			repository: "gitlab:group/app@gitlab.example.com",
+			state: "unprotected",
+			missing: ["protected_branch", "pipeline_must_succeed", "skipped_pipeline", "integration_status"],
+		});
+		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({ projectId: "demo", repositories: [protectedRepo, gitlabOpen] });
+		renderCard();
+
+		const open = await waitFor(() => rowOf("group/app · main"));
+		expect(within(open).getByText("Not protected")).toBeInTheDocument();
+		expect(
+			within(open).getByText(
+				"Missing: Protected branch, Pipelines must succeed, Skipped pipelines not counted as successful, LADO's lado/integration status",
+			),
+		).toBeInTheDocument();
+		// GitLab's guide, not GitHub's rulesets.
+		const gitlabGuide = screen.getByTestId("lado-protection-guide-gitlab");
+		expect(gitlabGuide).toHaveTextContent(
+			"In GitLab, protect the base branch under Settings → Repository → Protected branches with Allowed to push set to No one and Allowed to force push off. Under Settings → Merge requests, turn on “Pipelines must succeed” and turn off “Skipped pipelines are considered successful”. LADO's token needs the Developer role or higher and the api scope.",
+		);
+		expect(within(gitlabGuide).getByText("api")).toHaveClass("font-mono");
+		expect(screen.queryByTestId("lado-protection-guide")).not.toBeInTheDocument();
+	});
+
+	it("shows GitLab's guide for an unreadable GitLab branch and both guides for both hosts", async () => {
+		const gitlabUnknown = branch({ repository: "gitlab:group/app@gitlab.example.com", state: "unknown", error: "gitlab tracker: 403" });
+		vi.mocked(lado.fetchLadoProtection).mockResolvedValue({ projectId: "demo", repositories: [unprotectedRepo, gitlabUnknown] });
+		renderCard();
+
+		const unreadable = await waitFor(() => rowOf("group/app · main"));
+		expect(within(unreadable).getByText("Could not read the rules: gitlab tracker: 403")).toBeInTheDocument();
+		expect(screen.getByTestId("lado-protection-guide")).toHaveTextContent(guide);
+		expect(screen.getByTestId("lado-protection-guide-gitlab")).toHaveTextContent(/^In GitLab, protect the base branch/);
 	});
 
 	it("asks the host again on Check again", async () => {

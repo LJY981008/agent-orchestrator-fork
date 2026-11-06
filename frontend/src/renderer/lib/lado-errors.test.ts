@@ -5,10 +5,12 @@ import { LadoApiError } from "./lado";
 import {
 	ladoCheckCommandProblemText,
 	ladoErrorText,
+	ladoMergeBlockerText,
 	ladoPlanProblemText,
 	ladoPlanWaitingText,
 	ladoPolicyProblemText,
 	ladoProtectedPathProblemText,
+	ladoProtectionPartText,
 	ladoQueueErrorText,
 	ladoReasonText,
 	ladoSetupConflictText,
@@ -707,6 +709,8 @@ const verifyCodes = [
 	// A workspace task's pull requests across repositories (#64).
 	"LADO_INTEGRATION_PRS_CHANGED",
 	"LADO_INTEGRATION_MERGE_ORDER",
+	// AO's merge route, with or without the blockers (#21).
+	"PR_PRECONDITIONS_UNMET",
 ];
 
 // LADO fork: verification, check commands, protected paths, the integration
@@ -854,5 +858,86 @@ describe("LADO multi-repository errors", () => {
 		expect(ladoErrorText(createFullAppI18n("en").t, notReady)).toBe(
 			"LADO cannot approve this integration yet: Waiting for a pull request in each repository.",
 		);
+	});
+});
+
+// LADO fork: why AO refuses a merge and what a GitLab branch lacks (#21).
+describe("LADO merge refusals and GitLab protection", () => {
+	const daemon = "PR merge preconditions are not met";
+	const en = createFullAppI18n("en").t;
+	const ko = createFullAppI18n("ko").t;
+	const refused = (blockers?: unknown) => new LadoApiError(daemon, "PR_PRECONDITIONS_UNMET", blockers === undefined ? undefined : { blockers });
+	const blockerNames = [
+		"merged",
+		"closed",
+		"draft",
+		"ci_failing",
+		"ci_pending",
+		"ci_unknown",
+		"ci_no_pipeline",
+		"changes_requested",
+		"unresolved_comments",
+		"not_mergeable",
+		"head_mismatch",
+		"review_partial",
+	];
+	const gitlabParts = ["protected_branch", "push_access", "force_push", "pipeline_must_succeed", "skipped_pipeline", "integration_status"];
+
+	it("says a head without a CI pipeline and without LADO's approval cannot merge", () => {
+		expect(ladoErrorText(en, refused(["ci_no_pipeline"]))).toBe(
+			"This commit has no CI pipeline and no integration approval in LADO, so it cannot be merged.",
+		);
+		expect(ladoErrorText(ko, refused(["ci_no_pipeline"]))).toBe("이 커밋에는 CI 파이프라인이 없고 LADO 통합 승인도 없어 병합할 수 없습니다.");
+	});
+
+	it("names every blocker, and the host's own refusal", () => {
+		expect(ladoErrorText(en, refused(["not_mergeable"]))).toBe("The pull request cannot be merged yet: the host is blocking the merge.");
+		expect(ladoErrorText(ko, refused(["not_mergeable"]))).toBe("아직 PR을 병합할 수 없습니다: 호스트가 병합을 막고 있음.");
+		// A missing pipeline with another blocker is no longer the pipeline's alone.
+		expect(ladoErrorText(en, refused(["ci_no_pipeline", "not_mergeable"]))).toBe(
+			"The pull request cannot be merged yet: this commit has no CI pipeline; the host is blocking the merge.",
+		);
+		expect(ladoErrorText(en, refused(["ci_failing", "unresolved_comments"]))).toBe(
+			"The pull request cannot be merged yet: CI failed; review comments are unresolved.",
+		);
+		// A blocker from a newer daemon reads as the daemon names it.
+		expect(ladoErrorText(en, refused(["ci_pending", "new_blocker"]))).toBe("The pull request cannot be merged yet: CI is still running; new_blocker.");
+	});
+
+	it("words a refusal without blockers on its own", () => {
+		for (const blockers of [undefined, [], "ci_no_pipeline", [1, null]]) {
+			expect(ladoErrorText(en, refused(blockers))).toBe("The pull request's merge conditions are not met yet.");
+		}
+	});
+
+	it("words every blocker and GitLab part in every language", () => {
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const blocker of blockerNames) {
+				const text = ladoMergeBlockerText(t, blocker);
+				expect(text, `${locale} ${blocker}`).not.toBe(blocker);
+				expect(text, `${locale} ${blocker}`).not.toMatch(/^lado\.|{{|}}/);
+				expect(ladoErrorText(t, refused([blocker])), `${locale} ${blocker}`).not.toMatch(/^lado\.|{{|}}|^PR merge/);
+			}
+			for (const part of gitlabParts) {
+				const text = ladoProtectionPartText(t, part);
+				expect(text, `${locale} ${part}`).not.toBe(part);
+				expect(text, `${locale} ${part}`).not.toMatch(/^lado\./);
+			}
+			expect(t("lado.protection.guideGitlab"), locale).toContain("<code>api</code>");
+			expect(t("lado.verify.protection.unprotectedGitlab", { missing: "X" }), locale).toContain("X");
+		}
+	});
+
+	it("names what a GitLab branch lacks", () => {
+		expect(gitlabParts.map((part) => ladoProtectionPartText(en, part))).toEqual([
+			"Protected branch",
+			"Pushes allowed to no one",
+			"Force pushes blocked",
+			"Pipelines must succeed",
+			"Skipped pipelines not counted as successful",
+			"LADO's lado/integration status",
+		]);
+		expect(ladoProtectionPartText(ko, "integration_status")).toBe("LADO의 lado/integration 상태 게시");
 	});
 });

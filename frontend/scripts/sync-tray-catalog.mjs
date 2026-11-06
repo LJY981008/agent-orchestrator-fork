@@ -97,6 +97,13 @@ const KEYS = [
 	"lado.protection.part.integrationCheckSource",
 	"lado.protection.part.nonFastForward",
 	"lado.protection.part.deletion",
+	// LADO fork: a GitLab base branch's protection (#21).
+	"lado.protection.part.protectedBranch",
+	"lado.protection.part.pushAccess",
+	"lado.protection.part.forcePush",
+	"lado.protection.part.pipelineMustSucceed",
+	"lado.protection.part.skippedPipeline",
+	"lado.protection.part.integrationStatus",
 	"lado.presence.integration.reviewInconclusive",
 	"lado.presence.integration.noTests",
 	"lado.presence.integration.otherCode",
