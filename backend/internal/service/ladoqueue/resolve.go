@@ -814,6 +814,7 @@ func resolvePrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.L
 	fmt.Fprintf(&b, "- Push to the pull request's source branch without force: `git push %s HEAD:%s`. Never force-push. If the push is rejected, fetch `%s/%s`, merge it as well and push again.\n",
 		repo.remote, c.PRSourceBranch, repo.remote, c.PRSourceBranch)
 	b.WriteString("- Do not open, close or claim a pull request, and do not do any other step of the plan.\n")
+	b.WriteString("- Do not resolve or reply to the pull request's review threads: the worker that owns the pull request does that.\n")
 	b.WriteString("- When the push went through, run `ao report --done --note \"<one paragraph: the conflicts and how you resolved them, the checks you ran>\"`. LADO then reads the pull request's branch to confirm it.\n")
 	b.WriteString("- If resolving needs a decision the plan does not make, run `ao report --needs-input --note \"<the decision>\"` and wait.\n\n")
 	b.WriteString(planSection(in))
