@@ -210,9 +210,62 @@ func criticPrompt(req domain.LadoPlanRequest, draft []byte) string {
 	b.WriteString(commandBlock(critiqueCommand(req.ID)) + "\n\n")
 	b.WriteString("severity is P1, major or minor. Give a failure scenario for every P1 and major finding. " +
 		"An empty findings list is a valid result when nothing would make the work fail.\n\n")
+	b.WriteString(partSizingSection(draft))
 	b.WriteString("## Draft\n\n")
 	writeFenced(&b, string(draft))
 	return b.String()
+}
+
+// partSizingSection asks the critic to check the parts against the sizing
+// limits (#69), and lists the size warnings LADO finds in the draft itself.
+// File counts need the repository, so the critic counts those.
+func partSizingSection(draft []byte) string {
+	var b strings.Builder
+	b.WriteString("## Part sizing\n\n")
+	fmt.Fprintf(&b, "Check the plan's parts against LADO's sizing limits. A plan of at most %d steps, or one that changes about %d files, names no parts: "+
+		"each worker starts with 80,000 to 110,000 tokens of context and the integration worker reads the whole work again. "+
+		"A part has 2 to %d steps in one package or one area (store, service, API, UI); a part of more than %d steps or more than %d affected_paths is too large, "+
+		"and so is one whose paths hold more than %d files (count them with `git -C <repository folder> ls-files -- <the fixed folder of the glob> | wc -l`). "+
+		"In a repository of more than %d files, parts aim for 2 steps.\n\n",
+		domain.LadoPlanSmallSteps, domain.LadoPlanSmallFiles, domain.LadoPlanPartTargetSteps, domain.LadoPlanPartMaxSteps,
+		domain.LadoPlanPartMaxPaths, domain.LadoPlanPartMaxFiles, domain.LadoPlanLargeRepoFiles)
+	b.WriteString("Report each of these as a major finding, with the failure scenario that a worker compacts again and again or that starting workers costs more than the work:\n\n" +
+		"- a small plan split into parts that one worker should do;\n" +
+		"- a part of too many steps;\n" +
+		"- a part whose paths or files are too wide;\n" +
+		"- a plan of several one-step parts.\n\n")
+	if warnings := draftSizeWarnings(draft); len(warnings) > 0 {
+		b.WriteString("LADO's check of the draft found these size warnings:\n\n")
+		for _, w := range warnings {
+			b.WriteString("- " + w + "\n")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// draftSizeWarnings lists, as lines, the plan and part size warnings of a
+// draft, in the order of its parts.
+func draftSizeWarnings(draft []byte) []string {
+	plan, _ := domain.ParseLadoPlan(draft, domain.LadoPlanExpectations{})
+	var lines []string
+	for _, code := range plan.Warnings() {
+		switch code {
+		case domain.LadoPlanWarningSmallSplit:
+			lines = append(lines, fmt.Sprintf("%s: the plan has %d steps, at most %d, and names %d parts", code, len(plan.Steps), domain.LadoPlanSmallSteps, len(plan.Parts)))
+		case domain.LadoPlanWarningUnsplit:
+			lines = append(lines, fmt.Sprintf("%s: the plan has %d steps and names no parts", code, len(plan.Steps)))
+		default:
+			lines = append(lines, code)
+		}
+	}
+	parts := plan.PartWarnings(nil)
+	for _, part := range plan.Parts {
+		for _, w := range parts[part.ID] {
+			lines = append(lines, fmt.Sprintf("part %s: %s, %d over the limit of %d", part.ID, w.Code, w.Value, w.Limit))
+		}
+	}
+	return lines
 }
 
 // skippedMessage tells the designer LADO skipped the review.

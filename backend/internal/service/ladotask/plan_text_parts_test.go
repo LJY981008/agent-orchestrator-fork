@@ -1,6 +1,7 @@
 package ladotask
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -21,6 +22,37 @@ func TestPlanRequestAsksForParallelParts(t *testing.T) {
 		if !strings.Contains(message, want) {
 			t.Fatalf("plan request lacks %q:\n%s", want, message)
 		}
+	}
+}
+
+// The parts guidance starts with the work that stays in one worker, before
+// it asks for parallel parts, and its sizes are the domain's limits (#69).
+func TestPartsGuidanceStartsWithTheWorkNotToSplit(t *testing.T) {
+	message := planRequestMessage(domain.LadoTask{ID: "lado-task-1"}, domain.LadoPlanRequest{ID: "req-1"},
+		domain.LadoIssueSnapshot{ID: "github:acme/demo#1"}, "/artifacts", domain.LadoPlanRevision{})
+	for _, want := range []string{
+		fmt.Sprintf("Leave parts out when the work has at most %d steps or changes about %d files", domain.LadoPlanSmallSteps, domain.LadoPlanSmallFiles),
+		"80,000 to 110,000 tokens", "the integration worker reads the whole work again",
+		fmt.Sprintf("Plan for parallel parts by default when the work has more than %d steps", domain.LadoPlanSmallSteps),
+		fmt.Sprintf("2 to %d steps in one package or one area (store, service, API, UI)", domain.LadoPlanPartTargetSteps),
+		fmt.Sprintf("more than %d steps or more than %d affected_paths", domain.LadoPlanPartMaxSteps, domain.LadoPlanPartMaxPaths),
+		"at most 4 steps", "git -C <repository folder> ls-files -- <the fixed folder of the glob> | wc -l",
+		"a workspace root may not be a git repository", "single quotes",
+		fmt.Sprintf("more than %d files", domain.LadoPlanPartMaxFiles),
+		fmt.Sprintf("`git -C <repository folder> ls-files | wc -l` is over %d, aim for 2 steps per part", domain.LadoPlanLargeRepoFiles),
+		"Keep a part's own tests, and documents only that part changes, in the part",
+		"checking the parts against each other and wiring them together, files several parts change together, the full checks and the pull request",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("plan request lacks %q:\n%s", want, message)
+		}
+	}
+	if strings.Contains(message, "Leave the steps that check, document or publish the whole work") {
+		t.Fatalf("plan request still leaves every document and check out of the parts:\n%s", message)
+	}
+	notSplit, parallel := strings.Index(message, "Leave parts out when"), strings.Index(message, "Plan for parallel parts by default")
+	if notSplit < 0 || parallel < 0 || notSplit > parallel {
+		t.Fatalf("the work not to split (at %d) does not come before the parallel default (at %d):\n%s", notSplit, parallel, message)
 	}
 }
 

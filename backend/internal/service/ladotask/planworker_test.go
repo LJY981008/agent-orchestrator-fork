@@ -102,10 +102,16 @@ func TestRequestPlanStartsAPlanWorkerWithoutTheOrchestrator(t *testing.T) {
 		// Parallel parts are the default, with how to split them.
 		"Plan for parallel parts by default", "go into different parts of the same phase", "name that part in depends_on",
 		"locale JSON files", "parts:\n  - id:", "depends_on:", "leave parts out and say why",
+		// The sizing limits, and how to count the files under a part's paths.
+		"Leave parts out when the work has at most 4 steps", "at most 4 steps and 8 paths",
+		"git -C <repository folder> ls-files -- <the fixed folder of the glob> | wc -l",
 	} {
 		if !strings.Contains(cfg.Prompt, want) {
 			t.Fatalf("prompt lacks %q:\n%s", want, cfg.Prompt)
 		}
+	}
+	if strings.Index(cfg.Prompt, "Leave parts out when") > strings.Index(cfg.Prompt, "Plan for parallel parts by default") {
+		t.Fatalf("the prompt asks for parts before it says which work not to split:\n%s", cfg.Prompt)
 	}
 	issueFile := filepath.Join(pf.dataDir, "lado", "plan-requests", string(req.ID), "issue.md")
 	if data, err := os.ReadFile(issueFile); err != nil || !strings.Contains(string(data), "1. Add the route") {
