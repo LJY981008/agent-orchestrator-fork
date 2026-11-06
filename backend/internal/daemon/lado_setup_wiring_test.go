@@ -22,6 +22,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladopolicy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -218,5 +219,79 @@ func writeLadoFile(t *testing.T, path, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The setup's source of standing instructions lists the project's skills and
+// agents, read from its repository, for the session's tool (#29): a Claude
+// Code worker gets its own agent by name and path, the Codex skill to read
+// by path and the exception for the project's agents; a Codex worker gets
+// its own skill by name and the Claude Code agent with its description to
+// read by path, without the exception.
+func TestLadoSetupWiringCitesProjectSkills(t *testing.T) {
+	ctx := context.Background()
+	cfg := config.Config{DataDir: t.TempDir(), StateDir: t.TempDir()}
+	store := sqlitetest.MustOpen(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	repo := t.TempDir()
+	writeLadoFile(t, filepath.Join(repo, ".agents", "skills", "x", "SKILL.md"), "---\nname: x\ndescription: X steps\n---\n# x\n")
+	writeLadoFile(t, filepath.Join(repo, ".claude", "agents", "y.md"), "---\nname: y\ndescription: Y expert\n---\nCheck Y.\n")
+	ladoGit(t, repo, "init", "-q", "-b", "main")
+	ladoGit(t, repo, "add", "--", ".agents/skills/x/SKILL.md", ".claude/agents/y.md")
+	ladoGit(t, repo, "-c", "user.name=LADO", "-c", "user.email=lado@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "skills")
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: repo, RegisteredAt: at}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := store.SetLadoMode(ctx, "mer", true, at); err != nil {
+		t.Fatalf("turn LADO mode on: %v", err)
+	}
+	sessions := &ladoSetupSink{}
+	home := t.TempDir()
+	wireLadoSetup(cfg, store, ladoblob.New(cfg.StateDir), ladoSetupDeps{
+		folders:   ladoToolFolders{claudeDir: filepath.Join(home, ".claude"), claudeJSON: filepath.Join(home, ".claude.json"), codexHome: filepath.Join(home, ".codex")},
+		sessions:  sessions,
+		processes: func(context.Context) ([]procmem.Process, error) { return nil, nil },
+		reviewers: func(reviewcore.LadoSystemSection) {},
+	}, slog.New(slog.DiscardHandler))
+	if sessions.prompt == nil {
+		t.Fatal("wireLadoSetup installed no LADO prompt section")
+	}
+	const exception = "As the one exception to the rule above against the runtime's built-in subagents"
+	standing := func(harness domain.AgentHarness) string {
+		t.Helper()
+		worker, err := store.CreateSession(ctx, domain.SessionRecord{ProjectID: "mer", Kind: domain.KindWorker, Harness: harness, CreatedAt: at, UpdatedAt: at})
+		if err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+		section, err := sessions.prompt(ctx, domain.KindWorker, "mer", worker.ID, harness)
+		if err != nil {
+			t.Fatalf("%s worker: standing section: %v", harness, err)
+		}
+		if !strings.Contains(section.Text, "## Project skills and agents (LADO)") {
+			t.Fatalf("%s worker: no project skills and agents section:\n%s", harness, section.Text)
+		}
+		return section.Text
+	}
+
+	claude := standing(domain.HarnessClaudeCode)
+	for _, want := range []string{".agents/skills/x/SKILL.md", "agent y (.claude/agents/y.md)", exception} {
+		if !strings.Contains(claude, want) {
+			t.Fatalf("Claude Code worker: standing section has no %q:\n%s", want, claude)
+		}
+	}
+
+	codex := standing(domain.HarnessCodex)
+	loaded, notLoaded, ok := strings.Cut(codex, "Not loaded by Codex")
+	if !ok {
+		t.Fatalf("Codex worker: no list of files Codex does not load:\n%s", codex)
+	}
+	if !strings.Contains(notLoaded, "Y expert") || !strings.Contains(notLoaded, ".claude/agents/y.md") {
+		t.Fatalf("Codex worker: the Claude Code agent is not listed with its description to read:\n%s", codex)
+	}
+	if !strings.Contains(loaded, "Loaded by Codex itself") || !strings.Contains(loaded, ".agents/skills/x/SKILL.md") || strings.Contains(notLoaded, ".agents/skills/x/SKILL.md") {
+		t.Fatalf("Codex worker: its own skill is not only in the loaded list:\n%s", codex)
+	}
+	if strings.Contains(codex, exception) {
+		t.Fatalf("Codex worker: standing section has the subagent exception:\n%s", codex)
 	}
 }

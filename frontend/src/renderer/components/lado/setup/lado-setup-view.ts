@@ -77,33 +77,26 @@ export function ladoSetupRepoEntries(inventory: LadoSetupInventory, tool: LadoSe
 	return inventory.entries.filter((entry) => entry.tool === tool && entry.status === "repo_tracked");
 }
 
-// One path segment: no slash, and not empty.
-const citedPaths = [/^\.claude\/skills\/[^/]+\/SKILL\.md$/, /^\.agents\/skills\/[^/]+\/SKILL\.md$/];
-const citedAgent = /^\.claude\/agents\/[^/]+\.md$/;
+// The path shapes the daemon lists (backend ladosetup referenceKind): a
+// skill's SKILL.md right under .claude/skills/<n> or .agents/skills/<n>, an
+// agent right under .claude/agents, where <n> is one path segment, and a
+// CLAUDE.md or AGENTS.md anywhere.
+const citedShapes = [/^\.claude\/skills\/[^/]+\/SKILL\.md$/, /^\.agents\/skills\/[^/]+\/SKILL\.md$/, /^\.claude\/agents\/[^/]+\.md$/];
 
 /**
- * Whether LADO lists a repository file to workers as a project expert (#29):
- * a skill's SKILL.md right under .claude/skills/<n> or .agents/skills/<n>,
- * an agent right under .claude/agents, or a CLAUDE.md or AGENTS.md anywhere.
- * The daemon decides from the same path shapes, but it also leaves out the
- * project's agent rules file and a path with control characters, which the
- * page does not know; this is an approximation, and the repoCited sentence
- * stays true for those files too.
+ * Whether LADO lists a repository file to workers as a project expert (#29).
+ * Like the daemon it goes by the path's shape alone, not by the kind the
+ * inventory gave the file: an AGENTS.md under .claude/skills/<n> is a skill
+ * file to the inventory but an instruction file to the list. The daemon
+ * also leaves out the project's agent rules file and a path with control
+ * characters, which the page does not know; this is an approximation, and
+ * the repoCited sentence stays true for those files too.
  */
-export function ladoSetupCited(entry: Pick<LadoSetupEntry, "status" | "kind" | "name">): boolean {
+export function ladoSetupCited(entry: Pick<LadoSetupEntry, "status" | "name">): boolean {
 	if (entry.status !== "repo_tracked") return false;
-	switch (entry.kind) {
-		case "skill":
-			return citedPaths.some((shape) => shape.test(entry.name));
-		case "agent":
-			return citedAgent.test(entry.name);
-		case "instructions": {
-			const base = entry.name.split("/").at(-1);
-			return base === "CLAUDE.md" || base === "AGENTS.md";
-		}
-		default:
-			return false;
-	}
+	if (citedShapes.some((shape) => shape.test(entry.name))) return true;
+	const base = entry.name.split("/").at(-1);
+	return base === "CLAUDE.md" || base === "AGENTS.md";
 }
 
 /** The names LADO manages now. */

@@ -274,7 +274,11 @@ describe("LocalSetupSection", () => {
 		serve({
 			"GET /api/v1/lado/setup/inventory": () => ({
 				data: setupInventory({
-					entries: [repoEntry("claude-code", "instructions", "CLAUDE.md")],
+					entries: [
+						repoEntry("claude-code", "instructions", "CLAUDE.md"),
+						// The inventory calls it a skill file; the daemon lists it as an instruction file by its name.
+						repoEntry("claude-code", "skill", ".claude/skills/review/AGENTS.md"),
+					],
 					projects: [{ id: "demo", name: "demo", path: "/work/demo", error: "" }],
 				}),
 			}),
@@ -285,6 +289,7 @@ describe("LocalSetupSection", () => {
 		expect(screen.queryByText("No Claude Code or Codex setup was found on this computer.")).not.toBeInTheDocument();
 		await user.click(within(toolCard("claude-code")).getByRole("button", { name: /^Repository files/ }));
 		expect(within(entryRow("/work/demo/CLAUDE.md")).getByText(`Repository file · ${repoCited}`)).toBeInTheDocument();
+		expect(within(entryRow("/work/demo/.claude/skills/review/AGENTS.md")).getByText(`Repository file · ${repoCited}`)).toBeInTheDocument();
 	});
 
 	it("turns a managed item off at Global after a dry run", async () => {

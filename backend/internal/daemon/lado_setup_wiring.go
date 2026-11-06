@@ -101,9 +101,10 @@ type ladoSetupDeps struct {
 // wireLadoSetup builds LADO's local setup service over the daemon's folders
 // and installs its hooks: Claude Code config homes and the MCP servers of
 // Codex Chat sessions on the session manager, -c options on the Codex
-// adapter, the Codex instructions in the LADO section of standing
-// instructions, which replaces the one wireLado installed, and the adopted
-// instructions in AO reviewers' system prompts.
+// adapter, the Codex instructions and the project's skills and agents (#29)
+// in the LADO section of standing instructions, which replaces the one
+// wireLado installed, and the adopted instructions in AO reviewers' system
+// prompts.
 func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store, deps ladoSetupDeps, log *slog.Logger) *ladosetup.Service {
 	ignore := os.Getenv(ladoSetupIgnoreProcessesEnv) == "1"
 	if ignore {
@@ -128,8 +129,11 @@ func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store
 		deps.sessions.SetLadoChatServers(func(ctx context.Context, rec domain.SessionRecord) ([]ports.ChatMCPServerConfig, error) {
 			return setup.CodexChatServers(ctx, rec.ID, rec.ClientRequestID, rec.ProjectID)
 		})
-		// This replaces wireLado's source, so it keeps the plan worker roles' rules.
-		deps.sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup, Knowledge: deps.knowledge, Log: log}.Standing)
+		// This replaces wireLado's source, so it keeps the plan worker roles'
+		// rules. The setup also lists the project's skills and agents (#29).
+		deps.sessions.SetLadoPrompt(ladotask.PromptSource{
+			Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup, Knowledge: deps.knowledge, References: setup, Log: log,
+		}.Standing)
 		reviewers := deps.reviewers
 		if reviewers == nil {
 			reviewers = reviewcore.SetLadoSystemSection
