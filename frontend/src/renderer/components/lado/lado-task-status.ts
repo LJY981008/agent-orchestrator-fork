@@ -141,8 +141,11 @@ function planComingReason(task: LadoTask, t: TFunction): string | null {
 	return worker ? ladoPlanWorkerReason(worker, t) : null;
 }
 
-/** Whether a new plan is on its way: an open plan worker, or a pending request. */
-function planComing(task: LadoTask): boolean {
+/**
+ * Whether a new plan is on its way: an open plan worker, or a pending
+ * request. The lanes use it too, so a card's lane agrees with its status line.
+ */
+export function ladoPlanComing(task: LadoTask): boolean {
 	return ladoOpenPlanWorker(task) !== undefined || task.plan.requestPending;
 }
 
@@ -224,17 +227,17 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 			return parts.length > 0 ? parts.join(" · ") : null;
 		}
 		case "review_required":
-			if (planComing(task)) return planComingReason(task, t);
+			if (ladoPlanComing(task)) return planComingReason(task, t);
 			if (reason === "rules_changed") return null;
 			return reason ? ladoReasonText(t, reason) : null;
 		case "blocked":
 		case "failed":
-			if (planComing(task)) return planComingReason(task, t);
+			if (ladoPlanComing(task)) return planComingReason(task, t);
 			return reason ? ladoReasonText(t, reason) : null;
 		case "planned":
-			return planComing(task) ? planComingReason(task, t) : null;
+			return ladoPlanComing(task) ? planComingReason(task, t) : null;
 		case "draft":
-			if (planComing(task)) return planComingReason(task, t);
+			if (ladoPlanComing(task)) return planComingReason(task, t);
 			return task.plan.worker?.phase === "failed" ? ladoPlanFailureText(t, task.plan.worker.failureCode) || null : null;
 		case "running":
 			// A task split into parts says how many are merged.

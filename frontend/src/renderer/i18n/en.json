@@ -3302,6 +3302,8 @@
 	"lado.error.workspaceReservedName": "A repository with this name cannot go into a workspace.",
 	"lado.lane.queued": "Queued",
 	"lado.lane.queuedEmpty": "Approved tasks wait here until LADO starts their work.",
+	"lado.lane.planReview": "Plan review",
+	"lado.lane.planReviewEmpty": "Tasks wait here from the plan request until you approve the plan.",
 	"lado.task.open": "Open task {{issue}}",
 	"lado.task.state.planRequested": "Plan requested",
 	"lado.task.state.planRequestFailed": "Plan request failed",

@@ -3368,6 +3368,8 @@
 	"lado.error.workspaceReservedName": "Un dépôt portant ce nom ne peut pas aller dans un espace de travail.",
 	"lado.lane.queued": "En file",
 	"lado.lane.queuedEmpty": "Les tâches approuvées attendent ici que LADO lance leur travail.",
+	"lado.lane.planReview": "Revue du plan",
+	"lado.lane.planReviewEmpty": "Les tâches attendent ici de la demande de plan jusqu'à ce que vous approuviez le plan.",
 	"lado.task.open": "Ouvrir la tâche {{issue}}",
 	"lado.task.state.planRequested": "Plan demandé",
 	"lado.task.state.planRequestFailed": "Échec de la demande de plan",

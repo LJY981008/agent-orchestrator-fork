@@ -1,7 +1,10 @@
-// LADO fork: the Plan and Queued lanes, LADO's tasks in front of the session
-// board (docs/LJY-PRD/TDD.md §3.3). Plan holds the tasks the human acts on
-// next (Draft, Planned, approved tasks whose rules need review or block the
-// run, and failed runs); Queued holds the approved ones LADO acts on next,
+// LADO fork: the Plan, Plan review and Queued lanes, LADO's tasks in front of
+// the session board (docs/LJY-PRD/TDD.md §3.3, issue #30). Plan holds the
+// drafts: tasks with no plan requested, whose plan request failed, and issues
+// closed before any run. Plan review holds the tasks from the plan request
+// until the approval: a plan on its way, a plan to review, approved tasks
+// whose rules need review or block the run, and failed runs, the plans ready
+// for review first. Queued holds the approved ones LADO acts on next,
 // waiting or starting. Once a worker starts, its session card on the board
 // stands for the task, so the task leaves the lanes. A task card is not a
 // session card: it stands for an issue that has no session yet. DESIGN.md's
@@ -20,7 +23,7 @@ import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-import { ladoOpenPlanWorker, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { ladoOpenPlanWorker, ladoPlanComing, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoCardWatch, type LadoTaskWatch, useLadoBoardWatch } from "./LadoCardWatch";
 import { LadoPartWorkerCardLink } from "./LadoPartWorkerLink";
 import { LadoPlanWorkerCardLink } from "./LadoPlanWorkerStatus";
@@ -47,7 +50,8 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 	}, [projectId]);
 	const all = (tasks.data ?? []).filter(inLanes);
 	const queued = orderQueue(all.filter(isQueued));
-	const planned = orderTasks(all.filter((task) => !isQueued(task)));
+	const reviewing = orderPlanReview(all.filter(inPlanReview));
+	const planned = orderTasks(all.filter((task) => !isQueued(task) && !inPlanReview(task)));
 	const cardProps = {
 		repositories: repositories.data ?? [],
 		onCancel: setCancelling,
@@ -96,6 +100,15 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 				}
 			>
 				{planned.map((task) => <LadoTaskCard key={task.id} task={task} watch={watchOf(task.id)} {...cardProps} />)}
+			</LadoLane>
+			<LadoLane
+				label={t("lado.lane.planReview")}
+				testId="lado-plan-review-lane"
+				count={reviewing.length}
+				error={null}
+				empty={tasks.isSuccess && reviewing.length === 0 ? t("lado.lane.planReviewEmpty") : null}
+			>
+				{reviewing.map((task) => <LadoTaskCard key={task.id} task={task} watch={watchOf(task.id)} {...cardProps} />)}
 			</LadoLane>
 			<LadoLane
 				label={t("lado.lane.queued")}
@@ -169,6 +182,17 @@ function isQueued(task: LadoTask): boolean {
 	return task.state === "queued" || task.state === "dispatching" || task.state === "approved" || runningParts(task);
 }
 
+// The states of a task whose plan the human reviews next, or reviews again:
+// they stay in Plan review while a new plan is on its way too.
+const planReviewStates = new Set<LadoTask["state"]>(["planned", "review_required", "blocked", "failed"]);
+
+// From the plan request until the approval: a draft whose plan is on its way,
+// as its status line says, and a task with a plan to review.
+function inPlanReview(task: LadoTask): boolean {
+	if (isQueued(task)) return false;
+	return planReviewStates.has(task.state) || (task.state === "draft" && ladoPlanComing(task));
+}
+
 // A task whose parts run before its integration worker starts has no session
 // card of its own yet, so it stays in the Queued lane, its card saying how
 // many parts are merged and linking the part workers (docs/LJY-PRD/TDD.md
@@ -199,6 +223,17 @@ function orderTasks(tasks: LadoTask[]): LadoTask[] {
 function orderQueue(tasks: LadoTask[]): LadoTask[] {
 	const enqueued = (task: LadoTask) => Date.parse(task.queue?.enqueuedAt ?? "") || 0;
 	return [...tasks].sort((left, right) => enqueued(left) - enqueued(right));
+}
+
+// The plans ready for the human's approval first, as their status line says
+// Plan ready for review; then each group in the order its plans were
+// requested, the oldest first. A task with no request time (its plan came
+// from the issue) counts from its creation. The times are compared as
+// instants, since the daemon trims fractional seconds.
+function orderPlanReview(tasks: LadoTask[]): LadoTask[] {
+	const ready = (task: LadoTask) => task.state === "planned" && task.plan.latest?.valid === true && !ladoPlanComing(task);
+	const requested = (task: LadoTask) => Date.parse(task.plan.requestedAt ?? "") || Date.parse(task.createdAt) || 0;
+	return [...tasks].sort((left, right) => Number(ready(right)) - Number(ready(left)) || requested(left) - requested(right));
 }
 
 function LadoTaskCard({
