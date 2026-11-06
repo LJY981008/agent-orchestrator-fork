@@ -1305,8 +1305,33 @@ func cursorResolvedExecutionKey(s ports.ActivitySignal) (string, bool) {
 // session. Generic active/tool events remain insufficient to clear blocked.
 func isTurnBoundaryEvent(event string) bool {
 	return event == "user-prompt-submit" || event == "stop" || event == "session-end" ||
-		event == "process-exited" || event == "chat.controller.stopped" || event == "permission-resolved" ||
-		event == "liveness-probe"
+		event == "process-exited" || event == "permission-resolved" ||
+		event == "liveness-probe" || isChatReleaseEvent(event)
+}
+
+// isChatReleaseEvent lists every event the chat controller reports except the
+// two that put a session in blocked (chat.approval.requested and
+// chat.input.requested). Chat signals carry no tool name, so the correlated
+// post-tool-use release never applies to them; each of these is the
+// controller's explicit word that the decision is gone or the turn moved on.
+// The controller sends chat.approval.resolved and chat.input.resolved only once
+// no interaction is still pending, and lifecycle has already fenced the signal
+// by controller generation. Keep this list in step with the reportActivity
+// calls in service/chat/controller.go, or a chat session stays blocked.
+func isChatReleaseEvent(event string) bool {
+	switch event {
+	case "chat.turn.started",
+		"chat.turn.completed",
+		"chat.approval.resolved",
+		"chat.input.resolved",
+		"chat.interrupt.reconciled",
+		"chat.account.reauth",
+		"chat.controller.disconnected",
+		"chat.controller.stopped":
+		return true
+	default:
+		return false
+	}
 }
 
 // applyToolPrecedenceLocked folds an event-tagged activity signal through the

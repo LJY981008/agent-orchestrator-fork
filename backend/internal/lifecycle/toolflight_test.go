@@ -496,3 +496,96 @@ func TestToolPrecedence_NotificationCorrelationSiblingDoesNotClear(t *testing.T)
 		t.Fatalf("after approved failure post: state = %q, want active", got)
 	}
 }
+
+// chatSig builds a signal the way the chat controller reports it: event-tagged,
+// no tool identity, and fenced by the current controller generation.
+func chatSig(state domain.ActivityState, event string) ports.ActivitySignal {
+	return ports.ActivitySignal{Valid: true, State: state, Event: event, ControllerGeneration: "gen-current"}
+}
+
+// blockOnChatApproval seeds a chat session owned by the current controller and
+// drives it into blocked through chat.approval.requested.
+func blockOnChatApproval(t *testing.T, m *Manager, st *fakeStore, id domain.SessionID) {
+	t.Helper()
+	st.sessions[id] = domain.SessionRecord{
+		ID: id, ProjectID: "mer", Mode: domain.SessionModeChat,
+		Metadata:      domain.SessionMetadata{ControllerGeneration: "gen-current"},
+		Activity:      domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now()},
+		FirstSignalAt: time.Now(),
+	}
+	mustApply(t, m, id, chatSig(domain.ActivityBlocked, "chat.approval.requested"))
+	if got := stateOf(st, id); got != domain.ActivityBlocked {
+		t.Fatalf("setup: state = %q, want blocked", got)
+	}
+}
+
+func TestToolPrecedence_ChatEventsReleaseBlocked(t *testing.T) {
+	// Every chat controller event other than the two that raise blocked is the
+	// controller's explicit word that the decision is gone or the turn moved
+	// on. Missing one leaves a chat session stuck in blocked, which stops
+	// delivery, cue and LADO notifications for it.
+	cases := []struct {
+		event string
+		state domain.ActivityState
+	}{
+		{"chat.approval.resolved", domain.ActivityActive},
+		{"chat.input.resolved", domain.ActivityActive},
+		{"chat.turn.started", domain.ActivityActive},
+		{"chat.turn.completed", domain.ActivityIdle},
+		{"chat.interrupt.reconciled", domain.ActivityIdle},
+		{"chat.account.reauth", domain.ActivityWaitingInput},
+		{"chat.controller.disconnected", domain.ActivityExited},
+		{"chat.controller.stopped", domain.ActivityExited},
+	}
+	for _, tc := range cases {
+		t.Run(tc.event, func(t *testing.T) {
+			m, st, _ := newManager()
+			blockOnChatApproval(t, m, st, "mer-1")
+			mustApply(t, m, "mer-1", chatSig(tc.state, tc.event))
+			if got := stateOf(st, "mer-1"); got != tc.state {
+				t.Fatalf("state after %s = %q, want %q", tc.event, got, tc.state)
+			}
+		})
+	}
+}
+
+func TestToolPrecedence_ChatEventsBlockedSurvivesToolTraffic(t *testing.T) {
+	// Tool and notification traffic is no proof a chat dialog closed, even when
+	// it passes the controller fence.
+	cases := []ports.ActivitySignal{
+		{Valid: true, State: domain.ActivityActive, Event: "pre-tool-use", ToolName: "Bash", ToolUseID: "toolu_1", ControllerGeneration: "gen-current"},
+		{Valid: true, State: domain.ActivityActive, Event: "post-tool-use", ToolName: "Bash", ToolUseID: "toolu_1", ControllerGeneration: "gen-current"},
+		{Valid: true, State: domain.ActivityIdle, Event: "notification", ControllerGeneration: "gen-current"},
+		{Valid: true, State: domain.ActivityWaitingInput, Event: "notification", ControllerGeneration: "gen-current"},
+	}
+	for _, s := range cases {
+		t.Run(s.Event+"-"+string(s.State), func(t *testing.T) {
+			m, st, _ := newManager()
+			blockOnChatApproval(t, m, st, "mer-1")
+			mustApply(t, m, "mer-1", s)
+			if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+				t.Fatalf("state after %s = %q, want blocked", s.Event, got)
+			}
+		})
+	}
+}
+
+func TestToolPrecedence_ChatEventsInputRequestBlocks(t *testing.T) {
+	// A question dialog blocks the same way an approval does and is released
+	// by its own resolution.
+	m, st, _ := newManager()
+	blockOnChatApproval(t, m, st, "mer-1")
+	mustApply(t, m, "mer-1", chatSig(domain.ActivityActive, "chat.approval.resolved"))
+	mustApply(t, m, "mer-1", chatSig(domain.ActivityBlocked, "chat.input.requested"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("state after input request = %q, want blocked", got)
+	}
+	mustApply(t, m, "mer-1", chatSig(domain.ActivityActive, "post-tool-use"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityBlocked {
+		t.Fatalf("state after tool traffic = %q, want blocked", got)
+	}
+	mustApply(t, m, "mer-1", chatSig(domain.ActivityActive, "chat.input.resolved"))
+	if got := stateOf(st, "mer-1"); got != domain.ActivityActive {
+		t.Fatalf("state after input resolved = %q, want active", got)
+	}
+}
