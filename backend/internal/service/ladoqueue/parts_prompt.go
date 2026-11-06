@@ -176,10 +176,12 @@ func integrationPrompt(task domain.LadoTask, in ladotask.RunInput, checks []doma
 	if multi {
 		b.WriteString(integrationPRs(run, repos, example))
 		b.WriteString(changeRequestParagraph(task, changeRequest{targetPerRepo: true, refspec: refspec, multiRepo: true}))
+		b.WriteString(reviewThreadsParagraph(task))
 	} else {
 		fmt.Fprintf(&b, "Run the plan's checks on the whole result, push `%s` and open the task's pull request against the plan's base_ref. Link the issue in its description%s.\n\n", run.Branch, example)
 		b.WriteString(sessionBranchParagraph(sessionBranch{name: run.Branch}))
 		b.WriteString(changeRequestParagraph(task, changeRequest{target: run.BaseBranch, refspec: refspec}))
+		b.WriteString(reviewThreadsParagraph(task))
 	}
 	b.WriteString("\n")
 	b.WriteString(planSection(in))

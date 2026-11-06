@@ -38,7 +38,7 @@ Natural-language-to-command mappings for common AO tasks.
 | Claim an existing PR for the current session | `ao session claim-pr <pr-ref>` (`AO_SESSION_ID`) |
 | Claim an existing PR for another session | `ao session claim-pr <id> <pr-ref>` |
 | Merge a pull request | `ao pr merge <pr-number>` |
-| Resolve pull-request review threads | `ao pr resolve-comments <pr-number> [comment-id...]` |
+| Resolve the review threads you addressed (no `glab`, `gh` or token needed) | `ao pr resolve-comments <pr-number> <thread-or-comment-id...>`; read [commands/pr.md](commands/pr.md) first |
 | Submit a code review verdict | `ao review submit <session-id> --run <run-id> --verdict approved` |
 | Get an independent / adversarial review of an AO worker's implementation PR | `ao review trigger` (inside the owning worker), or `ao review trigger <worker-session-id>` |
 | Review someone else's PR | Spawn or use a normal review-only worker without claiming the target PR; submit the requested provider review directly |
