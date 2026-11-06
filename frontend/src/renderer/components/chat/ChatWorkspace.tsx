@@ -177,24 +177,36 @@ const EMPTY_CHAT_PLACEHOLDERS = [
 	"Find and fix a bug in this project",
 ] as const;
 
+/** Ids of every turn still in flight. Nested provider turns can run beside the root turn. */
+function inFlightTurnIds(turns: ConversationTurn[]): Set<string> {
+	return new Set(turns.filter((turn) => turn.state === "running" || turn.state === "queued").map((turn) => turn.id));
+}
+
+/** A pending approval or question the agent is waiting on right now. */
+function isLivePendingInteraction(item: ConversationItem, liveTurnIds: Set<string>): item is ConversationActivity {
+	return (
+		item.kind === "activity" &&
+		(item.activityKind === "approval" || item.activityKind === "user_input") &&
+		item.status === "pending" &&
+		(!item.turnId || liveTurnIds.has(item.turnId))
+	);
+}
+
 /**
- * The newest pending approval or question the live turn is waiting on.
+ * The newest pending approval or question the agent is waiting on.
  *
- * A request with no turn id belongs to the session rather than a turn, so a
- * turn-scoped one always wins; between equals the later sequence is the live one.
+ * Any in-flight turn counts, not only the first running one. A request with no
+ * turn id belongs to the session rather than a turn, so a turn-scoped one always
+ * wins; between equals the later sequence is the live one.
  */
 function latestPendingInteraction(
 	items: ConversationItem[],
 	activityKind: "approval" | "user_input",
-	turn: ConversationTurn | undefined,
+	turns: ConversationTurn[],
 ): ConversationActivity | undefined {
+	const liveTurnIds = inFlightTurnIds(turns);
 	return items.reduce<ConversationActivity | undefined>((latest, item) => {
-		if (
-			item.kind !== "activity" ||
-			item.activityKind !== activityKind ||
-			item.status !== "pending" ||
-			(item.turnId ? item.turnId !== turn?.id : !turn)
-		) {
+		if (!isLivePendingInteraction(item, liveTurnIds) || item.activityKind !== activityKind) {
 			return latest;
 		}
 		if (latest?.turnId && !item.turnId) return latest;
@@ -817,13 +829,8 @@ function ChatWorkspaceContent({
 			startupState,
 		],
 	);
-	const hasPendingInteraction = snapshot.items.some(
-		(item) =>
-			item.kind === "activity" &&
-			(item.activityKind === "approval" || item.activityKind === "user_input") &&
-			item.status === "pending" &&
-			(!item.turnId || item.turnId === turn?.id),
-	);
+	const liveTurnIds = inFlightTurnIds(snapshot.turns);
+	const hasPendingInteraction = snapshot.items.some((item) => isLivePendingInteraction(item, liveTurnIds));
 	const handleChatKeyDown = useCallback(
 		(event: ReactKeyboardEvent<HTMLElement>) => {
 			if (
@@ -1348,12 +1355,12 @@ function ChatWorkspaceContent({
 	);
 	const editHumanMessage = onEditMessage;
 	const pendingApproval = useMemo(
-		() => latestPendingInteraction(snapshot.items, "approval", turn),
-		[snapshot.items, turn],
+		() => latestPendingInteraction(snapshot.items, "approval", snapshot.turns),
+		[snapshot.items, snapshot.turns],
 	);
 	const pendingUserInput = useMemo(
-		() => latestPendingInteraction(snapshot.items, "user_input", turn),
-		[snapshot.items, turn],
+		() => latestPendingInteraction(snapshot.items, "user_input", snapshot.turns),
+		[snapshot.items, snapshot.turns],
 	);
 	const stableSettings = useStableValue(snapshot.settings);
 	const stableModelReroute = useStableValue(snapshot.modelReroute);

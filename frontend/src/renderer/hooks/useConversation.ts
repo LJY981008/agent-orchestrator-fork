@@ -19,13 +19,14 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
-import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
+import { workspaceQueryKeyForHost, workspaceQueryOptions } from "./useWorkspaceQuery";
+import type { WorkspaceSummary } from "../types/workspace";
 import { ladoClaudeChromeSessionQueryKey } from "../lib/lado-chrome";
 import { projectMemoQueryRoot } from "./useProjectMemo";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
@@ -325,16 +326,20 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 	return toSnapshot(data as WireSnapshot);
 }
 
-/** Refresh only the live page; refetching an infinite query downloads all older history. */
-export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
+/**
+ * Refresh only the live page; refetching an infinite query downloads all older history.
+ * A response older than the cached live page is ignored, so a slow refresh cannot
+ * roll the conversation back.
+ */
+export async function refreshConversationLivePage(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
 	let latest: ConversationSnapshot;
 	try {
 		latest = await fetchConversationPage(sessionId, hostId);
 	} catch (error) {
-		queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
+		if (hostId) queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
 		throw error;
 	}
-	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
+	if (hostId) queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (previous) => {
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
@@ -348,6 +353,33 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			: latest;
 		return { ...previous, pages: [live, ...previous.pages.slice(1)] };
 	});
+}
+
+export function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
+	return refreshConversationLivePage(queryClient, sessionId, hostId);
+}
+
+/** Poll interval while the agent is working or waiting on the user. */
+const LOCAL_CONVERSATION_BUSY_POLL_MS = 3_000;
+/** Poll interval otherwise, only while the document is visible. */
+const LOCAL_CONVERSATION_IDLE_POLL_MS = 15_000;
+const BUSY_SESSION_ACTIVITIES = new Set(["active", "blocked", "waiting_input"]);
+const localLiveRefreshes = new Set<string>();
+
+/**
+ * Safety-net refresh of a local conversation's live page. Live changes normally
+ * arrive through the event channel; this covers a stalled or missed event. It
+ * skips while the query itself or an earlier safety-net refresh is still fetching.
+ */
+function refreshLocalConversationSafetyNet(queryClient: QueryClient, sessionId: string) {
+	const queryKey = conversationQueryKey(sessionId);
+	// Without cached pages the query fetches on its own.
+	if (!queryClient.getQueryData(queryKey)) return;
+	if (localLiveRefreshes.has(sessionId) || queryClient.isFetching({ queryKey }) > 0) return;
+	localLiveRefreshes.add(sessionId);
+	void refreshConversationLivePage(queryClient, sessionId)
+		.catch(() => {})
+		.finally(() => localLiveRefreshes.delete(sessionId));
 }
 
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
@@ -392,6 +424,42 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		}, 2_000);
 		return () => window.clearInterval(timer);
 	}, [hostId, queryClient, sessionId]);
+	// The session list is polled on its own, so its activity can say the agent is
+	// working or waiting even when this conversation's cached snapshot went quiet.
+	const selectSessionActivity = useCallback(
+		(workspaces: WorkspaceSummary[]) =>
+			workspaces.flatMap((workspace) => workspace.sessions).find((session) => session.id === sessionId)?.activity?.state,
+		[sessionId],
+	);
+	const sessionActivity = useQuery({
+		...workspaceQueryOptions,
+		select: selectSessionActivity,
+		// Read the shared cache only; useWorkspacePolling owns its fetches.
+		enabled: false,
+	}).data;
+	const localSessionId = hostId ? undefined : sessionId;
+	const turnInFlight = Boolean(
+		query.data?.turns.some((turn) => turn.state === "running" || turn.state === "queued"),
+	);
+	const localBusy = turnInFlight || (sessionActivity !== undefined && BUSY_SESSION_ACTIVITIES.has(sessionActivity));
+	// Read the live page once on mount, even when the cached query is still fresh.
+	useEffect(() => {
+		if (localSessionId) refreshLocalConversationSafetyNet(queryClient, localSessionId);
+	}, [localSessionId, queryClient]);
+	const lastSessionActivity = useRef(sessionActivity);
+	useEffect(() => {
+		if (lastSessionActivity.current === sessionActivity) return;
+		lastSessionActivity.current = sessionActivity;
+		if (localSessionId) refreshLocalConversationSafetyNet(queryClient, localSessionId);
+	}, [localSessionId, queryClient, sessionActivity]);
+	useEffect(() => {
+		if (!localSessionId) return;
+		const timer = window.setInterval(() => {
+			if (!localBusy && document.visibilityState === "hidden") return;
+			refreshLocalConversationSafetyNet(queryClient, localSessionId);
+		}, localBusy ? LOCAL_CONVERSATION_BUSY_POLL_MS : LOCAL_CONVERSATION_IDLE_POLL_MS);
+		return () => window.clearInterval(timer);
+	}, [localBusy, localSessionId, queryClient]);
 
 	if (query.error && (!hostId || !query.data)) {
 		const code = apiErrorCode(query.error);
