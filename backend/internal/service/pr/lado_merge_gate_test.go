@@ -121,3 +121,163 @@ func TestMergeAsksTheGate(t *testing.T) {
 		}
 	})
 }
+
+// fakeLadoCIWaiver is a merge gate that allows and also waives a missing
+// pipeline as told.
+type fakeLadoCIWaiver struct {
+	fakeLadoMergeGate
+	waives    bool
+	waiveErr  error
+	waiveAsks []string
+}
+
+func (w *fakeLadoCIWaiver) WaivesMissingPipeline(_ context.Context, pr domain.PullRequest, headSHA string) (bool, error) {
+	w.waiveAsks = append(w.waiveAsks, pr.URL+"@"+headSHA+"->"+pr.TargetBranch)
+	return w.waives, w.waiveErr
+}
+
+// #21: a GitLab head no pipeline runs for reads CI unknown. AO merges it
+// only when that is the one blocker and the installed gate waives the
+// missing pipeline; otherwise the refusal names the blockers.
+func TestMergeWaivesAMissingPipelineOnlyThroughTheGate(t *testing.T) {
+	setup := func(mutate func(*fakeSCMAction)) (domain.PullRequest, *fakeSCMAction, *ActionService) {
+		pr, scm := mergeableActionFixture()
+		pr.URL, pr.Provider, pr.Host, pr.TargetBranch = "https://gitlab.example.com/acme/widgets/-/merge_requests/42", "gitlab", "gitlab.example.com", "main"
+		scm.observation.PR.URL, scm.observation.PR.TargetBranch = pr.URL, "main"
+		scm.observation.CI = ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: pr.HeadSHA, NoPipeline: true}
+		if mutate != nil {
+			mutate(scm)
+		}
+		return pr, scm, NewActionService(ActionDeps{Store: &fakeActionStore{pr: pr, ok: true}, Reader: scm, Merger: scm})
+	}
+	merge := func(svc *ActionService, pr domain.PullRequest) error {
+		_, err := svc.Merge(context.Background(), MergeRequest{PRID: "42", PRURL: pr.URL, ExpectedHeadSHA: pr.HeadSHA})
+		return err
+	}
+	blockedBy := func(t *testing.T, err error, want ...string) {
+		t.Helper()
+		var blocked *MergeBlockedError
+		if !errors.Is(err, ErrPRPreconditions) || !errors.As(err, &blocked) {
+			t.Fatalf("merge = %v, want a MergeBlockedError", err)
+		}
+		if strings.Join(blocked.Blockers, ",") != strings.Join(want, ",") {
+			t.Errorf("blockers = %v, want %v", blocked.Blockers, want)
+		}
+	}
+
+	t.Run("a waiver that waives", func(t *testing.T) {
+		pr, scm, svc := setup(func(scm *fakeSCMAction) { scm.observation.PR.TargetBranch = "release" })
+		gate := &fakeLadoCIWaiver{waives: true}
+		svc.SetMergeGate(gate)
+		if err := merge(svc, pr); err != nil || scm.mergeCalls != 1 {
+			t.Fatalf("merge = %v with %d merges, want one merge", err, scm.mergeCalls)
+		}
+		// The waiver is asked about the branch the PR merges into on the host.
+		if want := pr.URL + "@" + pr.HeadSHA + "->release"; len(gate.waiveAsks) != 1 || gate.waiveAsks[0] != want {
+			t.Errorf("waiver asked %v, want %s", gate.waiveAsks, want)
+		}
+	})
+
+	t.Run("a waiver that does not waive", func(t *testing.T) {
+		pr, scm, svc := setup(nil)
+		gate := &fakeLadoCIWaiver{}
+		svc.SetMergeGate(gate)
+		blockedBy(t, merge(svc, pr), domain.MergeBlockerCINoPipeline)
+		if scm.mergeCalls != 0 || len(gate.waiveAsks) != 1 {
+			t.Errorf("%d merges after %d waiver questions, want none after one", scm.mergeCalls, len(gate.waiveAsks))
+		}
+	})
+
+	t.Run("no gate", func(t *testing.T) {
+		pr, scm, svc := setup(nil)
+		blockedBy(t, merge(svc, pr), domain.MergeBlockerCINoPipeline)
+		if scm.mergeCalls != 0 {
+			t.Errorf("%d merges, want none", scm.mergeCalls)
+		}
+	})
+
+	t.Run("a gate that is no waiver", func(t *testing.T) {
+		pr, scm, svc := setup(nil)
+		svc.SetMergeGate(&fakeLadoMergeGate{})
+		blockedBy(t, merge(svc, pr), domain.MergeBlockerCINoPipeline)
+		if scm.mergeCalls != 0 {
+			t.Errorf("%d merges, want none", scm.mergeCalls)
+		}
+	})
+
+	t.Run("a waiver that cannot read", func(t *testing.T) {
+		pr, scm, svc := setup(nil)
+		failed := apierr.Internal("LADO_MERGE_GATE_FAILED", "LADO could not check.")
+		svc.SetMergeGate(&fakeLadoCIWaiver{waives: true, waiveErr: failed})
+		if err := merge(svc, pr); !errors.Is(err, failed) || scm.mergeCalls != 0 {
+			t.Fatalf("merge = %v with %d merges, want the waiver's error and none", err, scm.mergeCalls)
+		}
+	})
+
+	t.Run("another blocker as well", func(t *testing.T) {
+		pr, scm, svc := setup(func(scm *fakeSCMAction) {
+			scm.observation.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked)}
+		})
+		gate := &fakeLadoCIWaiver{waives: true}
+		svc.SetMergeGate(gate)
+		blockedBy(t, merge(svc, pr), domain.MergeBlockerCINoPipeline, domain.MergeBlockerNotMergeable)
+		if scm.mergeCalls != 0 || len(gate.waiveAsks) != 0 {
+			t.Errorf("%d merges after %d waiver questions, want neither", scm.mergeCalls, len(gate.waiveAsks))
+		}
+	})
+
+	t.Run("CI passing", func(t *testing.T) {
+		pr, scm, svc := setup(func(scm *fakeSCMAction) {
+			scm.observation.CI.Summary, scm.observation.CI.NoPipeline = string(domain.CIPassing), false
+		})
+		gate := &fakeLadoCIWaiver{}
+		svc.SetMergeGate(gate)
+		if err := merge(svc, pr); err != nil || scm.mergeCalls != 1 || len(gate.waiveAsks) != 0 {
+			t.Fatalf("merge = %v with %d merges after %d waiver questions, want one merge and none", err, scm.mergeCalls, len(gate.waiveAsks))
+		}
+	})
+
+	t.Run("CI unknown with a pipeline", func(t *testing.T) {
+		pr, scm, svc := setup(func(scm *fakeSCMAction) { scm.observation.CI.NoPipeline = false })
+		gate := &fakeLadoCIWaiver{waives: true}
+		svc.SetMergeGate(gate)
+		blockedBy(t, merge(svc, pr), domain.MergeBlockerCIUnknown)
+		if scm.mergeCalls != 0 || len(gate.waiveAsks) != 0 {
+			t.Errorf("%d merges after %d waiver questions, want neither", scm.mergeCalls, len(gate.waiveAsks))
+		}
+	})
+}
+
+// #21: the live read's blockers add a CI result of another head and a
+// partial review listing to the shared readiness rule, and name a missing
+// pipeline only while CI is unknown.
+func TestMergeBlockers(t *testing.T) {
+	_, ready := mergeableActionFixture()
+	cases := []struct {
+		name   string
+		mutate func(*ports.SCMObservation, *ports.SCMReviewObservation)
+		want   []string
+	}{
+		{"ready", func(*ports.SCMObservation, *ports.SCMReviewObservation) {}, nil},
+		{"CI of another head", func(o *ports.SCMObservation, _ *ports.SCMReviewObservation) { o.CI.HeadSHA = strings.Repeat("b", 40) }, []string{domain.MergeBlockerHeadMismatch}},
+		{"no head", func(o *ports.SCMObservation, _ *ports.SCMReviewObservation) { o.PR.HeadSHA, o.CI.HeadSHA = "", "" }, []string{domain.MergeBlockerHeadMismatch}},
+		{"partial review", func(_ *ports.SCMObservation, r *ports.SCMReviewObservation) { r.Partial = true }, []string{domain.MergeBlockerReviewPartial}},
+		{"no pipeline", func(o *ports.SCMObservation, _ *ports.SCMReviewObservation) { o.CI.Summary, o.CI.NoPipeline = "", true }, []string{domain.MergeBlockerCINoPipeline}},
+		{"no pipeline flag with CI pending", func(o *ports.SCMObservation, _ *ports.SCMReviewObservation) {
+			o.CI.Summary, o.CI.NoPipeline = string(domain.CIPending), true
+		}, []string{domain.MergeBlockerCIPending}},
+		{"changes requested and unresolved", func(_ *ports.SCMObservation, r *ports.SCMReviewObservation) {
+			r.Decision = string(domain.ReviewChangesRequest)
+			r.Threads = []ports.SCMReviewThreadObservation{{ID: "t1", Comments: []ports.SCMReviewCommentObservation{{ID: "c1"}}}}
+		}, []string{domain.MergeBlockerChangesRequested, domain.MergeBlockerUnresolvedComments}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			o, review := ready.observation, ready.review
+			c.mutate(&o, &review)
+			if got := mergeBlockers(o, review); strings.Join(got, ",") != strings.Join(c.want, ",") {
+				t.Errorf("mergeBlockers = %v, want %v", got, c.want)
+			}
+		})
+	}
+}

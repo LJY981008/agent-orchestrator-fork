@@ -221,6 +221,8 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_INTEGRATION_PRS_CHANGED: "lado.error.integrationPrsChanged",
 	LADO_INTEGRATION_MERGE_ORDER: "lado.error.integrationMergeOrder",
 	LADO_CHECK_COMMANDS_CHANGED: "lado.error.checkCommandsChanged",
+	// AO's merge route refused: details.blockers says why (#21).
+	PR_PRECONDITIONS_UNMET: "lado.error.mergePreconditions",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_SESSION_ID_INVALID: "lado.error.executionNotFound",
 	// Project knowledge (issue #24).
@@ -254,6 +256,13 @@ const setupStageKeys: Partial<Record<string, Partial<Record<string, LadoErrorKey
 };
 
 function errorKey(code: string, details: Record<string, unknown> | undefined): MessageKey | undefined {
+	// A head without a CI pipeline says so on its own; any other refusal
+	// names what holds the merge, and one without names a plain refusal (#21).
+	if (code === "PR_PRECONDITIONS_UNMET") {
+		const blockers = mergeBlockers(details);
+		if (blockers.length === 1 && blockers[0] === "ci_no_pipeline") return "lado.error.mergeNoPipeline";
+		return blockers.length > 0 ? errorKeys[code] : "lado.error.mergePreconditionsUnknown";
+	}
 	// A problem with the whole list or the time limit says it all; one with a
 	// row names the row. One from a newer daemon shows the daemon's own words.
 	if (code === "LADO_CHECK_COMMANDS_INVALID") {
@@ -332,6 +341,9 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 	const reasons = details?.reasons;
 	return {
 		number: typeof index === "number" ? String(index + 1) : "",
+		blockers: mergeBlockers(details)
+			.map((blocker) => ladoMergeBlockerText(t, blocker))
+			.join("; "),
 		problem:
 			code === "LADO_PROTECTED_PATHS_INVALID" ? ladoProtectedPathProblemText(t, details ?? {}) : ladoCheckCommandProblemText(t, details ?? {}),
 		reasons: Array.isArray(reasons)
@@ -898,6 +910,14 @@ const protectionPartKeys: Partial<Record<string, LadoProtectionPartKey>> = {
 	"required_status_checks:lado/integration:any_source": "lado.protection.part.integrationCheckSource",
 	non_fast_forward: "lado.protection.part.nonFastForward",
 	deletion: "lado.protection.part.deletion",
+	// A GitLab base branch's protection and project settings (#21).
+	protected_branch: "lado.protection.part.protectedBranch",
+	push_access: "lado.protection.part.pushAccess",
+	force_push: "lado.protection.part.forcePush",
+	pipeline_must_succeed: "lado.protection.part.pipelineMustSucceed",
+	skipped_pipeline: "lado.protection.part.skippedPipeline",
+	// LADO cannot post its status on the repository.
+	integration_status: "lado.protection.part.integrationStatus",
 };
 
 /** The part a branch's rules lack that only a check from any source fills. */
@@ -907,6 +927,37 @@ export const LADO_PROTECTION_ANY_SOURCE = "required_status_checks:lado/integrati
 export function ladoProtectionPartText(t: TFunction, part: string): string {
 	const key = protectionPartKeys[part];
 	return key ? t(key) : part;
+}
+
+type LadoMergeBlockerKey = Extract<MessageKey, `lado.mergeBlocker.${string}`>;
+
+// What holds AO's merge back, as PR_PRECONDITIONS_UNMET's details.blockers
+// names it (backend/internal/service/pr mergeBlockers, #21).
+const mergeBlockerKeys: Partial<Record<string, LadoMergeBlockerKey>> = {
+	merged: "lado.mergeBlocker.merged",
+	closed: "lado.mergeBlocker.closed",
+	draft: "lado.mergeBlocker.draft",
+	ci_failing: "lado.mergeBlocker.ciFailing",
+	ci_pending: "lado.mergeBlocker.ciPending",
+	ci_unknown: "lado.mergeBlocker.ciUnknown",
+	ci_no_pipeline: "lado.mergeBlocker.ciNoPipeline",
+	changes_requested: "lado.mergeBlocker.changesRequested",
+	unresolved_comments: "lado.mergeBlocker.unresolvedComments",
+	// The host itself refuses the merge, e.g. GitLab's "Pipelines must succeed".
+	not_mergeable: "lado.mergeBlocker.notMergeable",
+	head_mismatch: "lado.mergeBlocker.headMismatch",
+	review_partial: "lado.mergeBlocker.reviewPartial",
+};
+
+function mergeBlockers(details: Record<string, unknown> | undefined): string[] {
+	const blockers = details?.blockers;
+	return Array.isArray(blockers) ? blockers.filter((blocker): blocker is string => typeof blocker === "string") : [];
+}
+
+/** What holds a merge back, in the developer's language; one from a newer daemon shows as the daemon names it. */
+export function ladoMergeBlockerText(t: TFunction, blocker: string): string {
+	const key = mergeBlockerKeys[blocker];
+	return key ? t(key) : blocker;
 }
 
 type LadoProtectedPathProblemKey = Extract<MessageKey, `lado.protectedPaths.problem.${string}`>;

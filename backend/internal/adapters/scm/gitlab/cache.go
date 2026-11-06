@@ -28,6 +28,11 @@ const (
 	// weeks in practice; a 5-min TTL serves repeat lookups across many cycles
 	// without holding stale data for long.
 	forkProjectCacheTTL = 5 * time.Minute
+
+	// mrVersionCacheLimit bounds the MR-version cache. A version's
+	// created_at for a given head never changes, so entries carry no TTL;
+	// the oldest-stored entry is evicted once the limit is reached.
+	mrVersionCacheLimit = 512
 )
 
 // cacheEntry stores a cached value alongside the instant it was fetched.
@@ -73,6 +78,12 @@ type cache struct {
 	// Fork source-project paths are stable for days/weeks; the 5-min TTL
 	// serves repeat lookups across many cycles.
 	forkProject map[string]cacheEntry[string]
+
+	// mrVersion caches the created_at of an MR's newest diff version keyed by
+	// "host|repo|iid|head" (LADO fork, #21). fetchCI consults it only when a
+	// head has zero pipelines, to tell "not created yet" from "none will run".
+	// Bounded by mrVersionCacheLimit.
+	mrVersion map[string]cacheEntry[time.Time]
 }
 
 // newCache returns an initialized empty cache ready for use.
@@ -82,6 +93,7 @@ func newCache() *cache {
 		mrDetail:    map[string]cacheEntry[*restMR]{},
 		approvals:   map[string]cacheEntry[*restApprovals]{},
 		forkProject: map[string]cacheEntry[string]{},
+		mrVersion:   map[string]cacheEntry[time.Time]{},
 	}
 }
 
@@ -142,6 +154,36 @@ func (c *cache) setForkProject(host string, sourceProjectID int, path string) {
 	setCacheEntry(c.forkProject, forkProjectKey(host, sourceProjectID), path, c.now())
 }
 
+// --- MR version (LADO fork, #21) ---
+
+// getMRVersion returns the cached created_at of the MR diff version for
+// (host, repo, iid, head).
+func (c *cache) getMRVersion(host, repo string, iid int, head string) (time.Time, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e, ok := c.mrVersion[mrVersionKey(host, repo, iid, head)]
+	return e.value, ok
+}
+
+// setMRVersion stores createdAt for (host, repo, iid, head), evicting the
+// oldest-stored entry when the cache is full.
+func (c *cache) setMRVersion(host, repo string, iid int, head string, createdAt time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	key := mrVersionKey(host, repo, iid, head)
+	if _, exists := c.mrVersion[key]; !exists && len(c.mrVersion) >= mrVersionCacheLimit {
+		var oldestKey string
+		var oldest time.Time
+		for k, e := range c.mrVersion {
+			if oldestKey == "" || e.fetchedAt.Before(oldest) {
+				oldestKey, oldest = k, e.fetchedAt
+			}
+		}
+		delete(c.mrVersion, oldestKey)
+	}
+	setCacheEntry(c.mrVersion, key, createdAt, c.now())
+}
+
 // --- Key builders ---
 //
 // Keys include host (and repo or source-project ID) so that the same MR on
@@ -155,6 +197,10 @@ func (c *cache) setForkProject(host string, sourceProjectID int, path string) {
 // setCacheEntry, so a single key builder suffices.
 func mrKey(host, repo string, iid int) string {
 	return strings.ToLower(host) + "|" + strings.ToLower(repo) + "|" + fmt.Sprint(iid)
+}
+
+func mrVersionKey(host, repo string, iid int, head string) string {
+	return mrKey(host, repo, iid) + "|" + strings.ToLower(head)
 }
 
 func forkProjectKey(host string, sourceProjectID int) string {

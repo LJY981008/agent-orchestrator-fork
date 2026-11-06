@@ -123,7 +123,9 @@ const (
 	// branch (#59).
 	LadoCodeBaseNotDefault = "base_not_default" // confirm
 
-	// protection
+	// protection. unprotected_gitlab is a GitLab host whose client reads no
+	// protection (ErrLadoUnsupported), as every GitLab project was before
+	// #21; GitLab now reads as unprotected, protection_unknown or a pass.
 	LadoCodeUnprotected       = "unprotected"        // confirm
 	LadoCodeProtectionUnknown = "protection_unknown" // confirm
 	LadoCodeUnprotectedGitLab = "unprotected_gitlab" // confirm
@@ -362,7 +364,27 @@ type LadoProtectionDetails struct {
 	Missing        []string `json:"missing"`
 	RequiredChecks []string `json:"requiredChecks"`
 	ErrorClass     string   `json:"errorClass"`
+	// CodeOwnerApproval says a GitLab branch requires code owner approval
+	// (a paid tier). LADO shows it and does not judge by it.
+	CodeOwnerApproval bool `json:"codeOwnerApproval,omitempty"`
 }
+
+// What a GitLab base branch lacks for LADO to count it as protected
+// (docs/LJY-PRD/TDD.md §7.1, #21), in the order the protection item lists
+// them: the branch is a protected branch, no one may push to it (no role,
+// user, group or deploy key), force push is off, the project's "Pipelines
+// must succeed" is on and "Skipped pipelines are considered successful" is
+// off, and LADO can post the lado/integration status on the project. GitLab
+// stops a merge only while LADO's pending status keeps the pipeline from
+// succeeding, so a status LADO cannot post leaves the branch unprotected.
+const (
+	LadoGitLabMissingProtectedBranch   = "protected_branch"
+	LadoGitLabMissingPushAccess        = "push_access"
+	LadoGitLabMissingForcePush         = "force_push"
+	LadoGitLabMissingPipelineMustPass  = "pipeline_must_succeed"
+	LadoGitLabMissingSkippedPipeline   = "skipped_pipeline"
+	LadoGitLabMissingIntegrationStatus = "integration_status"
+)
 
 // Classes of a failed read of a branch's rules: the host's HTTP status, as
 // "http_404", a rate limit, a request that did not reach the host or got no
@@ -680,7 +702,8 @@ func ValidateLadoCheckCommands(commands []LadoCheckCommand) *LadoCheckCommandPro
 // an approved head went (docs/LJY-PRD/TDD.md §7.1).
 type LadoIntegrationStatusState string
 
-// Status states. GitLab has no such status: not applicable.
+// Status states. not_applicable is left only on GitLab approvals given
+// before LADO posted statuses there (#21); LADO does not post them again.
 const (
 	LadoIntegrationStatusPending       LadoIntegrationStatusState = "pending"
 	LadoIntegrationStatusPosted        LadoIntegrationStatusState = "posted"

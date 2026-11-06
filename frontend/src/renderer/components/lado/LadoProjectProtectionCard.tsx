@@ -1,9 +1,12 @@
 // LADO fork: Project settings → LADO → Branch protection (docs/LJY-PRD/TDD.md
 // §7.1). Whether each repository's base branch holds the rules that make
 // LADO's integration approval the way in: a required pull request, the
-// lado/integration status check, and no force pushes or deletion. A branch
-// without them is only watched: LADO detects a merge without approval. The
-// daemon keeps its reads for a while; Check again asks the host now.
+// lado/integration status check, and no force pushes or deletion. On GitLab
+// (#21): a protected branch nobody pushes to, no force pushes, pipelines that
+// must succeed, skipped pipelines that do not count, and a token LADO can post
+// its status with. A branch without them is only watched: LADO detects a merge
+// without approval. The daemon keeps its reads for a while; Check again asks
+// the host now.
 import type { TFunction } from "i18next";
 import { RefreshCw } from "lucide-react";
 import type { ReactNode } from "react";
@@ -24,7 +27,7 @@ const stateKeys: Record<ProtectionState, MessageKey> = {
 	protected: "lado.protection.state.protected",
 	unprotected: "lado.protection.state.unprotected",
 	unknown: "lado.protection.state.unknown",
-	// LADO does not read GitLab's protection, so the branch counts as not protected.
+	// A host whose protection LADO cannot read counts as not protected.
 	unsupported: "lado.protection.state.unprotected",
 };
 
@@ -61,6 +64,11 @@ function protectionDetail(t: TFunction, branch: LadoBranchProtection): ReactNode
 	}
 }
 
+/** A GitLab repository, as the daemon names it ("gitlab:group/project@host"). */
+function isGitLab(branch: LadoBranchProtection): boolean {
+	return branch.repository.startsWith("gitlab:");
+}
+
 /** The oldest read: what the card shows is at least that fresh. */
 function oldestCheck(repositories: readonly LadoBranchProtection[]): string | undefined {
 	return repositories
@@ -75,8 +83,11 @@ export function LadoProjectProtectionCard({ projectId }: { projectId: string }) 
 	const refresh = useRefreshLadoProtection(projectId);
 	const repositories = protection.data?.repositories ?? [];
 	const checked = formatResetTime(oldestCheck(repositories), i18n.language);
-	// How to protect a branch helps only where GitHub's rules are missing or unreadable.
-	const showGuide = repositories.some((branch) => branch.state === "unprotected" || branch.state === "unknown");
+	// How to protect a branch helps only where its rules are missing or
+	// unreadable, in the words of that branch's host.
+	const needsGuide = repositories.filter((branch) => branch.state === "unprotected" || branch.state === "unknown");
+	const showGuide = needsGuide.some((branch) => !isGitLab(branch));
+	const showGitLabGuide = needsGuide.some(isGitLab);
 	const checking = refresh.isPending;
 
 	return (
@@ -124,6 +135,11 @@ export function LadoProjectProtectionCard({ projectId }: { projectId: string }) 
 			{showGuide ? (
 				<p className="px-(--settings-row-inset) text-control leading-4 text-settings-muted" data-testid="lado-protection-guide">
 					<Trans i18nKey="lado.protection.guide" components={{ code: <span className="font-mono" /> }} />
+				</p>
+			) : null}
+			{showGitLabGuide ? (
+				<p className="px-(--settings-row-inset) text-control leading-4 text-settings-muted" data-testid="lado-protection-guide-gitlab">
+					<Trans i18nKey="lado.protection.guideGitlab" components={{ code: <span className="font-mono" /> }} />
 				</p>
 			) : null}
 			{refresh.isError ? (

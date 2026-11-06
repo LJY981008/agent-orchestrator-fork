@@ -82,8 +82,8 @@ func (s *Service) RepostIntegrationStatus(ctx context.Context, session domain.Se
 // execution (#64); empty names the first of them in merge order. It needs no
 // presence: the head is approved, and the same status goes up again. It
 // answers the approval as recorded after the post; a post that fails again
-// is in its status. GitLab gets no status: its approval stays
-// not_applicable.
+// is in its status. A GitLab approval given before LADO posted statuses
+// there (#21) stays not_applicable.
 func (s *Service) RepostIntegrationStatusOf(ctx context.Context, session domain.SessionID, prURL string) (domain.LadoIntegrationApproval, error) {
 	exec, ok, err := s.deps.Store.LadoExecution(ctx, session)
 	switch {
