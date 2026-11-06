@@ -175,6 +175,17 @@ describe("parts and overlapping work", () => {
 		expect(ladoTaskReason({ ...task("running") }, en, "en")).toBeNull();
 	});
 
+	it("says a running worker reported a pull request its session does not track", () => {
+		const untracked = task("running", "reported_pr_untracked");
+		expect(ladoTaskStatus(untracked, en)).toEqual({ label: "Running", tone: "working" });
+		expect(ladoTaskReason(untracked, ko, "ko")).toBe("보고된 PR/MR 이 추적되지 않음");
+		expect(ladoTaskReason(untracked, en, "en")).toBe("The reported pull request is not tracked");
+		// After the parts count of a task split into parts.
+		expect(ladoTaskReason({ ...untracked, parts: { total: 4, merged: 4 } }, ko, "ko")).toBe("파트 4/4 · 보고된 PR/MR 이 추적되지 않음");
+		// While LADO still tries to track it on a run across repositories.
+		expect(ladoTaskReason(task("validating", "reported_pr_untracked"), en, "en")).toBe("The reported pull request is not tracked");
+	});
+
 	it("names the task a queued task waits for when their files overlap", () => {
 		const queued: LadoTask = {
 			...task("queued", "paths_overlap"),

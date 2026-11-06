@@ -3582,6 +3582,7 @@
 	"lado.reason.attempts_exhausted": "Der Worker ist nach 3 Versuchen nicht gestartet",
 	"lado.reason.timed_out": "Bei der maximalen Laufzeit gestoppt",
 	"lado.reason.ended_without_pr": "Der Worker endete ohne PR",
+	"lado.reason.reported_pr_untracked": "Der gemeldete Pull Request wird nicht verfolgt",
 	"lado.reason.slot_global": "Wartet auf einen freien Laufplatz",
 	"lado.reason.slot_project": "Wartet auf einen freien Laufplatz in diesem Projekt",
 	"lado.reason.memory_tight": "Wartet, solange der Speicher knapp ist",

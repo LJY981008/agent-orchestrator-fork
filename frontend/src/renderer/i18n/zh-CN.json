@@ -3564,6 +3564,7 @@
 	"lado.reason.attempts_exhausted": "尝试 3 次后 worker 仍未启动",
 	"lado.reason.timed_out": "达到最长运行时间后已停止",
 	"lado.reason.ended_without_pr": "worker 结束时没有 PR",
+	"lado.reason.reported_pr_untracked": "报告的拉取请求未被跟踪",
 	"lado.reason.slot_global": "正在等待空闲的运行名额",
 	"lado.reason.slot_project": "正在等待此项目空闲的运行名额",
 	"lado.reason.memory_tight": "内存紧张，正在等待",
