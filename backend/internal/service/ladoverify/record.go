@@ -74,6 +74,9 @@ type headInputs struct {
 	// whether there is one (#53).
 	owner domain.SessionID
 	live  bool
+	// ownerActivity is the owner's activity state, empty without an owner
+	// (LADO #85).
+	ownerActivity domain.ActivityState
 	// worktree is the worktree of that repository where the check commands
 	// run: the one at the head of the execution's own session and its
 	// resolve worker, else the owner's, else the execution's own; empty when
@@ -214,6 +217,7 @@ func (s *Service) verifyHeadIn(ctx context.Context, exec domain.LadoExecution, o
 		record.Notified = s.requestFixes(ctx, in, ev, record.Notified, opts.host)
 		record.Notified = s.requestPull(ctx, in, record.Notified)
 		record.Notified = s.requestClean(ctx, in, ev, record.Notified) // LADO #22
+		record.Notified = s.requestResolve(ctx, in, record.Notified)   // LADO #85
 	}
 	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
 		return domain.LadoVerification{}, in, fmt.Errorf("store the record of head %s: %w", in.head, err)
@@ -343,7 +347,7 @@ func (s *Service) readOwner(ctx context.Context, in *headInputs, relative string
 	if ok {
 		own = worktreeOf(session)
 		if domain.LadoSessionLive(session) && !in.exec.SessionTerminated {
-			in.owner = in.exec.SessionID
+			in.owner, in.ownerActivity = in.exec.SessionID, session.Activity.State
 		}
 	}
 	trees := []string{own}
@@ -355,7 +359,7 @@ func (s *Service) readOwner(ctx context.Context, in *headInputs, relative string
 		if ok {
 			tree := worktreeOf(worker)
 			if in.owner == "" && domain.LadoSessionLive(worker) {
-				in.owner = id
+				in.owner, in.ownerActivity = id, worker.Activity.State
 				// The owner's worktree comes first.
 				trees = []string{tree, own}
 			} else {

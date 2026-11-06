@@ -257,6 +257,10 @@ type Service struct {
 	// its head's commands item wait as worktree_dirty (lado_worktree_dirty.go,
 	// LADO #22): one entry each, which a new head replaces.
 	dirtySince map[domain.SessionID]dirtyWait
+	// reviewSeen holds, by execution (passKey), the head each unresolved
+	// review thread was first seen at and since when the review threads
+	// message's conditions hold (lado_review_threads.go, LADO #85).
+	reviewSeen map[domain.SessionID]reviewSeen
 	// runCtx is the context of the loop Start began, while it runs; the
 	// background reads RefreshProtection starts run under it.
 	runCtx context.Context
@@ -309,6 +313,7 @@ func New(deps Deps) *Service {
 		prSeen:         map[domain.SessionID]bool{},
 		verified:       map[domain.SessionID]bool{},
 		dirtySince:     map[domain.SessionID]dirtyWait{},
+		reviewSeen:     map[domain.SessionID]reviewSeen{},
 	}
 }
 
@@ -547,8 +552,9 @@ func (s *Service) Tick(ctx context.Context) error {
 	}
 	if listErr == nil && ctx.Err() == nil && len(executions) < limit+len(resting) {
 		// The store listed every execution to verify: the waits of the
-		// others are over (LADO #22).
+		// others are over (LADO #22, #85).
 		s.pruneDirty(executions)
+		s.pruneReviewSeen(executions) // LADO #85
 	}
 	if ctx.Err() == nil {
 		if _, err := s.deps.Store.SettleLadoExecutionsAwaitingRepos(ctx); err != nil {
@@ -631,7 +637,8 @@ func (s *Service) verifyExecutionIn(ctx context.Context, exec domain.LadoExecuti
 	s.markPRSeen(ctx, exec)
 	switch {
 	case exec.PR.Merged || exec.PR.Closed:
-		s.forgetDirty(passKey(exec)) // LADO #22
+		s.forgetDirty(passKey(exec))      // LADO #22
+		s.forgetReviewSeen(passKey(exec)) // LADO #85
 		return s.settle(ctx, exec)
 	case exec.PR.HeadSHA == "":
 		return nil
