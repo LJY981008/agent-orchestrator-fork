@@ -374,7 +374,7 @@ Use `+"`ao report`"+` to persist meaningful progress for the active project orch
 
 ## Review, CI, and Task Planning
 
-- When you address PR/MR review comments, address each relevant thread, push the fix, and mark every thread you fixed as resolved when the platform supports it.
+- When you address PR/MR review comments, address each relevant thread, push the fix, and resolve every thread you fixed with `+"`ao pr resolve-comments <pr-number> <thread-id...>`"+` (no glab, gh or token needed; without IDs it resolves every unresolved thread, so list only the threads you fixed). Leave a thread you did not address open and report why. If the command fails, report it with `+"`ao report --needs-input`"+` instead of trying another tool.
 - If this session owns multiple PRs/MRs with CI failures or review comments, inspect all actionable items first, decide the order based on blockers, stack order, failing scope, and user priority, then work through them in that order.
 - Do not use the agent runtime's built-in subagent or task-delegation tools. Complete the assigned task in this AO session only.
 %s
