@@ -25,6 +25,18 @@ const (
 	reviewCommentLimitPerThread = 5
 	pipelineJobsPageSize        = 100
 	fetchConcurrency            = 5
+
+	// gitlabNoPipelineGrace is how long after a push GitLab may take to create
+	// the pipeline object. A head with zero pipelines whose newest MR diff
+	// version is older than this is treated as "no pipeline will run"
+	// (LADO fork, #21).
+	gitlabNoPipelineGrace = 5 * time.Minute
+
+	// externalPipelineLookback bounds how many pipelines of one commit are
+	// read to find the newest non-external one under an external pipeline.
+	externalPipelineLookback = 20
+
+	pipelineSourceExternal = "external"
 )
 
 // ---------------------------------------------------------------------------
@@ -385,28 +397,35 @@ func safeTime(t *time.Time) time.Time {
 
 // CommitChecksGuard returns a hash-based guard for the latest pipeline status
 // of a commit, allowing the observer to skip unchanged CI state.
+//
+// LADO fork (#21): when the latest pipeline is "external" (commit statuses
+// only), fetchCI reads the newest non-external pipeline under it, so the
+// guard hashes that listing too. Otherwise a real CI pipeline finishing below
+// an unchanged external pipeline would not promote the PR to a refresh.
 func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, headSHA, etag string) (ports.SCMGuardResult, error) {
 	if headSHA == "" {
 		return ports.SCMGuardResult{}, fmt.Errorf("gitlab scm: empty head SHA: %w", ErrNotFound)
-	}
-	path := fmt.Sprintf("/projects/%s/pipelines", projectPath(repo.Owner, repo.Name))
-	q := url.Values{
-		"sha":      {headSHA},
-		"per_page": {"1"},
-		"order_by": {"id"},
-		"sort":     {"desc"},
 	}
 	hc, err := p.clientForRepoErr(repo)
 	if err != nil {
 		return ports.SCMGuardResult{}, err
 	}
 
-	resp, err := hc.doGET(ctx, path, q)
-	if err != nil {
+	pipelines, body, err := p.fetchPipelinesForSHA(ctx, hc, repo, headSHA, 1)
+	if body == nil && err != nil {
 		return ports.SCMGuardResult{}, err
 	}
-	h := sha256.Sum256(resp.Body)
-	newETag := hex.EncodeToString(h[:])
+	h := sha256.New()
+	h.Write(body)
+	if err == nil && len(pipelines) > 0 && pipelines[0].Source == pipelineSourceExternal {
+		_, older, err := p.fetchPipelinesForSHA(ctx, hc, repo, headSHA, externalPipelineLookback)
+		if older == nil && err != nil {
+			return ports.SCMGuardResult{}, err
+		}
+		h.Write([]byte{0})
+		h.Write(older)
+	}
+	newETag := hex.EncodeToString(h.Sum(nil))
 	return ports.SCMGuardResult{
 		ETag:        newETag,
 		NotModified: etag == newETag,
@@ -546,7 +565,7 @@ func (p *Provider) fetchSingleMR(ctx context.Context, ref ports.SCMPRRef) (ports
 	// 2. Fetch CI (pipelines + jobs). A transient failure here must propagate
 	// as an error so the observer preserves the last durable CI state rather
 	// than overwriting it with "unknown"
-	ciObs, err := p.fetchCI(ctx, repo, mr.SHA)
+	ciObs, err := p.fetchCI(ctx, repo, ref.Number, mr.SHA)
 	if err != nil {
 		return ports.SCMObservation{}, fmt.Errorf("gitlab scm: fetch CI: %w", err)
 	}
@@ -626,47 +645,59 @@ func (p *Provider) fetchSourceProjectCached(ctx context.Context, hc *Client, hos
 	return srcProj.PathWithNamespace, nil
 }
 
-func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, headSHA string) (ports.SCMCIObservation, error) {
+func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, mrIID int, headSHA string) (ports.SCMCIObservation, error) {
 	if headSHA == "" {
 		return ports.SCMCIObservation{Summary: string(domain.CIUnknown)}, nil
 	}
 
-	path := fmt.Sprintf("/projects/%s/pipelines", projectPath(repo.Owner, repo.Name))
+	hc, err := p.clientForRepoErr(repo)
+	if err != nil {
+		return ports.SCMCIObservation{}, err
+	}
+
 	// per_page=1 matches CommitChecksGuard so both call sites produce the same
 	// cache key in Client.doGET's ETag cache. When the guard runs first (the
 	// cheap pre-check) and fetchCI runs second, doGET sends If-None-Match and
 	// receives a 304 — no body transfer, no JSON parse. Only pipelines[0] (the
 	// latest pipeline) is used, so per_page=1 is sufficient. Pipeline-jobs
 	// pagination (per_page=100, doGETPaginated) is intentionally untouched.
-	q := url.Values{
-		"sha":      {headSHA},
-		"per_page": {"1"},
-		"order_by": {"id"},
-		"sort":     {"desc"},
-	}
-	hc, err := p.clientForRepoErr(repo)
+	pipelines, _, err := p.fetchPipelinesForSHA(ctx, hc, repo, headSHA, 1)
 	if err != nil {
 		return ports.SCMCIObservation{}, err
 	}
-
-	resp, err := hc.doGET(ctx, path, q)
-	if err != nil {
-		return ports.SCMCIObservation{}, fmt.Errorf("fetch pipelines: %w", err)
-	}
-
-	var pipelines []restPipeline
-	if err := json.Unmarshal(resp.Body, &pipelines); err != nil {
-		return ports.SCMCIObservation{}, fmt.Errorf("unmarshal pipelines: %w", err)
-	}
 	if len(pipelines) == 0 {
-		return ports.SCMCIObservation{Summary: string(domain.CIUnknown), HeadSHA: headSHA}, nil
+		// The decision is made on the list length, never on the rolled-up
+		// result: a skipped or manual pipeline is still a pipeline (LADO fork, #21).
+		return ports.SCMCIObservation{
+			Summary:    string(domain.CIUnknown),
+			HeadSHA:    headSHA,
+			NoPipeline: p.noPipelineForHead(ctx, hc, repo, mrIID, headSHA),
+		}, nil
 	}
 
 	latest := pipelines[0]
 	ciState := pipelineStatusToCI(latest.Status)
+	jobsPipeline := latest
 
-	// Fetch jobs from the latest pipeline
-	checks, failedChecks, partial, err := p.fetchPipelineJobs(ctx, repo, latest.ID)
+	// LADO fork (#21): a pipeline whose source is "external" exists only
+	// because someone posted a commit status (LADO's lado/integration, or
+	// another tool). When it is the newest pipeline for the head it would
+	// hide the real CI pipeline below it, so read the newest non-external
+	// pipeline's jobs and roll the two statuses up to the worse one. A real
+	// CI failure then still reaches AO's failure injection and LADO's
+	// required checks.
+	if latest.Source == pipelineSourceExternal {
+		ciPipeline, ok, err := p.latestNonExternalPipeline(ctx, hc, repo, headSHA)
+		if err != nil {
+			return ports.SCMCIObservation{}, err
+		}
+		if ok {
+			ciState = worseCIState(ciState, pipelineStatusToCI(ciPipeline.Status))
+			jobsPipeline = ciPipeline
+		}
+	}
+
+	checks, failedChecks, partial, err := p.fetchPipelineJobs(ctx, repo, jobsPipeline.ID)
 	if err != nil {
 		return ports.SCMCIObservation{}, fmt.Errorf("fetch pipeline jobs: %w", err)
 	}
@@ -683,10 +714,122 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, headSHA stri
 	}, nil
 }
 
+// fetchPipelinesForSHA lists the newest perPage pipelines for sha, newest
+// first. It returns the raw body too so CommitChecksGuard can hash it.
+func (p *Provider) fetchPipelinesForSHA(ctx context.Context, hc *Client, repo ports.SCMRepo, sha string, perPage int) ([]restPipeline, []byte, error) {
+	path := fmt.Sprintf("/projects/%s/pipelines", projectPath(repo.Owner, repo.Name))
+	q := url.Values{
+		"sha":      {sha},
+		"per_page": {strconv.Itoa(perPage)},
+		"order_by": {"id"},
+		"sort":     {"desc"},
+	}
+	resp, err := hc.doGET(ctx, path, q)
+	if err != nil {
+		return nil, nil, fmt.Errorf("fetch pipelines: %w", err)
+	}
+	var pipelines []restPipeline
+	if err := json.Unmarshal(resp.Body, &pipelines); err != nil {
+		return nil, resp.Body, fmt.Errorf("unmarshal pipelines: %w", err)
+	}
+	return pipelines, resp.Body, nil
+}
+
+// latestNonExternalPipeline returns the newest pipeline for sha whose source
+// is not "external", looking at most externalPipelineLookback pipelines back.
+// It is only called when the newest pipeline is external, which is rare, so
+// it uses its own (per_page=20) request and ETag cache key.
+func (p *Provider) latestNonExternalPipeline(ctx context.Context, hc *Client, repo ports.SCMRepo, sha string) (restPipeline, bool, error) {
+	pipelines, _, err := p.fetchPipelinesForSHA(ctx, hc, repo, sha, externalPipelineLookback)
+	if err != nil {
+		return restPipeline{}, false, err
+	}
+	for _, pl := range pipelines {
+		if pl.Source != pipelineSourceExternal {
+			return pl, true, nil
+		}
+	}
+	return restPipeline{}, false, nil
+}
+
+// noPipelineForHead reports whether GitLab will not run a pipeline for
+// headSHA. The caller has already seen zero pipelines for the commit; this
+// adds the time test: the merge request's newest diff version must be for
+// headSHA and older than gitlabNoPipelineGrace. GitLab creates the pipeline
+// object right at push time, so after the grace period an empty list means
+// the commit has no jobs to run. The version's created_at (the push time as
+// GitLab saw it, not the commit date) is cached per (host, repo, iid, head).
+//
+// A failed versions read never fails the observation: it leaves NoPipeline
+// false (the merge stays blocked as before) and logs a warning.
+func (p *Provider) noPipelineForHead(ctx context.Context, hc *Client, repo ports.SCMRepo, mrIID int, headSHA string) bool {
+	if mrIID <= 0 {
+		return false
+	}
+	createdAt, ok := p.cache.getMRVersion(repo.Host, repo.Repo, mrIID, headSHA)
+	if !ok {
+		path := fmt.Sprintf("/projects/%s/merge_requests/%d/versions", projectPath(repo.Owner, repo.Name), mrIID)
+		resp, err := hc.doGET(ctx, path, url.Values{"per_page": {"1"}})
+		if err != nil {
+			p.logger.Warn("gitlab scm: read MR versions failed", "repo", repo.Repo, "mr", mrIID, "err", err)
+			return false
+		}
+		var versions []restMRVersion
+		if err := json.Unmarshal(resp.Body, &versions); err != nil {
+			p.logger.Warn("gitlab scm: unmarshal MR versions failed", "repo", repo.Repo, "mr", mrIID, "err", err)
+			return false
+		}
+		if len(versions) == 0 || versions[0].CreatedAt == nil || versions[0].CreatedAt.IsZero() {
+			p.logger.Warn("gitlab scm: MR versions carry no push time", "repo", repo.Repo, "mr", mrIID)
+			return false
+		}
+		// Only the newest version counts, and only when it is for this head:
+		// a mismatch means the MR moved (or the read raced a push), so the
+		// next poll decides again. Mismatches are not cached.
+		if !strings.EqualFold(versions[0].HeadCommitSHA, headSHA) {
+			return false
+		}
+		createdAt = *versions[0].CreatedAt
+		p.cache.setMRVersion(repo.Host, repo.Repo, mrIID, headSHA, createdAt)
+	}
+	return p.cache.now().Sub(createdAt) >= gitlabNoPipelineGrace
+}
+
+// worseCIState returns the worse of two CI states, ordered
+// failing > pending > unknown > passing.
+func worseCIState(a, b domain.CIState) domain.CIState {
+	if ciStateRank(b) > ciStateRank(a) {
+		return b
+	}
+	return a
+}
+
+func ciStateRank(s domain.CIState) int {
+	switch s {
+	case domain.CIFailing:
+		return 3
+	case domain.CIPending:
+		return 2
+	case domain.CIPassing:
+		return 0
+	default:
+		return 1
+	}
+}
+
 type restPipeline struct {
 	ID     int    `json:"id"`
 	Status string `json:"status"`
 	SHA    string `json:"sha"`
+	// Source is how the pipeline was created, e.g. "push",
+	// "merge_request_event" or "external" (commit statuses only).
+	Source string `json:"source"`
+}
+
+// restMRVersion is one entry of GET /merge_requests/:iid/versions.
+type restMRVersion struct {
+	HeadCommitSHA string     `json:"head_commit_sha"`
+	CreatedAt     *time.Time `json:"created_at"`
 }
 
 func (p *Provider) fetchPipelineJobs(ctx context.Context, repo ports.SCMRepo, pipelineID int) ([]ports.SCMCheckObservation, []ports.SCMCheckObservation, bool, error) {
