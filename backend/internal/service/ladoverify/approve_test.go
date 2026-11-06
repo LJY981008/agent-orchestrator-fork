@@ -658,3 +658,60 @@ func (r *verifyReads) addSession(session domain.SessionRecord) {
 	defer r.mu.Unlock()
 	r.sessions[session.ID] = session
 }
+
+// An execution with several PRs whose worker reported a PR LADO still
+// attaches cannot be approved yet (reported_pr_untracked); once the
+// reported PR is refused it no longer holds the approval.
+func TestApproveTaskWithAReportedPR(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		refused bool
+		held    bool
+	}{
+		{"a pending reported PR holds it", false, true},
+		{"a refused reported PR does not", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newApproveFixture(t)
+			exec, back, front := f.addMultiRepoApproval("7", verifyHead1, verifyHead2)
+			reported := "https://github.com/acme/back/pull/70"
+			f.tick()
+			f.store.update(exec.SessionID, func(e *domain.LadoExecution) {
+				pr := domain.LadoReportedPR{URL: reported}
+				if tc.refused {
+					pr.Refused, pr.Reason = true, domain.LadoReportedPRNotOpen
+				}
+				e.ReportedPRs = []domain.LadoReportedPR{pr}
+			})
+			result, err := f.approveTask(exec, "nonce-reported", nil, f.previewPR(exec, back, verifyHead1), f.previewPR(exec, front, verifyHead2))
+			if !tc.held {
+				if err != nil || len(result.PRs) != 2 {
+					t.Fatalf("approve the task = %+v, %v; want both approved", result.PRs, err)
+				}
+				return
+			}
+			details := requireAPIError(t, err, apierr.KindConflict, "LADO_INTEGRATION_NOT_READY").Details
+			if reasons, _ := details["reasons"].([]string); !slices.Equal(reasons, []string{domain.LadoRunningReportedPRUntracked}) {
+				t.Errorf("reasons = %v, want [reported_pr_untracked]", details["reasons"])
+			}
+			if urls, _ := details["reportedPrUrls"].([]string); !slices.Equal(urls, []string{reported}) {
+				t.Errorf("reported PR URLs = %v, want [%s]", details["reportedPrUrls"], reported)
+			}
+		})
+	}
+}
+
+// An execution with one PR and one repository is approved whatever its
+// worker reported: the reported PR would be a second one of its repository.
+func TestApproveOfASinglePRIgnoresAReportedPR(t *testing.T) {
+	f := newApproveFixture(t)
+	exec := f.add("1", verifyHead1)
+	f.store.update(exec.SessionID, func(e *domain.LadoExecution) {
+		e.ReportedPRs = []domain.LadoReportedPR{{URL: "https://github.com/acme/demo/pull/90"}}
+	})
+	f.tick()
+	preview := f.preview(exec)
+	if _, err := f.approve(exec, preview.SHA256, preview.Confirm, "nonce-single"); err != nil {
+		t.Fatalf("approve = %v, want it approved", err)
+	}
+}

@@ -8,15 +8,18 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
 	scmmulti "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/multi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoverify"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	reviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/review"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/ladoblob"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
@@ -53,11 +56,67 @@ func wireLadoVerify(store *sqlite.Store, blobs *ladoblob.Store, clients *ladoRep
 	if work.sender != nil {
 		deps.Sender = ladoVerifySender{sender: work.sender}
 	}
+	if work.claims != nil {
+		deps.Claims = ladoReportedPRClaimer{sessions: work.claims}
+	}
 	verify := ladoverify.New(deps)
 	if work.ladoModes != nil {
 		work.ladoModes.SetOnLadoModeOn(verify.RefreshProtection)
 	}
 	return verify
+}
+
+// ladoPRClaims claims a PR for a session: AO's session service.
+type ladoPRClaims interface {
+	ClaimPR(ctx context.Context, id domain.SessionID, ref string, opts sessionsvc.ClaimPROptions) (sessionsvc.ClaimPRResult, error)
+}
+
+// ladoReportedPRClaimer attaches a PR a worker reported to its session
+// (#71) through the session service's claim, as `ao session claim-pr` does:
+// it checks the PR is an open one of the project's repository, or of one of
+// its workspace's, and never takes over another active session's PR. A
+// claim that can never pass comes back as a *ladoverify.ReportedPRRefusal
+// with its reason; any other error may pass later.
+type ladoReportedPRClaimer struct {
+	sessions ladoPRClaims
+}
+
+func (c ladoReportedPRClaimer) ClaimReportedPR(ctx context.Context, session domain.SessionID, prURL string) error {
+	_, err := c.sessions.ClaimPR(ctx, session, prURL, sessionsvc.ClaimPROptions{AllowTakeover: false})
+	if err == nil {
+		return nil
+	}
+	if reason := ladoReportedPRRefusalReason(err); reason != "" {
+		return &ladoverify.ReportedPRRefusal{Reason: reason, Err: err}
+	}
+	return err
+}
+
+// ladoReportedPRRefusalReason is the reason a claim error refuses a
+// reported PR for good, or "" for an error that may pass later: the host or
+// the PR not reachable yet (a merge request just opened, a token problem),
+// a project that cannot be read now, or any error the claim does not name.
+func ladoReportedPRRefusalReason(err error) string {
+	var owned ports.PRClaimedByActiveSessionError
+	var api *apierr.Error
+	switch {
+	case errors.Is(err, sessionsvc.ErrSCMUnavailable), errors.Is(err, sessionsvc.ErrPRNotFound):
+		// The host's error inside is not the claim's to name.
+		return ""
+	case errors.As(err, &owned):
+		return domain.LadoReportedPROwnedElsewhere
+	case errors.Is(err, sessionsvc.ErrProjectMismatch):
+		return domain.LadoReportedPROutsideProject
+	case errors.Is(err, sessionsvc.ErrPRNotOpen):
+		return domain.LadoReportedPRNotOpen
+	case errors.Is(err, sessionsvc.ErrInvalidPRRef):
+		return domain.LadoReportedPRInvalid
+	case errors.Is(err, sessionsvc.ErrSessionNotClaimable), errors.Is(err, sessionsvc.ErrSessionNoWorkspace):
+		return domain.LadoReportedPRSessionNotClaimable
+	case errors.As(err, &api) && api.Code == "SESSION_TERMINATED":
+		return domain.LadoReportedPRSessionNotClaimable
+	}
+	return ""
 }
 
 // ladoReviewRuns reads a worker's review runs.

@@ -68,6 +68,11 @@ type Store interface {
 	ListLadoExecutionPRsToTrack(ctx context.Context, limit int) ([]domain.LadoExecution, error)
 	TrackLadoExecutionPR(ctx context.Context, session domain.SessionID, prURL, repo string, position int, at time.Time) (bool, error)
 	ReplaceLadoExecutionPR(ctx context.Context, session domain.SessionID, oldURL, newURL string, at time.Time, audit *domain.LadoAuditEvent) (bool, error)
+	// The PRs workers reported that their sessions do not have (reported.go,
+	// #71), and the audit of one LADO attached.
+	ListLadoExecutionsWithReportedPRs(ctx context.Context, limit int) ([]domain.LadoExecution, error)
+	RefuseLadoReportedPR(ctx context.Context, session domain.SessionID, prURL, reason string, at time.Time) error
+	AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error)
 	LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error)
 	LadoProjectChecks(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoCheckCommand, int, error)
 	// GetPR reads AO's PR row, for the base tip AO recorded.
@@ -172,6 +177,9 @@ type Deps struct {
 	Blobs Blobs
 	// Sender tells workers what failed. Without it none is told.
 	Sender Sender
+	// Claims attaches the PRs workers reported to their sessions
+	// (reported.go, #71). Without it no reported PR is attached.
+	Claims Claims
 	// Branches resolves a repository's base branch for ProjectProtection.
 	// Without it the branch the project configures is read, if any.
 	Branches Branches
@@ -219,6 +227,9 @@ type Service struct {
 	headFetched   map[string]time.Time
 	failedAt      map[domain.SessionID]time.Time
 	trackFailedAt map[domain.SessionID]time.Time
+	// reportedFailed holds, by execution and reported PR (reportedKey), the
+	// failures in a row of its claim (reported.go).
+	reportedFailed map[string]reportedFailure
 	// baseFetched holds, by repository, remote and branch (fetchKey), when
 	// LADO last fetched a base branch; urgent holds the targets
 	// (targetKey) a settled merge moved, which the next pass fetches at
@@ -270,19 +281,20 @@ func New(deps Deps) *Service {
 		deps.Interval = defaultInterval
 	}
 	return &Service{
-		deps:          deps,
-		protection:    NewProtection(deps.Clients, deps.Clock, protectionTTL),
-		kick:          make(chan struct{}, 1),
-		statusTried:   map[string]time.Time{},
-		headFetched:   map[string]time.Time{},
-		failedAt:      map[domain.SessionID]time.Time{},
-		trackFailedAt: map[domain.SessionID]time.Time{},
-		baseFetched:   map[string]time.Time{},
-		urgent:        map[string]bool{},
-		baseResolved:  map[string]resolvedBase{},
-		prURLWarned:   map[string]bool{},
-		prSeen:        map[domain.SessionID]bool{},
-		verified:      map[domain.SessionID]bool{},
+		deps:           deps,
+		protection:     NewProtection(deps.Clients, deps.Clock, protectionTTL),
+		kick:           make(chan struct{}, 1),
+		statusTried:    map[string]time.Time{},
+		headFetched:    map[string]time.Time{},
+		failedAt:       map[domain.SessionID]time.Time{},
+		trackFailedAt:  map[domain.SessionID]time.Time{},
+		reportedFailed: map[string]reportedFailure{},
+		baseFetched:    map[string]time.Time{},
+		urgent:         map[string]bool{},
+		baseResolved:   map[string]resolvedBase{},
+		prURLWarned:    map[string]bool{},
+		prSeen:         map[domain.SessionID]bool{},
+		verified:       map[domain.SessionID]bool{},
 	}
 }
 
@@ -450,8 +462,9 @@ func (s *Service) baseBranchOf(ctx context.Context, place repoPlace) (string, er
 
 // Tick runs one pass. The first pass cancels the check runs a stopped daemon
 // left running, so that they run again; a pass that cannot does nothing
-// else. A pass then pins the PRs executions opened (trackPRs). Each PR of an
-// execution is verified or settled on its own: what fails for one is
+// else. A pass then attaches the PRs workers reported to their sessions
+// (claimReportedPRs) and pins the PRs executions opened (trackPRs). Each PR
+// of an execution is verified or settled on its own: what fails for one is
 // returned, joined with the others, after the rest ran, and the loop leaves
 // that PR of the execution for failedRetryAfter. A pass verifies up to
 // verifyBatch executions in the store's order, except that after a merge
@@ -466,6 +479,9 @@ func (s *Service) Tick(ctx context.Context) error {
 		return err
 	}
 	var problems []error
+	if err := s.claimReportedPRs(ctx); err != nil {
+		problems = append(problems, err)
+	}
 	if err := s.trackPRs(ctx); err != nil {
 		problems = append(problems, err)
 	}

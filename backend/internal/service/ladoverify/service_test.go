@@ -931,6 +931,9 @@ type verifyStore struct {
 	// multi holds the sessions' PRs and the PRs executions track (#64,
 	// multirepo_test.go); an execution without them reads as before.
 	multi verifyMulti
+	// reported holds the reads and refusals of reported PRs (#71,
+	// reported_test.go).
+	reported verifyReported
 }
 
 func verifyKey(session domain.SessionID, head string) string { return string(session) + "@" + head }
