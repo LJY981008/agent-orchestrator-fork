@@ -22,6 +22,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
+	conversationQueryKey,
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
@@ -31,6 +32,7 @@ import {
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 import type { WorkspaceSummary } from "../types/workspace";
 import type { ConversationSnapshot } from "../types/conversation";
+import type { InfiniteData } from "@tanstack/react-query";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
 import { TooltipProvider } from "../components/ui/tooltip";
 
@@ -1314,6 +1316,7 @@ describe("local conversation safety-net refresh", () => {
 		expect(getMock).toHaveBeenCalledTimes(2);
 		expect(getMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/conversation", {
 			params: { path: { sessionId: "ao-1" }, query: { beforeSequence: undefined, limit: 200 } },
+			signal: expect.any(AbortSignal),
 		});
 		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
 		expect(postMock).not.toHaveBeenCalled();
@@ -1404,6 +1407,56 @@ describe("local conversation safety-net refresh", () => {
 		await act(async () => slow.resolve({ data: withPendingApproval(WIRE), error: undefined }));
 		await advance(3_000);
 		expect(getMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("drops a slow read when a newer write reached the cache while it was in flight", async () => {
+		// The approval resolves in place, so its sequence does not move. A read that
+		// started before the resolution must not bring the pending card back.
+		const slow = deferred<{ data: unknown; error: undefined }>();
+		const resolvedWire = { ...withPendingApproval(WIRE), activities: [{ ...PENDING_APPROVAL, status: "resolved", revision: 2 }] };
+		getMock.mockResolvedValueOnce({ data: withPendingApproval(WIRE), error: undefined }).mockReturnValueOnce(slow.promise).mockResolvedValue({ data: resolvedWire, error: undefined });
+		const { queryClient, Wrapper } = clientWithWrapper();
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		// What an event-driven refetch or the approval mutation writes meanwhile.
+		act(() => {
+			queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"), (previous) => previous && {
+				...previous,
+				pages: previous.pages.map((page) => ({
+					...page,
+					items: page.items.map((item) => item.kind === "activity" && item.activityKind === "approval" ? { ...item, status: "resolved" } : item),
+				})),
+			});
+		});
+		await advance(0);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(false);
+
+		await act(async () => slow.resolve({ data: withPendingApproval(WIRE), error: undefined }));
+		await advance(0);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(false);
+	});
+
+	it("aborts a read that hangs so the next poll can run", async () => {
+		getMock.mockResolvedValueOnce({ data: WIRE, error: undefined }).mockImplementationOnce((_path: string, init: { signal?: AbortSignal }) =>
+			new Promise((_resolve, reject) => {
+				init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+			}),
+		).mockResolvedValue({ data: withPendingApproval(WIRE), error: undefined });
+		const { Wrapper } = clientWithWrapper();
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		await advance(17_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await advance(6_000);
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
 	});
 });
 

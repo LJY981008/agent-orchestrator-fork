@@ -318,9 +318,10 @@ export interface ConversationQueryResult {
 	loadOlder: () => void;
 }
 
-async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number): Promise<ConversationSnapshot> {
+async function fetchConversationPage(sessionId: string, hostId?: string, beforeSequence?: number, signal?: AbortSignal): Promise<ConversationSnapshot> {
 	const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/sessions/{sessionId}/conversation", {
 		params: { path: { sessionId }, query: { beforeSequence, limit: CONVERSATION_PAGE_SIZE } },
+		...(signal ? { signal } : {}),
 	});
 	if (error) throw error;
 	return toSnapshot(data as WireSnapshot);
@@ -328,19 +329,31 @@ async function fetchConversationPage(sessionId: string, hostId?: string, beforeS
 
 /**
  * Refresh only the live page; refetching an infinite query downloads all older history.
- * A response older than the cached live page is ignored, so a slow refresh cannot
- * roll the conversation back.
+ *
+ * The response is dropped when anything wrote the cached conversation while it was
+ * in flight: an event-driven refetch, a settings or approval mutation, or an
+ * optimistic reorder is at least as new. Sequence numbers cannot tell, because
+ * in-place updates such as a resolved approval or changed settings keep them, and
+ * this direct read is not the query's own fetch, so cancelQueries cannot stop it.
  */
-export async function refreshConversationLivePage(queryClient: QueryClient, sessionId: string, hostId?: string): Promise<void> {
+export async function refreshConversationLivePage(
+	queryClient: QueryClient,
+	sessionId: string,
+	hostId?: string,
+	signal?: AbortSignal,
+): Promise<void> {
+	const queryKey = conversationQueryKey(sessionId, hostId);
+	const writesBefore = queryClient.getQueryState(queryKey)?.dataUpdateCount;
 	let latest: ConversationSnapshot;
 	try {
-		latest = await fetchConversationPage(sessionId, hostId);
+		latest = await fetchConversationPage(sessionId, hostId, undefined, signal);
 	} catch (error) {
 		if (hostId) queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), true);
 		throw error;
 	}
 	if (hostId) queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
-	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey(sessionId, hostId), (previous) => {
+	if (queryClient.getQueryState(queryKey)?.dataUpdateCount !== writesBefore) return;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(queryKey, (previous) => {
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
 		const priorLive = previous.pages[0];
@@ -364,6 +377,8 @@ const LOCAL_CONVERSATION_BUSY_POLL_MS = 3_000;
 /** Poll interval otherwise, only while the document is visible. */
 const LOCAL_CONVERSATION_IDLE_POLL_MS = 15_000;
 const BUSY_SESSION_ACTIVITIES = new Set(["active", "blocked", "waiting_input"]);
+/** A hung read is aborted so it cannot hold the safety net off for its session. */
+const LOCAL_CONVERSATION_REFRESH_TIMEOUT_MS = 20_000;
 const localLiveRefreshes = new Set<string>();
 
 /**
@@ -377,9 +392,14 @@ function refreshLocalConversationSafetyNet(queryClient: QueryClient, sessionId: 
 	if (!queryClient.getQueryData(queryKey)) return;
 	if (localLiveRefreshes.has(sessionId) || queryClient.isFetching({ queryKey }) > 0) return;
 	localLiveRefreshes.add(sessionId);
-	void refreshConversationLivePage(queryClient, sessionId)
+	const abort = new AbortController();
+	const timeout = window.setTimeout(() => abort.abort(), LOCAL_CONVERSATION_REFRESH_TIMEOUT_MS);
+	void refreshConversationLivePage(queryClient, sessionId, undefined, abort.signal)
 		.catch(() => {})
-		.finally(() => localLiveRefreshes.delete(sessionId));
+		.finally(() => {
+			window.clearTimeout(timeout);
+			localLiveRefreshes.delete(sessionId);
+		});
 }
 
 export function conversationQueryOptions(sessionId: string, hostId?: string) {
