@@ -14,8 +14,8 @@ func insertLadoReportedPRRefusal(t *testing.T, reason string) string {
 		VALUES ('session', 'https://github.com/o/r/pull/7', '` + reason + `', CURRENT_TIMESTAMP)`
 }
 
-// 0016 creates the refusal table with its checks, keyed by execution and PR,
-// that goes with its execution.
+// 0016 creates the refusal table, keyed by execution and PR, that goes with
+// its execution.
 func TestLadoMigrate0016CreatesReportedPRRefusals(t *testing.T) {
 	db := openLadoDatabase(t, 1)
 	if got, want := appliedVersion(t, db, ladoVersionTable), latestLadoMigration(t); got != want || got < 16 {
@@ -29,6 +29,12 @@ func TestLadoMigrate0016CreatesReportedPRRefusals(t *testing.T) {
 		target != "lado_executions" || onDelete != "CASCADE" {
 		t.Fatalf("foreign key = %q %q, %v; want lado_executions ON DELETE CASCADE", target, onDelete, err)
 	}
+}
+
+// A refusal takes each stored reason, once per execution and PR, and
+// nothing without a known reason, a PR or a time.
+func TestLadoMigrate0016RefusalChecks(t *testing.T) {
+	db := openLadoDatabase(t, 1)
 	insertLadoExecutionFixture(t, db)
 	for _, reason := range []string{"owned_elsewhere", "outside_project", "not_open", "invalid", "session_not_claimable", "unreachable"} {
 		mustExec(t, db, `DELETE FROM lado_reported_pr_refusals`)
