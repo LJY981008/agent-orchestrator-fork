@@ -1272,7 +1272,7 @@ func TestActivity_CurrentChatControllerResumesExitedWorkload(t *testing.T) {
 	signals := []ports.ActivitySignal{
 		{Valid: true, State: domain.ActivityActive, Event: "chat.turn.started", ControllerGeneration: "gen-current"},
 		{Valid: true, State: domain.ActivityIdle, Event: "chat.turn.completed", ControllerGeneration: "gen-current"},
-		{Valid: true, State: domain.ActivityWaitingInput, Event: "chat.input.requested", ControllerGeneration: "gen-current"},
+		{Valid: true, State: domain.ActivityBlocked, Event: "chat.input.requested", ControllerGeneration: "gen-current"},
 	}
 	for _, signal := range signals {
 		m, st, _ := newManager()

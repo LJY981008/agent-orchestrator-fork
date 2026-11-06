@@ -3451,11 +3451,16 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		// the queue so it cannot cascade through the same outage (issue #4861).
 		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
 	case ports.ChatEventApprovalRequested:
-		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.approval.requested", now)
+		// A pending approval or question is a dialog the provider waits on, so it
+		// is blocked, not waiting_input: waiting_input tells automation it may
+		// send the next message. Lifecycle releases blocked on every other chat
+		// event (isChatReleaseEvent), and the resolved events fire only once no
+		// interaction is still pending.
+		c.reportActivity(ctx, domain.ActivityBlocked, "chat.approval.requested", now)
 	case ports.ChatEventApprovalResolved:
 		c.reportInteractionResolved(ctx, "chat.approval.resolved", now)
 	case ports.ChatEventInputRequested:
-		c.reportActivity(ctx, domain.ActivityWaitingInput, "chat.input.requested", now)
+		c.reportActivity(ctx, domain.ActivityBlocked, "chat.input.requested", now)
 	case ports.ChatEventInputResolved:
 		c.reportInteractionResolved(ctx, "chat.input.resolved", now)
 	case ports.ChatEventCompacted:
