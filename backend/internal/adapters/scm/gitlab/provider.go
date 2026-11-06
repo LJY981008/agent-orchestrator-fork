@@ -61,8 +61,18 @@ type Provider struct {
 	// allowedHosts without an entry fall back to the default token (opts.Token).
 	hostTokens map[string]TokenSource
 
+	// LADO fork: allowedHosts, hostTokens and hostsGen change at run time
+	// through SetHosts, so they are read and written only under hostsMu.
+	// hostsGen counts SetHosts calls; cached clients and identities carry the
+	// generation they were made in and are ignored once it is old.
+	//
+	// Lock order: identityMu → hostMu → hostsMu. Nothing holds hostsMu while
+	// calling a TokenSource or making an HTTP request.
+	hostsMu  sync.RWMutex
+	hostsGen uint64
+
 	// Per-host clients for self-managed GitLab instances. Lazily populated.
-	hostClients   map[string]*Client
+	hostClients   map[string]hostClient
 	hostClientCfg ClientOptions
 	hostMu        sync.Mutex
 
@@ -76,8 +86,22 @@ type Provider struct {
 	// hostIdentities caches the authenticated account per-host so each host
 	// is resolved at most once for the provider's lifetime. The key is the
 	// normalized host string (empty string = gitlab.com).
-	hostIdentities map[string]ports.SCMIdentity
+	hostIdentities map[string]cachedIdentity
 	identityMu     sync.Mutex
+}
+
+// hostClient is a cached self-managed client and the host generation it was
+// built in (LADO fork).
+type hostClient struct {
+	client *Client
+	gen    uint64
+}
+
+// cachedIdentity is a cached account and the host generation it was resolved
+// in (LADO fork). An entry from an older generation counts as missing.
+type cachedIdentity struct {
+	ident ports.SCMIdentity
+	gen   uint64
 }
 
 // NewProvider creates a GitLab SCM provider. If SkipTokenPreflight is false
@@ -104,21 +128,7 @@ func NewProvider(opts ProviderOptions) (*Provider, error) {
 		logger = slog.Default()
 	}
 
-	allowed := make(map[string]bool, len(opts.AllowedHosts))
-	for _, h := range opts.AllowedHosts {
-		h = NormalizeHost(h)
-		if h != "" {
-			allowed[h] = true
-		}
-	}
-
-	hostTokens := make(map[string]TokenSource, len(opts.HostTokens))
-	for h, src := range opts.HostTokens {
-		h = NormalizeHost(h)
-		if h != "" && src != nil {
-			hostTokens[h] = src
-		}
-	}
+	allowed, hostTokens := normalizeHosts(opts.AllowedHosts, opts.HostTokens)
 
 	return &Provider{
 		client:       c,
@@ -131,9 +141,75 @@ func NewProvider(opts ProviderOptions) (*Provider, error) {
 			UserAgent:  opts.UserAgent,
 			RESTBase:   opts.RESTBase,
 		},
-		hostClients: map[string]*Client{},
+		hostClients: map[string]hostClient{},
 		cache:       newCache(),
 	}, nil
+}
+
+// normalizeHosts builds the allowlist set and the per-host token map the way
+// NewProvider always has: hosts are normalized, empty hosts and nil token
+// sources are dropped.
+func normalizeHosts(allowedHosts []string, hostTokens map[string]TokenSource) (map[string]bool, map[string]TokenSource) {
+	allowed := make(map[string]bool, len(allowedHosts))
+	for _, h := range allowedHosts {
+		h = NormalizeHost(h)
+		if h != "" {
+			allowed[h] = true
+		}
+	}
+
+	tokens := make(map[string]TokenSource, len(hostTokens))
+	for h, src := range hostTokens {
+		h = NormalizeHost(h)
+		if h != "" && src != nil {
+			tokens[h] = src
+		}
+	}
+	return allowed, tokens
+}
+
+// SetHosts replaces the self-managed allowlist and per-host token sources
+// while the provider is running (LADO fork: a token saved or deleted in LADO
+// reaches the provider without a daemon restart). The arguments mean the same
+// as ProviderOptions.AllowedHosts and ProviderOptions.HostTokens and are
+// normalized the same way; gitlab.com stays allowed and the default token is
+// unchanged.
+//
+// Cached self-managed clients and cached identities (gitlab.com included) from
+// before the call are not used again. SetHosts never waits for an identity
+// request in flight: it does not take identityMu, and it holds hostsMu and
+// hostMu one after the other, never both.
+func (p *Provider) SetHosts(allowedHosts []string, hostTokens map[string]TokenSource) {
+	allowed, tokens := normalizeHosts(allowedHosts, hostTokens)
+
+	p.hostsMu.Lock()
+	p.allowedHosts = allowed
+	p.hostTokens = tokens
+	p.hostsGen++
+	p.hostsMu.Unlock()
+
+	// Clear after the swap so a client built from the old maps in between is
+	// dropped too. Stale entries would be skipped by generation anyway; this
+	// just frees them.
+	p.hostMu.Lock()
+	p.hostClients = map[string]hostClient{}
+	p.hostMu.Unlock()
+}
+
+// hostState reads, under hostsMu, whether a normalized self-managed host is
+// allowed, its token source (nil when it uses the default token) and the
+// current host generation.
+func (p *Provider) hostState(h string) (allowed bool, src TokenSource, gen uint64) {
+	p.hostsMu.RLock()
+	defer p.hostsMu.RUnlock()
+	return p.allowedHosts[h], p.hostTokens[h], p.hostsGen
+}
+
+// hostGeneration returns the current host generation.
+func (p *Provider) hostGeneration() uint64 {
+	p.hostsMu.RLock()
+	defer p.hostsMu.RUnlock()
+	return p.hostsGen
 }
 
 // isHostAllowed reports whether host is a GitLab host the provider is permitted
@@ -147,7 +223,8 @@ func (p *Provider) isHostAllowed(host string) bool {
 	if IsGitLabDotCom(host) {
 		return true
 	}
-	return p.allowedHosts[host]
+	allowed, _, _ := p.hostState(host)
+	return allowed
 }
 
 // clientForHost returns the client whose REST base matches the given host.
@@ -170,8 +247,15 @@ func (p *Provider) clientForHost(host string) *Client {
 	if IsGitLabDotCom(h) {
 		return p.client
 	}
+
+	// LADO fork: hostMu is taken before hostsMu (lock order), and the host
+	// state is read once under it so the client matches the maps it was
+	// built from.
+	p.hostMu.Lock()
+	defer p.hostMu.Unlock()
+	allowed, src, gen := p.hostState(h)
 	// Reject non-allowlisted hosts before any credential is attached.
-	if !p.allowedHosts[h] {
+	if !allowed {
 		return nil
 	}
 	// If the default client's RESTBase already matches this host (e.g. a test
@@ -180,10 +264,8 @@ func (p *Provider) clientForHost(host string) *Client {
 		return p.client
 	}
 
-	p.hostMu.Lock()
-	defer p.hostMu.Unlock()
-	if c, ok := p.hostClients[h]; ok {
-		return c
+	if hc, ok := p.hostClients[h]; ok && hc.gen == gen {
+		return hc.client
 	}
 
 	cfg := p.hostClientCfg
@@ -192,11 +274,11 @@ func (p *Provider) clientForHost(host string) *Client {
 	cfg.RESTBase = "https://" + h + "/api/v4"
 	// Select the per-host token if one is configured; otherwise the default
 	// token (cfg.Token) applies.
-	if src, ok := p.hostTokens[h]; ok {
+	if src != nil {
 		cfg.Token = src
 	}
 	c := NewClient(cfg)
-	p.hostClients[h] = c
+	p.hostClients[h] = hostClient{client: c, gen: gen}
 	return c
 }
 
@@ -251,10 +333,15 @@ func (p *Provider) AuthenticatedIdentityForHost(ctx context.Context, host string
 	p.identityMu.Lock()
 	defer p.identityMu.Unlock()
 	if p.hostIdentities == nil {
-		p.hostIdentities = make(map[string]ports.SCMIdentity)
+		p.hostIdentities = make(map[string]cachedIdentity)
 	}
-	if ident, ok := p.hostIdentities[key]; ok {
-		return ident, nil
+	// LADO fork: an entry from before the last SetHosts counts as missing, so
+	// a replaced token's account is fetched again. The generation is read
+	// before the request; if SetHosts runs meanwhile, the stored entry is
+	// already old.
+	gen := p.hostGeneration()
+	if cached, ok := p.hostIdentities[key]; ok && cached.gen == gen {
+		return cached.ident, nil
 	}
 
 	client := p.clientForHost(host)
@@ -279,7 +366,7 @@ func (p *Provider) AuthenticatedIdentityForHost(ctx context.Context, host string
 		Login: login,
 		Human: !isBotAuthor(login),
 	}
-	p.hostIdentities[key] = ident
+	p.hostIdentities[key] = cachedIdentity{ident: ident, gen: gen}
 	return ident, nil
 }
 
@@ -301,8 +388,15 @@ func (p *Provider) SCMCredentialsAvailable(ctx context.Context) (bool, error) {
 		}
 	}
 
-	// Default token is not available — check per-host tokens.
+	// Default token is not available — check per-host tokens. LADO fork: copy
+	// the sources under hostsMu and call them after letting it go.
+	p.hostsMu.RLock()
+	sources := make([]TokenSource, 0, len(p.hostTokens))
 	for _, src := range p.hostTokens {
+		sources = append(sources, src)
+	}
+	p.hostsMu.RUnlock()
+	for _, src := range sources {
 		if src == nil {
 			continue
 		}
