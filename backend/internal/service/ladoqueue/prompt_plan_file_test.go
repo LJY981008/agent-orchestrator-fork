@@ -22,7 +22,7 @@ func TestWorkerPromptsNameThePlanFileToReadAgain(t *testing.T) {
 	part := domain.LadoTaskPart{PartID: "store", Title: "Store", Steps: []int{1}, AffectedPaths: []string{"backend/**"}, Branch: "b/store", MergeTipSHA: "abc"}
 	run := domain.LadoPartRun{Branch: "b/root", HeadSHA: "def"}
 	prompts := map[string]string{
-		"single":      workerPrompt(task, in, "main", nil),
+		"single":      workerPrompt(task, in, "main", false, nil),
 		"part":        partPrompt(task, in, part, []domain.LadoTaskPart{part}, "b/store", nil),
 		"merge":       mergePrompt(task, in, part, "b/merge", "", part.MergeTipSHA),
 		"integration": integrationPrompt(task, in, nil, run, []domain.LadoTaskPart{part}, nil),
@@ -45,7 +45,7 @@ func TestWorkerPromptsNameThePlanFileToReadAgain(t *testing.T) {
 	// Without a plan file, as in a run with no data dir, nothing is said.
 	in.PlanFile = ""
 	for role, prompt := range map[string]string{
-		"single": workerPrompt(task, in, "main", nil),
+		"single": workerPrompt(task, in, "main", false, nil),
 		"part":   partPrompt(task, in, part, []domain.LadoTaskPart{part}, "b/store", nil),
 	} {
 		if strings.Contains(prompt, "read that file again") {

@@ -19,6 +19,10 @@ import (
 func wantPrompt() string {
 	return "You are implementing a plan the developer approved in LADO for github:acme/app#12: Fix the login timeout.\n" +
 		"Follow the approved plan below and keep to its scope. When you open the pull request, link the issue in its description (for example \"Closes #12\").\n" +
+		"Your session branch is the branch your worktree is on when you start: read it with `git branch --show-current` before you change anything. " +
+		"Commit on that branch, push it under the same name (`git push -u origin <that branch>`; on GitLab, the push with the merge request options below is that push) and open the pull request from it. " +
+		"Do not make a new branch or switch to another one, even where AO's general instructions suggest a sibling branch for a pull request: in a LADO run these instructions come first. " +
+		"LADO tracks only a pull request opened from the session branch; one opened from another branch stays untracked, and the task stays running.\n" +
 		"If `gh` is not installed or not logged in, push the branch you work on and run " +
 		"`ao report --needs-input --note \"<branch> pushed; gh unavailable, please open the pull request\"`: " +
 		"a pull request the developer opens from that branch is tracked as this session's.\n\n" +
@@ -689,8 +693,13 @@ func TestBaseCheckFindsTheBranchAOStartsFrom(t *testing.T) {
 		if got := f.branches.calls(); !reflect.DeepEqual(got, want) {
 			t.Fatalf("asked for the base of %v, want %v", got, want)
 		}
-		if n := len(f.sessions.spawned()); n != 1 {
+		spawned := f.sessions.spawned()
+		if n := len(spawned); n != 1 {
 			t.Fatalf("spawned %d workers, want 1", n)
+		}
+		// Each child repository has its own session branch (#71).
+		if !strings.Contains(spawned[0].Prompt, "`git -C <folder> branch --show-current`") {
+			t.Errorf("a workspace worker's prompt does not ask for each repository's session branch:\n%s", spawned[0].Prompt)
 		}
 	})
 

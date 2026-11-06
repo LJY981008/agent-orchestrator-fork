@@ -17,8 +17,10 @@ import (
 // for (decision k of the step 8 plan). AO appends the pinned issue, which
 // the spawn passes as its issue context, and the worker's system prompt
 // carries the snapshot's rule text. base is the branch the dispatch resolved
-// as the task's base, which a GitLab merge request targets (#20).
-func workerPrompt(task domain.LadoTask, in ladotask.RunInput, base string, checks []domain.LadoCheckCommand) string {
+// as the task's base, which a GitLab merge request targets (#20). workspace
+// says the task's project is a workspace, whose child repositories each have
+// their own session branch (#71).
+func workerPrompt(task domain.LadoTask, in ladotask.RunInput, base string, workspace bool, checks []domain.LadoCheckCommand) string {
 	example := ""
 	if id, err := domain.ParseLadoIssueRef(task.IssueRef); err == nil {
 		if n := domain.LadoIssueNumber(id); n > 0 {
@@ -34,6 +36,7 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, base string, check
 		// The prompt does not know each repository's base branch.
 		cr = changeRequest{refspec: "HEAD", multiRepo: true}
 	}
+	b.WriteString(sessionBranchParagraph(sessionBranch{workspace: workspace}))
 	b.WriteString(changeRequestParagraph(task, cr))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "## Approved plan (revision %d, sha256 %s)\n\n", in.Revision.Number, shortSHA(in.Revision.SHA256))
