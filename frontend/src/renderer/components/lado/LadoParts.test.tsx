@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +15,7 @@ vi.mock("@tanstack/react-router", async (original) => ({
 vi.mock("../../lib/lado", async (original) => ({
 	...(await original<typeof import("../../lib/lado")>()),
 	fetchLadoTaskParts: vi.fn(),
+	fetchLadoTaskUsage: vi.fn(),
 }));
 
 function planContent(change: Partial<lado.LadoPlan["plan"]> = {}): lado.LadoPlan["plan"] {
@@ -71,6 +72,38 @@ describe("LadoPlanParts", () => {
 		expect(screen.queryByTestId("lado-plan-unsplit")).not.toBeInTheDocument();
 		expect(screen.queryByTestId("lado-plan-parts")).not.toBeInTheDocument();
 	});
+
+	// #69: the sizing warnings, which do not block the approval.
+	it("warns above the parts about a small plan split into parts", () => {
+		renderWithClient(<LadoPlanParts content={planContent({ warnings: ["split_small_plan"] })} />);
+		const warning = screen.getByTestId("lado-plan-split-small");
+		expect(warning).toHaveAttribute("role", "note");
+		expect(warning).toHaveTextContent("one worker would cost less");
+		// Above the list of phases.
+		expect(warning.compareDocumentPosition(screen.getAllByTestId("lado-plan-phase")[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(screen.queryAllByTestId("lado-plan-part-warning")).toHaveLength(0);
+	});
+
+	it("warns under a part about each sizing limit it is over", () => {
+		const content = planContent();
+		content.parts[0] = {
+			...content.parts[0]!,
+			warnings: [
+				{ code: "part_many_steps", value: 5, limit: 4 },
+				{ code: "part_many_files", value: 201, limit: 200 },
+			],
+		};
+		content.parts[1] = { ...content.parts[1]!, warnings: [{ code: "part_many_paths", value: 9, limit: 8 }] };
+		renderWithClient(<LadoPlanParts content={content} />);
+		const rows = screen.getAllByTestId("lado-plan-part");
+		const api = within(rows[0]!).getAllByTestId("lado-plan-part-warning");
+		expect(api.map((row) => row.dataset.code)).toEqual(["part_many_steps", "part_many_files"]);
+		expect(api[0]).toHaveTextContent("This part has 5 steps; a part should have at most 4.");
+		expect(api[1]).toHaveTextContent("201 files sit under this part's paths; a part should cover at most 200.");
+		expect(within(rows[1]!).getByTestId("lado-plan-part-warning")).toHaveTextContent("This part has 9 affected paths; a part should have at most 8.");
+		expect(within(rows[2]!).queryByTestId("lado-plan-part-warning")).not.toBeInTheDocument();
+		expect(screen.queryByTestId("lado-plan-split-small")).not.toBeInTheDocument();
+	});
 });
 
 const runningTask: lado.LadoTask = {
@@ -95,9 +128,46 @@ const partsRun: lado.LadoTaskParts = {
 	],
 };
 
+function sessionUsage(sessionId: string, change: Partial<lado.LadoSessionUsage>, costNanos = 0): lado.LadoSessionUsage {
+	return {
+		sessionId,
+		role: "part",
+		attempt: 1,
+		compactions: 0,
+		contextUsed: 0,
+		contextWindow: 200_000,
+		incomplete: false,
+		usageMissing: false,
+		totals: {
+			inputTokens: 0,
+			cachedInputTokens: 0,
+			outputTokens: 0,
+			costNanos,
+			subagentInputTokens: 0,
+			subagentOutputTokens: 0,
+			subagentCostNanos: 0,
+		},
+		...change,
+	};
+}
+
+const usageSummary: lado.LadoTaskUsageSummary = {
+	taskId: "lado-task-1",
+	title: "Add login",
+	compactions: 0,
+	elapsedMs: 0,
+	endReason: "in_progress",
+	endedAt: "2026-10-29T09:30:00Z",
+	inProgress: true,
+	incomplete: false,
+	sessionsMissing: 0,
+	totals: sessionUsage("", {}).totals,
+};
+
 describe("LadoPartsProgress", () => {
 	beforeEach(() => {
 		vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue(partsRun);
+		vi.mocked(lado.fetchLadoTaskUsage).mockRejectedValue(new Error("no usage"));
 	});
 
 	it("shows each part's state, why it waits, its commits and its workers, then the integration", async () => {
@@ -164,10 +234,57 @@ describe("LadoPartsProgress", () => {
 		expect(within(rows[1]!).getByTestId("lado-part-merge-repo")).toHaveTextContent("Merge conflict in front");
 	});
 
+	// #69: the measure each part's row shows, to tune the sizing limits by.
+	it("adds up each part's compactions and cost from the sessions of the run it shows", async () => {
+		vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({ ...partsRun, queueEntryId: "lado-queue-2" });
+		vi.mocked(lado.fetchLadoTaskUsage).mockResolvedValue({
+			task: usageSummary,
+			sessions: [
+				sessionUsage("demo-1", { role: "designer" }, 9_000_000_000),
+				// An earlier approval's run of a part with the same id.
+				sessionUsage("demo-2", { partId: "api", queueEntryId: "lado-queue-1", compactions: 7 }, 20_000_000_000),
+				sessionUsage("demo-8", { partId: "api", queueEntryId: "lado-queue-2", compactions: 1 }, 1_500_000_000),
+				// A retry of the same part in the run shown counts too.
+				sessionUsage("demo-10", { partId: "api", queueEntryId: "lado-queue-2", attempt: 2, compactions: 2 }, 1_000_000_000),
+				sessionUsage("demo-9", { partId: "web", queueEntryId: "lado-queue-2" }, 2_000_000),
+				// The merge worker's cost is not the part's.
+				sessionUsage("demo-11", { role: "merge", partId: "web", queueEntryId: "lado-queue-2", compactions: 3 }, 4_000_000_000),
+			],
+		});
+		renderWithClient(<LadoPartsProgress task={runningTask} onClose={() => undefined} />);
+		await waitFor(() => expect(screen.getAllByTestId("lado-part-measure")[0]).toHaveTextContent("1 steps · 3 compactions · $2.50"));
+		expect(lado.fetchLadoTaskUsage).toHaveBeenCalledWith("lado-task-1");
+		const measures = screen.getAllByTestId("lado-part-measure");
+		expect(measures[1]).toHaveTextContent("1 steps · 0 compactions · <$0.01");
+		// A part no session ran yet.
+		expect(measures[2]).toHaveTextContent("1 steps · 0 compactions · $0.00");
+	});
+
+	it("shows only the steps without the task's usage or the run's queue entry", async () => {
+		renderWithClient(<LadoPartsProgress task={runningTask} onClose={() => undefined} />);
+		await screen.findAllByTestId("lado-part");
+		await waitFor(() => expect(lado.fetchLadoTaskUsage).toHaveBeenCalled());
+		for (const measure of screen.getAllByTestId("lado-part-measure")) {
+			expect(measure).toHaveTextContent(/^1 steps$/);
+		}
+		cleanup();
+
+		// The usage reads, but the parts response names no run.
+		vi.mocked(lado.fetchLadoTaskUsage).mockResolvedValue({
+			task: usageSummary,
+			sessions: [sessionUsage("demo-8", { partId: "api", queueEntryId: "lado-queue-2", compactions: 1 }, 1_500_000_000)],
+		});
+		renderWithClient(<LadoPartsProgress task={runningTask} onClose={() => undefined} />);
+		await screen.findAllByTestId("lado-part");
+		await waitFor(() => expect(lado.fetchLadoTaskUsage).toHaveBeenCalledTimes(2));
+		expect(screen.getAllByTestId("lado-part-measure")[0]).toHaveTextContent(/^1 steps$/);
+	});
+
 	it("reads nothing for a task without parts", () => {
 		const { parts: _parts, ...single } = runningTask;
 		const { container } = renderWithClient(<LadoPartsProgress task={single} onClose={() => undefined} />);
 		expect(container).toBeEmptyDOMElement();
 		expect(lado.fetchLadoTaskParts).not.toHaveBeenCalled();
+		expect(lado.fetchLadoTaskUsage).not.toHaveBeenCalled();
 	});
 });
