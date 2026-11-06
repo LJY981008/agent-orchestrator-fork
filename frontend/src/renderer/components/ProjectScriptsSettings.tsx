@@ -18,6 +18,7 @@ import { cloudProjectSettingsQueryKey } from "./CloudProjectSettingsForm";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { hasWorkspaceAssets, WorkspaceAssetsSettings } from "./WorkspaceAssetsSettings";
 
 type Project = components["schemas"]["Project"];
 type ScriptKind = "setup" | "cleanup";
@@ -54,11 +55,18 @@ export function ProjectScriptsSettings({ projectId, onSaveState }: { projectId: 
 		});
 		if (error) throw new Error(apiErrorMessage(error));
 	};
-	return <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
+	const editor = <ScriptsEditor key={projectId} projectId={project.id} scratch={scratch} postCreate={localSteps(project.config?.postCreate)} preRemove={localSteps(project.config?.preRemove)}
 		save={save} onSaveState={onSaveState} onSaved={() => {
 			void client.invalidateQueries({ queryKey: ["project", projectId] });
 			void client.invalidateQueries({ queryKey: workspaceQueryKey });
 		}} />;
+	if (!hasWorkspaceAssets(project)) return editor;
+	// LADO #22: a workspace project's folder copy settings sit under the scripts,
+	// outside their form: they save on their own.
+	return <div className="flex flex-col gap-6">
+		{editor}
+		<WorkspaceAssetsSettings project={project} />
+	</div>;
 }
 
 /**
