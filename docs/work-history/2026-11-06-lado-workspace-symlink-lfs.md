@@ -45,7 +45,7 @@
 - golangci-lint v2.13.2: 0 issues.
 - `npm run api` 뒤 openapi.yaml·schema.ts 차이: 없음.
 - vitest 6개 파일(LadoVerificationSection, lado-errors, WorkspaceAssetsSettings, ProjectScriptsSettings, CreateProjectFlow, renderer-coverage): 154개 통과.
-- `npm run frontend:typecheck`: 결과는 PR 설명에 적는다.
+- `npm run frontend:typecheck`: 통과.
 - `npm run lint` 는 이 컴퓨터에서 환경 탓 5개 패키지 실패로 golangci-lint 전에 멈추므로 CI 에서 본다.
 
 ## 남은 질문 (계획에서 이어짐)
