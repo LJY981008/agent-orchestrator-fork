@@ -34,7 +34,10 @@ const (
 // the items it told about. A failure of the check commands waits until none
 // of them runs or can start, so that one message names every command that
 // failed. A message that could not be sent goes out on a later pass.
-func (s *Service) requestFixes(ctx context.Context, in headInputs, ev evaluation, notified []string) []string {
+// A base_overlap request is not sent, nor counted as sent, once host says
+// the PR merged (#75): its own merge may have moved the base, and a merged
+// PR has nothing to take in. Without an answer it is sent as before.
+func (s *Service) requestFixes(ctx context.Context, in headInputs, ev evaluation, notified []string, host *hostMerges) []string {
 	if s.deps.Sender == nil || !in.live {
 		return notified
 	}
@@ -44,6 +47,11 @@ func (s *Service) requestFixes(ctx context.Context, in headInputs, ev evaluation
 			continue
 		}
 		if item.Kind == domain.LadoVerifyCommands && !ev.commandsSettled {
+			continue
+		}
+		if item.Kind == domain.LadoVerifyBaseBranch && host.mergedOnHost(ctx, in.exec.PR.URL) {
+			s.deps.Log.Info("LADO did not ask a worker to take in the base: the host merged the pull request",
+				"session", in.exec.SessionID, "pr", in.exec.PR.URL, "head", in.head)
 			continue
 		}
 		message, err := s.fixMessage(in, ev, item)
