@@ -7017,14 +7017,14 @@ export interface components {
             checkedAt?: null | string;
             /** @description Why the rules could not be read, without secrets. */
             error?: string;
-            /** @description What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. */
+            /** @description What the rules lack, for unprotected. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed). */
             missing: string[];
             /** @description Canonical id of the repository, such as github:owner/repo. */
             repository: string;
             /** @description The checks the rules require, lado/integration left out. */
             requiredChecks: string[];
             /**
-             * @description protected: the rules require a pull request, the lado/integration status, no force pushes and no deletion; unknown: they could not be read; unsupported: LADO does not read GitLab's protection, it only detects.
+             * @description protected: on GitHub the rules require a pull request, the lado/integration status, no force pushes and no deletion; on GitLab the branch is protected with push allowed to no one and no force push, the project requires a succeeding pipeline and does not count skipped ones, and LADO can post its status; unknown: they could not be read; unsupported: the GitLab client reads no protection, LADO only detects.
              * @enum {string}
              */
             state: "protected" | "unprotected" | "unknown" | "unsupported";
@@ -7426,7 +7426,7 @@ export interface components {
             /** Format: date-time */
             statusPostedAt?: null | string;
             /**
-             * @description How posting the lado/integration commit status went; not_applicable on GitLab, which gets none.
+             * @description How posting the lado/integration commit status went; not_applicable on GitLab approvals given before LADO posted statuses there.
              * @enum {string}
              */
             statusState: "pending" | "posted" | "failed" | "not_applicable";
@@ -9119,7 +9119,7 @@ export interface components {
             fileVersion?: number;
             /** @description review: the reviewer harness. */
             harness?: string;
-            /** @description protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. */
+            /** @description protection: what the base branch's rules lack. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed). */
             missing?: string[];
             /** @description base_branch: local moves of the base branch since the run started that the remote does not hold. */
             moved?: components["schemas"]["LadoReflogEntryResponse"][];
