@@ -317,3 +317,45 @@ func TestProjectUsageListsTaskTotals(t *testing.T) {
 		t.Fatalf("unknown project err = %v, want not found", err)
 	}
 }
+
+// A task approved again runs its parts under a new queue entry with the same
+// part ids; each session carries its own execution's queue entry so the
+// parts view adds up only the run it shows (#69). Plan sessions carry none.
+func TestTaskUsageSessionsCarryTheirExecutionsQueueEntry(t *testing.T) {
+	f := newFakeStore()
+	u := seedPartsTask(f)
+	facts := f.facts[taskID]
+	facts.Approvals = append(facts.Approvals, domain.LadoTimingApproval{ID: "ap2", At: t0.Add(6 * time.Hour)})
+	facts.Executions = append(facts.Executions,
+		domain.LadoTimingExecution{SessionID: "part-a-3", Role: domain.LadoRolePart, PartID: "a", ApprovalID: "ap2", QueueEntryID: "q2", StartedAt: t0.Add(7 * time.Hour)},
+		domain.LadoTimingExecution{SessionID: "part-a-4", Role: domain.LadoRolePart, PartID: "a", ApprovalID: "ap2", QueueEntryID: "q2", StartedAt: t0.Add(8 * time.Hour)},
+	)
+	f.facts[taskID] = facts
+	u["part-a-3"] = usageOf(8_000_000_000, 800, 80, 8)
+	u["part-a-4"] = usageOf(9_000_000_000, 900, 90, 9)
+
+	got, err := newService(f, u, t0.Add(9*time.Hour)).TaskUsage(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("TaskUsage: %v", err)
+	}
+	want := map[domain.SessionID]domain.LadoQueueEntryID{
+		"design-2": "", "critic-1": "", "design-1": "", "critic-2": "",
+		"part-a-1": "q1", "part-a-2": "q1", "merge-a": "q1", "integ-1": "q1",
+		"part-a-3": "q2", "part-a-4": "q2",
+	}
+	if len(got.Sessions) != len(want) {
+		t.Fatalf("sessions = %+v, want %d", got.Sessions, len(want))
+	}
+	var q2Part int64
+	for _, s := range got.Sessions {
+		if q, ok := want[s.SessionID]; !ok || s.QueueEntryID != q {
+			t.Errorf("session %s queue entry = %q, want %q", s.SessionID, s.QueueEntryID, q)
+		}
+		if s.Role == domain.LadoSessionPart && s.PartID == "a" && s.QueueEntryID == "q2" {
+			q2Part += s.CostNanos
+		}
+	}
+	if q2Part != 17_000_000_000 {
+		t.Errorf("part a of q2 cost %d, want only q2's two sessions", q2Part)
+	}
+}

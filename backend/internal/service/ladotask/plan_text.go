@@ -96,21 +96,30 @@ parts:
 
 <the plan in prose: the approach, the decisions made and the questions left open>`
 
-// partsGuidance asks for a plan split into parallel parts by default, and
-// says how to split it (docs/LJY-PRD/TDD.md §5.4).
-const partsGuidance = `Plan for parallel parts by default. LADO runs each part in its own worker at the same time, merges the parts into one integration branch as they finish, ` +
+// partsGuidance says when to split a plan into parallel parts and how
+// (docs/LJY-PRD/TDD.md §5.4). It starts with the work that stays in one
+// worker, and its sizes are the domain's part sizing limits (#69).
+var partsGuidance = fmt.Sprintf(`Leave parts out when the work has at most %[1]d steps or changes about %[2]d files: `+
+	`each worker starts with 80,000 to 110,000 tokens of context and the integration worker reads the whole work again, so one worker costs less than parts. `+
+	`Plan for parallel parts by default when the work has more than %[1]d steps. LADO runs each part in its own worker at the same time, merges the parts into one integration branch as they finish, `+
 	`and then starts one integration worker that reviews the merged parts against each other, does the steps no part took, runs every check and opens the pull request.
 
 - Steps that do not touch the same files go into different parts of the same phase, which run at once.
 - A step that needs another part's result goes into a later phase: name that part in depends_on.
+- Give each part 2 to %[3]d steps in one package or one area (store, service, API, UI). Split a part of more than %[4]d steps or more than %[5]d affected_paths: a part keeps at most %[4]d steps and %[5]d paths.
+- Count the files under a part's paths with `+"`git -C <repository folder> ls-files -- <the fixed folder of the glob> | wc -l`"+`. `+
+	`Give the repository folder with -C, since a workspace root may not be a git repository, and put a glob in single quotes when you need one. `+
+	`Narrow or split a part whose paths hold more than %[6]d files. In a large repository, where `+"`git -C <repository folder> ls-files | wc -l`"+` is over %[7]d, aim for 2 steps per part.
 - Files many steps change together (locale JSON files, generated files such as schema.ts, openapi.yaml or sqlc's gen/, shared documents) belong to the integration steps or to one part.
 - Give each part narrow affected_paths. Parts whose paths overlap do not run at once.
-- Leave the steps that check, document or publish the whole work (full checks, docs, pull request) out of every part: they are the integration steps.
+- Keep a part's own tests, and documents only that part changes, in the part. Leave to the integration steps only what joins the parts: `+
+	`checking the parts against each other and wiring them together, files several parts change together, the full checks and the pull request.
 - Use 2 to 8 parts. When the work is small or can only be done in order, leave parts out and say why in one line of the plan's prose; one worker then does the whole plan.
 - In a workspace project, a plan whose paths lie in more than one child repository lists their folders in repos, in the order their pull requests merge (the database or API repository first): LADO keeps an integration branch in each of them, and the work opens one pull request per repository that changed. A plan with parts or a repos list keeps its affected_paths and every part's inside those repositories; without repos, a plan with parts stays inside the one repository its paths lie in, or the repository that holds the issue.
 - A part whose worker reports done without a commit stops the run, unless the part sets allow_empty: true.
 
-`
+`, domain.LadoPlanSmallSteps, domain.LadoPlanSmallFiles, domain.LadoPlanPartTargetSteps, domain.LadoPlanPartMaxSteps,
+	domain.LadoPlanPartMaxPaths, domain.LadoPlanPartMaxFiles, domain.LadoPlanLargeRepoFiles)
 
 // planRequestMessage is the coordination message that asks the orchestrator
 // for a plan. The snapshot itself sits in a file next to the plan, so a long

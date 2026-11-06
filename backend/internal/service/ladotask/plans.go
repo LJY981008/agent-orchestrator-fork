@@ -372,6 +372,10 @@ type PlanView struct {
 	// nil when LADO did not record it.
 	Critique domain.LadoPlanCritique
 	Metrics  *domain.LadoPlanRevisionMetrics
+	// PartFiles is the number of files under each part's affected_paths at
+	// the revision's base commit, by part id (#69). It is nil when the plan
+	// has no parts or LADO could not count them.
+	PartFiles map[string]int
 }
 
 // Plan returns one revision with its pinned content.
@@ -401,6 +405,7 @@ func (s *Service) Plan(ctx context.Context, revisionID domain.LadoPlanRevisionID
 	}
 	view.Content = string(content)
 	view.Plan, _ = domain.ParseLadoPlan(content, domain.LadoPlanExpectations{Task: task.ID, Issue: task.IssueRef})
+	view.PartFiles = s.partFiles(ctx, task, rev, view.Plan)
 	return view, nil
 }
 

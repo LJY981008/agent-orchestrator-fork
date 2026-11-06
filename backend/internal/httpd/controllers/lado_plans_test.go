@@ -239,3 +239,105 @@ func TestLadoAPI_TurningLadoModeOffChecksPresence(t *testing.T) {
 		t.Fatalf("turning LADO mode on needs no proof: status = %d, body %s", status, body)
 	}
 }
+
+// getLadoPlanContent reads GET /plans/{id} for a view holding plan and the
+// part file counts files, and returns its plan content and raw body.
+func getLadoPlanContent(t *testing.T, plan domain.LadoPlan, files map[string]int) (controllers.LadoPlanContentResponse, string) {
+	t.Helper()
+	rev := domain.LadoPlanRevision{ID: "lado-plan-1", TaskID: "lado-task-1", RequestID: "req-1", Number: 1, Source: "agent", SHA256: strings.Repeat("a", 64), CreatedAt: ladoTaskTime}
+	svc := &fakeLadoTaskService{
+		task:     sampleLadoTask(),
+		planView: ladotask.PlanView{Task: sampleLadoTask(), Revision: rev, Content: "---\n---\n", Plan: plan, PartFiles: files, Latest: true},
+	}
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoTasks: svc})
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/plans/lado-plan-1", "")
+	if status != http.StatusOK {
+		t.Fatalf("status = %d, body %s", status, body)
+	}
+	return decodeLadoJSON[controllers.LadoPlanResponse](t, body).Plan, string(body)
+}
+
+func ladoPlanSteps(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "step"
+	}
+	return out
+}
+
+func TestLadoAPI_PlanPartsCarryTheirSizingWarnings(t *testing.T) {
+	plan := domain.LadoPlan{
+		Steps: ladoPlanSteps(10),
+		Parts: []domain.LadoPlanPart{
+			{ID: "store", Title: "Store", Steps: []int{1, 2, 3, 4, 5}, AffectedPaths: []string{"backend/internal/store/**"}},
+			{ID: "service", Title: "Service", Steps: []int{6, 7}, AffectedPaths: []string{"backend/internal/service/**"}},
+			{ID: "ui", Title: "UI", Steps: []int{8, 9}, AffectedPaths: []string{"frontend/src/renderer/**"}},
+		},
+	}
+	got, _ := getLadoPlanContent(t, plan, map[string]int{"store": 30, "service": 201, "ui": 200})
+	if len(got.Parts) != 3 {
+		t.Fatalf("parts = %+v", got.Parts)
+	}
+	want := map[string][]controllers.LadoPlanPartWarningResponse{
+		"store":   {{Code: domain.LadoPlanPartWarningSteps, Value: 5, Limit: domain.LadoPlanPartMaxSteps}},
+		"service": {{Code: domain.LadoPlanPartWarningFiles, Value: 201, Limit: domain.LadoPlanPartMaxFiles}},
+		"ui":      {},
+	}
+	for _, part := range got.Parts {
+		if part.Warnings == nil {
+			t.Fatalf("part %s warnings are null, want an array", part.ID)
+		}
+		w := want[part.ID]
+		if len(part.Warnings) != len(w) {
+			t.Fatalf("part %s warnings = %+v, want %+v", part.ID, part.Warnings, w)
+		}
+		for i := range w {
+			if part.Warnings[i] != w[i] {
+				t.Fatalf("part %s warnings = %+v, want %+v", part.ID, part.Warnings, w)
+			}
+		}
+	}
+	if len(got.Warnings) != 0 {
+		t.Fatalf("plan warnings = %v", got.Warnings)
+	}
+}
+
+func TestLadoAPI_PlanPartsWithoutFileCountsLeaveFileWarningsOut(t *testing.T) {
+	plan := domain.LadoPlan{
+		Steps: ladoPlanSteps(3),
+		Parts: []domain.LadoPlanPart{
+			{ID: "back", Title: "Back", Steps: []int{1, 2}, AffectedPaths: []string{"backend/**"}},
+			{ID: "front", Title: "Front", Steps: []int{3}, AffectedPaths: []string{"frontend/**"}},
+		},
+	}
+	got, body := getLadoPlanContent(t, plan, nil)
+	if len(got.Warnings) != 1 || got.Warnings[0] != domain.LadoPlanWarningSmallSplit {
+		t.Fatalf("plan warnings = %v, want [%s]", got.Warnings, domain.LadoPlanWarningSmallSplit)
+	}
+	for _, part := range got.Parts {
+		if len(part.Warnings) != 0 {
+			t.Fatalf("part %s warnings = %+v", part.ID, part.Warnings)
+		}
+	}
+	if !strings.Contains(body, `"warnings":[]`) {
+		t.Fatalf("part warnings are not an empty array: %s", body)
+	}
+}
+
+func TestLadoAPI_PlanWithoutPartsReadsAsBefore(t *testing.T) {
+	for _, tc := range []struct {
+		steps    int
+		warnings []string
+	}{{6, []string{domain.LadoPlanWarningUnsplit}}, {4, nil}} {
+		got, body := getLadoPlanContent(t, domain.LadoPlan{Steps: ladoPlanSteps(tc.steps), AffectedPaths: []string{"backend/**"}}, nil)
+		if got.Parts == nil || len(got.Parts) != 0 || got.IntegrationSteps == nil || len(got.IntegrationSteps) != 0 {
+			t.Fatalf("%d steps: parts = %+v, integration steps = %v", tc.steps, got.Parts, got.IntegrationSteps)
+		}
+		if got.Warnings == nil || len(got.Warnings) != len(tc.warnings) || (len(tc.warnings) == 1 && got.Warnings[0] != tc.warnings[0]) {
+			t.Fatalf("%d steps: warnings = %v, want %v", tc.steps, got.Warnings, tc.warnings)
+		}
+		if !strings.Contains(body, `"parts":[]`) {
+			t.Fatalf("%d steps: parts are not an empty array: %s", tc.steps, body)
+		}
+	}
+}

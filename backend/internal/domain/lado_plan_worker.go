@@ -430,7 +430,9 @@ type LadoPlanReviewDecision struct {
 }
 
 // DecideLadoPlanReview applies the settings to a draft. match reports whether
-// a glob matches a path; the services pass the matcher of affected paths.
+// a glob matches a path; the services pass the matcher of affected paths. A
+// draft with a sizing warning (a small plan split, a part of too many steps
+// or paths) is never skipped.
 func DecideLadoPlanReview(plan LadoPlan, s LadoPlanReviewSettings, match func(pattern, path string) bool) LadoPlanReviewDecision {
 	kinds := slices.Clone(plan.ChangeKinds)
 	for _, kind := range LadoChangeKinds {
@@ -446,7 +448,9 @@ func DecideLadoPlanReview(plan LadoPlan, s LadoPlanReviewSettings, match func(pa
 	}
 	slices.SortFunc(kinds, func(a, b string) int { return slices.Index(LadoChangeKinds, a) - slices.Index(LadoChangeKinds, b) })
 	decision := LadoPlanReviewDecision{Kinds: kinds}
-	if !s.Skip || len(plan.AffectedPaths) > s.MaxPaths || len(kinds) > 0 {
+	// A draft whose parts break the sizing limits is reviewed, so the critic
+	// can point at the split (#69).
+	if !s.Skip || len(plan.AffectedPaths) > s.MaxPaths || len(kinds) > 0 || plan.sizeWarned() {
 		return decision
 	}
 	decision.Skip = true
