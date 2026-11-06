@@ -237,8 +237,14 @@ type PromptSource struct {
 	Knowledge interface {
 		Index(ctx context.Context, projectID domain.ProjectID) (ladoknowledge.Index, error)
 	}
-	// Log records a knowledge index LADO could not read; nil uses
-	// slog.Default.
+	// References lists the skills, agents and instruction files the
+	// project's repository tracks (service/ladosetup, #29); nil adds no
+	// project skills and agents section.
+	References interface {
+		ProjectReferences(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoProjectReference, error)
+	}
+	// Log records a knowledge index or a reference list LADO could not read;
+	// nil uses slog.Default.
 	Log *slog.Logger
 }
 
@@ -337,7 +343,8 @@ func (p PromptSource) CodexSection(ctx context.Context, projectID domain.Project
 }
 
 // Section is the text of Standing: CodexSection, then OrchestratorSection
-// for an orchestrator or WorkerSection for a worker, then KnowledgeSection.
+// for an orchestrator or WorkerSection for a worker, then KnowledgeSection,
+// then ReferencesSection.
 func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
 	standing, err := p.Standing(ctx, kind, projectID, sessionID, harness)
 	return standing.Text, err
@@ -346,8 +353,10 @@ func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, proj
 // Standing is the session manager's LADO section of a session's standing
 // instructions (sessionmanager.LadoPromptSection). Its text is CodexSection,
 // then OrchestratorSection for an orchestrator or WorkerSection for a
-// worker, then KnowledgeSection. It replaces AO's orchestrator role only for an orchestrator that
-// gets LADO's orchestrator section, that is in a project in LADO mode.
+// worker, then KnowledgeSection, then ReferencesSection (#29). It replaces
+// AO's orchestrator role only for an orchestrator that gets LADO's
+// orchestrator section, that is in a project in LADO mode; the other
+// sections never decide that.
 func (p PromptSource) Standing(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (domain.LadoStandingSection, error) {
 	var section string
 	var err error
@@ -367,7 +376,9 @@ func (p PromptSource) Standing(ctx context.Context, kind domain.SessionKind, pro
 		return domain.LadoStandingSection{}, err
 	}
 	var parts []string
-	for _, part := range []string{codex, section, p.KnowledgeSection(ctx, kind, projectID, sessionID)} {
+	knowledge := p.KnowledgeSection(ctx, kind, projectID, sessionID)
+	references := p.ReferencesSection(ctx, kind, projectID, sessionID, harness)
+	for _, part := range []string{codex, section, knowledge, references} {
 		if part != "" {
 			parts = append(parts, part)
 		}
