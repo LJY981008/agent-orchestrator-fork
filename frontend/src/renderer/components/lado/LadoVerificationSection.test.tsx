@@ -548,6 +548,50 @@ test("names a deleted local base branch and a check taken from one app only", ()
 	expect(within(row("protection")).getByText(/set the check's source to “Any source”/)).toBeInTheDocument();
 });
 
+// #21: a GitLab branch lacks protected-branch and project settings, not rulesets.
+test("names what a GitLab base branch lacks in GitLab's words", () => {
+	renderSection(
+		execution({
+			verification: verification({
+				items: items({
+					protection: {
+						outcome: "confirm",
+						code: "unprotected",
+						details: { provider: "gitlab", repo: "group/app", branch: "main", missing: ["push_access", "force_push", "integration_status"] },
+					},
+				}),
+			}),
+		}),
+	);
+	expect(
+		within(row("protection")).getByText(
+			"Not protected: GitLab settings missing Pushes allowed to no one, Force pushes blocked, LADO's lado/integration status",
+		),
+	).toBeInTheDocument();
+});
+
+// #21: AO's merge route says why it refused.
+test("says a merge was refused because the head has no CI pipeline, or names the blockers", async () => {
+	vi.mocked(lado.mergeLadoPR).mockRejectedValueOnce(
+		new lado.LadoApiError("PR merge preconditions are not met", "PR_PRECONDITIONS_UNMET", { blockers: ["ci_no_pipeline"] }),
+	);
+	renderSection(execution({ integration: approval }));
+	fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+	expect(await screen.findByRole("alert")).toHaveTextContent(
+		"This commit has no CI pipeline and no integration approval in LADO, so it cannot be merged.",
+	);
+	cleanup();
+
+	vi.mocked(lado.mergeLadoPR).mockRejectedValueOnce(
+		new lado.LadoApiError("PR merge preconditions are not met", "PR_PRECONDITIONS_UNMET", { blockers: ["ci_no_pipeline", "not_mergeable"] }),
+	);
+	renderSection(execution({ integration: approval }));
+	fireEvent.click(screen.getByRole("button", { name: "Merge" }));
+	expect(await screen.findByRole("alert")).toHaveTextContent(
+		"The pull request cannot be merged yet: this commit has no CI pipeline; the host is blocking the merge.",
+	);
+});
+
 // #59: the PR is open in another repository than the task's issue.
 test("names a PR repository outside the workspace, and a base that is not its default branch", () => {
 	const { unmount } = renderSection(

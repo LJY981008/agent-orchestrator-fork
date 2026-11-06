@@ -44,6 +44,31 @@ const (
 // view warns when it names no parts.
 const LadoPlanLargeSteps = 6
 
+// Part sizing (#69). The values come from measured part runs: parts of 2 to 3
+// steps in one area ran without compaction, parts of 5 or more steps over 13
+// or more paths compacted 6 to 16 times, and parts of one step cost more to
+// start than their work.
+const (
+	// LadoPlanSmallSteps: a plan of at most this many steps names no parts;
+	// one worker is cheaper than parts plus an integration worker.
+	LadoPlanSmallSteps = 4
+	// LadoPlanSmallFiles: a plan changing about this many files names no
+	// parts either.
+	LadoPlanSmallFiles = 5
+	// LadoPlanPartTargetSteps is the most steps a part aims for.
+	LadoPlanPartTargetSteps = 3
+	// LadoPlanPartMaxSteps: a part of more steps is warned about.
+	LadoPlanPartMaxSteps = 4
+	// LadoPlanPartMaxPaths: a part of more affected paths is warned about.
+	LadoPlanPartMaxPaths = 8
+	// LadoPlanPartMaxFiles: a part whose paths match more files is warned
+	// about.
+	LadoPlanPartMaxFiles = 200
+	// LadoPlanLargeRepoFiles: a repository of more files is large; its parts
+	// aim for 2 steps.
+	LadoPlanLargeRepoFiles = 10000
+)
+
 // Plan problem codes of a parts list. Field is "parts"; Detail names the part
 // and the offending value.
 const (
@@ -84,6 +109,25 @@ const (
 // worker runs it from start to end. A warning never blocks the approval.
 const LadoPlanWarningUnsplit = "unsplit_large_plan"
 
+// LadoPlanWarningSmallSplit warns of a small plan that names parts: the
+// workers' start and the integration worker cost more than the work.
+const LadoPlanWarningSmallSplit = "split_small_plan"
+
+// Part warning codes (#69): a part larger than the sizing limits. Like the
+// plan warnings they never block the approval.
+const (
+	LadoPlanPartWarningSteps = "part_many_steps"
+	LadoPlanPartWarningPaths = "part_many_paths"
+	LadoPlanPartWarningFiles = "part_many_files"
+)
+
+// LadoPlanPartWarning is one part warning: the part's Value over the Limit.
+type LadoPlanPartWarning struct {
+	Code  string
+	Value int
+	Limit int
+}
+
 // ladoPartID is the form of a part id: lower case, it starts a branch name
 // segment.
 var ladoPartID = regexp.MustCompile(`^[a-z][a-z0-9-]{0,30}$`)
@@ -101,12 +145,50 @@ func ValidLadoPartID(id string) bool {
 }
 
 // Warnings lists what the plan view warns about, without blocking the
-// approval: a large plan without parts.
+// approval: a large plan without parts, or a small plan with them.
 func (p LadoPlan) Warnings() []string {
 	if len(p.Parts) == 0 && len(p.Steps) >= LadoPlanLargeSteps {
 		return []string{LadoPlanWarningUnsplit}
 	}
+	if len(p.Parts) > 0 && len(p.Steps) <= LadoPlanSmallSteps {
+		return []string{LadoPlanWarningSmallSplit}
+	}
 	return nil
+}
+
+// PartWarnings lists, by part id, the parts larger than the sizing limits.
+// files holds the number of files each part's paths match; a part missing
+// from it, or a nil files, gets no file warning. Parts without warnings are
+// left out; nil means none.
+func (p LadoPlan) PartWarnings(files map[string]int) map[string][]LadoPlanPartWarning {
+	var out map[string][]LadoPlanPartWarning
+	for _, part := range p.Parts {
+		var warnings []LadoPlanPartWarning
+		if n := len(part.Steps); n > LadoPlanPartMaxSteps {
+			warnings = append(warnings, LadoPlanPartWarning{Code: LadoPlanPartWarningSteps, Value: n, Limit: LadoPlanPartMaxSteps})
+		}
+		if n := len(part.AffectedPaths); n > LadoPlanPartMaxPaths {
+			warnings = append(warnings, LadoPlanPartWarning{Code: LadoPlanPartWarningPaths, Value: n, Limit: LadoPlanPartMaxPaths})
+		}
+		if n, ok := files[part.ID]; ok && n > LadoPlanPartMaxFiles {
+			warnings = append(warnings, LadoPlanPartWarning{Code: LadoPlanPartWarningFiles, Value: n, Limit: LadoPlanPartMaxFiles})
+		}
+		if len(warnings) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string][]LadoPlanPartWarning{}
+		}
+		out[part.ID] = warnings
+	}
+	return out
+}
+
+// sizeWarned reports whether the plan's parts break a sizing limit LADO can
+// see in a draft: a small plan split, or a part of too many steps or paths.
+// File counts need the repository and are left out.
+func (p LadoPlan) sizeWarned() bool {
+	return slices.Contains(p.Warnings(), LadoPlanWarningSmallSplit) || len(p.PartWarnings(nil)) > 0
 }
 
 // IntegrationSteps returns the 1-based numbers of the steps no part takes:

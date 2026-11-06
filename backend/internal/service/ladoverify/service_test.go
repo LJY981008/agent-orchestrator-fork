@@ -402,7 +402,9 @@ func TestTickRetriesStatusPosting(t *testing.T) {
 	})
 	f.host.setPostErr(errors.New("github tracker: post the lado/integration status: the host answered 500: token ghp_" + strings.Repeat("a", 36) + " refused\nretry later"))
 	f.store.addApproval(domain.LadoIntegrationApproval{ID: "approval-gh", ExecutionSessionID: one.SessionID, PRURL: one.PR.URL, HeadSHA: verifyHead1, StatusState: domain.LadoIntegrationStatusPending})
-	f.store.addApproval(domain.LadoIntegrationApproval{ID: "approval-gl", ExecutionSessionID: lab.SessionID, PRURL: lab.PR.URL, HeadSHA: verifyHead3, StatusState: domain.LadoIntegrationStatusPending})
+	// A GitLab approval given before LADO posted statuses there (#21) is
+	// not posted, and its head takes no waiting status: it is approved.
+	f.store.addApproval(domain.LadoIntegrationApproval{ID: "approval-gl", ExecutionSessionID: lab.SessionID, PRURL: lab.PR.URL, HeadSHA: verifyHead3, StatusState: domain.LadoIntegrationStatusNotApplicable})
 
 	f.tick()
 	posts := f.host.postsMade()
@@ -934,6 +936,21 @@ type verifyStore struct {
 	// reported holds the reads and refusals of reported PRs (#71,
 	// reported_test.go).
 	reported verifyReported
+	// sourceBranches are the PRs' source branches, by URL, and
+	// onApprovalsRead runs after each read of a head's integration
+	// approvals, outside the lock (gitlab_status_test.go).
+	sourceBranches  map[string]string
+	onApprovalsRead func(session domain.SessionID, prURL, head string)
+}
+
+// setSourceBranch gives the PR at url its source branch.
+func (s *verifyStore) setSourceBranch(url, branch string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sourceBranches == nil {
+		s.sourceBranches = map[string]string{}
+	}
+	s.sourceBranches[url] = branch
 }
 
 func verifyKey(session domain.SessionID, head string) string { return string(session) + "@" + head }
@@ -1050,8 +1067,14 @@ func (s *verifyStore) LadoProjectChecks(context.Context, domain.ProjectID) ([]do
 func (s *verifyStore) GetPR(_ context.Context, url string) (domain.PullRequest, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	pr, ok := s.storedPRLocked(url)
+	pr.SourceBranch = s.sourceBranches[url]
+	return pr, ok, nil
+}
+
+func (s *verifyStore) storedPRLocked(url string) (domain.PullRequest, bool) {
 	if pr, ok := s.sessionPRLocked(url); ok {
-		return pr, true, nil
+		return pr, true
 	}
 	for _, exec := range s.executions {
 		if exec.PR.URL == url {
@@ -1059,10 +1082,10 @@ func (s *verifyStore) GetPR(_ context.Context, url string) (domain.PullRequest, 
 				URL: url, SessionID: exec.SessionID, Number: exec.PR.Number, HeadSHA: exec.PR.HeadSHA, TargetBranch: exec.PR.TargetBranch,
 				Title: exec.PR.Title, Merged: exec.PR.Merged, Closed: exec.PR.Closed, Provider: "github", Host: "github.com", Repo: "acme/demo",
 				BaseSHA: s.baseSHAs[url],
-			}, true, nil
+			}, true
 		}
 	}
-	return domain.PullRequest{}, false, nil
+	return domain.PullRequest{}, false
 }
 
 func (s *verifyStore) ListLadoCommitChecks(_ context.Context, prURL, commit string) ([]domain.PullRequestCheck, error) {
@@ -1756,8 +1779,11 @@ func (g *verifyGit) opsOf(dir string) []string {
 // verifyHost is the repositories' host: it answers branch rules and records
 // the commit statuses posted, refusing them while postErr is set.
 type verifyHost struct {
-	mu      sync.Mutex
-	rules   ports.LadoBranchRules
+	mu    sync.Mutex
+	rules ports.LadoBranchRules
+	// gitlab is what a GitLab repository's branches answer; nil leaves them
+	// rules.
+	gitlab  *ports.LadoGitLabProtection
 	postErr error
 	posts   []verifyPost
 	// ruleReads are the branches whose rules were read, as repo@branch.
@@ -1786,6 +1812,11 @@ func (h *verifyHost) postsMade() []verifyPost {
 	return slices.Clone(h.posts)
 }
 
+// postsTo returns the commit statuses posted on the provider's repositories.
+func (h *verifyHost) postsTo(provider domain.TrackerProvider) []verifyPost {
+	return slices.DeleteFunc(h.postsMade(), func(p verifyPost) bool { return p.repo.Provider != provider })
+}
+
 type verifyClient struct {
 	ports.LadoRepoClient
 	host *verifyHost
@@ -1795,7 +1826,18 @@ func (c verifyClient) BranchRules(_ context.Context, repo domain.TrackerRepo, br
 	c.host.mu.Lock()
 	defer c.host.mu.Unlock()
 	c.host.ruleReads = append(c.host.ruleReads, repo.Native+"@"+branch)
+	if repo.Provider == domain.TrackerProviderGitLab && c.host.gitlab != nil {
+		protection := *c.host.gitlab
+		return ports.LadoBranchRules{GitLab: &protection}, nil
+	}
 	return c.host.rules, nil
+}
+
+// setGitLab makes GitLab repositories answer protection.
+func (h *verifyHost) setGitLab(protection *ports.LadoGitLabProtection) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.gitlab = protection
 }
 
 func (h *verifyHost) branchReads() []string {

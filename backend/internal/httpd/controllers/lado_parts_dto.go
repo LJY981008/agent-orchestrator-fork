@@ -57,11 +57,12 @@ type LadoPartRunRepoResponse struct {
 
 // LadoTaskPartsResponse is the parts run of a task's newest approval.
 type LadoTaskPartsResponse struct {
-	Branch    string                 `json:"branch,omitempty" description:"The integration branch, named the same in each of the run's repositories; omitted while the newest approval runs no parts."`
-	BaseSHA   string                 `json:"baseSha,omitempty" description:"The approved base commit the integration branch started from."`
-	HeadSHA   string                 `json:"headSha,omitempty" description:"Where LADO last moved the integration branch."`
-	StartedAt *time.Time             `json:"startedAt,omitempty"`
-	Parts     []LadoTaskPartResponse `json:"parts"`
+	QueueEntryID string                 `json:"queueEntryId,omitempty" description:"The queue entry of the run shown: the sessions of the task's usage with this queueEntryId are this run's, retries included. Omitted while the newest approval runs no parts."`
+	Branch       string                 `json:"branch,omitempty" description:"The integration branch, named the same in each of the run's repositories; omitted while the newest approval runs no parts."`
+	BaseSHA      string                 `json:"baseSha,omitempty" description:"The approved base commit the integration branch started from."`
+	HeadSHA      string                 `json:"headSha,omitempty" description:"Where LADO last moved the integration branch."`
+	StartedAt    *time.Time             `json:"startedAt,omitempty"`
+	Parts        []LadoTaskPartResponse `json:"parts"`
 	// Repos are the run's repositories (#64); the fields above are the
 	// first's.
 	Repos []LadoPartRunRepoResponse `json:"repos,omitempty" description:"The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Omitted while the newest approval runs no parts."`

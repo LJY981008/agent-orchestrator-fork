@@ -483,9 +483,9 @@ func derivedPresenceNonce(nonce string, i int) string {
 }
 
 // recordApprovals records the pending approvals with the proof and one audit
-// event in one transaction, then posts each one's status once on GitHub and
-// puts each in its result. GitLab gets no status: its approvals are
-// not_applicable. inputs are what each record was computed from: the
+// event in one transaction, then posts each one's status once, on GitHub and
+// GitLab alike (#21), and puts each in its result. inputs are what each
+// record was computed from: the
 // repository verified, whose host takes the status (#59), and the remote
 // target's commit the record was computed against, which the merge gate
 // compares with (#53).
@@ -499,10 +499,6 @@ func (s *Service) recordApprovals(ctx context.Context, exec domain.LadoExecution
 	prs := make([]map[string]any, 0, len(pending))
 	for n, p := range pending {
 		result := results[p.index]
-		state := domain.LadoIntegrationStatusPending
-		if inputs[p.index].repo.Provider == domain.TrackerProviderGitLab {
-			state = domain.LadoIntegrationStatusNotApplicable
-		}
 		id := p.renewID
 		if id == "" {
 			id = "lado-integration-" + s.deps.NewID()
@@ -518,7 +514,7 @@ func (s *Service) recordApprovals(ctx context.Context, exec domain.LadoExecution
 			ProofNonce:         derivedPresenceNonce(proof.Nonce, n),
 			Actor:              actor,
 			ApprovedAt:         now,
-			StatusState:        state,
+			StatusState:        domain.LadoIntegrationStatusPending,
 			BaseTipSHA:         inputs[p.index].baseTip,
 		}
 		approvals = append(approvals, approval)

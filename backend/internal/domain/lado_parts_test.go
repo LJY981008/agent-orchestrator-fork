@@ -345,3 +345,99 @@ func TestLadoPlanOutsideRepo(t *testing.T) {
 		})
 	}
 }
+
+// sizedPlan is a plan of n steps with the given parts, built in code.
+func sizedPlan(steps int, parts ...domain.LadoPlanPart) domain.LadoPlan {
+	plan := domain.LadoPlan{Parts: parts}
+	for i := range steps {
+		plan.Steps = append(plan.Steps, "step "+string(rune('a'+i)))
+	}
+	return plan
+}
+
+func pathsOf(n int) []string {
+	var paths []string
+	for i := range n {
+		paths = append(paths, "backend/p"+string(rune('a'+i))+"/**")
+	}
+	return paths
+}
+
+func TestLadoPlanWarnsOfASmallPlanSplit(t *testing.T) {
+	split := sizedPlan(3,
+		domain.LadoPlanPart{ID: "a", Steps: []int{1}, AffectedPaths: pathsOf(1)},
+		domain.LadoPlanPart{ID: "b", Steps: []int{2}, AffectedPaths: pathsOf(1)})
+	if w := split.Warnings(); !slices.Equal(w, []string{domain.LadoPlanWarningSmallSplit}) {
+		t.Fatalf("three steps in two parts: warnings = %v, want split_small_plan", w)
+	}
+	four := split
+	four.Steps = sizedPlan(domain.LadoPlanSmallSteps).Steps
+	if w := four.Warnings(); !slices.Equal(w, []string{domain.LadoPlanWarningSmallSplit}) {
+		t.Fatalf("four steps in two parts: warnings = %v, want split_small_plan", w)
+	}
+	five := split
+	five.Steps = sizedPlan(domain.LadoPlanSmallSteps + 1).Steps
+	if w := five.Warnings(); len(w) != 0 {
+		t.Fatalf("five steps in two parts: warnings = %v, want none", w)
+	}
+	if w := sizedPlan(4).Warnings(); len(w) != 0 {
+		t.Fatalf("four steps without parts: warnings = %v, want none", w)
+	}
+	if w := sizedPlan(6).Warnings(); !slices.Equal(w, []string{domain.LadoPlanWarningUnsplit}) {
+		t.Fatalf("six steps without parts: warnings = %v, want unsplit_large_plan", w)
+	}
+}
+
+func TestLadoPlanPartWarnings(t *testing.T) {
+	plan := sizedPlan(20,
+		domain.LadoPlanPart{ID: "steps4", Steps: []int{1, 2, 3, 4}, AffectedPaths: pathsOf(1)},
+		domain.LadoPlanPart{ID: "steps5", Steps: []int{5, 6, 7, 8, 9}, AffectedPaths: pathsOf(1)},
+		domain.LadoPlanPart{ID: "paths8", Steps: []int{10}, AffectedPaths: pathsOf(8)},
+		domain.LadoPlanPart{ID: "paths9", Steps: []int{11}, AffectedPaths: pathsOf(9)},
+		domain.LadoPlanPart{ID: "files200", Steps: []int{12}, AffectedPaths: pathsOf(1)},
+		domain.LadoPlanPart{ID: "files201", Steps: []int{13}, AffectedPaths: pathsOf(1)},
+		domain.LadoPlanPart{ID: "uncounted", Steps: []int{14}, AffectedPaths: pathsOf(1)},
+	)
+	files := map[string]int{"steps4": 1, "steps5": 1, "paths8": 1, "paths9": 1, "files200": 200, "files201": 201}
+	got := plan.PartWarnings(files)
+	want := map[string][]domain.LadoPlanPartWarning{
+		"steps5":   {{Code: domain.LadoPlanPartWarningSteps, Value: 5, Limit: 4}},
+		"paths9":   {{Code: domain.LadoPlanPartWarningPaths, Value: 9, Limit: 8}},
+		"files201": {{Code: domain.LadoPlanPartWarningFiles, Value: 201, Limit: 200}},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("part warnings = %+v, want %+v", got, want)
+	}
+	for id, w := range want {
+		if !slices.Equal(got[id], w) {
+			t.Fatalf("part %s: warnings = %+v, want %+v", id, got[id], w)
+		}
+	}
+	if got := plan.PartWarnings(nil); len(got) != 2 || got["files201"] != nil {
+		t.Fatalf("without file counts: %+v, want the steps and paths warnings only", got)
+	}
+	if got := sizedPlan(6).PartWarnings(map[string]int{"x": 500}); got != nil {
+		t.Fatalf("a plan without parts: %+v, want none", got)
+	}
+}
+
+func TestParseLadoPlanKeepsSizeOutOfProblems(t *testing.T) {
+	big := `parts:
+  - id: backend
+    title: Backend
+    steps: [1, 2, 3, 4, 5]
+    affected_paths: ["backend/a/**", "backend/b/**", "backend/c/**", "backend/d/**", "backend/e/**", "backend/f/**", "backend/g/**", "backend/h/**", "backend/i/**"]
+  - id: frontend
+    title: Frontend
+    steps: [6]
+    affected_paths: ["frontend/src/**"]
+`
+	plan, problems := parse(t, partsPlan(big))
+	if len(problems) != 0 {
+		t.Fatalf("problems = %+v, want none: size is a warning", problems)
+	}
+	w := plan.PartWarnings(nil)["backend"]
+	if len(w) != 2 || w[0].Code != domain.LadoPlanPartWarningSteps || w[1].Code != domain.LadoPlanPartWarningPaths {
+		t.Fatalf("backend warnings = %+v", w)
+	}
+}

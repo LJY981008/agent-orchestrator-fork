@@ -8,7 +8,8 @@ package ladoverify
 // the record still waits for (a check command, a review, the evidence pin),
 // and tells the worker once about each of LADO's own items that fails on the
 // head. A merged or closed PR is settled once. At the end the pass posts
-// again the lado/integration statuses that could not be posted.
+// again the lado/integration statuses that could not be posted, and a
+// pending one on the open GitLab heads still without an approval (#21).
 //
 // #53: the loop fetches each base branch at most every baseFetchEvery, so a
 // record sees another PR's merge into its base (base_advanced, or
@@ -220,6 +221,12 @@ type Service struct {
 	// statusTried holds, by approval, when this daemon last tried to post
 	// its status.
 	statusTried map[string]time.Time
+	// headLocks are the locks of the heads lado/integration statuses are
+	// posted on (lockHead), and waitingPosted holds, by PR and head
+	// (waitingKey), when this daemon last looked at an open GitLab head for
+	// its waiting status (gitlab_pending.go), for waitingRepostEvery.
+	headLocks     map[string]*headLock
+	waitingPosted map[string]time.Time
 	// headFetched holds, by execution and head, when the loop last fetched
 	// a head the repository lacked; failedAt, by execution and PR
 	// (passKey), when a pass last could not verify it; trackFailedAt, by
@@ -285,6 +292,8 @@ func New(deps Deps) *Service {
 		protection:     NewProtection(deps.Clients, deps.Clock, protectionTTL),
 		kick:           make(chan struct{}, 1),
 		statusTried:    map[string]time.Time{},
+		headLocks:      map[string]*headLock{},
+		waitingPosted:  map[string]time.Time{},
 		headFetched:    map[string]time.Time{},
 		failedAt:       map[domain.SessionID]time.Time{},
 		trackFailedAt:  map[domain.SessionID]time.Time{},
@@ -540,6 +549,10 @@ func (s *Service) Tick(ctx context.Context) error {
 		if err := s.retryStatuses(ctx); err != nil {
 			problems = append(problems, err)
 		}
+	}
+	if ctx.Err() == nil {
+		// What fails is logged, not returned: it is no fault of the pass.
+		s.postWaitingStatuses(ctx, executions)
 	}
 	return errors.Join(problems...)
 }

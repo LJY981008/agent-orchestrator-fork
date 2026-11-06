@@ -22,6 +22,7 @@ type LadoSessionUsageResponse struct {
 	SessionID     string                  `json:"sessionId"`
 	Role          string                  `json:"role" enum:"designer,critic,worker,part,merge,integration" description:"The role the task's timings show for the session."`
 	PartID        string                  `json:"partId,omitempty" description:"The part of a part or merge worker."`
+	QueueEntryID  string                  `json:"queueEntryId,omitempty" description:"The queue entry of the execution the session ran; omitted for a plan session. Sessions of one execution, retries included, share it."`
 	Attempt       int                     `json:"attempt" description:"The session's attempt from 1; 0 when it cannot be read, as for a deleted session."`
 	Totals        LadoUsageTotalsResponse `json:"totals"`
 	ContextUsed   int64                   `json:"contextUsed" description:"Tokens in the session's context now; 0 before the provider reports."`

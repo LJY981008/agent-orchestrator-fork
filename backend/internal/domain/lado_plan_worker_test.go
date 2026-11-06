@@ -167,6 +167,39 @@ func TestDecideLadoPlanReview(t *testing.T) {
 	}
 }
 
+func TestDecideLadoPlanReviewReviewsAnOversizedSplit(t *testing.T) {
+	settings := domain.DefaultLadoPlanReviewSettings()
+	paths := []string{"frontend/src/a.ts", "frontend/src/b.ts", "docs/x.md"}
+	plain := domain.LadoPlan{Steps: []string{"a", "b", "c", "d"}, AffectedPaths: paths[:1]}
+	if d := domain.DecideLadoPlanReview(plain, settings, globMatch); !d.Skip {
+		t.Fatalf("one path without parts: %+v, want a skip", d)
+	}
+	small := domain.LadoPlan{Steps: []string{"a", "b", "c", "d"}, AffectedPaths: paths, Parts: []domain.LadoPlanPart{
+		{ID: "front", Steps: []int{1, 2}, AffectedPaths: paths[:2]},
+		{ID: "docs", Steps: []int{3}, AffectedPaths: paths[2:]},
+	}}
+	if d := domain.DecideLadoPlanReview(small, settings, globMatch); d.Skip {
+		t.Fatalf("four steps in two parts over three paths: %+v, want a review", d)
+	}
+	steps := small
+	steps.Steps = []string{"a", "b", "c", "d", "e", "f"}
+	steps.Parts = []domain.LadoPlanPart{
+		{ID: "front", Steps: []int{1, 2, 3, 4, 5}, AffectedPaths: paths[:2]},
+		{ID: "docs", Steps: []int{6}, AffectedPaths: paths[2:]},
+	}
+	if d := domain.DecideLadoPlanReview(steps, settings, globMatch); d.Skip {
+		t.Fatalf("a part of five steps: %+v, want a review", d)
+	}
+	fine := steps
+	fine.Parts = []domain.LadoPlanPart{
+		{ID: "front", Steps: []int{1, 2, 3}, AffectedPaths: paths[:2]},
+		{ID: "docs", Steps: []int{4, 5, 6}, AffectedPaths: paths[2:]},
+	}
+	if d := domain.DecideLadoPlanReview(fine, settings, globMatch); !d.Skip {
+		t.Fatalf("six steps in two parts of three: %+v, want a skip", d)
+	}
+}
+
 func TestLadoPlanReviewSettingsValidate(t *testing.T) {
 	if err := domain.DefaultLadoPlanReviewSettings().Validate(); err != nil {
 		t.Fatalf("defaults: %v", err)

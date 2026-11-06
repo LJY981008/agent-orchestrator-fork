@@ -98,7 +98,11 @@ func writePRError(w http.ResponseWriter, r *http.Request, err error) {
 	case errors.Is(err, prsvc.ErrPRHeadChanged):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "PR_HEAD_CHANGED", "PR head changed; refresh before merging", nil)
 	case errors.Is(err, prsvc.ErrPRPreconditions):
-		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "PR_PRECONDITIONS_UNMET", "PR merge preconditions are not met", nil)
+		var details map[string]any
+		if blocked := (*prsvc.MergeBlockedError)(nil); errors.As(err, &blocked) { // LADO fork, #21: why the merge is blocked
+			details = map[string]any{"blockers": blocked.Blockers}
+		}
+		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "PR_PRECONDITIONS_UNMET", "PR merge preconditions are not met", details)
 	case errors.Is(err, prsvc.ErrNothingToResolve):
 		envelope.WriteAPIError(w, r, http.StatusUnprocessableEntity, "unprocessable", "NOTHING_TO_RESOLVE", "No unresolved review threads to resolve", nil)
 	default:

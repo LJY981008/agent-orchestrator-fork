@@ -7017,14 +7017,14 @@ export interface components {
             checkedAt?: null | string;
             /** @description Why the rules could not be read, without secrets. */
             error?: string;
-            /** @description What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. */
+            /** @description What the rules lack, for unprotected. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed). */
             missing: string[];
             /** @description Canonical id of the repository, such as github:owner/repo. */
             repository: string;
             /** @description The checks the rules require, lado/integration left out. */
             requiredChecks: string[];
             /**
-             * @description protected: the rules require a pull request, the lado/integration status, no force pushes and no deletion; unknown: they could not be read; unsupported: LADO does not read GitLab's protection, it only detects.
+             * @description protected: on GitHub the rules require a pull request, the lado/integration status, no force pushes and no deletion; on GitLab the branch is protected with push allowed to no one and no force push, the project requires a succeeding pipeline and does not count skipped ones, and LADO can post its status; unknown: they could not be read; unsupported: the GitLab client reads no protection, LADO only detects.
              * @enum {string}
              */
             state: "protected" | "unprotected" | "unknown" | "unsupported";
@@ -7426,7 +7426,7 @@ export interface components {
             /** Format: date-time */
             statusPostedAt?: null | string;
             /**
-             * @description How posting the lado/integration commit status went; not_applicable on GitLab, which gets none.
+             * @description How posting the lado/integration commit status went; not_applicable on GitLab approvals given before LADO posted statuses there.
              * @enum {string}
              */
             statusState: "pending" | "posted" | "failed" | "not_applicable";
@@ -7592,7 +7592,7 @@ export interface components {
             risk?: string;
             steps: string[];
             testCommands: string[];
-            /** @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts. */
+            /** @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts, split_small_plan for parts in a plan of four or fewer steps. */
             warnings: string[];
         };
         LadoPlanCritiqueResponse: {
@@ -7682,6 +7682,19 @@ export interface components {
             /** @description 1-based numbers into the plan's steps. */
             steps: number[];
             title: string;
+            /** @description The sizing limits the part is over, without blocking the approval; empty when it is within them. */
+            warnings: components["schemas"]["LadoPlanPartWarningResponse"][];
+        };
+        LadoPlanPartWarningResponse: {
+            /**
+             * @description part_many_steps: more steps than the limit; part_many_paths: more affected_paths than the limit; part_many_files: more files under its paths at the revision's base commit than the limit.
+             * @enum {string}
+             */
+            code: "part_many_steps" | "part_many_paths" | "part_many_files";
+            /** @description The largest count within the limit. */
+            limit: number;
+            /** @description The part's count. */
+            value: number;
         };
         LadoPlanProblemResponse: {
             /**
@@ -8175,6 +8188,8 @@ export interface components {
             incomplete: boolean;
             /** @description The part of a part or merge worker. */
             partId?: string;
+            /** @description The queue entry of the execution the session ran; omitted for a plan session. Sessions of one execution, retries included, share it. */
+            queueEntryId?: string;
             /**
              * @description The role the task's timings show for the session.
              * @enum {string}
@@ -8781,6 +8796,8 @@ export interface components {
             /** @description Where LADO last moved the integration branch. */
             headSha?: string;
             parts: components["schemas"]["LadoTaskPartResponse"][];
+            /** @description The queue entry of the run shown: the sessions of the task's usage with this queueEntryId are this run's, retries included. Omitted while the newest approval runs no parts. */
+            queueEntryId?: string;
             /** @description The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Omitted while the newest approval runs no parts. */
             repos?: components["schemas"]["LadoPartRunRepoResponse"][];
             /** Format: date-time */
@@ -9119,7 +9136,7 @@ export interface components {
             fileVersion?: number;
             /** @description review: the reviewer harness. */
             harness?: string;
-            /** @description protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. */
+            /** @description protection: what the base branch's rules lack. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed). */
             missing?: string[];
             /** @description base_branch: local moves of the base branch since the run started that the remote does not hold. */
             moved?: components["schemas"]["LadoReflogEntryResponse"][];

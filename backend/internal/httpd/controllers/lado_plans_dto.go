@@ -125,7 +125,7 @@ type LadoPlanContentResponse struct {
 	ChangeKinds        []string               `json:"changeKinds" description:"The changes the plan declares: db_schema, external_api, auth or data_deletion."`
 	Parts              []LadoPlanPartResponse `json:"parts" description:"The parts LADO runs in parallel workers, in the plan's order; empty when one worker runs the whole plan."`
 	IntegrationSteps   []int                  `json:"integrationSteps" description:"The 1-based numbers of the steps no part takes, which the integration worker does once every part is merged; empty without parts."`
-	Warnings           []string               `json:"warnings" description:"What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts."`
+	Warnings           []string               `json:"warnings" description:"What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts, split_small_plan for parts in a plan of four or fewer steps."`
 	Body               string                 `json:"body" description:"The Markdown after the front matter."`
 }
 
@@ -137,6 +137,16 @@ type LadoPlanPartResponse struct {
 	AffectedPaths []string `json:"affectedPaths"`
 	DependsOn     []string `json:"dependsOn" description:"The parts merged before this one starts."`
 	Phase         int      `json:"phase" description:"The display phase: 1 for a part without dependencies, one more than the latest of its dependencies otherwise; 0 on a dependency cycle."`
+	// Warnings are the sizing limits the part is over; they never block the
+	// approval.
+	Warnings []LadoPlanPartWarningResponse `json:"warnings" description:"The sizing limits the part is over, without blocking the approval; empty when it is within them."`
+}
+
+// LadoPlanPartWarningResponse is one sizing limit a part is over (#69).
+type LadoPlanPartWarningResponse struct {
+	Code  string `json:"code" enum:"part_many_steps,part_many_paths,part_many_files" description:"part_many_steps: more steps than the limit; part_many_paths: more affected_paths than the limit; part_many_files: more files under its paths at the revision's base commit than the limit."`
+	Value int    `json:"value" description:"The part's count."`
+	Limit int    `json:"limit" description:"The largest count within the limit."`
 }
 
 // LadoPlanResponse is one revision with its pinned content.

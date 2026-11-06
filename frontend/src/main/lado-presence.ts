@@ -1618,14 +1618,15 @@ function headLines(t: Translate, verified: VerifiedSubject): string[] {
 	];
 }
 
-// What happens next. GitLab gets no status; a branch whose rules do not
-// require the status lets a pull request merge without the approval, which
-// LADO only notices.
+// What happens next. LADO posts its status on GitHub and GitLab (#21); a
+// record from before that names GitLab's protection unprotected_gitlab, and
+// such a head gets no status. A branch whose rules do not require the status
+// lets a pull request merge without the approval, which LADO only notices.
 function nextLines(t: Translate, verified: readonly VerifiedSubject[], many: boolean): string {
 	const protections = verified.map((one) => one.items.find((item) => item.kind === "protection"));
 	// Rules LADO could not read may well protect the branch (U4 of #15).
 	const unprotected = protections.some((protection) => protection?.code === "unprotected" || protection?.code === "unprotected_gitlab");
-	const posts = protections.some((protection) => protection?.details.provider !== "gitlab");
+	const posts = protections.some((protection) => protection?.code !== "unprotected_gitlab");
 	const next = [
 		...(posts ? [t(many ? "lado.presence.integration.nextStatusMany" : "lado.presence.integration.nextStatus")] : []),
 		...(unprotected ? [t(many ? "lado.presence.integration.nextUnprotectedMany" : "lado.presence.integration.nextUnprotected")] : []),
@@ -1715,6 +1716,13 @@ const PROTECTION_PARTS: Partial<Record<string, PresenceMessageKey>> = {
 	[ANY_SOURCE_PART]: "lado.protection.part.integrationCheckSource",
 	non_fast_forward: "lado.protection.part.nonFastForward",
 	deletion: "lado.protection.part.deletion",
+	// A GitLab base branch's protection and project settings (#21).
+	protected_branch: "lado.protection.part.protectedBranch",
+	push_access: "lado.protection.part.pushAccess",
+	force_push: "lado.protection.part.forcePush",
+	pipeline_must_succeed: "lado.protection.part.pipelineMustSucceed",
+	skipped_pipeline: "lado.protection.part.skippedPipeline",
+	integration_status: "lado.protection.part.integrationStatus",
 };
 
 // A part from a newer daemon reads as the daemon names it.

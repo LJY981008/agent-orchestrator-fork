@@ -142,8 +142,12 @@ func (s *ActionService) Merge(ctx context.Context, request MergeRequest) (MergeR
 	if err := s.ladoMerge.authorizeFresh(ctx, tracked, fresh.PR, expectedHead); err != nil { // LADO fork
 		return MergeResult{}, err
 	}
-	if !readyToMerge(fresh, review) {
-		return MergeResult{}, ErrPRPreconditions
+	if blockers := mergeBlockers(fresh, review); len(blockers) > 0 {
+		// LADO fork, #21: only a GitLab head no pipeline runs for, approved
+		// in LADO, merges past a blocker.
+		if err := s.ladoMerge.waive(ctx, tracked, fresh.PR, expectedHead, blockers); err != nil {
+			return MergeResult{}, err
+		}
 	}
 
 	out, err := s.merger.MergePullRequest(ctx, ports.SCMMergeRequest{PR: ref, ExpectedHeadSHA: expectedHead, Method: ports.SCMMergeSquash})
@@ -183,19 +187,35 @@ func (s *ActionService) fetchMergeReadiness(ctx context.Context, ref ports.SCMPR
 	return observations[0], review, nil
 }
 
-func readyToMerge(o ports.SCMObservation, review ports.SCMReviewObservation) bool {
-	if o.PR.HeadSHA == "" || o.CI.HeadSHA != o.PR.HeadSHA || review.Partial {
-		return false
-	}
-	return domain.MergeReadiness{
+// mergeBlockers lists what stops the merge in the live read: the shared
+// readiness rule's blockers, a CI result of another head, and a partial
+// review listing. A GitLab head with no pipeline reports ci_no_pipeline in
+// place of ci_unknown (LADO fork, #21).
+func mergeBlockers(o ports.SCMObservation, review ports.SCMReviewObservation) []string {
+	ci := domain.CIState(o.CI.Summary)
+	blockers := domain.MergeReadiness{
 		Draft:              o.PR.Draft,
 		Merged:             o.PR.Merged,
 		Closed:             o.PR.Closed,
-		CI:                 domain.CIState(o.CI.Summary),
+		CI:                 ci,
 		Review:             domain.ReviewDecision(review.Decision),
 		Mergeability:       domain.Mergeability(o.Mergeability.State),
 		UnresolvedComments: hasUnresolvedHumanComments(review.Threads),
-	}.ReadyToMerge()
+	}.Blockers()
+	if o.CI.NoPipeline && (ci == domain.CIUnknown || ci == "") {
+		for i, blocker := range blockers {
+			if blocker == domain.MergeBlockerCIUnknown {
+				blockers[i] = domain.MergeBlockerCINoPipeline
+			}
+		}
+	}
+	if o.PR.HeadSHA == "" || o.CI.HeadSHA != o.PR.HeadSHA {
+		blockers = append(blockers, domain.MergeBlockerHeadMismatch)
+	}
+	if review.Partial {
+		blockers = append(blockers, domain.MergeBlockerReviewPartial)
+	}
+	return blockers
 }
 
 func hasUnresolvedHumanComments(threads []ports.SCMReviewThreadObservation) bool {

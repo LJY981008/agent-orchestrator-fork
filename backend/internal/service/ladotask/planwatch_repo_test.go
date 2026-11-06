@@ -19,6 +19,10 @@ import (
 type recordingGit struct {
 	mu   sync.Mutex
 	dirs []string
+	// files are what ListFiles gives; listDirs are the folders it was asked
+	// in.
+	files    []string
+	listDirs []string
 }
 
 func (g *recordingGit) RevParse(_ context.Context, dir, _ string) (string, error) {
@@ -26,6 +30,13 @@ func (g *recordingGit) RevParse(_ context.Context, dir, _ string) (string, error
 	defer g.mu.Unlock()
 	g.dirs = append(g.dirs, dir)
 	return strings.Repeat("c", 40), nil
+}
+
+func (g *recordingGit) ListFiles(_ context.Context, dir, _ string) ([]string, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.listDirs = append(g.listDirs, dir)
+	return slices.Clone(g.files), nil
 }
 
 // workspacePlanFixture turns the plan fixture's project into a workspace
@@ -257,5 +268,23 @@ func TestSingleRepositoryPartsPlanIsNotCheckedAgainstAFolder(t *testing.T) {
 	rev := pf.pinLegacy(t, pf.partsPlanFile([]string{"back/**", "frontend/**"}, []string{"frontend/**"}))
 	if !rev.Valid() {
 		t.Fatalf("problems = %+v, want none", rev.Problems)
+	}
+}
+
+// In a workspace, the plan view lists the files of the issue's repository and
+// matches them under its folder, as the plan's paths are written (#69).
+func TestWorkspacePlanViewCountsFilesUnderTheRepository(t *testing.T) {
+	pf, git, root := workspacePlanFixture(t)
+	git.files = []string{"internal/a.go", "internal/b.go", "web/x.go", "README.md"}
+	rev := pf.pinLegacy(t, pf.partsPlanFile([]string{"back/**"}, []string{"back/web/**"}))
+	view, err := pf.svc.Plan(context.Background(), rev.ID)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if want := map[string]int{"a": 2, "b": 1}; !maps.Equal(view.PartFiles, want) {
+		t.Fatalf("part files = %v, want %v", view.PartFiles, want)
+	}
+	if want := []string{filepath.Join(root, "back")}; !slices.Equal(git.listDirs, want) {
+		t.Fatalf("listed in %v, want %v", git.listDirs, want)
 	}
 }

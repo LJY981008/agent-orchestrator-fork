@@ -263,6 +263,60 @@ func (r MergeReadiness) ReadyToMerge() bool {
 	return r.Mergeability == MergeMergeable
 }
 
+// Merge blockers name why a PR is not ready to merge (LADO fork, #21). The
+// merge route returns them in the details of PR_PRECONDITIONS_UNMET.
+// MergeReadiness.Blockers gives the first nine; AO's merge adds
+// MergeBlockerHeadMismatch and MergeBlockerReviewPartial from its live read,
+// and MergeBlockerCINoPipeline in place of MergeBlockerCIUnknown when the
+// host reports no pipeline runs for the head.
+const (
+	MergeBlockerMerged             = "merged"
+	MergeBlockerClosed             = "closed"
+	MergeBlockerDraft              = "draft"
+	MergeBlockerCIFailing          = "ci_failing"
+	MergeBlockerCIPending          = "ci_pending"
+	MergeBlockerCIUnknown          = "ci_unknown"
+	MergeBlockerCINoPipeline       = "ci_no_pipeline"
+	MergeBlockerChangesRequested   = "changes_requested"
+	MergeBlockerUnresolvedComments = "unresolved_comments"
+	MergeBlockerNotMergeable       = "not_mergeable"
+	MergeBlockerHeadMismatch       = "head_mismatch"
+	MergeBlockerReviewPartial      = "review_partial"
+)
+
+// Blockers lists the merge blockers of r, in a fixed order. It is empty
+// exactly when ReadyToMerge reports true (LADO fork, #21).
+func (r MergeReadiness) Blockers() []string {
+	var blockers []string
+	if r.Merged {
+		blockers = append(blockers, MergeBlockerMerged)
+	}
+	if r.Closed {
+		blockers = append(blockers, MergeBlockerClosed)
+	}
+	if r.Draft {
+		blockers = append(blockers, MergeBlockerDraft)
+	}
+	switch r.CI {
+	case CIFailing:
+		blockers = append(blockers, MergeBlockerCIFailing)
+	case CIPending:
+		blockers = append(blockers, MergeBlockerCIPending)
+	case CIUnknown, "":
+		blockers = append(blockers, MergeBlockerCIUnknown)
+	}
+	if r.Review == ReviewChangesRequest {
+		blockers = append(blockers, MergeBlockerChangesRequested)
+	}
+	if r.UnresolvedComments {
+		blockers = append(blockers, MergeBlockerUnresolvedComments)
+	}
+	if r.Mergeability != MergeMergeable {
+		blockers = append(blockers, MergeBlockerNotMergeable)
+	}
+	return blockers
+}
+
 // MergeReadinessOf projects stored PR facts into the shared readiness rule.
 // hasUnresolvedComments comes from the pr_comment rows AO keeps for the PR,
 // filtered to actionable unresolved comments.

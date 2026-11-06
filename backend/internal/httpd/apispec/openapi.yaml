@@ -20689,10 +20689,14 @@ components:
           description: Why the rules could not be read, without secrets.
           type: string
         missing:
-          description: 'What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration
-            (or required_status_checks:lado/integration:any_source when the rules
-            take the check from one app only, which LADO''s status cannot satisfy),
-            non_fast_forward, deletion.'
+          description: 'What the rules lack, for unprotected. GitHub: pull_request,
+            required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source
+            when the rules take the check from one app only, which LADO''s status
+            cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch,
+            push_access (someone may push), force_push, pipeline_must_succeed (Pipelines
+            must succeed is off), skipped_pipeline (skipped pipelines count as successful),
+            integration_status (LADO cannot post its status: the token is below Developer,
+            lacks the api scope, or LADO''s last post failed).'
           items:
             type: string
           type: array
@@ -20705,9 +20709,12 @@ components:
             type: string
           type: array
         state:
-          description: 'protected: the rules require a pull request, the lado/integration
-            status, no force pushes and no deletion; unknown: they could not be read;
-            unsupported: LADO does not read GitLab''s protection, it only detects.'
+          description: 'protected: on GitHub the rules require a pull request, the
+            lado/integration status, no force pushes and no deletion; on GitLab the
+            branch is protected with push allowed to no one and no force push, the
+            project requires a succeeding pipeline and does not count skipped ones,
+            and LADO can post its status; unknown: they could not be read; unsupported:
+            the GitLab client reads no protection, LADO only detects.'
           enum:
           - protected
           - unprotected
@@ -21704,7 +21711,7 @@ components:
           - string
         statusState:
           description: How posting the lado/integration commit status went; not_applicable
-            on GitLab, which gets none.
+            on GitLab approvals given before LADO posted statuses there.
           enum:
           - pending
           - posted
@@ -22149,7 +22156,8 @@ components:
           type: array
         warnings:
           description: 'What the plan view warns about without blocking the approval:
-            unsplit_large_plan for six or more steps without parts.'
+            unsplit_large_plan for six or more steps without parts, split_small_plan
+            for parts in a plan of four or fewer steps.'
           items:
             type: string
           type: array
@@ -22368,6 +22376,12 @@ components:
           type: array
         title:
           type: string
+        warnings:
+          description: The sizing limits the part is over, without blocking the approval;
+            empty when it is within them.
+          items:
+            $ref: '#/components/schemas/LadoPlanPartWarningResponse'
+          type: array
       required:
       - id
       - title
@@ -22375,6 +22389,29 @@ components:
       - affectedPaths
       - dependsOn
       - phase
+      - warnings
+      type: object
+    LadoPlanPartWarningResponse:
+      properties:
+        code:
+          description: 'part_many_steps: more steps than the limit; part_many_paths:
+            more affected_paths than the limit; part_many_files: more files under
+            its paths at the revision''s base commit than the limit.'
+          enum:
+          - part_many_steps
+          - part_many_paths
+          - part_many_files
+          type: string
+        limit:
+          description: The largest count within the limit.
+          type: integer
+        value:
+          description: The part's count.
+          type: integer
+      required:
+      - code
+      - value
+      - limit
       type: object
     LadoPlanProblemResponse:
       properties:
@@ -23500,6 +23537,10 @@ components:
           type: boolean
         partId:
           description: The part of a part or merge worker.
+          type: string
+        queueEntryId:
+          description: The queue entry of the execution the session ran; omitted for
+            a plan session. Sessions of one execution, retries included, share it.
           type: string
         role:
           description: The role the task's timings show for the session.
@@ -25087,6 +25128,11 @@ components:
           items:
             $ref: '#/components/schemas/LadoTaskPartResponse'
           type: array
+        queueEntryId:
+          description: 'The queue entry of the run shown: the sessions of the task''s
+            usage with this queueEntryId are this run''s, retries included. Omitted
+            while the newest approval runs no parts.'
+          type: string
         repos:
           description: The repositories the run has an integration branch in, each
             named branch, in the order the plan's repos give; branch, baseSha and
@@ -25927,10 +25973,14 @@ components:
           description: 'review: the reviewer harness.'
           type: string
         missing:
-          description: 'protection: what the base branch''s rules lack: pull_request,
+          description: 'protection: what the base branch''s rules lack. GitHub: pull_request,
             required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source
             when the rules take the check from one app only, which LADO''s status
-            cannot satisfy), non_fast_forward, deletion.'
+            cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch,
+            push_access (someone may push), force_push, pipeline_must_succeed (Pipelines
+            must succeed is off), skipped_pipeline (skipped pipelines count as successful),
+            integration_status (LADO cannot post its status: the token is below Developer,
+            lacks the api scope, or LADO''s last post failed).'
           items:
             type: string
           type: array

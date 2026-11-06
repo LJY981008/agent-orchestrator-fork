@@ -76,7 +76,11 @@ type glLadoProject struct {
 	DefaultBranch     string `json:"default_branch"`
 	IssuesEnabled     *bool  `json:"issues_enabled"`
 	IssuesAccessLevel string `json:"issues_access_level"`
-	Permissions       struct {
+	// PipelineMustSucceed and SkippedPipelineAllowed are the merge settings
+	// BranchRules reads; nil when GitLab leaves them out.
+	PipelineMustSucceed    *bool `json:"only_allow_merge_if_pipeline_succeeds"`
+	SkippedPipelineAllowed *bool `json:"allow_merge_on_skipped_pipeline"`
+	Permissions            struct {
 		ProjectAccess *struct {
 			AccessLevel int `json:"access_level"`
 		} `json:"project_access"`
@@ -93,6 +97,8 @@ func (p glLadoProject) issuesOff() bool {
 	return p.IssuesEnabled != nil && !*p.IssuesEnabled
 }
 
+// accessLevel is the token's role on the project: the larger of its project
+// and group access.
 func (p glLadoProject) accessLevel() int {
 	level := 0
 	if p.Permissions.ProjectAccess != nil {
@@ -123,7 +129,7 @@ func (w *LadoIssues) CheckAccess(ctx context.Context, repo domain.TrackerRepo) (
 		return access, err
 	}
 	projectAPI := ladoProjectPath(projectPath)
-	answer, err := w.send(ctx, host, http.MethodGet, projectAPI, nil)
+	project, answer, err := w.readProject(ctx, host, projectPath)
 	if err != nil {
 		return access, err
 	}
@@ -136,10 +142,6 @@ func (w *LadoIssues) CheckAccess(ctx context.Context, repo domain.TrackerRepo) (
 			Detail: fmt.Sprintf("The token cannot read %s.", projectPath),
 		}}
 		return access, nil
-	}
-	var project glLadoProject
-	if err := json.Unmarshal(answer.body, &project); err != nil {
-		return access, fmt.Errorf("gitlab tracker: decode project: %w", err)
 	}
 	access.DefaultBranch = project.DefaultBranch
 	hasAPI := slices.Contains(scopes, "api")
@@ -188,6 +190,21 @@ func (w *LadoIssues) CheckAccess(ctx context.Context, repo domain.TrackerRepo) (
 		issues, pulls, rules, statuses,
 	}
 	return access, nil
+}
+
+// readProject reads the project, its merge settings and the token's access
+// on it. An answer other than 2xx comes back undecoded for the caller to
+// judge.
+func (w *LadoIssues) readProject(ctx context.Context, host hostEntry, projectPath string) (glLadoProject, ladoAnswer, error) {
+	answer, err := w.send(ctx, host, http.MethodGet, ladoProjectPath(projectPath), nil)
+	if err != nil || !answer.ok() {
+		return glLadoProject{}, answer, err
+	}
+	var project glLadoProject
+	if err := json.Unmarshal(answer.body, &project); err != nil {
+		return glLadoProject{}, answer, fmt.Errorf("gitlab tracker: decode project: %w", err)
+	}
+	return project, answer, nil
 }
 
 // Login returns the account the default host's token belongs to.
@@ -264,11 +281,13 @@ func ladoProjectPath(projectPath string) string {
 	return "/projects/" + url.PathEscape(projectPath)
 }
 
-// ladoAnswer is one response's status and body.
+// ladoAnswer is one response's status and body, with the token that was sent
+// so a message can be cleaned of it.
 type ladoAnswer struct {
 	status int
 	header http.Header
 	body   []byte
+	token  string
 }
 
 func (a ladoAnswer) ok() bool {
@@ -326,5 +345,5 @@ func (w *LadoIssues) send(ctx context.Context, host hostEntry, method, path stri
 	if err != nil {
 		return ladoAnswer{}, fmt.Errorf("gitlab tracker: read response body: %w", err)
 	}
-	return ladoAnswer{status: resp.StatusCode, header: resp.Header, body: respBody}, nil
+	return ladoAnswer{status: resp.StatusCode, header: resp.Header, body: respBody, token: tok}, nil
 }

@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -108,13 +109,30 @@ func (f *fakeArtifacts) Read(_ context.Context, v domain.SessionArtifactVersion)
 	return content, nil
 }
 
-type fakeGit struct{ refs map[string]string }
+// fakeGit resolves the refs it has and lists files for every commit; lists,
+// when set, records the commits it listed.
+type fakeGit struct {
+	refs    map[string]string
+	files   []string
+	listErr error
+	lists   *[]string
+}
 
 func (g fakeGit) RevParse(_ context.Context, _ string, ref string) (string, error) {
 	if sha, ok := g.refs[ref]; ok {
 		return sha, nil
 	}
 	return "", fmt.Errorf("%s names no commit", ref)
+}
+
+func (g fakeGit) ListFiles(_ context.Context, _, rev string) ([]string, error) {
+	if g.lists != nil {
+		*g.lists = append(*g.lists, rev)
+	}
+	if g.listErr != nil {
+		return nil, g.listErr
+	}
+	return slices.Clone(g.files), nil
 }
 
 // Rule snapshot hashes the fake rules give.
@@ -1302,5 +1320,80 @@ func TestRenderIssueFileFencesEveryText(t *testing.T) {
 	}
 	if !strings.Contains(out, "````text\nBody with ``` fence\n````") {
 		t.Fatalf("the body was not out-fenced:\n%s", out)
+	}
+}
+
+// The plan view counts the files under each part's paths at the revision's
+// base commit (#69), once per revision.
+func TestPlanViewCountsThePartsFiles(t *testing.T) {
+	pf := newPlanFixture(t)
+	var lists []string
+	pf.svc.deps.Git = fakeGit{
+		refs: map[string]string{"main": strings.Repeat("c", 40)},
+		files: []string{
+			"back/internal/a.go", "back/internal/b/c.go", "back/web/x.go",
+			"frontend/src/a.ts", "frontend/src/b.ts", "frontend/c.ts", "README.md",
+		},
+		lists: &lists,
+	}
+	rev := pf.pinLegacy(t, pf.partsPlanFile([]string{"back/**", "frontend/**"}, []string{"frontend/**", "frontend/src/**"}))
+	ctx := context.Background()
+	view, err := pf.svc.Plan(ctx, rev.ID)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if want := map[string]int{"a": 2, "b": 3}; !reflect.DeepEqual(view.PartFiles, want) {
+		t.Fatalf("part files = %v, want %v", view.PartFiles, want)
+	}
+	if !slices.Equal(lists, []string{rev.BaseSHA}) {
+		t.Fatalf("listed %v, want the base commit %s once", lists, rev.BaseSHA)
+	}
+	again, err := pf.svc.Plan(ctx, rev.ID)
+	if err != nil {
+		t.Fatalf("Plan again: %v", err)
+	}
+	if len(lists) != 1 || !reflect.DeepEqual(again.PartFiles, view.PartFiles) {
+		t.Fatalf("second view listed %v and counted %v, want no git call and the same counts", lists, again.PartFiles)
+	}
+}
+
+// A revision whose files LADO cannot list shows no counts and no error, and
+// the next view does not ask git again.
+func TestPlanViewKeepsAFailedFileCount(t *testing.T) {
+	pf := newPlanFixture(t)
+	var lists []string
+	pf.svc.deps.Git = fakeGit{
+		refs:    map[string]string{"main": strings.Repeat("c", 40)},
+		listErr: errors.New("git ls-tree gave no answer within 10s"),
+		lists:   &lists,
+	}
+	rev := pf.pinLegacy(t, pf.partsPlanFile([]string{"back/**", "frontend/**"}, []string{"frontend/**"}))
+	ctx := context.Background()
+	for range 2 {
+		view, err := pf.svc.Plan(ctx, rev.ID)
+		if err != nil {
+			t.Fatalf("Plan: %v", err)
+		}
+		if view.PartFiles != nil || len(view.Plan.Parts) != 2 {
+			t.Fatalf("view = %v parts, files %v, want the parts without counts", len(view.Plan.Parts), view.PartFiles)
+		}
+	}
+	if len(lists) != 1 {
+		t.Fatalf("listed %v, want one git call", lists)
+	}
+}
+
+// A plan without parts lists no files.
+func TestPlanViewWithoutPartsListsNoFiles(t *testing.T) {
+	pf := newPlanFixture(t)
+	var lists []string
+	pf.svc.deps.Git = fakeGit{refs: map[string]string{"main": strings.Repeat("c", 40)}, files: []string{"backend/a.go"}, lists: &lists}
+	rev := pf.pinLegacy(t, pf.planFile("issue"))
+	view, err := pf.svc.Plan(context.Background(), rev.ID)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if view.PartFiles != nil || len(lists) != 0 {
+		t.Fatalf("part files %v, listed %v, want neither", view.PartFiles, lists)
 	}
 }

@@ -203,6 +203,8 @@ type Service struct {
 	// criticReminders are when LADO reminded each running critic.
 	criticMu        sync.Mutex
 	criticReminders map[domain.LadoPlanCritiqueID]time.Time
+	// partFilesCache keeps the file counts of plan views' parts (#69).
+	partFilesCache partFilesCache
 }
 
 // New returns a Service.

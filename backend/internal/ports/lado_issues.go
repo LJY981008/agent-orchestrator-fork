@@ -83,7 +83,55 @@ const (
 
 // LadoBranchRules are the rules that apply to one branch.
 type LadoBranchRules struct {
+	// Rules are GitHub's branch rules; GitLab has none.
 	Rules []LadoBranchRule
+	// GitLab is a GitLab branch's protection and what the token may do on
+	// the project; nil on GitHub.
+	GitLab *LadoGitLabProtection
+}
+
+// LadoGitLabProtection is how GitLab guards one branch: the protected
+// branch entries that match it, the project's merge settings and the
+// token's standing on the project (docs/LJY-PRD/TDD.md §7.1). When several
+// entries match, push and merge access are their union and force push is
+// allowed if any entry allows it, as GitLab itself applies them.
+type LadoGitLabProtection struct {
+	// Protected says at least one protected branch entry matches.
+	Protected bool
+	// MatchedNames are the matching entries' names, exact or wildcard.
+	MatchedNames []string
+	// PushAccess and MergeAccess are who may push to and merge into the
+	// branch. An empty list leaves the branch's guard unknown.
+	PushAccess  []LadoGitLabAccess
+	MergeAccess []LadoGitLabAccess
+	// AllowForcePush is true when an entry allows force push or does not
+	// say.
+	AllowForcePush bool
+	// CodeOwnerApprovalRequired is true when an entry requires code owner
+	// approval (a paid tier).
+	CodeOwnerApprovalRequired bool
+	// PipelineMustSucceed is the project's "Pipelines must succeed" and
+	// SkippedPipelineAllowed its "Skipped pipelines are considered
+	// successful"; nil when GitLab did not say.
+	PipelineMustSucceed    *bool
+	SkippedPipelineAllowed *bool
+	// AccessLevel is the token's role on the project, the larger of its
+	// project and group access (30 is Developer).
+	AccessLevel int
+	// TokenScopes are the token's scopes when ScopesKnown; GitLab reports
+	// them only for access tokens.
+	TokenScopes []string
+	ScopesKnown bool
+}
+
+// LadoGitLabAccess is one push or merge access entry of a protected branch.
+// AccessLevel 0 is "No one"; an entry for a user, group or deploy key lets
+// that one in whatever the level.
+type LadoGitLabAccess struct {
+	AccessLevel int
+	User        bool
+	Group       bool
+	DeployKey   bool
 }
 
 // LadoBranchRule is one rule. A branch may get the same type from several
@@ -109,6 +157,11 @@ type LadoCommitStatus struct {
 	Context     string
 	Description string
 	TargetURL   string
+	// Ref and MergeRequest are the pull request's source branch and number.
+	// GitLab uses them to pick the pipeline the status joins; GitHub ignores
+	// them.
+	Ref          string
+	MergeRequest int
 }
 
 // LadoRepoAccess is what a token can do on a repository.
