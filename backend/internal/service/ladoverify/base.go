@@ -11,6 +11,11 @@ package ladoverify
 // file the head changed or the plan names fails as base_overlap: the head
 // must take in the base and be verified again. Another move needs
 // confirming as base_advanced.
+//
+// LADO fork (#75): a file whose content the remote base and the head share
+// does not overlap. After the PR's own squash or rebase merge the head is
+// not an ancestor of the base, yet merging it changes nothing there: the
+// head was verified with that content.
 
 import (
 	"cmp"
@@ -66,9 +71,9 @@ type BaseInput struct {
 //
 // When the remote-tracking target branch is past the head's merge base with
 // it, the files changed on it since that the head changed too or the plan
-// names, except those an ignore glob matches, fail the item as
-// base_overlap; without such a file the move needs confirming as
-// base_advanced.
+// names, except those an ignore glob matches and those whose content the
+// tip and the head share (#75), fail the item as base_overlap; without such
+// a file the move needs confirming as base_advanced.
 //
 // With DefaultBranch, a target or a dispatcher's base branch other than it
 // (case aside) needs confirming as base_not_default, with both branches in
@@ -147,7 +152,9 @@ func notDefaultBase(in BaseInput) bool {
 // baseAdvance sets details.Advanced, AdvancedTip, Overlap and OverlapCount
 // when the remote-tracking target branch is past the head's merge base with
 // it. A repository without that branch or the head has nothing to compare,
-// and a head the branch holds nothing to take in.
+// and a head the branch holds nothing to take in. A path that overlaps
+// counts only when the tip and the head differ there (#75); the tip and the
+// head are compared only when some path overlaps.
 func baseAdvance(ctx context.Context, git Git, in BaseInput, details *domain.LadoBaseBranchDetails) error {
 	if in.Remote == "" || in.HeadSHA == "" {
 		return nil
@@ -184,6 +191,17 @@ func baseAdvance(ctx context.Context, git Git, in BaseInput, details *domain.Lad
 		if slices.Contains(headPaths, p) || anyGlob(in.Affected, p) {
 			overlap = append(overlap, p)
 		}
+	}
+	// #75: a path whose content the head and the tip share does not
+	// change when the head merges, as after the PR's own squash or rebase
+	// merge, or another PR's same change: the head was verified with it.
+	if len(overlap) > 0 {
+		differ, err := git.ChangedPaths(ctx, in.Dir, tip, head)
+		if err != nil {
+			return err
+		}
+		differPaths := PrefixPaths(in.Prefix, differ)
+		overlap = slices.DeleteFunc(overlap, func(p string) bool { return !slices.Contains(differPaths, p) })
 	}
 	slices.Sort(overlap)
 	details.OverlapCount = len(overlap)
