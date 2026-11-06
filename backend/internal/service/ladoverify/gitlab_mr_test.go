@@ -1,6 +1,7 @@
 package ladoverify
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -18,6 +19,7 @@ func TestTickBuildsARecordForAGitLabMergeRequest(t *testing.T) {
 		task.Repo = domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "a/b/c", Host: "host"}
 	})
 	f.store.update(exec.SessionID, func(e *domain.LadoExecution) { e.PR.URL = mrURL })
+	f.host.setGitLab(gitlabGuarded())
 
 	f.tick()
 	record := f.record(exec.SessionID, verifyHead1)
@@ -28,8 +30,8 @@ func TestTickBuildsARecordForAGitLabMergeRequest(t *testing.T) {
 		t.Fatal("record has no items")
 	}
 	protection := verifyItemOf(t, record, domain.LadoVerifyProtection)
-	if protection.Outcome != domain.LadoVerifyConfirm || protection.Code != domain.LadoCodeUnprotectedGitLab {
-		t.Errorf("protection item = %s %q, want confirm %s for a GitLab project", protection.Outcome, protection.Code, domain.LadoCodeUnprotectedGitLab)
+	if protection.Outcome != domain.LadoVerifyPass || protection.Code != "" || !strings.Contains(string(protection.Details), `"provider":"gitlab"`) {
+		t.Errorf("protection item = %s %q %s, want a pass for a guarded GitLab branch", protection.Outcome, protection.Code, protection.Details)
 	}
 	if paths := verifyItemOf(t, record, domain.LadoVerifyPaths); paths.Outcome != domain.LadoVerifyPass {
 		t.Errorf("paths item = %s %s %s, want pass", paths.Outcome, paths.Code, paths.Details)

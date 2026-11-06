@@ -2,7 +2,6 @@ package daemon
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -26,9 +25,17 @@ func TestLadoRepoClientsPassBranchRulesAndStatus(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /repos/acme/demo/rules/branches/main":
 			_, _ = w.Write([]byte(`[{"type":"deletion"}]`))
-		case "POST /repos/acme/demo/statuses/" + sha:
+		case "POST /repos/acme/demo/statuses/" + sha, "POST /projects/group/project/statuses/" + sha:
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{}`))
+		case "GET /projects/group/project":
+			_, _ = w.Write([]byte(`{"only_allow_merge_if_pipeline_succeeds":true,"permissions":{"project_access":{"access_level":30}}}`))
+		case "GET /personal_access_tokens/self":
+			_, _ = w.Write([]byte(`{"scopes":["api"]}`))
+		case "GET /projects/group/project/protected_branches":
+			_, _ = w.Write([]byte(`[{"name":"main","push_access_levels":[{"access_level":0}],"allow_force_push":false}]`))
+		case "GET /projects/group/project/merge_requests/7":
+			_, _ = w.Write([]byte(`{"iid":7,"head_pipeline":{"id":77,"sha":"` + sha + `"}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -36,6 +43,7 @@ func TestLadoRepoClientsPassBranchRulesAndStatus(t *testing.T) {
 	t.Cleanup(srv.Close)
 	clients := newLadoRepoClients(config.GitLabConfig{})
 	clients.githubBaseURL = srv.URL
+	clients.gitlabBaseURL = srv.URL
 	status := ports.LadoCommitStatus{State: "success", Context: domain.LadoIntegrationStatusContext, Description: "Approved in LADO"}
 
 	repo := domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/demo"}
@@ -55,20 +63,28 @@ func TestLadoRepoClientsPassBranchRulesAndStatus(t *testing.T) {
 		"POST /repos/acme/demo/statuses/" + sha + " Bearer tok-entered",
 	}
 	mu.Lock()
-	defer mu.Unlock()
 	if !slices.Equal(got, want) {
+		mu.Unlock()
 		t.Fatalf("requests = %q, want %q", got, want)
 	}
+	mu.Unlock()
 
 	gitlabRepo := domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "group/project"}
 	gitlab, err := clients.ForRepo(ctx, gitlabRepo, "tok-entered")
 	if err != nil {
 		t.Fatalf("ForRepo for GitLab: %v", err)
 	}
-	if _, err := gitlab.BranchRules(ctx, gitlabRepo, "main"); !errors.Is(err, ports.ErrLadoUnsupported) {
-		t.Fatalf("GitLab BranchRules = %v, want ErrLadoUnsupported", err)
+	gitlabRules, err := gitlab.BranchRules(ctx, gitlabRepo, "main")
+	if err != nil || gitlabRules.GitLab == nil || !gitlabRules.GitLab.Protected {
+		t.Fatalf("GitLab BranchRules = %+v, %v; want main protected", gitlabRules, err)
 	}
-	if err := gitlab.PostCommitStatus(ctx, gitlabRepo, sha, status); !errors.Is(err, ports.ErrLadoUnsupported) {
-		t.Fatalf("GitLab PostCommitStatus = %v, want ErrLadoUnsupported", err)
+	status.MergeRequest = 7
+	if err := gitlab.PostCommitStatus(ctx, gitlabRepo, sha, status); err != nil {
+		t.Fatalf("GitLab PostCommitStatus: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if last := got[len(got)-1]; last != "POST /projects/group/project/statuses/"+sha+" Bearer tok-entered" {
+		t.Fatalf("last request = %q, want the GitLab status with the entered token", last)
 	}
 }

@@ -2040,6 +2040,85 @@ describe("approving an integration", () => {
 		expect(notDefault).not.toContain("Also to confirm");
 	});
 
+	it("names a GitLab branch's missing parts and says LADO posts its status there too (#21)", async () => {
+		const withItem = (item: VerifyItem) => confirmItems.map((other) => (other.kind === item.kind ? item : other));
+		const missing = ["protected_branch", "pipeline_must_succeed", "skipped_pipeline", "integration_status"];
+		const { approveIntegration, dialog } = setup(
+			{},
+			{
+				integrationPreview: () =>
+					json(
+						200,
+						integrationPreview({
+							items: withItem({
+								kind: "protection",
+								outcome: "confirm",
+								code: "unprotected",
+								details: { provider: "gitlab", repo: "group/app", branch: "main", missing },
+							}),
+							confirm: confirmCodes,
+						}),
+					),
+			},
+		);
+		await approveIntegration({ sessionId: "demo-7" });
+		const detail = dialogOptions(dialog).detail ?? "";
+		expect(detail).toContain(
+			"The base branch's rules lack (4): Protected branch, Pipelines must succeed, Skipped pipelines not counted as successful, …",
+		);
+		expect(detail).toContain("On approval, LADO posts the lado/integration status on this head");
+		expect(detail).toContain("This repository is not protected");
+
+		// The other two parts read in the app's words too, in every language.
+		for (const locale of ["en", "ko", "ja", "zh-CN", "es", "fr", "de", "pt-BR"] as const) {
+			const one = setup(
+				{ locale: () => locale },
+				{
+					integrationPreview: () =>
+						json(
+							200,
+							integrationPreview({
+								items: withItem({
+									kind: "protection",
+									outcome: "confirm",
+									code: "unprotected",
+									details: { provider: "gitlab", repo: "group/app", branch: "main", missing: ["push_access", "force_push"] },
+								}),
+								confirm: confirmCodes,
+							}),
+						),
+				},
+			);
+			await one.approveIntegration({ sessionId: "demo-7" });
+			const words = dialogOptions(one.dialog).detail ?? "";
+			expect(words, locale).toContain(trayCatalogs[locale]["lado.protection.part.pushAccess"]);
+			expect(words, locale).toContain(trayCatalogs[locale]["lado.protection.part.forcePush"]);
+			expect(words, locale).not.toContain("push_access");
+		}
+	});
+
+	it("keeps a record from before #21, whose GitLab protection is unprotected_gitlab, without the status line", async () => {
+		const withItem = (item: VerifyItem) => confirmItems.map((other) => (other.kind === item.kind ? item : other));
+		const { approveIntegration, dialog } = setup(
+			{},
+			{
+				integrationPreview: () =>
+					json(
+						200,
+						integrationPreview({
+							items: withItem({ kind: "protection", outcome: "confirm", code: "unprotected_gitlab", details: { provider: "gitlab", branch: "main" } }),
+							confirm: ["unprotected_gitlab", ...confirmCodes.filter((code) => code !== "unprotected")],
+						}),
+					),
+			},
+		);
+		await approveIntegration({ sessionId: "demo-7" });
+		const detail = dialogOptions(dialog).detail ?? "";
+		expect(detail).toContain("LADO does not read GitLab's branch protection.");
+		expect(detail).not.toContain("LADO posts the lado/integration status");
+		expect(detail).toContain("This repository is not protected");
+	});
+
 	it("words the confirmation from main's catalog in the current language", async () => {
 		const { approveIntegration, dialog } = setup({ locale: () => "ko" });
 		await approveIntegration({ sessionId: "demo-7" });

@@ -2,9 +2,10 @@ package ladoverify
 
 // LADO fork (#53): an integration approval holds for the base its head was
 // verified against. Once another PR's merge into that base changed the same
-// paths as the head (base_overlap), LADO withdraws the approval: on GitHub a
-// pending lado/integration status replaces the success it posted, so a
-// ruleset that requires it stops the merge, and AO's merge gate refuses.
+// paths as the head (base_overlap), LADO withdraws the approval: a pending
+// lado/integration status replaces the success it posted, so a ruleset that
+// requires it (GitHub) or "Pipelines must succeed" (GitLab, #21) stops the
+// merge, and AO's merge gate refuses.
 // The head has to take in the base; its new head is verified and approved
 // on its own.
 //
@@ -45,8 +46,8 @@ func baseOverlapped(record domain.LadoVerification) bool {
 
 // revokeOverlapped revokes the integration approvals of the record's head
 // that still hold when the record is base_overlap, each with its audit
-// event, and posts the pending status of each on GitHub once; a post that
-// fails is posted again by the loop. Once the head has an approval revoked
+// event, and posts the pending status of each once; a post that fails is
+// posted again by the loop. Once the head has an approval revoked
 // for its base, now or before, the approvals of the current heads of the
 // execution's other tracked PRs that have not merged are revoked as
 // sibling_revoked the same way (#64). It returns the approvals it revoked.
@@ -87,8 +88,9 @@ func (s *Service) revokeOverlapped(ctx context.Context, exec domain.LadoExecutio
 
 // revokeApprovals revokes those of approvals that still hold for reason,
 // each with its audit event (cause names the PR whose base moved, for a
-// sibling's), and posts the pending status of each on GitHub once. It
-// returns the approvals it revoked.
+// sibling's), and posts the pending status of each once. A GitLab approval
+// given before LADO posted statuses there stays not_applicable and gets
+// none. It returns the approvals it revoked.
 func (s *Service) revokeApprovals(ctx context.Context, exec domain.LadoExecution, approvals []domain.LadoIntegrationApproval, reason, cause string) ([]domain.LadoIntegrationApproval, error) {
 	var revoked []domain.LadoIntegrationApproval
 	for _, approval := range approvals {

@@ -201,6 +201,12 @@ type SCMCIObservation struct {
 	// complete CI state — the observer must not overwrite durable checks as
 	// Fetched=true complete (review Item 13). Mirrors SCMReviewObservation.Partial.
 	Partial bool
+	// NoPipeline is true when the provider is confident no CI pipeline will
+	// run for HeadSHA: GitLab reported zero pipelines for the commit and the
+	// merge request's latest diff version for that head is older than a grace
+	// period. Summary stays "unknown"; consumers decide whether that still
+	// blocks a merge. Only the GitLab adapter sets it.
+	NoPipeline bool
 }
 
 // SCMCheckObservation is one normalized check/status context. ProviderID is an

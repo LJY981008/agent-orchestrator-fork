@@ -509,10 +509,13 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 		}
 		case "protection": {
 			switch (code) {
-				case "unprotected":
-					return t("lado.verify.protection.unprotected", {
-						missing: (details.missing ?? []).map((part) => ladoProtectionPartText(t, part)).join(", "),
-					});
+				case "unprotected": {
+					const missing = (details.missing ?? []).map((part) => ladoProtectionPartText(t, part)).join(", ");
+					// GitLab has protected branches and project settings, not rulesets (#21).
+					return details.provider === "gitlab"
+						? t("lado.verify.protection.unprotectedGitlab", { missing })
+						: t("lado.verify.protection.unprotected", { missing });
+				}
 				case "protection_unknown":
 					return details.error ? t("lado.verify.protection.unknownError", { error: details.error }) : t("lado.verify.protection.unknown");
 				case "unprotected_gitlab":
