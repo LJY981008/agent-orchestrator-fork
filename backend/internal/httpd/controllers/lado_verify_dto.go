@@ -146,6 +146,9 @@ type LadoVerificationResponse struct {
 	Items      []LadoVerifyItemResponse        `json:"items"`
 	Evidence   []LadoEvidenceCriterionResponse `json:"evidence" description:"Each acceptance criterion's evidence, from the evidence item."`
 	ComputedAt time.Time                       `json:"computedAt"`
+	// UnresolvedReviewThreads is read for the execution view only, outside
+	// the record and its hash (LADO #85).
+	UnresolvedReviewThreads int `json:"unresolvedReviewThreads,omitempty" description:"How many review threads of the PR are unresolved now and keep it from being ready to merge. Only the execution view fills it; it is outside the record and its hash, and omitted when there are none."`
 }
 
 // LadoIntegrationApprovalResponse is the developer's integration approval of

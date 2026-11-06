@@ -113,6 +113,7 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 						<LadoRepostStatus projectId={projectId} sessionId={execution.sessionId} />
 					</div>
 				) : null}
+				<ReviewThreads count={verification?.unresolvedReviewThreads} />
 				{verification ? (
 					<ul className="flex flex-col gap-2" data-testid="lado-verify-items">
 						{verification.items.map((item) => (
@@ -253,6 +254,7 @@ function TrackedPRVerification({
 					<LadoRepostStatus projectId={projectId} sessionId={execution.sessionId} prUrl={pr.url} />
 				</div>
 			) : null}
+			<ReviewThreads count={record?.unresolvedReviewThreads} />
 			{record ? (
 				<ul className="flex flex-col gap-2" data-testid="lado-verify-items">
 					{record.items.map((item) => (
@@ -281,6 +283,22 @@ function TrackedPRVerification({
 				/>
 			) : null}
 		</li>
+	);
+}
+
+/**
+ * How many review threads of the pull request are still unresolved (LADO
+ * #85): they keep it from being ready to merge until the worker resolves
+ * the threads it addressed. Hidden while there are none.
+ */
+function ReviewThreads({ count }: { count?: number }) {
+	const { t } = useTranslation();
+	const threads = count ?? 0;
+	if (threads <= 0) return null;
+	return (
+		<p className="pl-3.5 text-xs text-muted-foreground" data-testid="lado-verify-review-threads">
+			{t("lado.verify.reviewThreads", { count: threads })}
+		</p>
 	);
 }
 

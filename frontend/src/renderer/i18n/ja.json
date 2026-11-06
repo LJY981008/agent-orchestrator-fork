@@ -4074,6 +4074,8 @@
 	"lado.verify.commands.dirty_other": "コミットされていないファイル {{count}} 個のためチェックを待っています — コミットか削除するか .gitignore に入れると始まります",
 	"lado.verify.commands.dirtyMore_one": "ほか {{count}} 個",
 	"lado.verify.commands.dirtyMore_other": "ほか {{count}} 個",
+	"lado.verify.reviewThreads_one": "未解決のレビュースレッド {{count}} 件",
+	"lado.verify.reviewThreads_other": "未解決のレビュースレッド {{count}} 件",
 	"lado.verify.commits.passed_one": "{{count}} 件のコミットと PR タイトルが韓国語です",
 	"lado.verify.commits.passed_other": "{{count}} 件のコミットと PR タイトルが韓国語です",
 	"lado.verify.commits.notKorean_one": "韓国語ではないメッセージ {{count}} 件",
