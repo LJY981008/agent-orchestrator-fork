@@ -19,6 +19,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/gitdefault"
+	"github.com/aoagents/agent-orchestrator/backend/internal/gitlfs"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -110,6 +111,26 @@ type RepoGitStatus struct {
 	NeedsGitInit    bool     `json:"needsGitInit"`
 	RequiredActions []string `json:"requiredActions"`
 	BlockingErrors  []string `json:"blockingErrors"`
+	// GitLFSMissing (LADO #22) reports that the repository's HEAD uses Git LFS
+	// (.gitattributes has filter=lfs) but git-lfs is not installed. It is
+	// advisory: sessions cannot start until git-lfs is installed, but the
+	// import itself is not blocked.
+	GitLFSMissing bool `json:"gitLfsMissing,omitempty"`
+}
+
+// ladoGitLFSInstalled reports whether git-lfs is installed (LADO #22). Tests
+// replace it.
+var ladoGitLFSInstalled = gitlfs.Installed
+
+// ladoImportRepoMissesGitLFS reports whether a repository with commits uses
+// Git LFS at HEAD while git-lfs is not installed. A failed check reports
+// false: the hint never blocks.
+func ladoImportRepoMissesGitLFS(ctx context.Context, path string) bool {
+	uses, err := gitlfs.UsesLFS(ctx, "git", path, "HEAD")
+	if err != nil || !uses {
+		return false
+	}
+	return !ladoGitLFSInstalled(ctx, "git")
 }
 
 // ImportValidationResult is shared by project import validation and future
@@ -407,6 +428,9 @@ func inspectImportRepo(ctx context.Context, path string) RepoGitStatus {
 	status.NeedsGitInit = !status.IsRepo
 	if status.IsRepo && status.HasCommit && importRepoHasDetachedHead(ctx, path) {
 		status.BlockingErrors = append(status.BlockingErrors, "DETACHED_HEAD")
+	}
+	if status.IsRepo && status.HasCommit {
+		status.GitLFSMissing = ladoImportRepoMissesGitLFS(ctx, path) // LADO #22
 	}
 	if status.NeedsGitInit {
 		status.RequiredActions = append(status.RequiredActions, GitPreparationActionInit)

@@ -1627,6 +1627,9 @@ func toSpawnAPIError(err error) error {
 	case errors.Is(err, sessionmanager.ErrSpawnSystemPrompt):
 		return apierr.Internal("SPAWN_SYSTEM_PROMPT_FAILED", err.Error())
 	case errors.Is(err, sessionmanager.ErrWorkspaceCreate):
+		if mapped := ladoWorkspaceSetupAPIError(err); mapped != nil { // LADO #22
+			return mapped
+		}
 		return apierr.Conflict("WORKSPACE_CREATE_FAILED", err.Error(), nil)
 	case errors.Is(err, sessionmanager.ErrWorkspaceProvision):
 		return apierr.Conflict("WORKSPACE_PROVISION_FAILED", err.Error(), nil)
@@ -1655,6 +1658,30 @@ func toSpawnAPIError(err error) error {
 	default:
 		return apierr.Internal("SPAWN_INTERNAL", err.Error())
 	}
+}
+
+// ladoWorkspaceSetupAPIError (LADO #22) puts the short setup summary first in
+// a WORKSPACE_CREATE_FAILED message, so readers that cut the message (the LADO
+// queue keeps 512 bytes) still see the repository and the cause. The full
+// error text stays in details.cause. It returns nil when err carries no
+// ports.WorkspaceSetupError.
+func ladoWorkspaceSetupAPIError(err error) error {
+	summary, ok := ports.WorkspaceSetupSummary(err)
+	if !ok {
+		return nil
+	}
+	var setup *ports.WorkspaceSetupError
+	errors.As(err, &setup)
+	details := map[string]any{"cause": err.Error()}
+	if setup.Repo != "" {
+		details["repo"] = setup.Repo
+	}
+	if errors.Is(err, ports.ErrGitLFSMissing) {
+		if fix := strings.TrimSpace(setup.Fix); fix != "" {
+			details["suggestedFix"] = fix
+		}
+	}
+	return apierr.Conflict("WORKSPACE_CREATE_FAILED", summary, details)
 }
 
 func (s *Service) replayClientRequest(ctx context.Context, id, hash string) (domain.SessionRecord, bool, error) {
