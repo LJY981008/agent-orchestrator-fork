@@ -69,6 +69,10 @@ type Deps struct {
 	// HomeDir expands "~" in key paths; nil uses os.UserHomeDir.
 	HomeDir func() (string, error)
 	Log     *slog.Logger
+	// CredentialsChanged runs after a token was stored or deleted, so the
+	// daemon can give AO's GitLab adapters the new hosts without a restart.
+	// nil does nothing.
+	CredentialsChanged func(ctx context.Context)
 }
 
 // Service checks and makes repository connections, and keeps host tokens.
@@ -88,6 +92,13 @@ func New(deps Deps) *Service {
 		deps.Log = slog.Default()
 	}
 	return &Service{deps: deps}
+}
+
+// credentialsChanged tells the daemon a stored token changed.
+func (s *Service) credentialsChanged(ctx context.Context) {
+	if s.deps.CredentialsChanged != nil {
+		s.deps.CredentialsChanged(ctx)
+	}
 }
 
 // CheckInput names a repository and the credentials to reach it.
@@ -244,6 +255,9 @@ func (s *Service) Connect(ctx context.Context, in ConnectInput) (ConnectResult, 
 			s.deps.Log.Warn("LADO could not store a host token", "host", check.Host, "err", err)
 			return ConnectResult{}, apierr.Internal("LADO_CREDENTIAL_STORE_FAILED", "Failed to store the access token")
 		}
+		// The token is stored even when the SSH key or the clone fails below,
+		// so AO's adapters take it now.
+		s.credentialsChanged(ctx)
 	}
 	keyPath, problem := s.keyPath(in.SSHKeyPath)
 	if problem.code != "" {
@@ -337,6 +351,7 @@ func (s *Service) StoreCredential(ctx context.Context, host, token string) (Stor
 	if err != nil {
 		return StoredCredential{}, "", apierr.Invalid("LADO_TOKEN_INVALID", err.Error(), nil)
 	}
+	s.credentialsChanged(ctx)
 	return stored, login, nil
 }
 
@@ -348,6 +363,7 @@ func (s *Service) DeleteCredential(ctx context.Context, host string) error {
 	if err := s.deps.Credentials.Delete(ctx, host); err != nil {
 		return apierr.Internal("LADO_CREDENTIAL_DELETE_FAILED", "Failed to delete the access token")
 	}
+	s.credentialsChanged(ctx)
 	return nil
 }
 
