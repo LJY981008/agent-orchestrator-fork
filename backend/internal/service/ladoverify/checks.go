@@ -96,10 +96,14 @@ type CommandsInput struct {
 	// RequiredNamed says whether the base branch's rules name required
 	// checks (RequiredContexts).
 	RequiredNamed bool
-	// WorktreeCode is WorktreeReady's answer: empty when the next command
+	// WorktreeCode is WorktreeCheck's answer: empty when the next command
 	// can run in the execution's worktree, else worktree_missing,
-	// worktree_not_at_head or worktree_changed.
+	// worktree_not_at_head, worktree_dirty or worktree_changed.
 	WorktreeCode string
+	// Dirty and DirtyCount are WorktreeCheck's paths for worktree_dirty:
+	// the first domain.LadoDirtyFilesMax and how many there are.
+	Dirty      []string
+	DirtyCount int
 }
 
 // EvaluateCommands computes the commands item. Without commands it passes as
@@ -112,13 +116,14 @@ type CommandsInput struct {
 // one fails as command_timed_out, and a failed one or one that could not
 // start fails as commands_failed. A command without a run, or whose newest
 // run was cancelled, runs next: it waits as commands_running while the
-// worktree is ready, else as worktree_not_at_head or worktree_changed, and
-// fails as worktree_missing without a worktree. A failure wins over a wait;
-// the first command in order names the code. The details list each command
-// with the hash of its text and its newest run.
+// worktree is ready, else as worktree_not_at_head, worktree_dirty or
+// worktree_changed, and fails as worktree_missing without a worktree. A
+// failure wins over a wait; the first command in order names the code. The
+// details list each command with the hash of its text and its newest run,
+// and for worktree_dirty the paths that keep the worktree from being clean.
 func EvaluateCommands(in CommandsInput) (domain.LadoVerifyItem, error) {
 	switch in.WorktreeCode {
-	case "", domain.LadoCodeWorktreeMissing, domain.LadoCodeWorktreeNotAtHead, domain.LadoCodeWorktreeChanged:
+	case "", domain.LadoCodeWorktreeMissing, domain.LadoCodeWorktreeNotAtHead, domain.LadoCodeWorktreeDirty, domain.LadoCodeWorktreeChanged:
 	default:
 		return domain.LadoVerifyItem{}, fmt.Errorf("evaluate the check commands: unknown worktree code %q", in.WorktreeCode)
 	}
@@ -129,6 +134,10 @@ func EvaluateCommands(in CommandsInput) (domain.LadoVerifyItem, error) {
 		return domain.NewLadoVerifyItem(domain.LadoVerifyCommands, domain.LadoVerifyConfirm, domain.LadoCodeNoTests, domain.LadoCommandsDetails{})
 	}
 	var details domain.LadoCommandsDetails
+	if in.WorktreeCode == domain.LadoCodeWorktreeDirty {
+		details.Dirty = slices.Clone(in.Dirty[:min(len(in.Dirty), domain.LadoDirtyFilesMax)])
+		details.DirtyCount = max(in.DirtyCount, len(in.Dirty))
+	}
 	failCode, waitCode := "", ""
 	for _, command := range in.Commands {
 		entry := domain.LadoVerifyCommandRun{Name: command.Name, CommandSHA256: domain.LadoCheckCommandSHA256(command.Command)}
@@ -196,7 +205,7 @@ func commandOutcome(run domain.LadoCheckRun, ran bool, worktreeCode string) (dom
 		switch worktreeCode {
 		case domain.LadoCodeWorktreeMissing:
 			return domain.LadoVerifyFail, worktreeCode, nil
-		case domain.LadoCodeWorktreeNotAtHead, domain.LadoCodeWorktreeChanged:
+		case domain.LadoCodeWorktreeNotAtHead, domain.LadoCodeWorktreeDirty, domain.LadoCodeWorktreeChanged:
 			return domain.LadoVerifyWait, worktreeCode, nil
 		}
 		return domain.LadoVerifyWait, domain.LadoCodeCommandsRunning, nil

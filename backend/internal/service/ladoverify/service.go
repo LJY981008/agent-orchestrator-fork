@@ -253,6 +253,10 @@ type Service struct {
 	// first verification this daemon stored (timings.go).
 	prSeen   map[domain.SessionID]bool
 	verified map[domain.SessionID]bool
+	// dirtySince holds, by execution (passKey), when this daemon first saw
+	// its head's commands item wait as worktree_dirty (lado_worktree_dirty.go,
+	// LADO #22): one entry each, which a new head replaces.
+	dirtySince map[domain.SessionID]dirtyWait
 	// runCtx is the context of the loop Start began, while it runs; the
 	// background reads RefreshProtection starts run under it.
 	runCtx context.Context
@@ -304,6 +308,7 @@ func New(deps Deps) *Service {
 		prURLWarned:    map[string]bool{},
 		prSeen:         map[domain.SessionID]bool{},
 		verified:       map[domain.SessionID]bool{},
+		dirtySince:     map[domain.SessionID]dirtyWait{},
 	}
 }
 
@@ -500,9 +505,9 @@ func (s *Service) Tick(ctx context.Context) error {
 	if len(urgent) > 0 {
 		limit = urgentListMax
 	}
-	executions, err := s.deps.Store.ListLadoExecutionsToVerify(ctx, limit+len(resting))
-	if err != nil {
-		problems = append(problems, fmt.Errorf("list the executions to verify: %w", err))
+	executions, listErr := s.deps.Store.ListLadoExecutionsToVerify(ctx, limit+len(resting))
+	if listErr != nil {
+		problems = append(problems, fmt.Errorf("list the executions to verify: %w", listErr))
 	}
 	keys := map[domain.SessionID]string{}
 	if len(urgent) > 0 {
@@ -539,6 +544,11 @@ func (s *Service) Tick(ctx context.Context) error {
 		if err != nil {
 			problems = append(problems, fmt.Errorf("execution %s, pull request %s: %w", exec.SessionID, exec.PR.URL, err))
 		}
+	}
+	if listErr == nil && ctx.Err() == nil && len(executions) < limit+len(resting) {
+		// The store listed every execution to verify: the waits of the
+		// others are over (LADO #22).
+		s.pruneDirty(executions)
 	}
 	if ctx.Err() == nil {
 		if _, err := s.deps.Store.SettleLadoExecutionsAwaitingRepos(ctx); err != nil {
@@ -621,6 +631,7 @@ func (s *Service) verifyExecutionIn(ctx context.Context, exec domain.LadoExecuti
 	s.markPRSeen(ctx, exec)
 	switch {
 	case exec.PR.Merged || exec.PR.Closed:
+		s.forgetDirty(passKey(exec)) // LADO #22
 		return s.settle(ctx, exec)
 	case exec.PR.HeadSHA == "":
 		return nil

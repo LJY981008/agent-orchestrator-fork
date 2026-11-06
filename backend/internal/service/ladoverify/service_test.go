@@ -236,8 +236,8 @@ func TestTickRunsCommandsOncePerHead(t *testing.T) {
 	if n := f.store.runCount(); n != 4 {
 		t.Fatalf("runs started in a worktree with changes = %d, want still 4", n)
 	}
-	if item := verifyItemOf(t, f.record(one.SessionID, verifyHead2), domain.LadoVerifyCommands); item.Outcome != domain.LadoVerifyWait || item.Code != domain.LadoCodeWorktreeNotAtHead {
-		t.Errorf("commands item in a worktree with changes = %s %s, want wait worktree_not_at_head", item.Outcome, item.Code)
+	if item := verifyItemOf(t, f.record(one.SessionID, verifyHead2), domain.LadoVerifyCommands); item.Outcome != domain.LadoVerifyWait || item.Code != domain.LadoCodeWorktreeDirty {
+		t.Errorf("commands item in a worktree with changes = %s %s, want wait worktree_dirty", item.Outcome, item.Code)
 	}
 	f.git.setDirty(f.reads.worktree(one.SessionID), false)
 	f.tick()

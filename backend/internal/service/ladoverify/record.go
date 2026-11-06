@@ -213,6 +213,7 @@ func (s *Service) verifyHeadIn(ctx context.Context, exec domain.LadoExecution, o
 	if opts.startWork {
 		record.Notified = s.requestFixes(ctx, in, ev, record.Notified, opts.host)
 		record.Notified = s.requestPull(ctx, in, record.Notified)
+		record.Notified = s.requestClean(ctx, in, ev, record.Notified) // LADO #22
 	}
 	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
 		return domain.LadoVerification{}, in, fmt.Errorf("store the record of head %s: %w", in.head, err)
@@ -703,21 +704,24 @@ func (s *Service) newerBase(ctx context.Context, dir, head, a, b string) (string
 // daemon's slot is free.
 func (s *Service) commandsItem(ctx context.Context, in headInputs, runs []domain.LadoCheckRun, named bool, opts verifyOptions, ev *evaluation) (domain.LadoVerifyItem, error) {
 	due := CommandsToRun(in.commands, runs)
-	code := ""
+	var worktree WorktreeState
 	if len(due) > 0 {
 		// After a run, the worktree may hold what the run left, such as build
 		// output, and nothing else.
-		code = WorktreeReady(ctx, s.deps.Git, in.worktree, in.head, runs)
-		if code == "" && opts.startWork {
+		worktree = WorktreeCheck(ctx, s.deps.Git, in.worktree, in.head, runs)
+		if worktree.Code == "" && opts.startWork {
 			if run, ok := s.startCommand(ctx, in, due[0]); ok {
 				runs, due = append(slices.Clip(runs), run), due[1:]
 			}
 		}
 	}
 	ev.runs = runs
-	ev.commandsSettled = (len(due) == 0 || code != "") &&
+	ev.commandsSettled = (len(due) == 0 || worktree.Code != "") &&
 		!slices.ContainsFunc(runs, func(run domain.LadoCheckRun) bool { return run.Status == domain.LadoCheckRunRunning })
-	return EvaluateCommands(CommandsInput{Commands: in.commands, Runs: runs, RequiredNamed: named, WorktreeCode: code})
+	return EvaluateCommands(CommandsInput{
+		Commands: in.commands, Runs: runs, RequiredNamed: named,
+		WorktreeCode: worktree.Code, Dirty: worktree.Dirty, DirtyCount: worktree.DirtyCount,
+	})
 }
 
 // startCommand starts command on the head in the execution's worktree when

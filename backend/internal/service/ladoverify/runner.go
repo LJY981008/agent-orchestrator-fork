@@ -238,43 +238,72 @@ func sameVariable(a, b string) bool {
 	return a == b
 }
 
-// WorktreeReady tells whether the next check command can run on head in the
-// worktree at dir, so that the commands test exactly the pushed commit: ""
-// when it can, domain.LadoCodeWorktreeMissing when the folder is gone, and
-// domain.LadoCodeWorktreeNotAtHead while its HEAD is another commit or git
-// cannot read it. Before the head's first run that left a status, the
-// worktree must have no change, untracked files included
-// (worktree_not_at_head otherwise). After one, its status must be the one
-// LADO read when the head's last run ended, which may hold that run's build
-// output: any other change, such as an edit the worker did not commit, waits
-// as domain.LadoCodeWorktreeChanged.
+// WorktreeReady is WorktreeCheck's code alone.
 func WorktreeReady(ctx context.Context, git Git, dir, head string, runs []domain.LadoCheckRun) string {
+	return WorktreeCheck(ctx, git, dir, head, runs).Code
+}
+
+// WorktreeState is what WorktreeCheck read of a worktree: its code and, for
+// worktree_dirty, the first domain.LadoDirtyFilesMax paths that keep it from
+// being clean and how many there are.
+type WorktreeState struct {
+	Code       string
+	Dirty      []string
+	DirtyCount int
+}
+
+// dirtyPather lists the paths that keep a worktree from being clean
+// (ExecGit.DirtyPaths). It is not part of Git, so that the Git fakes of
+// the tests need not have it: without it worktree_dirty lists no path.
+type dirtyPather interface {
+	DirtyPaths(ctx context.Context, dir string) ([]string, error)
+}
+
+// WorktreeCheck tells whether the next check command can run on head in the
+// worktree at dir, so that the commands test exactly the pushed commit: an
+// empty code when it can, domain.LadoCodeWorktreeMissing when the folder is
+// gone, and domain.LadoCodeWorktreeNotAtHead while its HEAD is another
+// commit or git cannot read it. Before the head's first run that left a
+// status, the worktree must have no change, untracked files included: a
+// worktree at the head with changes waits as domain.LadoCodeWorktreeDirty,
+// with the paths git lists (LADO #22). After one, its status must be the
+// one LADO read when the head's last run ended, which may hold that run's
+// build output: any other change, such as an edit the worker did not
+// commit, waits as domain.LadoCodeWorktreeChanged.
+func WorktreeCheck(ctx context.Context, git Git, dir, head string, runs []domain.LadoCheckRun) WorktreeState {
 	if dir == "" {
-		return domain.LadoCodeWorktreeMissing
+		return WorktreeState{Code: domain.LadoCodeWorktreeMissing}
 	}
 	info, err := os.Stat(dir)
 	switch {
 	case errors.Is(err, fs.ErrNotExist) || (err == nil && !info.IsDir()):
-		return domain.LadoCodeWorktreeMissing
+		return WorktreeState{Code: domain.LadoCodeWorktreeMissing}
 	case err != nil:
-		return domain.LadoCodeWorktreeNotAtHead
+		return WorktreeState{Code: domain.LadoCodeWorktreeNotAtHead}
 	}
 	current, err := git.RevParse(ctx, dir, "HEAD")
 	if err != nil || !strings.EqualFold(current, head) {
-		return domain.LadoCodeWorktreeNotAtHead
+		return WorktreeState{Code: domain.LadoCodeWorktreeNotAtHead}
 	}
 	status, err := git.Status(ctx, dir)
 	if err != nil {
-		return domain.LadoCodeWorktreeNotAtHead
+		return WorktreeState{Code: domain.LadoCodeWorktreeNotAtHead}
 	}
 	after, ran := lastWorktreeStatus(runs)
 	switch {
 	case !ran && strings.TrimSpace(status) != "":
-		return domain.LadoCodeWorktreeNotAtHead
+		state := WorktreeState{Code: domain.LadoCodeWorktreeDirty}
+		if lister, ok := git.(dirtyPather); ok {
+			if paths, err := lister.DirtyPaths(ctx, dir); err == nil {
+				state.Dirty = slices.Clone(paths[:min(len(paths), domain.LadoDirtyFilesMax)])
+				state.DirtyCount = len(paths)
+			}
+		}
+		return state
 	case ran && domain.LadoWorktreeStatusSHA256(status) != after:
-		return domain.LadoCodeWorktreeChanged
+		return WorktreeState{Code: domain.LadoCodeWorktreeChanged}
 	}
-	return ""
+	return WorktreeState{}
 }
 
 // lastWorktreeStatus returns the status hash LADO read after the head's run
