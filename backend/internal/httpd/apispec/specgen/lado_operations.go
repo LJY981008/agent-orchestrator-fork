@@ -134,6 +134,7 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoUnseenAlertCountsResponse":     "LadoUnseenAlertCountsResponse",
 	"ControllersLadoCompactWarningResponse":        "LadoCompactWarningResponse",
 	"ControllersLadoPlanPartResponse":              "LadoPlanPartResponse",
+	"ControllersLadoPlanPartWarningResponse":       "LadoPlanPartWarningResponse",
 	"ControllersLadoExecutionPRResponse":           "LadoExecutionPRResponse",
 	"ControllersLadoExecutionResolveResponse":      "LadoExecutionResolveResponse",
 	"ControllersLadoExecutionTrackedPRResponse":    "LadoExecutionTrackedPRResponse",

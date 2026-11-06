@@ -37,6 +37,7 @@ func ladoTaskPartsResponse(view ladoqueue.PartsView) LadoTaskPartsResponse {
 	resp := LadoTaskPartsResponse{Parts: make([]LadoTaskPartResponse, 0, len(view.Parts))}
 	if view.Run.Branch != "" {
 		resp.Branch, resp.BaseSHA, resp.HeadSHA = view.Run.Branch, view.Run.BaseSHA, view.Run.HeadSHA
+		resp.QueueEntryID = string(view.Run.QueueEntryID)
 		resp.StartedAt = ladoOptionalTime(view.Run.StartedAt)
 		for _, repo := range view.Repos {
 			resp.Repos = append(resp.Repos, LadoPartRunRepoResponse{

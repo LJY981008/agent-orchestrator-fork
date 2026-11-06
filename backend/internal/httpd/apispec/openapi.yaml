@@ -22147,7 +22147,8 @@ components:
           type: array
         warnings:
           description: 'What the plan view warns about without blocking the approval:
-            unsplit_large_plan for six or more steps without parts.'
+            unsplit_large_plan for six or more steps without parts, split_small_plan
+            for parts in a plan of four or fewer steps.'
           items:
             type: string
           type: array
@@ -22366,6 +22367,12 @@ components:
           type: array
         title:
           type: string
+        warnings:
+          description: The sizing limits the part is over, without blocking the approval;
+            empty when it is within them.
+          items:
+            $ref: '#/components/schemas/LadoPlanPartWarningResponse'
+          type: array
       required:
       - id
       - title
@@ -22373,6 +22380,29 @@ components:
       - affectedPaths
       - dependsOn
       - phase
+      - warnings
+      type: object
+    LadoPlanPartWarningResponse:
+      properties:
+        code:
+          description: 'part_many_steps: more steps than the limit; part_many_paths:
+            more affected_paths than the limit; part_many_files: more files under
+            its paths at the revision''s base commit than the limit.'
+          enum:
+          - part_many_steps
+          - part_many_paths
+          - part_many_files
+          type: string
+        limit:
+          description: The largest count within the limit.
+          type: integer
+        value:
+          description: The part's count.
+          type: integer
+      required:
+      - code
+      - value
+      - limit
       type: object
     LadoPlanProblemResponse:
       properties:
@@ -23498,6 +23528,10 @@ components:
           type: boolean
         partId:
           description: The part of a part or merge worker.
+          type: string
+        queueEntryId:
+          description: The queue entry of the execution the session ran; omitted for
+            a plan session. Sessions of one execution, retries included, share it.
           type: string
         role:
           description: The role the task's timings show for the session.
@@ -25085,6 +25119,11 @@ components:
           items:
             $ref: '#/components/schemas/LadoTaskPartResponse'
           type: array
+        queueEntryId:
+          description: 'The queue entry of the run shown: the sessions of the task''s
+            usage with this queueEntryId are this run''s, retries included. Omitted
+            while the newest approval runs no parts.'
+          type: string
         repos:
           description: The repositories the run has an integration branch in, each
             named branch, in the order the plan's repos give; branch, baseSha and

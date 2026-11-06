@@ -85,7 +85,7 @@ func (c *LadoController) getPlan(w http.ResponseWriter, r *http.Request) {
 		Task:     ladoTaskResponse(view.Task),
 		Revision: ladoPlanRevisionWithMetrics(view.Revision, view.Metrics),
 		Content:  view.Content,
-		Plan:     ladoPlanContentResponse(view.Plan),
+		Plan:     ladoPlanContentResponse(view.Plan, view.PartFiles),
 		Latest:   view.Latest,
 		Approved: view.Approved,
 	}
@@ -311,7 +311,10 @@ func ladoPlanHistoryResponse(history ladotask.PlanHistory) LadoPlanHistoryRespon
 	return resp
 }
 
-func ladoPlanContentResponse(plan domain.LadoPlan) LadoPlanContentResponse {
+// ladoPlanContentResponse reads the plan for the plan view. files is the
+// number of files under each part's paths, by part id; nil leaves the file
+// warnings out.
+func ladoPlanContentResponse(plan domain.LadoPlan, files map[string]int) LadoPlanContentResponse {
 	orEmpty := func(values []string) []string {
 		if values == nil {
 			return []string{}
@@ -330,7 +333,7 @@ func ladoPlanContentResponse(plan domain.LadoPlan) LadoPlanContentResponse {
 		Reviewer:           plan.Reviewer,
 		PlanSource:         plan.PlanSource,
 		ChangeKinds:        orEmpty(plan.ChangeKinds),
-		Parts:              ladoPlanPartResponses(plan.Parts),
+		Parts:              ladoPlanPartResponses(plan.Parts, plan.PartWarnings(files)),
 		IntegrationSteps:   orEmptyInts(plan.IntegrationSteps()),
 		Warnings:           orEmpty(plan.Warnings()),
 		Body:               plan.Body,
@@ -344,14 +347,23 @@ func orEmptyInts(values []int) []int {
 	return values
 }
 
-func ladoPlanPartResponses(parts []domain.LadoPlanPart) []LadoPlanPartResponse {
+func ladoPlanPartResponses(parts []domain.LadoPlanPart, warnings map[string][]domain.LadoPlanPartWarning) []LadoPlanPartResponse {
 	phases := domain.LadoPartPhases(parts)
 	out := make([]LadoPlanPartResponse, 0, len(parts))
 	for _, part := range parts {
 		out = append(out, LadoPlanPartResponse{
 			ID: part.ID, Title: part.Title, Steps: orEmptyInts(part.Steps), AffectedPaths: orEmptyStrings(part.AffectedPaths),
 			DependsOn: orEmptyStrings(part.DependsOn), Phase: phases[part.ID],
+			Warnings: ladoPlanPartWarningResponses(warnings[part.ID]),
 		})
+	}
+	return out
+}
+
+func ladoPlanPartWarningResponses(warnings []domain.LadoPlanPartWarning) []LadoPlanPartWarningResponse {
+	out := make([]LadoPlanPartWarningResponse, 0, len(warnings))
+	for _, w := range warnings {
+		out = append(out, LadoPlanPartWarningResponse{Code: w.Code, Value: w.Value, Limit: w.Limit})
 	}
 	return out
 }

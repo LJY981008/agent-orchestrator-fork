@@ -7592,7 +7592,7 @@ export interface components {
             risk?: string;
             steps: string[];
             testCommands: string[];
-            /** @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts. */
+            /** @description What the plan view warns about without blocking the approval: unsplit_large_plan for six or more steps without parts, split_small_plan for parts in a plan of four or fewer steps. */
             warnings: string[];
         };
         LadoPlanCritiqueResponse: {
@@ -7682,6 +7682,19 @@ export interface components {
             /** @description 1-based numbers into the plan's steps. */
             steps: number[];
             title: string;
+            /** @description The sizing limits the part is over, without blocking the approval; empty when it is within them. */
+            warnings: components["schemas"]["LadoPlanPartWarningResponse"][];
+        };
+        LadoPlanPartWarningResponse: {
+            /**
+             * @description part_many_steps: more steps than the limit; part_many_paths: more affected_paths than the limit; part_many_files: more files under its paths at the revision's base commit than the limit.
+             * @enum {string}
+             */
+            code: "part_many_steps" | "part_many_paths" | "part_many_files";
+            /** @description The largest count within the limit. */
+            limit: number;
+            /** @description The part's count. */
+            value: number;
         };
         LadoPlanProblemResponse: {
             /**
@@ -8175,6 +8188,8 @@ export interface components {
             incomplete: boolean;
             /** @description The part of a part or merge worker. */
             partId?: string;
+            /** @description The queue entry of the execution the session ran; omitted for a plan session. Sessions of one execution, retries included, share it. */
+            queueEntryId?: string;
             /**
              * @description The role the task's timings show for the session.
              * @enum {string}
@@ -8781,6 +8796,8 @@ export interface components {
             /** @description Where LADO last moved the integration branch. */
             headSha?: string;
             parts: components["schemas"]["LadoTaskPartResponse"][];
+            /** @description The queue entry of the run shown: the sessions of the task's usage with this queueEntryId are this run's, retries included. Omitted while the newest approval runs no parts. */
+            queueEntryId?: string;
             /** @description The repositories the run has an integration branch in, each named branch, in the order the plan's repos give; branch, baseSha and headSha above are the first's. Omitted while the newest approval runs no parts. */
             repos?: components["schemas"]["LadoPartRunRepoResponse"][];
             /** Format: date-time */
