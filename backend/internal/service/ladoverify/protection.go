@@ -1,7 +1,7 @@
 package ladoverify
 
 // LADO fork: the base branch's remote protection (docs/LJY-PRD/TDD.md §7.1;
-// plan decisions d and i). The rules that apply to the base branch name the
+// plan decisions d and i; GitLab since #21). The rules that apply to the base branch name the
 // checks it requires, and say whether the remote sends every change through
 // LADO's integration approval: a pull request, the lado/integration check,
 // and no force push or deletion. Reads go through the repository client with
@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,12 +41,18 @@ type ProtectionRead struct {
 	Err      error
 	// ReadAt is when LADO asked the host.
 	ReadAt time.Time
+	// StatusPostFailed says LADO's last lado/integration post on the
+	// repository, of any state, failed on the host (#21). It is kept in the
+	// daemon's memory, so it is false after a restart until LADO posts again.
+	// GitLab counts it as integration_status missing.
+	StatusPostFailed bool
 }
 
 // ErrorMessage is the read's error on one line without secrets, empty when
-// the read worked or LADO reads no rules on the host (GitLab).
+// the read worked or a GitLab client reads no rules (ErrLadoUnsupported,
+// unprotected_gitlab).
 func (r ProtectionRead) ErrorMessage() string {
-	if r.Err == nil || r.Provider == domain.TrackerProviderGitLab {
+	if r.Err == nil || (r.Provider == domain.TrackerProviderGitLab && errors.Is(r.Err, ports.ErrLadoUnsupported)) {
 		return ""
 	}
 	return redactedErrorLine(r.Err)
@@ -71,6 +78,9 @@ type Protection struct {
 
 	mu      sync.Mutex
 	entries map[protectionKey]*protectionEntry
+	// postFailed holds, by repository (statusRepoKey), whether LADO's last
+	// lado/integration post there failed.
+	postFailed map[string]bool
 }
 
 type protectionKey struct {
@@ -92,7 +102,34 @@ func NewProtection(clients RepoClients, now func() time.Time, ttl time.Duration)
 	if now == nil {
 		now = time.Now
 	}
-	return &Protection{clients: clients, now: now, ttl: ttl, entries: map[protectionKey]*protectionEntry{}}
+	return &Protection{clients: clients, now: now, ttl: ttl, entries: map[protectionKey]*protectionEntry{}, postFailed: map[string]bool{}}
+}
+
+// notePost keeps how LADO's last lado/integration post on repo went, which
+// every later read of the repository's branches carries
+// (ProtectionRead.StatusPostFailed).
+func (p *Protection) notePost(repo domain.TrackerRepo, failed bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if failed {
+		p.postFailed[statusRepoKey(repo)] = true
+	} else {
+		delete(p.postFailed, statusRepoKey(repo))
+	}
+}
+
+// lastPostFailed reports whether LADO's last lado/integration post on repo
+// failed.
+func (p *Protection) lastPostFailed(repo domain.TrackerRepo) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.postFailed[statusRepoKey(repo)]
+}
+
+// statusRepoKey names a repository for its status posts: GitLab and GitHub
+// compare paths without case.
+func statusRepoKey(repo domain.TrackerRepo) string {
+	return strings.ToLower(domain.LadoRepoRef(repo))
 }
 
 // Read returns the rules of branch on repo: the last read while it is younger
@@ -100,7 +137,15 @@ func NewProtection(clients RepoClients, now func() time.Time, ttl time.Duration)
 // a read of the branch under way waits for it, then takes it from the cache
 // unless forced. A failed read keeps the last good rules next to its error
 // and is cached like any other; a read its caller cancelled is not kept.
+// Every read, cached or new, carries how LADO's last status post on the
+// repository went as it stands now.
 func (p *Protection) Read(ctx context.Context, repo domain.TrackerRepo, branch string, force bool) ProtectionRead {
+	read := p.read(ctx, repo, branch, force)
+	read.StatusPostFailed = p.lastPostFailed(repo)
+	return read
+}
+
+func (p *Protection) read(ctx context.Context, repo domain.TrackerRepo, branch string, force bool) ProtectionRead {
 	e := p.entry(repo, branch)
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -201,14 +246,68 @@ func MissingProtection(rules ports.LadoBranchRules) []string {
 	return missing
 }
 
-// EvaluateProtection is the protection item for a read. LADO does not read
-// GitLab's protection, so a GitLab project is unprotected_gitlab; a failed
-// read is protection_unknown with the class of its error
-// (ProtectionErrorClass), which stays the same from one read to the next
-// where the message may not, so a dry run and the approval after it hash
-// alike; a branch missing a part is unprotected; else the item passes. The
-// details name the required checks, from the last good read when this one
-// failed.
+// gitlabDeveloperAccess is GitLab's Developer role, the least that may post
+// commit statuses.
+const gitlabDeveloperAccess = 30
+
+// gitlabAPIScope is the token scope GitLab's commit status API needs.
+const gitlabAPIScope = "api"
+
+// MissingGitLabProtection lists what a GitLab branch lacks for LADO to count
+// it as protected, in this order (domain.LadoGitLabMissing*):
+// protected_branch, push_access when an entry lets anyone push (a role
+// above No one, a user, group or deploy key) or names no one, force_push,
+// pipeline_must_succeed when off or unsaid, skipped_pipeline when on or
+// unsaid, and integration_status when LADO cannot post its status: the
+// token's role is below Developer, its scopes are known and lack api, or
+// LADO's last post on the repository failed (postFailed). An unprotected
+// branch lists no push_access or force_push. A nil protection lacks all it
+// can.
+func MissingGitLabProtection(protection *ports.LadoGitLabProtection, postFailed bool) []string {
+	var p ports.LadoGitLabProtection
+	if protection != nil {
+		p = *protection
+	}
+	var missing []string
+	if !p.Protected {
+		missing = append(missing, domain.LadoGitLabMissingProtectedBranch)
+	} else {
+		open := len(p.PushAccess) == 0
+		for _, access := range p.PushAccess {
+			if access.AccessLevel > 0 || access.User || access.Group || access.DeployKey {
+				open = true
+			}
+		}
+		if open {
+			missing = append(missing, domain.LadoGitLabMissingPushAccess)
+		}
+		if p.AllowForcePush {
+			missing = append(missing, domain.LadoGitLabMissingForcePush)
+		}
+	}
+	if p.PipelineMustSucceed == nil || !*p.PipelineMustSucceed {
+		missing = append(missing, domain.LadoGitLabMissingPipelineMustPass)
+	}
+	if p.SkippedPipelineAllowed == nil || *p.SkippedPipelineAllowed {
+		missing = append(missing, domain.LadoGitLabMissingSkippedPipeline)
+	}
+	scopeMissing := p.ScopesKnown && !slices.ContainsFunc(p.TokenScopes, func(scope string) bool { return strings.EqualFold(scope, gitlabAPIScope) })
+	if p.AccessLevel < gitlabDeveloperAccess || scopeMissing || postFailed {
+		missing = append(missing, domain.LadoGitLabMissingIntegrationStatus)
+	}
+	return missing
+}
+
+// EvaluateProtection is the protection item for a read. A failed read is
+// protection_unknown with the class of its error (ProtectionErrorClass),
+// which stays the same from one read to the next where the message may not,
+// so a dry run and the approval after it hash alike, except that a GitLab
+// client that reads no protection (ErrLadoUnsupported) is
+// unprotected_gitlab, as every GitLab project was before #21; a branch
+// missing a part (MissingProtection, MissingGitLabProtection on GitLab) is
+// unprotected; else the item passes. The details name the required checks,
+// from the last good read when this one failed, and on GitLab whether the
+// branch requires code owner approval.
 func EvaluateProtection(read ProtectionRead) (domain.LadoVerifyItem, error) {
 	required, _ := RequiredContexts(read.Rules)
 	details := domain.LadoProtectionDetails{
@@ -217,15 +316,24 @@ func EvaluateProtection(read ProtectionRead) (domain.LadoVerifyItem, error) {
 		Branch:         read.Branch,
 		RequiredChecks: required,
 	}
+	gitlab := read.Provider == domain.TrackerProviderGitLab
+	if gitlab && read.Rules.GitLab != nil {
+		details.CodeOwnerApproval = read.Rules.GitLab.CodeOwnerApprovalRequired
+	}
 	outcome, code := domain.LadoVerifyPass, ""
 	switch {
-	case read.Provider == domain.TrackerProviderGitLab:
+	case gitlab && errors.Is(read.Err, ports.ErrLadoUnsupported):
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeUnprotectedGitLab
 	case read.Err != nil:
 		details.ErrorClass = ProtectionErrorClass(read.Err)
 		outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeProtectionUnknown
 	default:
-		if details.Missing = MissingProtection(read.Rules); len(details.Missing) > 0 {
+		if gitlab {
+			details.Missing = MissingGitLabProtection(read.Rules.GitLab, read.StatusPostFailed)
+		} else {
+			details.Missing = MissingProtection(read.Rules)
+		}
+		if len(details.Missing) > 0 {
 			outcome, code = domain.LadoVerifyConfirm, domain.LadoCodeUnprotected
 		}
 	}

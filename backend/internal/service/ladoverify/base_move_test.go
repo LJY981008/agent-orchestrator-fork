@@ -17,10 +17,10 @@ import (
 var verifyTip = strings.Repeat("7d", 20)
 
 // #53: a head whose base took a merge of the same paths (base_overlap)
-// loses its integration approval in the loop: on GitHub a pending
-// lado/integration status replaces the success, a GitLab approval only
-// stops counting, the worker is told once, and the head cannot be approved
-// again.
+// loses its integration approval in the loop: a pending lado/integration
+// status replaces the success, on GitLab too (#21), where the waiting status
+// of an unapproved head follows, the worker is told once, and the head
+// cannot be approved again.
 func TestTickRevokesAnApprovalOnceTheBaseOverlaps(t *testing.T) {
 	f := newApproveFixture(t)
 	hub := f.add("1", verifyHead1)
@@ -34,7 +34,7 @@ func TestTickRevokesAnApprovalOnceTheBaseOverlaps(t *testing.T) {
 	})
 	f.store.addApproval(domain.LadoIntegrationApproval{
 		ID: "approval-gl", ExecutionSessionID: lab.SessionID, PRURL: lab.PR.URL, HeadSHA: verifyHead3, TargetBranch: "main",
-		StatusState: domain.LadoIntegrationStatusNotApplicable, BaseTipSHA: verifyBase,
+		StatusState: domain.LadoIntegrationStatusPosted, StatusAttempts: 1, StatusPostedAt: t0, BaseTipSHA: verifyBase,
 	})
 	// Another PR's merge into main changed src/login.go, which both heads
 	// change too.
@@ -64,12 +64,22 @@ func TestTickRevokesAnApprovalOnceTheBaseOverlaps(t *testing.T) {
 	}
 	want := verifyPost{repo: domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/demo"}, sha: verifyHead1,
 		status: ports.LadoCommitStatus{State: "pending", Context: "lado/integration", Description: "Base moved in LADO; verify a new head"}}
-	if posts := f.host.postsMade(); len(posts) != 1 || posts[0] != want {
+	if posts := f.host.postsTo(domain.TrackerProviderGitHub); len(posts) != 1 || posts[0] != want {
 		t.Fatalf("posts = %+v, want %+v", posts, want)
 	}
 	gl := f.store.approval("approval-gl")
-	if !gl.Revoked() || gl.StatusState != domain.LadoIntegrationStatusNotApplicable || gl.StatusAttempts != 0 {
-		t.Errorf("GitLab approval = revoked %v, %s after %d attempts; want revoked, not_applicable without one", gl.Revoked(), gl.StatusState, gl.StatusAttempts)
+	if !gl.Revoked() || gl.StatusState != domain.LadoIntegrationStatusPosted || gl.StatusAttempts != 1 {
+		t.Errorf("GitLab approval = revoked %v, %s after %d attempts; want revoked, posted after 1", gl.Revoked(), gl.StatusState, gl.StatusAttempts)
+	}
+	// The merge request's revoked approval posts its pending status, then
+	// the pass posts the waiting status of the head, approved no more.
+	labRepo := domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "acme/demo"}
+	wantLab := []verifyPost{
+		{repo: labRepo, sha: verifyHead3, status: ports.LadoCommitStatus{State: "pending", Context: "lado/integration", Description: "Base moved in LADO; verify a new head", MergeRequest: lab.PR.Number}},
+		{repo: labRepo, sha: verifyHead3, status: ports.LadoCommitStatus{State: "pending", Context: "lado/integration", Description: "Waiting for approval in LADO", MergeRequest: lab.PR.Number}},
+	}
+	if posts := f.host.postsTo(domain.TrackerProviderGitLab); !slices.Equal(posts, wantLab) {
+		t.Fatalf("GitLab posts = %+v, want %+v", posts, wantLab)
 	}
 
 	audits := f.store.auditEvents()
@@ -124,7 +134,7 @@ func TestTickRevokesAnApprovalOnceTheBaseOverlaps(t *testing.T) {
 	// Another pass revokes, posts and tells nothing again.
 	f.clock.advance(statusRetryAfter)
 	f.tick()
-	if n := len(f.host.postsMade()); n != 1 {
+	if n := len(f.host.postsTo(domain.TrackerProviderGitHub)); n != 1 {
 		t.Errorf("posts after another pass = %d, want 1", n)
 	}
 	if n := len(f.store.auditEvents()); n != 2 {

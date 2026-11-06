@@ -676,6 +676,10 @@ func TestLadoAPI_ProjectProtection(t *testing.T) {
 	github := func(native string) domain.TrackerRepo {
 		return domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: native}
 	}
+	gitlab := func(native string) domain.TrackerRepo {
+		return domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: native, Host: "gitlab.example.com"}
+	}
+	yes, no := true, false
 	token := "ghp_" + strings.Repeat("a", 36)
 	svc := &fakeLadoVerifyService{reads: []ladoverify.ProtectionRead{
 		{Provider: domain.TrackerProviderGitHub, Repo: github("acme/demo"), Branch: "main", ReadAt: at, Rules: ports.LadoBranchRules{Rules: []ports.LadoBranchRule{
@@ -685,8 +689,15 @@ func TestLadoAPI_ProjectProtection(t *testing.T) {
 			{Type: ports.LadoBranchRulePullRequest}, required("build"),
 		}}},
 		{Provider: domain.TrackerProviderGitHub, Repo: github("acme/web"), Branch: "main", ReadAt: at, Err: errors.New("the host answered 401 for token " + token)},
-		{Provider: domain.TrackerProviderGitLab, Repo: domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "group/app", Host: "gitlab.example.com"}, Branch: "main", ReadAt: at},
+		{Provider: domain.TrackerProviderGitLab, Repo: domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "group/app", Host: "gitlab.example.com"}, Branch: "main", ReadAt: at, Err: ports.ErrLadoUnsupported},
 		{Provider: domain.TrackerProviderGitHub, Repo: github("acme/docs"), ReadAt: at, Err: errors.New("resolve the base branch: no branch")},
+		{Provider: domain.TrackerProviderGitLab, Repo: gitlab("group/guarded"), Branch: "main", ReadAt: at, Rules: ports.LadoBranchRules{GitLab: &ports.LadoGitLabProtection{
+			Protected: true, PushAccess: []ports.LadoGitLabAccess{{AccessLevel: 0}}, PipelineMustSucceed: &yes, SkippedPipelineAllowed: &no, AccessLevel: 40,
+		}}},
+		{Provider: domain.TrackerProviderGitLab, Repo: gitlab("group/open"), Branch: "main", ReadAt: at, StatusPostFailed: true, Rules: ports.LadoBranchRules{GitLab: &ports.LadoGitLabProtection{
+			Protected: true, PushAccess: []ports.LadoGitLabAccess{{AccessLevel: 30}}, AllowForcePush: true, PipelineMustSucceed: &yes, SkippedPipelineAllowed: &no, AccessLevel: 40,
+		}}},
+		{Provider: domain.TrackerProviderGitLab, Repo: gitlab("group/denied"), Branch: "main", ReadAt: at, Err: &ports.LadoHTTPError{Status: http.StatusForbidden, Message: "403 Forbidden"}},
 	}}
 	srv := newLadoTestServer(t, httpd.APIDeps{LadoVerify: svc})
 
@@ -715,6 +726,9 @@ func TestLadoAPI_ProjectProtection(t *testing.T) {
 		{"github:acme/web", "main", "unknown", "", "", "the host answered 401 for token [redacted]"},
 		{"gitlab:group/app@gitlab.example.com", "main", "unsupported", "", "", ""},
 		{"github:acme/docs", "", "unknown", "", "", "resolve the base branch: no branch"},
+		{"gitlab:group/guarded@gitlab.example.com", "main", "protected", "", "", ""},
+		{"gitlab:group/open@gitlab.example.com", "main", "unprotected", "push_access,force_push,integration_status", "", ""},
+		{"gitlab:group/denied@gitlab.example.com", "main", "unknown", "", "", "the host answered 403: 403 Forbidden"},
 	}
 	if resp.ProjectID != "mer" || !reflect.DeepEqual(got, want) {
 		t.Fatalf("protection of %s = %+v, want %+v", resp.ProjectID, got, want)

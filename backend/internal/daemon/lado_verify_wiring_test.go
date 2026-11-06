@@ -152,6 +152,11 @@ func TestWireLadoWorkStartsTheVerifier(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	useLadoStoredTokens(t, nil)
+	// No GitLab token anywhere (#21): the loop's reads of the branch's
+	// protection and its waiting status stop before the network.
+	clearProviderTokenEnv(t)
+	t.Setenv("GLAB_CONFIG_DIR", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	cfg := config.Config{DataDir: t.TempDir(), StateDir: t.TempDir()}
 	store := sqlitetest.MustOpen(t)
 	at := time.Now().UTC().Truncate(time.Second)
@@ -193,8 +198,11 @@ func TestWireLadoWorkStartsTheVerifier(t *testing.T) {
 	if item := items[domain.LadoVerifyRequiredChecks]; item.Outcome != domain.LadoVerifyPass || !strings.Contains(string(item.Details), `"unit"`) {
 		t.Errorf("required checks = %+v, want the passed unit check", item)
 	}
-	if item := items[domain.LadoVerifyProtection]; item.Outcome != domain.LadoVerifyConfirm || item.Code != domain.LadoCodeUnprotectedGitLab {
-		t.Errorf("protection = %+v, want GitLab's confirm", item)
+	// LADO reads GitLab's protection now (#21); without a token the read
+	// fails.
+	if item := items[domain.LadoVerifyProtection]; item.Outcome != domain.LadoVerifyConfirm || item.Code != domain.LadoCodeProtectionUnknown ||
+		!strings.Contains(string(item.Details), `"provider":"gitlab"`) || !strings.Contains(string(item.Details), `"errorClass":"other"`) {
+		t.Errorf("protection = %+v, want GitLab's unknown protection without a token", item)
 	}
 	if item := items[domain.LadoVerifyReview]; item.Outcome != domain.LadoVerifyInfo || item.Code != domain.LadoCodeNotRequired {
 		t.Errorf("review = %+v, want not required by the pinned plan", item)

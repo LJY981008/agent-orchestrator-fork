@@ -275,10 +275,13 @@ func TestIntegrationApprovalRecordsAndPostsStatus(t *testing.T) {
 		f.reads.updateTask(exec.TaskID, func(task *domain.LadoTask) {
 			task.Repo = domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "acme/demo"}
 		})
+		f.host.setGitLab(gitlabGuarded())
+		defer f.host.setGitLab(nil)
+		f.store.setSourceBranch(exec.PR.URL, "lado/feature")
 		before := len(f.host.postsMade())
 		p := f.preview(exec)
-		if !slices.Contains(p.Confirm, domain.LadoCodeUnprotectedGitLab) {
-			t.Errorf("GitLab confirm codes = %v, want unprotected_gitlab among them", p.Confirm)
+		if slices.Contains(p.Confirm, domain.LadoCodeUnprotectedGitLab) || slices.Contains(p.Confirm, domain.LadoCodeUnprotected) {
+			t.Errorf("GitLab confirm codes = %v, want the guarded branch protected", p.Confirm)
 		}
 		result, err := f.svc.ApproveIntegration(f.ctx, ApproveInput{
 			SessionID: exec.SessionID, PRURL: exec.PR.URL, HeadSHA: verifyHead4, VerificationSHA256: p.SHA256,
@@ -287,11 +290,16 @@ func TestIntegrationApprovalRecordsAndPostsStatus(t *testing.T) {
 		if err != nil {
 			t.Fatalf("approval = %v", err)
 		}
-		if a := result.Approval; a.StatusState != domain.LadoIntegrationStatusNotApplicable || a.StatusAttempts != 0 || a.Actor != "human:dev-presence" {
-			t.Errorf("GitLab approval = %s after %d attempts by %s, want not_applicable by human:dev-presence", a.StatusState, a.StatusAttempts, a.Actor)
+		// #21: GitLab's approval is recorded pending and posts its success on
+		// the merge request's source branch and number.
+		if a := result.Approval; a.StatusState != domain.LadoIntegrationStatusPosted || a.StatusAttempts != 1 || a.Actor != "human:dev-presence" {
+			t.Errorf("GitLab approval = %s after %d attempts by %s, want posted after 1 by human:dev-presence", a.StatusState, a.StatusAttempts, a.Actor)
 		}
-		if n := len(f.host.postsMade()); n != before {
-			t.Errorf("posts = %d, want still %d", n, before)
+		want := verifyPost{repo: domain.TrackerRepo{Provider: domain.TrackerProviderGitLab, Native: "acme/demo"}, sha: verifyHead4, status: ports.LadoCommitStatus{
+			State: "success", Context: "lado/integration", Description: "Approved in LADO", Ref: "lado/feature", MergeRequest: exec.PR.Number,
+		}}
+		if posts := f.host.postsMade(); len(posts) != before+1 || posts[before] != want {
+			t.Errorf("posts = %+v, want %+v after the first %d", posts, want, before)
 		}
 	})
 }
@@ -550,12 +558,16 @@ func (s *verifyStore) ApproveLadoIntegration(_ context.Context, a domain.LadoInt
 
 func (s *verifyStore) ListLadoIntegrationApprovals(_ context.Context, session domain.SessionID, prURL, head string) ([]domain.LadoIntegrationApproval, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	var out []domain.LadoIntegrationApproval
 	for _, a := range s.approvals {
 		if a.ExecutionSessionID == session && a.PRURL == prURL && a.HeadSHA == head {
 			out = append(out, a)
 		}
+	}
+	hook := s.onApprovalsRead
+	s.mu.Unlock()
+	if hook != nil {
+		hook(session, prURL, head)
 	}
 	return out, nil
 }
@@ -608,9 +620,10 @@ func (s *verifyStore) ResetLadoIntegrationStatus(_ context.Context, id string) e
 	return fmt.Errorf("no integration approval %s", id)
 }
 
-// RevokeLadoIntegrationApproval keeps the store's rules: a GitHub
-// approval's status starts over as pending with no attempts, a GitLab one
-// stays not_applicable, and a revoked approval stays as it was.
+// RevokeLadoIntegrationApproval keeps the store's rules: an approval's
+// status starts over as pending with no attempts, one that is
+// not_applicable (GitLab before #21) stays so, and a revoked approval stays
+// as it was.
 func (s *verifyStore) RevokeLadoIntegrationApproval(_ context.Context, id, reason string, at time.Time, audit domain.LadoAuditEvent) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
