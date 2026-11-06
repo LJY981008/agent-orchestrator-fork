@@ -13,7 +13,8 @@ import (
 // #53: another PR merged into the remote base after the head left it. A
 // change there to a file the head changed or the plan names fails the
 // base_branch item as base_overlap; another change needs confirming as
-// base_advanced.
+// base_advanced. #75: a file the head and the base share the content of
+// does not overlap.
 func TestBaseMovedUnderTheHead(t *testing.T) {
 	// setup makes a head that changes guide.md, then lets upstream change
 	// path on main and fetches it into dir.
@@ -134,6 +135,78 @@ func TestBaseMovedUnderTheHead(t *testing.T) {
 		in := input(r, head)
 		in.Target = "release"
 		expect(t, evaluate(t, in), domain.LadoVerifyPass, "", domain.LadoBaseBranchDetails{Branch: "main", Remote: "origin"})
+	})
+
+	// #75: the PR's own squash or rebase merge leaves the head off the
+	// base, yet merging it changes nothing there.
+	headRepo := func(t *testing.T) (*testRepo, string, string) {
+		t.Helper()
+		r := newTestRepo(t, t0.Add(-time.Hour))
+		work := r.worktree(t0.Add(time.Minute), "lado/work")
+		r.write(work, "guide.md", "How to run the app.\nInstall it first.\nStart it.\nStop it.\nUpdate it.\n")
+		r.commit(t0.Add(2*time.Minute), work, "fix: 안내를 고친다")
+		r.write(work, "src/login.go", "package login\n")
+		head := r.commit(t0.Add(2*time.Minute), work, "feat: 로그인을 더한다")
+		r.git(t0.Add(3*time.Minute), r.upstream, "fetch", "-q", r.dir, "lado/work")
+		return r, work, head
+	}
+	squash := func(t *testing.T, r *testRepo) {
+		t.Helper()
+		r.git(t0.Add(3*time.Minute), r.upstream, "merge", "-q", "--squash", "FETCH_HEAD")
+		r.commit(t0.Add(3*time.Minute), r.upstream, "fix: 안내를 고친다 (#7)")
+	}
+	fetch := func(t *testing.T, r *testRepo) string {
+		t.Helper()
+		r.publish(t0.Add(4 * time.Minute))
+		r.git(t0.Add(4*time.Minute), r.dir, "fetch", "-q", "origin")
+		return r.git(t0, r.dir, "rev-parse", "refs/remotes/origin/main")
+	}
+
+	t.Run("the PR's own squash merge", func(t *testing.T) {
+		r, _, head := headRepo(t)
+		squash(t, r)
+		tip := fetch(t, r)
+		expect(t, evaluate(t, input(r, head)), domain.LadoVerifyConfirm, domain.LadoCodeBaseAdvanced, domain.LadoBaseBranchDetails{
+			Branch: "main", Remote: "origin", Advanced: true, AdvancedTip: tip,
+		})
+	})
+
+	t.Run("the PR's own rebase merge", func(t *testing.T) {
+		r, _, head := headRepo(t)
+		// Another PR merged first, so the rebase rewrites the head's
+		// commits.
+		r.write(r.upstream, "CHANGELOG.md", "changed upstream\n")
+		r.commit(t0.Add(3*time.Minute), r.upstream, "Change CHANGELOG.md")
+		r.git(t0.Add(3*time.Minute), r.upstream, "cherry-pick", "FETCH_HEAD~1", "FETCH_HEAD")
+		tip := fetch(t, r)
+		expect(t, evaluate(t, input(r, head)), domain.LadoVerifyConfirm, domain.LadoCodeBaseAdvanced, domain.LadoBaseBranchDetails{
+			Branch: "main", Remote: "origin", Advanced: true, AdvancedTip: tip,
+		})
+	})
+
+	t.Run("another PR after the squash merge", func(t *testing.T) {
+		for _, path := range []string{"src/session.go", "guide.md"} {
+			t.Run(path, func(t *testing.T) {
+				r, _, head := headRepo(t)
+				squash(t, r)
+				r.write(r.upstream, path, "changed upstream\n")
+				r.commit(t0.Add(3*time.Minute), r.upstream, "Change "+path)
+				tip := fetch(t, r)
+				expect(t, evaluate(t, input(r, head)), domain.LadoVerifyFail, domain.LadoCodeBaseOverlap, domain.LadoBaseBranchDetails{
+					Branch: "main", Remote: "origin", Advanced: true, AdvancedTip: tip, Overlap: []string{path}, OverlapCount: 1,
+				})
+			})
+		}
+	})
+
+	t.Run("another PR's same change", func(t *testing.T) {
+		r, _, head := headRepo(t)
+		r.write(r.upstream, "guide.md", "How to run the app.\nInstall it first.\nStart it.\nStop it.\nUpdate it.\n")
+		r.commit(t0.Add(3*time.Minute), r.upstream, "Change guide.md")
+		tip := fetch(t, r)
+		expect(t, evaluate(t, input(r, head)), domain.LadoVerifyConfirm, domain.LadoCodeBaseAdvanced, domain.LadoBaseBranchDetails{
+			Branch: "main", Remote: "origin", Advanced: true, AdvancedTip: tip,
+		})
 	})
 
 	t.Run("a page of overlapping files", func(t *testing.T) {

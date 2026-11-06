@@ -158,3 +158,110 @@ func TestMergeGateRevokesBeforeTheLoopSeesTheMerge(t *testing.T) {
 	_, err := r.approve(b, "nonce-again")
 	requireAPIError(t, err, apierr.KindConflict, "LADO_INTEGRATION_REVOKED")
 }
+
+// squashA puts on origin's main one commit with the tree of A's head, as the
+// host's squash merge of A's PR does, and returns it. AO's row of the PR is
+// left open, as before AO observes the merge.
+func (r *overlapRepo) squashA(at time.Time) string {
+	r.t.Helper()
+	squash := r.git(at, r.workA, "commit-tree", r.headA+"^{tree}", "-p", "refs/remotes/origin/main", "-m", "docs: 설치 방법을 적는다 (#1)")
+	r.git(at, r.workA, "push", "-q", "origin", squash+":refs/heads/main")
+	return squash
+}
+
+// approvedA approves A's head before the merge and returns its approval.
+func (r *overlapRepo) approvedA(a domain.LadoExecution) domain.LadoIntegrationApproval {
+	r.t.Helper()
+	result, err := r.approve(a, "nonce-a")
+	if err != nil {
+		r.t.Fatalf("approval of A = %v", err)
+	}
+	return *result.Approval
+}
+
+// requireQuiet fails unless the pass left the approval holding and revoked,
+// posted and told nothing.
+func requireQuiet(t *testing.T, f *approveFixture, a domain.LadoExecution, approval domain.LadoIntegrationApproval, postsBefore int) {
+	t.Helper()
+	if got := f.store.approval(approval.ID); got.Revoked() {
+		t.Errorf("A's approval revoked for %q, want it to hold", got.RevokedReason)
+	}
+	if n := revokedAudits(f); n != 0 {
+		t.Errorf("integration.revoked audits = %d, want none", n)
+	}
+	for _, post := range f.host.postsMade()[postsBefore:] {
+		if post.status.State == "pending" {
+			t.Errorf("pending status posted after the merge: %+v", post)
+		}
+	}
+	if messages := f.sender.to(a.SessionID); len(messages) != 0 {
+		t.Errorf("messages = %q, want none", messages)
+	}
+}
+
+// #75 with real git: the host squashes A's approved head into origin's
+// main, and the loop fetches the base before AO observes the merge. The
+// base moved by A's own merge, whose content A's head has: the base_branch
+// item does not fail as base_overlap, the approval holds and nothing is
+// posted, audited or told.
+func TestTickSeesThePRsOwnSquashMergeAsNoOverlap(t *testing.T) {
+	r := newOverlapRepo(t)
+	f := r.f
+	a := r.add("1", r.headA, r.workA)
+	approval := r.approvedA(a)
+	postsBefore := len(f.host.postsMade())
+	squash := r.squashA(t0.Add(4 * time.Minute))
+
+	f.clock.advance(3 * time.Minute)
+	f.tick()
+	item := verifyItemOf(t, f.record(a.SessionID, r.headA), domain.LadoVerifyBaseBranch)
+	if item.Code == domain.LadoCodeBaseOverlap {
+		t.Fatalf("base_branch item = %s %q, want no base_overlap", item.Outcome, item.Code)
+	}
+	var details domain.LadoBaseBranchDetails
+	if err := json.Unmarshal(item.Details, &details); err != nil {
+		t.Fatal(err)
+	}
+	if details.AdvancedTip != squash || details.OverlapCount != 0 {
+		t.Errorf("details = %+v, want the squash commit advanced with no overlap", details)
+	}
+	requireQuiet(t, f, a, approval, postsBefore)
+}
+
+// #75 with real git: right after A's squash merge another PR's merge
+// changes guide.md, which A's head changed too, so the base overlaps A's
+// head. The host says A merged: the loop keeps A's approval and does not
+// ask A's worker to take in the base.
+func TestTickKeepsTheApprovalWhenAnotherMergeFollowsTheSquash(t *testing.T) {
+	r := newOverlapRepo(t)
+	f := r.f
+	a := r.add("1", r.headA, r.workA)
+	approval := r.approvedA(a)
+	postsBefore := len(f.host.postsMade())
+	r.squashA(t0.Add(4 * time.Minute))
+	// B's PR merges on top of the squash without a conflict.
+	r.git(t0.Add(5*time.Minute), r.dir, "fetch", "-q", "origin")
+	other := r.worktree(t0.Add(5*time.Minute), "other")
+	r.git(t0.Add(5*time.Minute), other, "merge", "-q", "--no-edit", "-m", "Merge B", r.headB)
+	r.git(t0.Add(5*time.Minute), other, "push", "-q", "origin", "HEAD:refs/heads/main")
+	f.heads.setPR(a.PR.URL, LivePR{HeadSHA: r.headA, TargetBranch: "main", Merged: true})
+
+	f.clock.advance(3 * time.Minute)
+	f.tick()
+	record := f.record(a.SessionID, r.headA)
+	item := verifyItemOf(t, record, domain.LadoVerifyBaseBranch)
+	if item.Code != domain.LadoCodeBaseOverlap {
+		t.Fatalf("base_branch item = %s %q, want base_overlap", item.Outcome, item.Code)
+	}
+	var details domain.LadoBaseBranchDetails
+	if err := json.Unmarshal(item.Details, &details); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(details.Overlap, []string{"guide.md"}) {
+		t.Errorf("overlap = %v, want guide.md", details.Overlap)
+	}
+	if slices.Contains(record.Notified, string(domain.LadoVerifyBaseBranch)) {
+		t.Errorf("notified = %v, want base_branch left out", record.Notified)
+	}
+	requireQuiet(t, f, a, approval, postsBefore)
+}

@@ -615,7 +615,8 @@ func (s *Service) verifyExecution(ctx context.Context, exec domain.LadoExecution
 
 // verifyExecutionIn is verifyExecution; urgent fetches the base branch past
 // baseFetchEvery, as after a merge into it. A head whose record turns
-// base_overlap loses its integration approvals.
+// base_overlap loses its integration approvals, unless its host says the PR
+// merged (#75).
 func (s *Service) verifyExecutionIn(ctx context.Context, exec domain.LadoExecution, urgent bool) error {
 	s.markPRSeen(ctx, exec)
 	switch {
@@ -624,11 +625,14 @@ func (s *Service) verifyExecutionIn(ctx context.Context, exec domain.LadoExecuti
 	case exec.PR.HeadSHA == "":
 		return nil
 	}
-	record, err := s.verifyHead(ctx, exec, verifyOptions{startWork: true, loopFetch: true, forceFetch: urgent})
+	// The fix request and the revocation of the pass read the host once
+	// (#75).
+	host := s.newHostMerges()
+	record, err := s.verifyHead(ctx, exec, verifyOptions{startWork: true, loopFetch: true, forceFetch: urgent, host: host})
 	if err != nil {
 		return err
 	}
-	_, err = s.revokeOverlapped(ctx, exec, record)
+	_, err = s.revokeOverlapped(ctx, exec, record, host)
 	return err
 }
 
