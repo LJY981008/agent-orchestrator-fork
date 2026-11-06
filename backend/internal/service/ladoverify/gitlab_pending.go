@@ -10,6 +10,13 @@ package ladoverify
 // takes it too. What remains: a pipeline that starts and passes inside that
 // window can be merged on GitLab; LADO then records merged_without_approval.
 //
+// The pending status attaches to the running MR pipeline and keeps it
+// "running" until the approval, even after every job has ended; that is
+// intended. The observer still reads the jobs' end: the GitLab commit guard
+// hashes the jobs of a pending pipeline, and an open GitLab MR whose CI is
+// pending gets the max-age refresh during incremental discovery (#83). The
+// required checks then pass on the jobs, not on the pipeline's summary.
+//
 // The post and the approval's success race: the loop may read no approval,
 // the approval may then be recorded and post its success, and the loop's
 // pending would bury it. Both posts hold the lock of the repository and

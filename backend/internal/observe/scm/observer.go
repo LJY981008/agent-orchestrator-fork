@@ -1400,7 +1400,16 @@ func (o *Observer) selectRefreshCandidates(ctx context.Context, subjects map[str
 			// updated set are left to the terminal-reconciliation pass — do not
 			// promote them here or reconciliation will skip them (it checks
 			// candidateKeys to avoid double-fetching).
-			if !hasCursor || listedPRs == nil || listedPRs[key] {
+			//
+			// LADO fork (#83): GitLab has no terminal-reconciliation pass, and
+			// a pending commit status (LADO's lado/integration before approval)
+			// attached to a running MR pipeline keeps that pipeline "running"
+			// after its jobs end. The commit guard hashes the jobs of a pending
+			// pipeline; as a backstop for what it misses, an open GitLab MR
+			// whose stored CI is pending also gets the max-age refresh during
+			// incremental discovery. GitHub is unchanged.
+			gitlabCIPending := s.repo.Provider == "gitlab" && s.known.CI == domain.CIPending && !s.known.Merged && !s.known.Closed
+			if !hasCursor || listedPRs == nil || listedPRs[key] || gitlabCIPending {
 				last := o.Cache.LastPRFetchAt[key]
 				if last.IsZero() || now.Sub(last) > DefaultPRMaxAge {
 					candidate = true

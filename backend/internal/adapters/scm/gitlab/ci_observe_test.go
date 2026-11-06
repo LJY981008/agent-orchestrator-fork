@@ -27,6 +27,10 @@ type ciObserveServer struct {
 	versions      func() (int, any)
 	versionCalls  atomic.Int32
 	pipelineCalls map[string]*atomic.Int32
+	// jobLists and jobCalls are keyed by pipeline id; jobs registers the
+	// handler once and later calls only swap the list.
+	jobLists map[string][]map[string]any
+	jobCalls map[string]*atomic.Int32
 }
 
 func newCIObserveServer(t *testing.T) (*ciObserveServer, *Provider) {
@@ -35,6 +39,8 @@ func newCIObserveServer(t *testing.T) (*ciObserveServer, *Provider) {
 		mux:           http.NewServeMux(),
 		pipelines:     func(string) any { return []any{} },
 		pipelineCalls: map[string]*atomic.Int32{"1": {}, "20": {}},
+		jobLists:      map[string][]map[string]any{},
+		jobCalls:      map[string]*atomic.Int32{},
 	}
 	s.mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -92,10 +98,33 @@ func (s *ciObserveServer) setVersions(f func() (int, any)) {
 	s.versions = f
 }
 
+// jobs sets the job list served for a pipeline. The first call for a
+// pipeline registers its handler; later calls replace the list.
 func (s *ciObserveServer) jobs(pipelineID string, jobs []map[string]any) {
-	s.mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/"+pipelineID+"/jobs", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(jobs)
-	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.jobCalls[pipelineID]; !ok {
+		calls := &atomic.Int32{}
+		s.jobCalls[pipelineID] = calls
+		s.mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/"+pipelineID+"/jobs", func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			s.mu.Lock()
+			list := s.jobLists[pipelineID]
+			s.mu.Unlock()
+			_ = json.NewEncoder(w).Encode(list)
+		})
+	}
+	s.jobLists[pipelineID] = jobs
+}
+
+// jobCallCount reports how often a pipeline's jobs were read.
+func (s *ciObserveServer) jobCallCount(pipelineID string) int32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c := s.jobCalls[pipelineID]; c != nil {
+		return c.Load()
+	}
+	return 0
 }
 
 func versionAt(head string, at time.Time) func() (int, any) {
@@ -331,6 +360,8 @@ func TestCommitChecksGuard_ExternalLatestWatchesRealCI(t *testing.T) {
 		}
 		return []map[string]any{external, {"id": 11, "status": ciStatus.Load(), "sha": ciObserveHead, "source": "merge_request_event"}}
 	})
+	// A running CI pipeline's jobs are part of the guard (#83).
+	s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "running"}})
 	ctx := context.Background()
 	first, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, "")
 	if err != nil {
@@ -358,11 +389,152 @@ func TestCommitChecksGuard_NonExternalSingleRead(t *testing.T) {
 	s.setPipelines(func(string) any {
 		return []map[string]any{{"id": 11, "status": "running", "sha": ciObserveHead, "source": "push"}}
 	})
+	// A running pipeline's jobs are part of the guard (#83).
+	s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "running"}})
 	if _, err := p.CommitChecksGuard(context.Background(), ciObserveRepo, ciObserveHead, ""); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.pipelineCalls["20"].Load(); got != 0 {
 		t.Fatalf("lookback pipeline reads = %d, want 0", got)
+	}
+}
+
+// LADO fork (#83): a pending lado/integration status attached to the running
+// MR pipeline keeps it "running" after every job ends, so the pipeline listing
+// body never changes. The guard must still see the jobs finish, and the
+// following fetch must report them passed.
+func TestCommitChecksGuard_RunningPipelineJobsFinish(t *testing.T) {
+	s, p := newCIObserveServer(t)
+	s.setPipelines(func(string) any {
+		return []map[string]any{{"id": 11, "status": "running", "sha": ciObserveHead, "source": "merge_request_event", "updated_at": "2026-11-06T06:31:49Z"}}
+	})
+	s.jobs("11", []map[string]any{
+		{"id": 110, "name": "pipeline-check", "status": "success"},
+		{"id": 111, "name": "back-build", "status": "running"},
+		{"id": 112, "name": "front-build", "status": "running"},
+	})
+	ctx := context.Background()
+	first, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	same, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, first.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !same.NotModified {
+		t.Fatal("guard changed with nothing changed")
+	}
+	s.jobs("11", []map[string]any{
+		{"id": 112, "name": "front-build", "status": "success"},
+		{"id": 110, "name": "pipeline-check", "status": "success"},
+		{"id": 111, "name": "back-build", "status": "success"},
+	})
+	changed, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, first.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.NotModified || changed.ETag == first.ETag {
+		t.Fatal("guard did not change when the running pipeline's jobs finished")
+	}
+	obs := fetchOne(t, p)
+	if obs.CI.Summary != string(domain.CIPending) {
+		t.Fatalf("Summary = %q, want pending (the pipeline is still running)", obs.CI.Summary)
+	}
+	if len(obs.CI.Checks) != 3 {
+		t.Fatalf("Checks = %+v, want 3 jobs", obs.CI.Checks)
+	}
+	for _, c := range obs.CI.Checks {
+		if c.Status != string(domain.PRCheckPassed) {
+			t.Fatalf("check %s status = %q, want passed", c.Name, c.Status)
+		}
+	}
+}
+
+func TestCommitChecksGuard_JobDurationDoesNotFlap(t *testing.T) {
+	s, p := newCIObserveServer(t)
+	s.setPipelines(func(string) any {
+		return []map[string]any{{"id": 11, "status": "running", "sha": ciObserveHead, "source": "push"}}
+	})
+	s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "running", "duration": 12.5, "queued_duration": 1.2}})
+	ctx := context.Background()
+	first, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "running", "duration": 42.0, "queued_duration": 1.3}})
+	again, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, first.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.NotModified {
+		t.Fatal("guard changed when only a job's duration changed")
+	}
+}
+
+func TestCommitChecksGuard_ExternalLatestWatchesRealCIJobs(t *testing.T) {
+	s, p := newCIObserveServer(t)
+	s.setPipelines(func(perPage string) any {
+		external := map[string]any{"id": 12, "status": "pending", "sha": ciObserveHead, "source": "external"}
+		if perPage == "1" {
+			return []map[string]any{external}
+		}
+		return []map[string]any{external, {"id": 11, "status": "running", "sha": ciObserveHead, "source": "merge_request_event"}}
+	})
+	s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "running"}})
+	ctx := context.Background()
+	first, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.pipelineCalls["20"].Load(); got != 1 {
+		t.Fatalf("lookback pipeline reads = %d, want 1 per guard call", got)
+	}
+	s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "success"}})
+	changed, err := p.CommitChecksGuard(ctx, ciObserveRepo, ciObserveHead, first.ETag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed.NotModified {
+		t.Fatal("guard did not change when the CI pipeline's jobs under the external pipeline finished")
+	}
+	if got := s.pipelineCalls["20"].Load(); got != 2 {
+		t.Fatalf("lookback pipeline reads = %d, want 2 after two guard calls", got)
+	}
+	if got := s.jobCallCount("11"); got != 2 {
+		t.Fatalf("CI pipeline job reads = %d, want 2", got)
+	}
+}
+
+func TestCommitChecksGuard_FinishedPipelineSkipsJobs(t *testing.T) {
+	for _, status := range []string{"success", "failed", "canceled", "skipped", "manual"} {
+		t.Run(status, func(t *testing.T) {
+			s, p := newCIObserveServer(t)
+			s.setPipelines(func(string) any {
+				return []map[string]any{{"id": 11, "status": status, "sha": ciObserveHead, "source": "push"}}
+			})
+			s.jobs("11", []map[string]any{{"id": 110, "name": "build", "status": "success"}})
+			if _, err := p.CommitChecksGuard(context.Background(), ciObserveRepo, ciObserveHead, ""); err != nil {
+				t.Fatal(err)
+			}
+			if got := s.jobCallCount("11"); got != 0 {
+				t.Fatalf("job reads = %d, want 0 for a %s pipeline", got, status)
+			}
+		})
+	}
+}
+
+func TestCommitChecksGuard_JobsReadFailure(t *testing.T) {
+	s, p := newCIObserveServer(t)
+	s.setPipelines(func(string) any {
+		return []map[string]any{{"id": 11, "status": "running", "sha": ciObserveHead, "source": "push"}}
+	})
+	s.mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/11/jobs", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]any{"message": "500"})
+	})
+	if _, err := p.CommitChecksGuard(context.Background(), ciObserveRepo, ciObserveHead, ""); err == nil {
+		t.Fatal("guard succeeded although the jobs read failed")
 	}
 }
 

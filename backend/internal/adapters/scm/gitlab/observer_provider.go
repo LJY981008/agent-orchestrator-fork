@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"regexp"
@@ -413,6 +414,14 @@ func safeTime(t *time.Time) time.Time {
 // only), fetchCI reads the newest non-external pipeline under it, so the
 // guard hashes that listing too. Otherwise a real CI pipeline finishing below
 // an unchanged external pipeline would not promote the PR to a refresh.
+//
+// LADO fork (#83): when the pipeline whose jobs fetchCI reads is still
+// pending (running, pending, created, ...), the guard also hashes a summary
+// of its jobs. A pending commit status (LADO's lado/integration before
+// approval) attached to a running MR pipeline keeps that pipeline "running"
+// after every job ends, so the pipeline listing alone never changes and the
+// finished jobs would never be read. Finished pipelines skip the jobs read,
+// so their hash and cost stay as before.
 func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, headSHA, etag string) (ports.SCMGuardResult, error) {
 	if headSHA == "" {
 		return ports.SCMGuardResult{}, fmt.Errorf("gitlab scm: empty head SHA: %w", ErrNotFound)
@@ -428,19 +437,60 @@ func (p *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, he
 	}
 	h := sha256.New()
 	h.Write(body)
-	if err == nil && len(pipelines) > 0 && pipelines[0].Source == pipelineSourceExternal {
-		_, older, err := p.fetchPipelinesForSHA(ctx, hc, repo, headSHA, externalPipelineLookback)
-		if older == nil && err != nil {
-			return ports.SCMGuardResult{}, err
+	if err == nil && len(pipelines) > 0 {
+		latest := pipelines[0]
+		lookbackOK := true
+		var lookback []restPipeline
+		if latest.Source == pipelineSourceExternal {
+			var older []byte
+			var lerr error
+			lookback, older, lerr = p.fetchPipelinesForSHA(ctx, hc, repo, headSHA, externalPipelineLookback)
+			if older == nil && lerr != nil {
+				return ports.SCMGuardResult{}, lerr
+			}
+			h.Write([]byte{0})
+			h.Write(older)
+			// A malformed lookback body is hashed as is; without a parsed
+			// list the jobs pipeline is unknown, so its jobs are not read.
+			lookbackOK = lerr == nil
 		}
-		h.Write([]byte{0})
-		h.Write(older)
+		if lookbackOK {
+			jobsPipeline, _ := jobsPipelineFor(latest, lookback)
+			if pipelineStatusToCI(jobsPipeline.Status) == domain.CIPending {
+				checks, _, partial, jerr := p.fetchPipelineJobs(ctx, repo, jobsPipeline.ID)
+				if jerr != nil {
+					return ports.SCMGuardResult{}, jerr
+				}
+				h.Write([]byte{1})
+				writeJobsDigest(h, checks, partial)
+			}
+		}
 	}
 	newETag := hex.EncodeToString(h.Sum(nil))
 	return ports.SCMGuardResult{
 		ETag:        newETag,
 		NotModified: etag == newETag,
 	}, nil
+}
+
+// writeJobsDigest writes a stable summary of a pipeline's jobs: the id, name
+// and raw GitLab status of each job in id order, then whether the listing was
+// truncated. Fields that change on every read of a running job (duration,
+// queued_duration) are left out so the guard does not flap.
+func writeJobsDigest(w io.Writer, checks []ports.SCMCheckObservation, partial bool) {
+	sorted := make([]ports.SCMCheckObservation, len(checks))
+	copy(sorted, checks)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		a, b := sorted[i].ProviderID, sorted[j].ProviderID
+		if len(a) != len(b) {
+			return len(a) < len(b)
+		}
+		return a < b
+	})
+	for _, c := range sorted {
+		_, _ = fmt.Fprintf(w, "%s\x00%s\x00%s\n", c.ProviderID, c.Name, c.Conclusion)
+	}
+	_, _ = fmt.Fprintf(w, "partial=%t", partial)
 }
 
 // ---------------------------------------------------------------------------
@@ -688,7 +738,6 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, mrIID int, h
 
 	latest := pipelines[0]
 	ciState := pipelineStatusToCI(latest.Status)
-	jobsPipeline := latest
 
 	// LADO fork (#21): a pipeline whose source is "external" exists only
 	// because someone posted a commit status (LADO's lado/integration, or
@@ -697,15 +746,18 @@ func (p *Provider) fetchCI(ctx context.Context, repo ports.SCMRepo, mrIID int, h
 	// pipeline's jobs and roll the two statuses up to the worse one. A real
 	// CI failure then still reaches AO's failure injection and LADO's
 	// required checks.
+	var lookback []restPipeline
 	if latest.Source == pipelineSourceExternal {
-		ciPipeline, ok, err := p.latestNonExternalPipeline(ctx, hc, repo, headSHA)
+		// Only called when the newest pipeline is external, which is rare,
+		// so it uses its own (per_page=20) request and ETag cache key.
+		lookback, _, err = p.fetchPipelinesForSHA(ctx, hc, repo, headSHA, externalPipelineLookback)
 		if err != nil {
 			return ports.SCMCIObservation{}, err
 		}
-		if ok {
-			ciState = worseCIState(ciState, pipelineStatusToCI(ciPipeline.Status))
-			jobsPipeline = ciPipeline
-		}
+	}
+	jobsPipeline, underExternal := jobsPipelineFor(latest, lookback)
+	if underExternal {
+		ciState = worseCIState(ciState, pipelineStatusToCI(jobsPipeline.Status))
 	}
 
 	checks, failedChecks, partial, err := p.fetchPipelineJobs(ctx, repo, jobsPipeline.ID)
@@ -746,21 +798,23 @@ func (p *Provider) fetchPipelinesForSHA(ctx context.Context, hc *Client, repo po
 	return pipelines, resp.Body, nil
 }
 
-// latestNonExternalPipeline returns the newest pipeline for sha whose source
-// is not "external", looking at most externalPipelineLookback pipelines back.
-// It is only called when the newest pipeline is external, which is rare, so
-// it uses its own (per_page=20) request and ETag cache key.
-func (p *Provider) latestNonExternalPipeline(ctx context.Context, hc *Client, repo ports.SCMRepo, sha string) (restPipeline, bool, error) {
-	pipelines, _, err := p.fetchPipelinesForSHA(ctx, hc, repo, sha, externalPipelineLookback)
-	if err != nil {
-		return restPipeline{}, false, err
+// jobsPipelineFor picks the pipeline whose jobs describe a head's CI, given
+// the newest pipeline and, when that one is "external", the lookback listing
+// (externalPipelineLookback pipelines, newest first) already read for it. A
+// non-external latest is its own jobs pipeline. An external latest yields the
+// newest non-external pipeline of the lookback with ok=true, or itself when
+// there is none. fetchCI and CommitChecksGuard share this rule so the guard
+// watches the jobs fetchCI reads.
+func jobsPipelineFor(latest restPipeline, lookback []restPipeline) (restPipeline, bool) {
+	if latest.Source != pipelineSourceExternal {
+		return latest, false
 	}
-	for _, pl := range pipelines {
+	for _, pl := range lookback {
 		if pl.Source != pipelineSourceExternal {
-			return pl, true, nil
+			return pl, true
 		}
 	}
-	return restPipeline{}, false, nil
+	return latest, false
 }
 
 // noPipelineForHead reports whether GitLab will not run a pipeline for
