@@ -3321,6 +3321,8 @@
 	"lado.error.workspaceReservedName": "이 이름의 저장소는 워크스페이스에 넣을 수 없습니다.",
 	"lado.lane.queued": "대기열",
 	"lado.lane.queuedEmpty": "승인된 작업은 LADO가 작업을 시작할 때까지 여기서 기다립니다.",
+	"lado.lane.planReview": "계획 검토",
+	"lado.lane.planReviewEmpty": "계획을 요청한 작업은 계획이 만들어지고 승인될 때까지 여기서 기다립니다.",
 	"lado.task.open": "{{issue}} 작업 열기",
 	"lado.task.state.planRequested": "계획 요청됨",
 	"lado.task.state.planRequestFailed": "계획을 요청하지 못함",

@@ -3321,6 +3321,8 @@
 	"lado.error.workspaceReservedName": "Ein Repository mit diesem Namen kann nicht in einen Workspace.",
 	"lado.lane.queued": "Warteschlange",
 	"lado.lane.queuedEmpty": "Freigegebene Aufgaben warten hier, bis LADO ihre Arbeit startet.",
+	"lado.lane.planReview": "Planprüfung",
+	"lado.lane.planReviewEmpty": "Aufgaben warten hier von der Plananfrage, bis du den Plan freigibst.",
 	"lado.task.open": "Aufgabe {{issue}} öffnen",
 	"lado.task.state.planRequested": "Plan angefordert",
 	"lado.task.state.planRequestFailed": "Planungsanfrage fehlgeschlagen",

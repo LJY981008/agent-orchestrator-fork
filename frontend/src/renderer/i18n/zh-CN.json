@@ -3303,6 +3303,8 @@
 	"lado.error.workspaceReservedName": "此名称的仓库无法放入工作区。",
 	"lado.lane.queued": "队列",
 	"lado.lane.queuedEmpty": "已批准的任务在此等待，直到 LADO 开始执行。",
+	"lado.lane.planReview": "计划审核",
+	"lado.lane.planReviewEmpty": "已请求计划的任务在此等待，直到计划生成并获批准。",
 	"lado.task.open": "打开任务 {{issue}}",
 	"lado.task.state.planRequested": "已请求计划",
 	"lado.task.state.planRequestFailed": "计划请求失败",

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createFullAppI18n } from "../../i18n/all-messages";
 import { APP_LOCALES } from "../../../shared/ui-locale";
-import type { LadoExecutionTrackedPR, LadoTask, LadoTaskState, LadoTaskStateReason } from "../../lib/lado";
-import { ladoMergeable, ladoTaskReason, ladoTaskStatus } from "./lado-task-status";
+import type { LadoExecutionTrackedPR, LadoPlanWorkerPhase, LadoTask, LadoTaskState, LadoTaskStateReason } from "../../lib/lado";
+import { ladoMergeable, ladoPlanComing, ladoTaskReason, ladoTaskStatus } from "./lado-task-status";
 
 function task(state: LadoTaskState, stateReason?: LadoTaskStateReason): LadoTask {
 	return {
@@ -131,6 +131,34 @@ describe("ladoTaskStatus", () => {
 				expect(label.length, `${locale} ${state}`).toBeGreaterThan(0);
 			}
 		}
+	});
+});
+
+// LADO fork: whether a new plan is on its way; the lanes put such a draft in
+// the Plan review lane (issue #30).
+describe("ladoPlanComing", () => {
+	const draft = (requestPending: boolean, phase?: LadoPlanWorkerPhase): LadoTask => ({
+		...task("draft"),
+		execution: undefined,
+		plan: { requestPending, ...(phase ? { worker: { requestId: "r1", phase } } : {}) },
+	});
+
+	it("is true while a plan worker's request is open", () => {
+		for (const phase of ["waiting", "designing", "critiquing", "revising", "submitted", "fixing"] as const) {
+			expect(ladoPlanComing(draft(false, phase)), phase).toBe(true);
+		}
+	});
+
+	it("is false once the plan worker ended, unless a request is pending", () => {
+		for (const phase of ["done", "failed", "replaced"] as const) {
+			expect(ladoPlanComing(draft(false, phase)), phase).toBe(false);
+			expect(ladoPlanComing(draft(true, phase)), `${phase} with a pending request`).toBe(true);
+		}
+	});
+
+	it("is true for a pending request without a plan worker, and false with neither", () => {
+		expect(ladoPlanComing(draft(true))).toBe(true);
+		expect(ladoPlanComing(draft(false))).toBe(false);
 	});
 });
 

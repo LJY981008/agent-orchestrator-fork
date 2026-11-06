@@ -3321,6 +3321,8 @@
 	"lado.error.workspaceReservedName": "この名前のリポジトリはワークスペースに入れられません。",
 	"lado.lane.queued": "キュー",
 	"lado.lane.queuedEmpty": "承認されたタスクは、LADO が作業を始めるまでここで待ちます。",
+	"lado.lane.planReview": "計画レビュー",
+	"lado.lane.planReviewEmpty": "計画を依頼したタスクは、計画ができて承認されるまでここで待ちます。",
 	"lado.task.open": "タスク {{issue}} を開く",
 	"lado.task.state.planRequested": "計画を依頼済み",
 	"lado.task.state.planRequestFailed": "計画の依頼に失敗",
