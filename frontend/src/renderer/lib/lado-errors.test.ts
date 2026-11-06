@@ -188,6 +188,8 @@ const reasons = [
 	"checks_failed",
 	"commands_running",
 	"worktree_not_at_head",
+	// At the head with uncommitted or untracked files (#22).
+	"worktree_dirty",
 	"commands_failed",
 	"command_timed_out",
 	"worktree_missing",
@@ -829,6 +831,7 @@ describe("LADO verification errors", () => {
 		expect(ladoReasonText(en, "verifying")).toBe("LADO is verifying the pull request's head");
 		expect(ladoReasonText(ko, "verifying")).toBe("LADO가 풀 리퀘스트 head를 검증하는 중");
 		expect(ladoReasonText(en, "worktree_not_at_head")).toBe("Waiting for the worktree to match the PR head");
+		expect(ladoReasonText(ko, "worktree_dirty")).toBe("워크트리의 커밋 안 된 파일이 정리되기를 기다리는 중");
 		expect(ladoReasonText(ko, "commit_messages_failed")).toBe("커밋 메시지가 한국어가 아님");
 		expect(ladoReasonText(en, "merged_without_approval")).toBe("Merged without an integration approval");
 		expect(ladoReasonText(ko, "status_not_posted")).toBe("LADO가 아직 통합 상태를 게시하지 못함");
