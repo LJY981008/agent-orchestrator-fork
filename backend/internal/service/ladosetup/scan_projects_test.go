@@ -40,10 +40,13 @@ func TestRepoTrackedFilesAreNeverAdoptable(t *testing.T) {
 	tracked := []string{
 		"CLAUDE.md", "docs/CLAUDE.md", "AGENTS.md", "service/AGENTS.md", ".mcp.json", ".claude/settings.json",
 		".claude/skills/release/SKILL.md", ".claude/agents/reviewer.md", ".claude/commands/ship.md", ".codex/config.toml",
+		".agents/skills/plan/SKILL.md",
 	}
 	gitRepo(t, h, app, append([]string{"README.md", "NOTCLAUDE.md"}, tracked...)...)
 	h.write(filepath.Join(app, ".claude", "settings.local.json"), `{"model": "haiku"}`)
 	h.write(filepath.Join(app, "CLAUDE.local.md"), "mine")
+	// An untracked Codex skill never reaches a worktree and is not listed.
+	h.write(filepath.Join(app, ".agents", "skills", "x", "SKILL.md"), "untracked")
 	// A repository that tracks a personal file shows it as tracked.
 	lib := filepath.Join(h.root, "work", "lib")
 	gitRepo(t, h, lib, "CLAUDE.local.md")
@@ -87,6 +90,7 @@ func TestRepoTrackedFilesAreNeverAdoptable(t *testing.T) {
 		".claude/skills/release/SKILL.md": {string(domain.LadoSetupToolClaudeCode), string(domain.LadoSetupKindSkill)},
 		"service/AGENTS.md":               {string(domain.LadoSetupToolCodex), string(domain.LadoSetupKindInstructions)},
 		".codex/config.toml":              {string(domain.LadoSetupToolCodex), ""},
+		".agents/skills/plan/SKILL.md":    {string(domain.LadoSetupToolCodex), string(domain.LadoSetupKindSkill)},
 	} {
 		e := entryAt(t, inv, project, domain.LadoSetupKind(want[1]), rel)
 		if string(e.Tool) != want[0] {
@@ -94,7 +98,7 @@ func TestRepoTrackedFilesAreNeverAdoptable(t *testing.T) {
 		}
 	}
 	for _, e := range inv.Entries {
-		if e.Name == "README.md" || e.Name == "NOTCLAUDE.md" {
+		if e.Name == "README.md" || e.Name == "NOTCLAUDE.md" || e.Name == ".agents/skills/x/SKILL.md" {
 			t.Fatalf("a file no tool loads is listed: %+v", e)
 		}
 		if e.Location == project && e.Status == domain.LadoSetupStatusAdoptable {

@@ -4,7 +4,10 @@ package ladosetup
 // files a project's repository tracks reach every worker through its
 // worktree, so LADO shows them read-only and never adopts them. The personal
 // files most repositories leave untracked never reach a worktree, so LADO
-// shows them with that reason and leaves them alone.
+// shows them with that reason and leaves them alone. Codex's repository
+// skills under .agents/skills are listed too (#29), and ProjectReferences
+// (references.go) reads the same tracked files to list a project's skills and
+// agents in a LADO session's instructions.
 
 import (
 	"bytes"
@@ -22,7 +25,8 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
-// gitTimeout bounds the git call that lists one project's tracked files.
+// gitTimeout bounds the git call that lists one project's tracked files for
+// the inventory.
 const gitTimeout = 10 * time.Second
 
 // The personal Claude files of a project's main checkout.
@@ -33,10 +37,11 @@ const (
 
 // repoSetupPathspecs are the setup files Claude Code and Codex load from a
 // checkout, and the two personal files, which are listed so a repository
-// that tracks them shows them as tracked.
+// that tracks them shows them as tracked. .agents/skills holds Codex's
+// repository skills (#29).
 var repoSetupPathspecs = []string{
 	"*CLAUDE.md", "AGENTS.md", "*/AGENTS.md", ".claude/settings.json", ".mcp.json",
-	".claude/skills/*", ".claude/agents/*", ".claude/commands/*", ".codex/*",
+	".claude/skills/*", ".claude/agents/*", ".claude/commands/*", ".codex/*", ".agents/skills/*",
 	claudeLocalMD, claudeLocalSettings,
 }
 
@@ -85,7 +90,7 @@ func (sc *scanner) project(ctx context.Context, id domain.ProjectID, dir string)
 	if _, err := os.Stat(dir); err != nil {
 		return fmt.Errorf("read the project folder: %w", err)
 	}
-	tracked, err := trackedSetupFiles(ctx, dir)
+	tracked, err := trackedSetupFiles(ctx, dir, gitTimeout)
 	if err != nil {
 		return err
 	}
@@ -126,7 +131,8 @@ func (sc *scanner) project(ctx context.Context, id domain.ProjectID, dir string)
 }
 
 // repoFileKind tells which tool loads a tracked file and as what. It refuses
-// what a pathspec matched by its suffix alone, such as NOTCLAUDE.md.
+// what a pathspec matched by its suffix alone, such as NOTCLAUDE.md. A file
+// under .agents/skills is a Codex skill (#29).
 func repoFileKind(rel string) (domain.LadoSetupTool, domain.LadoSetupKind, bool) {
 	claude, codex := domain.LadoSetupToolClaudeCode, domain.LadoSetupToolCodex
 	switch {
@@ -146,22 +152,26 @@ func repoFileKind(rel string) (domain.LadoSetupTool, domain.LadoSetupKind, bool)
 		return codex, domain.LadoSetupKindInstructions, true
 	case strings.HasPrefix(rel, ".codex/"):
 		return codex, "", true
+	case strings.HasPrefix(rel, ".agents/skills/"):
+		return codex, domain.LadoSetupKindSkill, true
 	default:
 		return "", "", false
 	}
 }
 
 // trackedSetupFiles runs git ls-files in dir for repoSetupPathspecs, with
-// every prompt off, and returns the paths relative to dir with slashes.
-func trackedSetupFiles(ctx context.Context, dir string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(ctx, gitTimeout)
+// every prompt off, and returns the paths relative to dir with slashes. The
+// call gives up after timeout: gitTimeout for the inventory, and a shorter
+// one when a session's instructions wait for it (#29).
+func trackedSetupFiles(ctx context.Context, dir string, timeout time.Duration) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	args := append([]string{"-C", dir, "ls-files", "-z", "--"}, repoSetupPathspecs...)
 	cmd := aoprocess.CommandContext(ctx, "git", args...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never")
 	out, err := cmd.Output()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return nil, fmt.Errorf("git ls-files gave no answer within %s", gitTimeout)
+		return nil, fmt.Errorf("git ls-files gave no answer within %s", timeout)
 	}
 	if err != nil {
 		var exitErr *exec.ExitError
