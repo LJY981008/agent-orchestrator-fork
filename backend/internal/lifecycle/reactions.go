@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -224,7 +225,7 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 					continue
 				}
 				commentSlice := []ports.PRCommentObservation{comment}
-				msg := formatReviewCommentsMessage(commentSlice)
+				msg := formatReviewCommentsMessage(o.Number, commentSlice)
 				if ident != "your PR" {
 					msg = strings.Replace(msg, "your PR", ident, 1)
 				}
@@ -884,9 +885,13 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 	return msg.String()
 }
 
-func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
+// formatReviewCommentsMessage builds the review-comment nudge. It names the
+// exact AO command that closes a thread (#85): workers otherwise look for glab
+// or gh, find no token, and stop with the thread still open, which keeps the PR
+// from being ready to merge. prNumber 0 prints a placeholder instead.
+func formatReviewCommentsMessage(prNumber int, comments []ports.PRCommentObservation) string {
 	if len(comments) == 0 {
-		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here."
+		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here.\n\n" + reviewThreadResolveInstructions(prNumber)
 	}
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
@@ -915,8 +920,26 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		}
 		msg.WriteString("\n")
 	}
-	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
+	msg.WriteString("\nAddress each comment and push fixes. You should not need to re-fetch review data unless you need additional context beyond what is provided here.\n\n")
+	msg.WriteString(reviewThreadResolveInstructions(prNumber))
 	return msg.String()
+}
+
+// reviewThreadResolveInstructions is the thread-closing procedure appended to
+// every review-comment nudge. It must keep saying to list only addressed
+// thread IDs: the command closes every unresolved thread when called without
+// IDs.
+func reviewThreadResolveInstructions(prNumber int) string {
+	number := "<PR number>"
+	if prNumber > 0 {
+		number = strconv.Itoa(prNumber)
+	}
+	return fmt.Sprintf("After you push, resolve each thread you addressed with `ao pr resolve-comments %s <thread id...>`. "+
+		"The AO daemon handles this for both GitHub and GitLab, so you do not need glab, gh or a token. "+
+		"Called without IDs the command resolves every unresolved thread, so list only the thread IDs you addressed. "+
+		"Do not resolve a thread you decided not to address; report why with `ao report --checkpoint --note \"<reason>\"`. "+
+		"If the command fails (for example because AO tracks the same number in more than one repository), do not try another tool to resolve the thread; "+
+		"report it with `ao report --needs-input --note \"<PR URL> <thread id...>: <error>\"`.", number)
 }
 
 func markdownCodeFence(s string) string {
