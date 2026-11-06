@@ -189,6 +189,27 @@ func TestRequiredChecksWithoutARuleset(t *testing.T) {
 	}
 }
 
+// LADO fork (#83): on GitLab the pending lado/integration posted before the
+// approval keeps the MR pipeline running after its jobs end. Without named
+// required checks, finished jobs must still pass the head while LADO's own
+// pending status is left out of the judgement and of the details.
+func TestRequiredChecksWithoutARulesetIgnorePendingIntegration(t *testing.T) {
+	item, err := EvaluateRequiredChecks(nil, false, true, headCheckRows("pipeline-check", "passed", "back-build", "passed", "front-build", "passed", domain.LadoIntegrationStatusContext, "queued"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectItemOutcome(t, item, domain.LadoVerifyRequiredChecks, domain.LadoVerifyPass, "")
+	details := requiredChecksDetailsOf(t, item)
+	if len(details.Checks) != 3 {
+		t.Fatalf("details checks = %+v, want the three jobs", details.Checks)
+	}
+	for _, check := range details.Checks {
+		if strings.EqualFold(check.Name, domain.LadoIntegrationStatusContext) {
+			t.Fatalf("details list %s: %+v", check.Name, details.Checks)
+		}
+	}
+}
+
 // checkRunAt is a run of a check command on the head, finished a minute
 // after it started unless it still runs.
 // withCommand is run as a run of another text of its command.

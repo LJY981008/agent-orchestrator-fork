@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -3515,6 +3516,117 @@ func TestMergeabilityFromProviderFacts_UnstableOutranksBlockers(t *testing.T) {
 			}
 			if strings.Join(got.Blockers, ",") != strings.Join(tc.wantBlockers, ",") {
 				t.Fatalf("Blockers = %v, want %v", got.Blockers, tc.wantBlockers)
+			}
+		})
+	}
+}
+
+// TestPoll_GitLabCIPendingForcedRefreshDuringIncrementalDiscovery (LADO fork,
+// #83) covers the backstop for a GitLab MR whose pipeline stays "running"
+// because a pending commit status is attached to it: during incremental
+// discovery (cursor set), with both guards NotModified and the MR absent from
+// the listing, an open GitLab MR whose stored CI is pending is still re-fetched
+// once its snapshot is older than DefaultPRMaxAge. A GitLab MR with passing CI
+// and a GitHub PR with pending CI are left alone under the same conditions.
+func TestPoll_GitLabCIPendingForcedRefreshDuringIncrementalDiscovery(t *testing.T) {
+	parser, err := gitlab.NewProvider(gitlab.ProviderOptions{
+		Token:              gitlab.StaticTokenSource("tok"),
+		SkipTokenPreflight: true,
+		AllowedHosts:       []string{"host"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gitlabRepo := ports.SCMRepo{Provider: "gitlab", Host: "host", Owner: "o", Name: "r", Repo: "o/r"}
+	for _, tc := range []struct {
+		name      string
+		repo      ports.SCMRepo
+		origin    string
+		storedCI  domain.CIState
+		wantForce bool
+	}{
+		{name: "gitlab ci pending", repo: gitlabRepo, origin: "https://host/o/r.git", storedCI: domain.CIPending, wantForce: true},
+		{name: "gitlab ci passing", repo: gitlabRepo, origin: "https://host/o/r.git", storedCI: domain.CIPassing},
+		{name: "github ci pending", repo: testRepo, origin: "https://github.com/o/r.git", storedCI: domain.CIPending},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := testStoreWithSession()
+			store.projects["p"] = domain.ProjectRecord{ID: "p", RepoOriginURL: tc.origin}
+
+			stored := gitlabSSHObservation(tc.repo, 1, "feat")
+			if tc.repo.Provider == "github" {
+				stored = testObs(1)
+			}
+			stored.CI.Summary = string(tc.storedCI)
+			stored.CI.HeadSHA = stored.PR.HeadSHA
+			stored.CI.Checks = []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckInProgress), Conclusion: "running", URL: "ci", ProviderID: "110"}}
+			local, _, _, _, _ := domainFromObservation("p-1", domain.SessionRecord{AutoInjectReview: true}, stored, domain.PullRequest{}, persistenceOptions{}, time.Unix(1, 0).UTC())
+			local.ReviewObservedAt = time.Unix(2, 0).UTC()
+			if local.CI != tc.storedCI {
+				t.Fatalf("stored CI = %q, want %q", local.CI, tc.storedCI)
+			}
+			store.prs["p-1"] = []domain.PullRequest{local}
+
+			// The pipeline is still running (summary pending), but every job ended.
+			fresh := stored
+			fresh.CI.Summary = string(domain.CIPending)
+			fresh.CI.Checks = []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckPassed), Conclusion: "success", URL: "ci", ProviderID: "110"}}
+
+			repoKey := prKey(tc.repo, 0)
+			commitCacheKey := commitKey(tc.repo, local.HeadSHA)
+			fake := &fakeProvider{
+				repoGuards:   map[string]ports.SCMGuardResult{repoKey: {ETag: "v1", NotModified: true}},
+				checkGuards:  map[string]ports.SCMGuardResult{commitCacheKey: {ETag: "ci1", NotModified: true}},
+				observations: map[string]ports.SCMObservation{prKey(tc.repo, 1): fresh},
+			}
+			now := time.Unix(10_000, 0).UTC()
+			var obs *Observer
+			if tc.repo.Provider == "gitlab" {
+				fake.identity = ports.SCMIdentity{Login: "alice", Human: true}
+				provider := &gitlabParsedProvider{fakeProvider: fake, parser: parser}
+				obs = New(provider, store, &fakeLifecycle{}, Config{Clock: func() time.Time { return now }, Tick: time.Hour, Logger: quietSlog(), CacheMax: 128, ScopedIdentityResolver: provider})
+			} else {
+				obs = newTestObserver(store, fake, &fakeLifecycle{}, now)
+			}
+			obs.Cache.RepoPRListETag[repoKey] = "v1"
+			obs.Cache.CommitChecksETag[commitCacheKey] = "ci1"
+			obs.Cache.LastSyncCursor[repoKey] = now.Add(-time.Hour)
+			prCacheKey := keyForTrackedPR(local, tc.repo)
+
+			// Within max-age: nothing to fetch.
+			obs.Cache.LastPRFetchAt[prCacheKey] = now.Add(-time.Minute)
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if len(fake.fetchBatches) != 0 {
+				t.Fatalf("fetched within max-age: %#v", fake.fetchBatches)
+			}
+
+			// Older than max-age.
+			obs.Cache.LastPRFetchAt[prCacheKey] = now.Add(-(DefaultPRMaxAge + time.Minute))
+			if err := obs.Poll(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if !tc.wantForce {
+				if len(fake.fetchBatches) != 0 {
+					t.Fatalf("fetched although not forced: %#v", fake.fetchBatches)
+				}
+				return
+			}
+			if len(fake.fetchBatches) != 1 || len(fake.fetchBatches[0]) != 1 || fake.fetchBatches[0][0].Number != 1 {
+				t.Fatalf("expected one forced fetch of MR 1, got %#v", fake.fetchBatches)
+			}
+			var written *fakeWrite
+			for i := range store.writes {
+				if store.writes[i].pr.Number == 1 {
+					written = &store.writes[i]
+				}
+			}
+			if written == nil {
+				t.Fatal("forced fetch was not persisted")
+			}
+			if len(written.checks) != 1 || written.checks[0].Status != domain.PRCheckPassed {
+				t.Fatalf("persisted checks = %#v, want build passed", written.checks)
 			}
 		})
 	}
