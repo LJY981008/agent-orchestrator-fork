@@ -58,12 +58,14 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 // ladoWork is LADO's services wireLadoWork builds.
 type ladoWork struct {
 	connections *ladoconnect.Service
-	tasks       *ladotask.Service
-	rules       *ladopolicy.Service
-	queue       *ladoqueue.Service
-	setup       *ladosetup.Service
-	verify      *ladoverify.Service
-	chrome      *ladochrome.Service
+	// clients are LADO's own repository clients.
+	clients *ladoRepoClients
+	tasks   *ladotask.Service
+	rules   *ladopolicy.Service
+	queue   *ladoqueue.Service
+	setup   *ladosetup.Service
+	verify  *ladoverify.Service
+	chrome  *ladochrome.Service
 	// watch is the worker watch (issue #42), whose loop the daemon starts
 	// with startLadoWatch.
 	watch ladoWatchServices
@@ -88,13 +90,22 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	if ladoStoredTokens == nil {
 		installLadoCredentials(cfg, log)
 	}
-	clients := newLadoRepoClients(cfg.GitLab)
+	// The environment's config, not one with the stored tokens in it, so a
+	// stored token is read on every call and a replaced one is used at once.
+	clients := newLadoRepoClients(ladoGitLabBase(cfg))
+	// A token saved or deleted here reaches AO's GitLab adapters without a
+	// daemon restart (issue #19).
+	var credentialsChanged func(context.Context)
+	if hub := ladoGitLabHub; hub != nil {
+		credentialsChanged = hub.Reload
+	}
 	connections := ladoconnect.New(ladoconnect.Deps{
-		Credentials: ladoStoredTokens,
-		Clients:     clients,
-		Projects:    store,
-		Cloner:      ladoCloner{projects: projects},
-		Log:         log,
+		Credentials:        ladoStoredTokens,
+		Clients:            clients,
+		Projects:           store,
+		Cloner:             ladoCloner{projects: projects},
+		Log:                log,
+		CredentialsChanged: credentialsChanged,
 	})
 	blobs := ladoblob.New(cfg.StateDir)
 	setup := wireLadoSetup(cfg, store, blobs, work.setup, log)
@@ -154,7 +165,7 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	verify := wireLadoVerify(store, blobs, clients, work, log)
 	chrome := wireLadoClaudeChrome(cfg, store, work.setup.sessions, log)
 	relay := wireLadoRelay(store, blobs, work.sender, log)
-	return ladoWork{connections: connections, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch, relay: relay}
+	return ladoWork{connections: connections, clients: clients, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch, relay: relay}
 }
 
 // ladoQueueSender is how the dispatcher tells a running resolve worker about
