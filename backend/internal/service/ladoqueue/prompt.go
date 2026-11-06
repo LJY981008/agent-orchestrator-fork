@@ -16,8 +16,9 @@ import (
 // last what LADO verifies on the pull request and the evidence file it asks
 // for (decision k of the step 8 plan). AO appends the pinned issue, which
 // the spawn passes as its issue context, and the worker's system prompt
-// carries the snapshot's rule text.
-func workerPrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.LadoCheckCommand) string {
+// carries the snapshot's rule text. base is the branch the dispatch resolved
+// as the task's base, which a GitLab merge request targets (#20).
+func workerPrompt(task domain.LadoTask, in ladotask.RunInput, base string, checks []domain.LadoCheckCommand) string {
 	example := ""
 	if id, err := domain.ParseLadoIssueRef(task.IssueRef); err == nil {
 		if n := domain.LadoIssueNumber(id); n > 0 {
@@ -27,9 +28,13 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.La
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are implementing a plan the developer approved in LADO for %s: %s.\n", task.IssueRef, oneLine(task.Issue.Title))
 	fmt.Fprintf(&b, "Follow the approved plan below and keep to its scope. When you open the pull request, link the issue in its description%s.\n", example)
+	cr := changeRequest{target: base, refspec: "HEAD"}
 	if plan, _ := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{}); len(plan.Repos) > 0 {
 		b.WriteString(reposParagraph(plan.Repos))
+		// The prompt does not know each repository's base branch.
+		cr = changeRequest{refspec: "HEAD", multiRepo: true}
 	}
+	b.WriteString(changeRequestParagraph(task, cr))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "## Approved plan (revision %d, sha256 %s)\n\n", in.Revision.Number, shortSHA(in.Revision.SHA256))
 	b.WriteString(in.PlanText)
