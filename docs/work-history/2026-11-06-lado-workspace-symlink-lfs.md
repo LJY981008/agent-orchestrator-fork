@@ -25,6 +25,15 @@
 - **`dirtySince` 키(계획과 다른 점, 유지)**: 계획 4단계는 키를 세션 id 로 정했지만 verify 파트는 기존 `passKey` 를 썼다. 단일 PR 실행에서는 세션 id 그대로라 계획과 같고, 다중 저장소 실행(PR 여럿)에서만 세션+PR URL 이다. 세션 id 하나로 두면 한 세션의 두 PR head 가 패스마다 서로 덮어써 2분이 끝내 차지 않으므로, 파트의 선택이 계획의 의도(head 마다 항목이 쌓이지 않게)를 지키면서 다중 PR 을 깨지 않는 쪽이다. 항목 수는 실행이 추적하는 PR 수를 넘지 않는다.
 - **CLI 미러**: `internal/cli/project.go` 의 `projectConfig` 에 `workspaceAssets` 가 없어 `ao project set-config` 가 이 설정을 지운다. `preRemove`·`effort` 도 이미 같은 처지이고 계획 경로 밖이라 고치지 않고, projects.mdx 에 적었다(후속 후보).
 
+### main 재기준 (#77 이후)
+
+PR 을 연 뒤 main 에 #77(보고된 PR 자동 연결)이 들어와 같은 파일이 겹쳤다. `origin/main` 위로 rebase 했다(파트 병합 커밋은 선형화).
+
+- `lado_queue_dto.go`·`lado_tasks_dto.go` stateReason enum: main 의 `reported_pr_untracked` 와 `worktree_dirty` 를 둘 다 둔다.
+- `ladoverify/service.go` `New`: main 의 `reportedFailed` 와 `dirtySince` 를 둘 다 초기화한다.
+- `openapi.yaml`·`schema.ts`: `npm run api` 로 다시 만들었다.
+- 검사를 모두 다시 돌렸다.
+
 ### 문서 (14단계와 검수)
 
 - `frontend/src/docs/content/configuration/projects.mdx`: 설정 표에 `workspaceAssets`, 새 절 "Workspace folders"(패턴 규칙, 기본값, `[]`, skip/keep, symlinks 로 원본 쓰기, CLI 가 지운다는 점), 자주 겪는 문제에 git-lfs 없음·hooksPath 훅·자산 복사 실패.
