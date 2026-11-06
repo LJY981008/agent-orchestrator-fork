@@ -288,6 +288,53 @@ type LadoExecution struct {
 	PRReposFirm bool
 	// WorkerDone says the newest report of the execution's session is done.
 	WorkerDone bool
+	// ReportedPRs are the PRs the execution's worker reported it created
+	// (`ao report --pr-created`) that its session does not have (#71): not
+	// one of the session's PRs, and in a repository where the session has no
+	// open PR. Those LADO found it cannot attach to the session are Refused,
+	// with the reason. Only a single worker's or an integration worker's
+	// execution has them, in report order.
+	ReportedPRs []LadoReportedPR
+}
+
+// LadoReportedPR is a PR an execution's worker reported it created that its
+// session does not have (#71). LADO attaches such a PR to the session, as
+// `ao session claim-pr` does; Refused says it found it cannot, and Reason why
+// (LadoReportedPR*).
+type LadoReportedPR struct {
+	URL     string
+	Refused bool
+	Reason  string
+}
+
+// Reasons LADO refuses to attach a reported PR to its execution's session
+// (#71). They are stored with the refusal.
+const (
+	// LadoReportedPROwnedElsewhere means another session, running or ended,
+	// has the PR.
+	LadoReportedPROwnedElsewhere = "owned_elsewhere"
+	// LadoReportedPROutsideProject means the PR is not in the project's
+	// repository or one of its workspace's.
+	LadoReportedPROutsideProject = "outside_project"
+	// LadoReportedPRNotOpen means the PR is merged or closed.
+	LadoReportedPRNotOpen = "not_open"
+	// LadoReportedPRInvalid means the reported reference names no PR.
+	LadoReportedPRInvalid = "invalid"
+	// LadoReportedPRSessionNotClaimable means the session cannot take a PR.
+	LadoReportedPRSessionNotClaimable = "session_not_claimable"
+	// LadoReportedPRUnreachable means attaching it failed too many times in
+	// a row.
+	LadoReportedPRUnreachable = "unreachable"
+)
+
+// LadoReportedPRRefusalReasons are the reasons a refusal can be stored with.
+var LadoReportedPRRefusalReasons = []string{
+	LadoReportedPROwnedElsewhere,
+	LadoReportedPROutsideProject,
+	LadoReportedPRNotOpen,
+	LadoReportedPRInvalid,
+	LadoReportedPRSessionNotClaimable,
+	LadoReportedPRUnreachable,
 }
 
 // LadoExecutionTrackedPR is one PR LADO tracks for an execution (#64): the
@@ -338,6 +385,22 @@ func (e LadoExecution) MissingPRRepos() []string {
 		}
 	}
 	return missing
+}
+
+// PendingReportedPRs returns the reported PRs LADO still tries to attach to
+// the execution's session (#71): those not Refused, while the session runs.
+// An ended session takes no PR, so it has none.
+func (e LadoExecution) PendingReportedPRs() []LadoReportedPR {
+	if e.SessionTerminated {
+		return nil
+	}
+	var pending []LadoReportedPR
+	for _, pr := range e.ReportedPRs {
+		if !pr.Refused {
+			pending = append(pending, pr)
+		}
+	}
+	return pending
 }
 
 // ladoSameRelative reports whether two slash-separated repository folders

@@ -162,6 +162,11 @@ const (
 	// LadoValidatingPRMissing means a repository the execution is expected
 	// to open a PR in has none yet (#64, LadoExecution.MissingPRRepos).
 	LadoValidatingPRMissing = "pr_missing"
+	// LadoRunningReportedPRUntracked means the worker reported a PR its
+	// session does not have (#71, LadoExecution.ReportedPRs): a Running
+	// execution without a PR, or one with several PRs that LADO still
+	// attaches a reported PR to before it may be approved.
+	LadoRunningReportedPRUntracked = "reported_pr_untracked"
 )
 
 // State derives the task's state now, as StateAt does.
@@ -304,9 +309,11 @@ func (e LadoExecution) State() (LadoTaskState, string) {
 // PR merged and none is missing, without approval when any merged head had
 // none. Otherwise the first open PR that is Validating gives its reason, then
 // a repository still without a PR keeps it Validating (LadoValidatingPRMissing),
-// then a PR waiting for its approval makes it Integration pending, and it is
-// Integrating once every open PR's head is approved. Before any PR opens it
-// is Running or Failed as with one PR.
+// then so does a reported PR LADO still attaches to the session
+// (LadoRunningReportedPRUntracked, PendingReportedPRs), then a PR waiting
+// for its approval makes it Integration pending, and it is Integrating once
+// every open PR's head is approved. Before any PR opens it is Running or
+// Failed as with one PR.
 func (e LadoExecution) taskState() (LadoTaskState, string) {
 	if len(e.PRs) <= 1 && len(e.PRRepos) <= 1 {
 		return e.prState()
@@ -338,6 +345,10 @@ func (e LadoExecution) taskState() (LadoTaskState, string) {
 	if missing {
 		return LadoTaskValidating, LadoValidatingPRMissing
 	}
+	// A reported PR LADO still attaches may be one more PR to approve.
+	if len(e.PendingReportedPRs()) > 0 {
+		return LadoTaskValidating, LadoRunningReportedPRUntracked
+	}
 	if slices.Contains(states, LadoTaskIntegrationPending) {
 		return LadoTaskIntegrationPending, ""
 	}
@@ -367,7 +378,9 @@ func (e LadoExecution) TrackedPRState(pr LadoExecutionTrackedPR) (LadoTaskState,
 // one: a run stopped at its deadline while its PR opened still has the PR to
 // review, as the run time limit stops once a PR is open. A merge without an
 // integration approval counts only for an execution dispatched under
-// integration approval.
+// integration approval. Without a PR, a running execution whose worker
+// reported one its session does not have says so
+// (LadoRunningReportedPRUntracked), refused or not.
 func (e LadoExecution) prState() (LadoTaskState, string) {
 	switch {
 	case e.PR.Merged && e.IntegrationGated && !e.Integration.MergedHeadApproved:
@@ -380,6 +393,9 @@ func (e LadoExecution) prState() (LadoTaskState, string) {
 		return LadoTaskFailed, LadoFailedTimedOut
 	case e.PR.URL == "" && e.SessionTerminated:
 		return LadoTaskFailed, LadoFailedEndedWithoutPR
+	case e.PR.URL == "" && len(e.ReportedPRs) > 0:
+		// The worker opened a PR its session does not have (#71).
+		return LadoTaskRunning, LadoRunningReportedPRUntracked
 	case e.PR.URL == "":
 		return LadoTaskRunning, ""
 	}

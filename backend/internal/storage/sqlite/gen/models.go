@@ -823,6 +823,13 @@ type LadoRelay struct {
 	DeliveredAt            sql.NullTime
 }
 
+type LadoReportedPRRefusal struct {
+	ExecutionSessionID string
+	PRURL              string
+	Reason             string
+	RefusedAt          time.Time
+}
+
 type LadoRule struct {
 	ID         string
 	Builtin    int64
