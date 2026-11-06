@@ -219,7 +219,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		}
 		return s.startParts(ctx, entry, task, in, plan, repos)
 	}
-	cfg := spawnConfig(task, entry, in, agent, checks)
+	cfg := spawnConfig(task, entry, in, agent, base.Branch, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
 	exec := domain.LadoExecution{
 		SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead,
@@ -266,8 +266,10 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 // spawnConfig starts the worker from the snapshot's agent and permission mode
 // and from the plan and issue the developer approved, in Chat (decisions c,
 // d and n of the step 6 plan). The attempt's own client request id is what
-// the worker gate grants the spawn by. The branch is left to AO's naming.
-func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent, checks []domain.LadoCheckCommand) ports.SpawnConfig {
+// the worker gate grants the spawn by. The branch is left to AO's naming;
+// baseBranch is the one the worker's pull request targets.
+func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent, baseBranch string,
+	checks []domain.LadoCheckCommand) ports.SpawnConfig {
 	return ports.SpawnConfig{
 		ProjectID:         task.ProjectID,
 		IssueID:           task.IssueRef,
@@ -276,7 +278,7 @@ func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.
 		IssueContext:      in.IssueContext,
 		Kind:              domain.KindWorker,
 		Harness:           agent.Harness,
-		Prompt:            workerPrompt(task, in, checks),
+		Prompt:            workerPrompt(task, in, baseBranch, checks),
 		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName(task.Issue.Title),

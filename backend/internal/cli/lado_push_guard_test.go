@@ -97,6 +97,9 @@ func TestLadoPushGuardDecidesCommands(t *testing.T) {
 		{"git push --force-with-lease origin HEAD:ao/x/root", work, nil, ""},
 		{"git push -o merge_request.create origin HEAD:refs/heads/x", work, nil, ""},
 		{"git push -o merge_request.create -o merge_request.target=main origin HEAD:refs/heads/x", work, nil, ""},
+		// The push the worker prompt asks for on GitLab (#20).
+		{`git push -o merge_request.create -o merge_request.target=main -o merge_request.title="한글 제목" -o merge_request.description="Closes #20" origin HEAD`, work, nil, ""},
+		{`git push -o merge_request.create -o merge_request.title="한글 제목" -o merge_request.description="Closes group/proj#20" origin HEAD:refs/heads/ao/x/root`, work, nil, ""},
 		{"git push origin HEAD:refs/heads/$(git branch --show-current)", work, nil, ""},
 		{"git push origin HEAD", work, nil, ""},
 		{"git push", work, nil, ""},
