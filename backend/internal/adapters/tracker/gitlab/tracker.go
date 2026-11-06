@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	scmgitlab "github.com/aoagents/agent-orchestrator/backend/internal/adapters/scm/gitlab"
@@ -68,6 +69,13 @@ type Options struct {
 	UserAgent    string
 	AllowedHosts []string
 	HostTokens   map[string]scmgitlab.TokenSource
+
+	// LADO fork: SkipTokenPreflight skips New's check that the default
+	// token can be read. The daemon sets it so the tracker exists even
+	// when only self-managed host tokens are configured (or none yet);
+	// hosts connected later arrive through SetHosts. A missing default
+	// token then fails gitlab.com requests with ErrNoToken at call time.
+	SkipTokenPreflight bool
 }
 
 // hostEntry holds the per-host base URL and token source. The default
@@ -102,7 +110,12 @@ type Tracker struct {
 	// hosts maps each allowed self-managed host to its config (base URL +
 	// token). Hosts in AllowedHosts without an explicit HostTokens entry fall
 	// back to the default token.
-	hosts map[string]hostEntry
+	//
+	// LADO fork: SetHosts replaces the map while requests run, so it is
+	// read and written only under hostsMu. Nothing calls a TokenSource or
+	// makes an HTTP request while holding it.
+	hostsMu sync.RWMutex
+	hosts   map[string]hostEntry
 
 	preflight httpkit.PreflightCache
 }
@@ -114,8 +127,10 @@ func New(opts Options) (*Tracker, error) {
 	if src == nil {
 		return nil, ErrNoToken
 	}
-	if _, err := src.Token(context.Background()); err != nil {
-		return nil, err
+	if !opts.SkipTokenPreflight {
+		if _, err := src.Token(context.Background()); err != nil {
+			return nil, err
+		}
 	}
 	baseURL := opts.BaseURL
 	if baseURL == "" {
@@ -126,33 +141,63 @@ func New(opts Options) (*Tracker, error) {
 		ua = defaultUserAgent
 	}
 
-	// Build per-host config for self-managed hosts.
-	hosts := make(map[string]hostEntry, len(opts.AllowedHosts))
-	for _, raw := range opts.AllowedHosts {
+	t := &Tracker{
+		http:        opts.HTTPClient,
+		userAgent:   ua,
+		defaultHost: hostEntry{baseURL: baseURL, tokens: src},
+		hosts:       buildHosts(opts.AllowedHosts, opts.HostTokens, src),
+	}
+	if t.http == nil {
+		t.http = &http.Client{Timeout: 30 * time.Second}
+	}
+	return t, nil
+}
+
+// buildHosts builds the per-host config for self-managed hosts. gitlab.com
+// and empty entries are skipped (gitlab.com always uses the default
+// config). A host without its own token falls back to defaultTokens.
+// HostTokens keys are normalized the same way as AllowedHosts so a
+// differently-cased key still matches its host.
+func buildHosts(allowedHosts []string, hostTokens map[string]scmgitlab.TokenSource, defaultTokens scmgitlab.TokenSource) map[string]hostEntry {
+	tokens := make(map[string]scmgitlab.TokenSource, len(hostTokens))
+	for raw, ts := range hostTokens {
+		if h := scmgitlab.NormalizeHost(raw); h != "" && ts != nil {
+			tokens[h] = ts
+		}
+	}
+	hosts := make(map[string]hostEntry, len(allowedHosts))
+	for _, raw := range allowedHosts {
 		h := scmgitlab.NormalizeHost(raw)
 		if h == "" || scmgitlab.IsGitLabDotCom(h) {
 			continue
 		}
 		he := hostEntry{
 			baseURL: "https://" + h + "/api/v4",
-			tokens:  src, // fall back to default token
+			tokens:  defaultTokens, // fall back to default token
 		}
-		if ts, ok := opts.HostTokens[h]; ok && ts != nil {
+		if ts, ok := tokens[h]; ok {
 			he.tokens = ts
 		}
 		hosts[h] = he
 	}
+	return hosts
+}
 
-	t := &Tracker{
-		http:        opts.HTTPClient,
-		userAgent:   ua,
-		defaultHost: hostEntry{baseURL: baseURL, tokens: src},
-		hosts:       hosts,
-	}
-	if t.http == nil {
-		t.http = &http.Client{Timeout: 30 * time.Second}
-	}
-	return t, nil
+// SetHosts replaces the allowed self-managed hosts and their tokens with
+// the same rules New uses: an allowed host without its own token uses the
+// default token, and a host not in allowedHosts is rejected again.
+// gitlab.com stays allowed with the default config. Requests already in
+// flight keep the config they read; later requests see the new one.
+//
+// LADO fork: the daemon calls this when LADO host tokens are saved or
+// deleted, so a newly connected host works without a daemon restart
+// (issue #19). The map is built before the lock is taken; no TokenSource
+// is called here.
+func (t *Tracker) SetHosts(allowedHosts []string, hostTokens map[string]scmgitlab.TokenSource) {
+	hosts := buildHosts(allowedHosts, hostTokens, t.defaultHost.tokens)
+	t.hostsMu.Lock()
+	t.hosts = hosts
+	t.hostsMu.Unlock()
 }
 
 // configForHost returns the per-host config (base URL + token) for the given
@@ -164,7 +209,10 @@ func (t *Tracker) configForHost(host string) (hostEntry, error) {
 	if scmgitlab.IsGitLabDotCom(host) {
 		return t.defaultHost, nil
 	}
-	if he, ok := t.hosts[host]; ok {
+	t.hostsMu.RLock()
+	he, ok := t.hosts[host]
+	t.hostsMu.RUnlock()
+	if ok {
 		return he, nil
 	}
 	return hostEntry{}, fmt.Errorf("gitlab tracker: host %q not in allowlist: %w", host, ErrHostNotAllowed)

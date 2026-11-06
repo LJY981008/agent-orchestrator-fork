@@ -539,9 +539,11 @@ func Run() error {
 			return claudecodeagent.ProviderCatalogFingerprint(fingerprintCtx, request.Binary, request.WorkingDir, request.Env)
 		},
 	}
-	// LADO fork: stored host tokens join every token chain built from here on
-	// (docs/LJY-PRD/TDD.md §5.1).
-	cfg.GitLab = installLadoCredentials(cfg, log)
+	// LADO fork: stored host tokens join every token chain built from here on,
+	// and the GitLab adapters follow later token changes through the GitLab
+	// host hub (docs/LJY-PRD/TDD.md §5.1, issue #19). cfg.GitLab stays the
+	// environment's config.
+	installLadoCredentials(cfg, log)
 	// Build the multi-tracker dispatching to both GitHub and GitLab once,
 	// shared between the session service and the intake observer below.
 	// Env-configured tokens are validated eagerly here; CLI credential probing

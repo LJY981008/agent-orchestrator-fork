@@ -141,6 +141,23 @@ func (p *Provider) sshRemoteHost(u *url.URL) (string, bool) {
 	if p.isHostAllowed(hostname) {
 		return hostname, true
 	}
+	match, matches := p.allowedHostPortMatch(hostname)
+	if matches == 1 {
+		return match, true
+	}
+	if p.isHostAllowed(u.Host) {
+		return u.Host, true
+	}
+	return "", false
+}
+
+// allowedHostPortMatch counts the allowlisted host:port entries whose host
+// name is hostname and returns the last one. LADO fork: the allowlist changes
+// through SetHosts, so it is read under hostsMu here, with no other lock taken
+// inside.
+func (p *Provider) allowedHostPortMatch(hostname string) (string, int) {
+	p.hostsMu.RLock()
+	defer p.hostsMu.RUnlock()
 	match, matches := "", 0
 	for allowed := range p.allowedHosts {
 		name, _, err := net.SplitHostPort(allowed)
@@ -149,13 +166,7 @@ func (p *Provider) sshRemoteHost(u *url.URL) (string, bool) {
 			matches++
 		}
 	}
-	if matches == 1 {
-		return match, true
-	}
-	if p.isHostAllowed(u.Host) {
-		return u.Host, true
-	}
-	return "", false
+	return match, matches
 }
 
 // splitOwnerRepo splits a GitLab project path into owner (namespace, possibly

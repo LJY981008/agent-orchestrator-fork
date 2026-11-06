@@ -3772,15 +3772,18 @@ func TestApprovalIsStoredPendingWithProviderDecisions(t *testing.T) {
 	if len(resolvedDetail.Decisions) != 3 {
 		t.Fatalf("resolved decision options = %d, want preserved 3", len(resolvedDetail.Decisions))
 	}
-	if !hasActivitySignal(h.activity.snapshot(), domain.ActivityWaitingInput, "chat.approval.requested") {
-		t.Fatalf("activity signals = %v, want waiting_input on approval request", h.activity.snapshot())
+	if !hasActivitySignal(h.activity.snapshot(), domain.ActivityBlocked, "chat.approval.requested") {
+		t.Fatalf("activity signals = %v, want blocked on approval request", h.activity.snapshot())
+	}
+	if hasActivitySignal(h.activity.snapshot(), domain.ActivityWaitingInput, "chat.approval.requested") {
+		t.Fatalf("activity signals = %v, approval request must not report waiting_input", h.activity.snapshot())
 	}
 	if !hasActivitySignal(h.activity.snapshot(), domain.ActivityActive, "chat.approval.resolved") {
 		t.Fatalf("activity signals = %v, want active after approval resolve", h.activity.snapshot())
 	}
 }
 
-func TestResolvingOneOfMultipleApprovalsKeepsWaitingInput(t *testing.T) {
+func TestResolvingOneOfMultipleApprovalsKeepsBlocked(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "go", ClientMessageID: "c1"}); err != nil {
@@ -3798,6 +3801,7 @@ func TestResolvingOneOfMultipleApprovalsKeepsWaitingInput(t *testing.T) {
 			s.Activities[0].Status == domain.ActivityStatusPending &&
 			s.Activities[1].Status == domain.ActivityStatusPending
 	})
+	awaitActivitySignal(t, h, domain.ActivityBlocked, "chat.approval.requested")
 
 	if err := h.svc.Resolve(ctx, testSession, "approval-1", ports.ChatDecision{ID: "accept"}); err != nil {
 		t.Fatalf("Resolve first: %v", err)
@@ -3814,7 +3818,7 @@ func TestResolvingOneOfMultipleApprovalsKeepsWaitingInput(t *testing.T) {
 	}
 }
 
-func TestProviderResolutionKeepsWaitingInputUntilFinalApproval(t *testing.T) {
+func TestProviderResolutionKeepsBlockedUntilFinalApproval(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "go", ClientMessageID: "c1"}); err != nil {
@@ -3827,6 +3831,7 @@ func TestProviderResolutionKeepsWaitingInputUntilFinalApproval(t *testing.T) {
 		})
 	}
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 2 })
+	awaitActivitySignal(t, h, domain.ActivityBlocked, "chat.approval.requested")
 
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventApprovalResolved, RequestID: "approval-1"})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
@@ -3846,6 +3851,48 @@ func TestProviderResolutionKeepsWaitingInputUntilFinalApproval(t *testing.T) {
 	}
 	t.Fatalf("active provider-resolution signals after final approval = %d, want 1",
 		countActivitySignals(h.activity.snapshot(), domain.ActivityActive, "chat.approval.resolved"))
+}
+
+// A provider question (ACP elicitation, AskUserQuestion) is a dialog like an
+// approval: it reports blocked, never waiting_input, until it is answered.
+func TestInputRequestReportsBlockedUntilResolved(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "go", ClientMessageID: "c1"}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventInputRequested, ProviderTurnID: "provider-turn-1",
+		ProviderItemID: "input-1", RequestID: "input-1",
+		Input: &ports.ChatInputRequest{Message: "Choose a value"},
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Activities) == 1 && s.Activities[0].Status == domain.ActivityStatusPending
+	})
+	awaitActivitySignal(t, h, domain.ActivityBlocked, "chat.input.requested")
+	if hasActivitySignal(h.activity.snapshot(), domain.ActivityWaitingInput, "chat.input.requested") {
+		t.Fatalf("activity signals = %v, input request must not report waiting_input", h.activity.snapshot())
+	}
+	if got := countActivitySignals(h.activity.snapshot(), domain.ActivityActive, "chat.input.resolved"); got != 0 {
+		t.Fatalf("input resolution signals before the answer = %d, want 0", got)
+	}
+
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventInputResolved, RequestID: "input-1"})
+	awaitActivitySignal(t, h, domain.ActivityActive, "chat.input.resolved")
+}
+
+// Reauthentication is an account problem the user fixes outside the dialog
+// flow, so it stays waiting_input rather than blocked.
+func TestAccountReauthReportsWaitingInput(t *testing.T) {
+	h := newHarness(t)
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventError, ProviderEventID: "provider-error-reauth",
+		Err: ports.NewChatProviderFailure("Sign in again", "", ports.ErrChatAuthRequired),
+	})
+	awaitActivitySignal(t, h, domain.ActivityWaitingInput, "chat.account.reauth")
+	if hasActivitySignal(h.activity.snapshot(), domain.ActivityBlocked, "chat.account.reauth") {
+		t.Fatalf("activity signals = %v, reauth must not report blocked", h.activity.snapshot())
+	}
 }
 
 // A controller that dies mid-turn must not leave the turn looking like it is still
@@ -6163,6 +6210,20 @@ func hasActivitySignal(signals []ports.ActivitySignal, state domain.ActivityStat
 		}
 	}
 	return false
+}
+
+// awaitActivitySignal waits for the controller's post-projection activity
+// report, which lands after the snapshot a test may already have observed.
+func awaitActivitySignal(t *testing.T, h *harness, state domain.ActivityState, event string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if hasActivitySignal(h.activity.snapshot(), state, event) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("activity signals = %v, want %s on %s", h.activity.snapshot(), state, event)
 }
 
 func countActivitySignals(signals []ports.ActivitySignal, state domain.ActivityState, event string) int {

@@ -74,7 +74,20 @@ func (s *ghTokenSource) Token(ctx context.Context) (string, error) {
 // HostTokens from GitLabConfig are passed through so the tracker can route
 // self-managed GitLab issue lookups to the correct host with the correct
 // token. This mirrors the SCM provider's wiring in newGitLabSCMProvider.
+//
+// LADO fork: the tracker is built even without a default token
+// (SkipTokenPreflight), so a host connected later reaches it through
+// SetHosts; a gitlab.com lookup without a token fails at request time with
+// ErrNoToken. With the GitLab host hub, the hosts come from the hub
+// (lado_tokens.go, issue #19).
 func newGitLabTracker(gitlabCfg config.GitLabConfig) (ports.Tracker, error) {
+	opts := trackergitlab.Options{
+		Token:              ladoGitLabDefaultTokens(), // LADO fork: DefaultTokenSource plus the stored gitlab.com token
+		SkipTokenPreflight: true,
+	}
+	if hub := ladoGitLabHub; hub != nil {
+		return hub.newTracker(opts)
+	}
 	hostTokens := make(map[string]scmgitlab.TokenSource, len(gitlabCfg.HostTokens))
 	for host, token := range gitlabCfg.HostTokens {
 		host = strings.ToLower(strings.TrimSpace(host))
@@ -82,11 +95,34 @@ func newGitLabTracker(gitlabCfg config.GitLabConfig) (ports.Tracker, error) {
 			hostTokens[host] = scmgitlab.StaticTokenSource(token)
 		}
 	}
-	return trackergitlab.New(trackergitlab.Options{
-		Token:        ladoGitLabDefaultTokens(), // LADO fork: DefaultTokenSource plus the stored gitlab.com token
-		AllowedHosts: gitlabCfg.AllowedHosts,
-		HostTokens:   hostTokens,
-	})
+	opts.AllowedHosts = gitlabCfg.AllowedHosts
+	opts.HostTokens = hostTokens
+	return trackergitlab.New(opts)
+}
+
+// logGitLabTrackerWithoutDefaultToken notes, at Info, a GitLab tracker built
+// without a gitlab.com token. It is not a problem: self-managed hosts use
+// their own tokens, and GitLab issue lookups start once a token exists.
+func logGitLabTrackerWithoutDefaultToken(gitlabCfg config.GitLabConfig, logger *slog.Logger) {
+	ctx := context.Background()
+	if _, err := ladoGitLabDefaultTokens().Token(ctx); err == nil {
+		return
+	}
+	hosts := 0
+	if hub := ladoGitLabHub; hub != nil {
+		hosts = hub.hostTokenCount(ctx)
+	} else {
+		for _, token := range gitlabCfg.HostTokens {
+			if strings.TrimSpace(token) != "" {
+				hosts++
+			}
+		}
+	}
+	if hosts > 0 {
+		logger.Info("gitlab tracker: no gitlab.com token; self-managed GitLab hosts use their own tokens", "hosts", hosts)
+		return
+	}
+	logger.Info("gitlab tracker: no GitLab token yet; GitLab issue lookups start once a token is available")
 }
 
 // newMultiTracker builds a multi-tracker dispatching to both GitHub and
@@ -120,6 +156,7 @@ func newMultiTracker(gitlabCfg config.GitLabConfig, logger *slog.Logger) ports.T
 		logTrackerDisabled(logger, "gitlab", err)
 	} else {
 		named = append(named, trackermulti.NamedTracker{Key: "gitlab", Tracker: t})
+		logGitLabTrackerWithoutDefaultToken(gitlabCfg, logger) // LADO fork: Info, not "tracker disabled" (issue #19)
 	}
 
 	if len(named) == 0 {

@@ -1,7 +1,7 @@
 import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
 const { getMock, patchMock, postMock, apiErrorCodeMock, apiErrorMessageMock } = vi.hoisted(() => ({
@@ -22,6 +22,7 @@ vi.mock("../lib/api-client", async (importOriginal) => ({
 import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
+	conversationQueryKey,
 	useConversation,
 	useConversationCommands,
 	useConversationConfigOptions,
@@ -29,6 +30,9 @@ import {
 	toSnapshot,
 } from "./useConversation";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
+import type { WorkspaceSummary } from "../types/workspace";
+import type { ConversationSnapshot } from "../types/conversation";
+import type { InfiniteData } from "@tanstack/react-query";
 import { ChatWorkspace } from "../components/chat/ChatWorkspace";
 import { TooltipProvider } from "../components/ui/tooltip";
 
@@ -1232,6 +1236,229 @@ describe("useConversationSkills polling", () => {
 	});
 });
 
+
+describe("local conversation safety-net refresh", () => {
+	// Live changes normally arrive through the event channel. When that channel
+	// stalls or misses an event, a pending approval must still reach the screen
+	// without the user sending a message first (#39).
+	const IDLE_WIRE = {
+		...WIRE,
+		turns: [{ ...WIRE.turns[0], state: "completed" }],
+		modelReroute: undefined,
+		account: undefined,
+		threadState: undefined,
+	};
+	const PENDING_APPROVAL = {
+		id: "approval-1",
+		turnId: "turn-1",
+		sequence: 4,
+		revision: 1,
+		activityKind: "approval",
+		status: "pending",
+		summary: "Run command",
+		requestId: "approval-1",
+		detail: { command: "npm test" },
+		createdAt: "2026-08-03T00:00:04Z",
+	};
+	function withPendingApproval<T extends { activities: unknown[] }>(wire: T) {
+		return { ...wire, latestSequence: 4, activities: [PENDING_APPROVAL] };
+	}
+	function clientWithWrapper(staleTime = 0) {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false, staleTime }, mutations: { retry: false } },
+		});
+		function Wrapper({ children }: { children: ReactNode }) {
+			return <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		}
+		return { queryClient, Wrapper };
+	}
+	function seedSessionActivity(queryClient: QueryClient, state: string) {
+		queryClient.setQueryData(workspaceQueryKey, [
+			{ id: "proj-1", name: "Project", sessions: [{ id: "ao-1", activity: { state, lastActivityAt: "2026-08-03T00:00:00Z" } }] },
+		] as unknown as WorkspaceSummary[]);
+	}
+	function hasPendingApproval(snapshot: ConversationSnapshot | undefined) {
+		return Boolean(snapshot?.items.some((item) => item.kind === "activity" && item.activityKind === "approval" && item.status === "pending"));
+	}
+	async function advance(ms: number) {
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(ms);
+		});
+		// Let the read's response reach the rendered hook. The query cache notifies
+		// on a zero-delay timer, which fake time only runs once the clock moves, so
+		// each call drifts by a few milliseconds; the interval checks leave room.
+		for (let hop = 0; hop < 3; hop += 1) {
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1);
+			});
+		}
+	}
+
+	beforeEach(() => {
+		vi.useFakeTimers();
+	});
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("reads the live page every 3 seconds while a turn is running, without a send", async () => {
+		getMock.mockResolvedValueOnce({ data: WIRE, error: undefined }).mockResolvedValue({ data: withPendingApproval(WIRE), error: undefined });
+		const { Wrapper } = clientWithWrapper();
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(false);
+
+		await advance(2_900);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		await advance(100);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(getMock).toHaveBeenLastCalledWith("/api/v1/sessions/{sessionId}/conversation", {
+			params: { path: { sessionId: "ao-1" }, query: { beforeSequence: undefined, limit: 200 } },
+			signal: expect.any(AbortSignal),
+		});
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
+	it("polls every 3 seconds when the cached snapshot is idle but the session list says blocked", async () => {
+		getMock.mockResolvedValueOnce({ data: IDLE_WIRE, error: undefined }).mockResolvedValue({ data: withPendingApproval(IDLE_WIRE), error: undefined });
+		const { queryClient, Wrapper } = clientWithWrapper();
+		seedSessionActivity(queryClient, "blocked");
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(false);
+
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+	});
+
+	it("reads the live page as soon as the session list reports a new activity", async () => {
+		getMock.mockResolvedValueOnce({ data: IDLE_WIRE, error: undefined }).mockResolvedValue({ data: withPendingApproval(IDLE_WIRE), error: undefined });
+		const { queryClient, Wrapper } = clientWithWrapper();
+		seedSessionActivity(queryClient, "idle");
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(1);
+
+		act(() => seedSessionActivity(queryClient, "blocked"));
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+	});
+
+	it("reads the live page on remount even while the cached query is fresh", async () => {
+		getMock.mockResolvedValueOnce({ data: IDLE_WIRE, error: undefined }).mockResolvedValue({ data: withPendingApproval(IDLE_WIRE), error: undefined });
+		const { Wrapper } = clientWithWrapper(60_000);
+		const first = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		first.unmount();
+
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+	});
+
+	it("waits 15 seconds between reads when nothing is running and the session is idle", async () => {
+		getMock.mockResolvedValue({ data: IDLE_WIRE, error: undefined });
+		const { queryClient, Wrapper } = clientWithWrapper();
+		seedSessionActivity(queryClient, "idle");
+		renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		expect(getMock).toHaveBeenCalledTimes(1);
+
+		await advance(14_900);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		await advance(100);
+		expect(getMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("skips the idle read while the document is hidden", async () => {
+		getMock.mockResolvedValue({ data: IDLE_WIRE, error: undefined });
+		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		try {
+			const { Wrapper } = clientWithWrapper();
+			renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+			await advance(0);
+			await advance(45_000);
+			expect(getMock).toHaveBeenCalledTimes(1);
+		} finally {
+			visibility.mockRestore();
+		}
+	});
+
+	it("does not start a second read while one is still in flight", async () => {
+		const slow = deferred<{ data: unknown; error: undefined }>();
+		getMock.mockResolvedValueOnce({ data: WIRE, error: undefined }).mockReturnValueOnce(slow.promise).mockResolvedValue({ data: WIRE, error: undefined });
+		const { Wrapper } = clientWithWrapper();
+		renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await advance(9_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		await act(async () => slow.resolve({ data: withPendingApproval(WIRE), error: undefined }));
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(3);
+	});
+
+	it("drops a slow read when a newer write reached the cache while it was in flight", async () => {
+		// The approval resolves in place, so its sequence does not move. A read that
+		// started before the resolution must not bring the pending card back.
+		const slow = deferred<{ data: unknown; error: undefined }>();
+		const resolvedWire = { ...withPendingApproval(WIRE), activities: [{ ...PENDING_APPROVAL, status: "resolved", revision: 2 }] };
+		getMock.mockResolvedValueOnce({ data: withPendingApproval(WIRE), error: undefined }).mockReturnValueOnce(slow.promise).mockResolvedValue({ data: resolvedWire, error: undefined });
+		const { queryClient, Wrapper } = clientWithWrapper();
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		// What an event-driven refetch or the approval mutation writes meanwhile.
+		act(() => {
+			queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(conversationQueryKey("ao-1"), (previous) => previous && {
+				...previous,
+				pages: previous.pages.map((page) => ({
+					...page,
+					items: page.items.map((item) => item.kind === "activity" && item.activityKind === "approval" ? { ...item, status: "resolved" } : item),
+				})),
+			});
+		});
+		await advance(0);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(false);
+
+		await act(async () => slow.resolve({ data: withPendingApproval(WIRE), error: undefined }));
+		await advance(0);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(false);
+	});
+
+	it("aborts a read that hangs so the next poll can run", async () => {
+		getMock.mockResolvedValueOnce({ data: WIRE, error: undefined }).mockImplementationOnce((_path: string, init: { signal?: AbortSignal }) =>
+			new Promise((_resolve, reject) => {
+				init.signal?.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")));
+			}),
+		).mockResolvedValue({ data: withPendingApproval(WIRE), error: undefined });
+		const { Wrapper } = clientWithWrapper();
+		const { result } = renderHook(() => useConversation("ao-1"), { wrapper: Wrapper });
+		await advance(0);
+		await advance(3_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+
+		await advance(17_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await advance(6_000);
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(hasPendingApproval(result.current.snapshot)).toBe(true);
+	});
+});
 
 describe("toSnapshot", () => {
 	it("keeps the sender's clientMessageId on a user message so its echo can be matched", () => {
