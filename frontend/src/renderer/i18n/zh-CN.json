@@ -4056,6 +4056,8 @@
 	"lado.verify.commands.dirty_other": "因 {{count}} 个未提交的文件而等待检查 — 提交、删除或加入 .gitignore 后开始",
 	"lado.verify.commands.dirtyMore_one": "另有 {{count}} 个",
 	"lado.verify.commands.dirtyMore_other": "另有 {{count}} 个",
+	"lado.verify.reviewThreads_one": "{{count}} 个未解决的评审讨论",
+	"lado.verify.reviewThreads_other": "{{count}} 个未解决的评审讨论",
 	"lado.verify.commits.passed_one": "{{count}} 个提交和 PR 标题都是韩语",
 	"lado.verify.commits.passed_other": "{{count}} 个提交和 PR 标题都是韩语",
 	"lado.verify.commits.notKorean_one": "{{count}} 条信息不是韩语",

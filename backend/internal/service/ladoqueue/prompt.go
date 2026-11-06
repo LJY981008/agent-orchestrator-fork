@@ -38,6 +38,7 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, base string, works
 	}
 	b.WriteString(sessionBranchParagraph(sessionBranch{workspace: workspace}))
 	b.WriteString(changeRequestParagraph(task, cr))
+	b.WriteString(reviewThreadsParagraph(task))
 	b.WriteString("\n")
 	fmt.Fprintf(&b, "## Approved plan (revision %d, sha256 %s)\n\n", in.Revision.Number, shortSHA(in.Revision.SHA256))
 	b.WriteString(in.PlanText)
@@ -49,6 +50,33 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, base string, works
 	b.WriteString(verificationParagraph(in.Snapshot, checks))
 	b.WriteString("\n\n" + evidenceForm)
 	return b.String()
+}
+
+// reviewThreadsParagraph tells a worker that owns a pull request how to
+// close the review threads it addressed (#85): with `ao pr resolve-comments`,
+// which the AO daemon runs on GitHub and GitLab alike, naming only the
+// threads it addressed, since the command without ids resolves every open
+// thread. A thread it leaves is reported, not resolved, and a failure is
+// handed to the developer rather than retried with another tool. The
+// provider tool it names is the task's own, so a GitHub prompt does not talk
+// of glab. It ends with a line break.
+func reviewThreadsParagraph(task domain.LadoTask) string {
+	provider := task.Repo.Provider
+	if id, err := domain.ParseLadoIssueRef(task.IssueRef); err == nil {
+		provider = id.Provider
+	}
+	tool := "`gh`"
+	if provider == domain.TrackerProviderGitLab {
+		tool = "`glab`"
+	}
+	return "When review comments arrive on your pull request, address each one and push. " +
+		"Then resolve every thread you addressed with `ao pr resolve-comments <PR number> <thread id...>`: " +
+		"the AO daemon resolves the threads on GitHub and GitLab alike, so it needs no " + tool + " and no token. " +
+		"Name only the thread ids you addressed: without ids the command resolves every open thread. " +
+		"Do not resolve a thread you did not address; leave it open and report why with `ao report --checkpoint --note \"<thread id>: <why>\"`. " +
+		"If the command fails (for example because AO tracks the same number in several repositories), do not try another tool: " +
+		"run `ao report --needs-input --note \"<PR URL> <thread id...>: <the error>\"`. " +
+		"An open review thread keeps the pull request from being ready to merge, and LADO reminds you once when one is still open after you push and stop or report done.\n"
 }
 
 // reposParagraph tells a worker whose plan names the workspace repositories

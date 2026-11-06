@@ -20,22 +20,27 @@ import (
 // into the branch the PR merges into now. Each is nil while there is none.
 // Revoked is the newest approval of the head into that branch that LADO
 // withdrew, while the head has no approval that holds (#64: a sibling PR's
-// base overlap withdraws it too).
+// base overlap withdraws it too). UnresolvedReviewThreads is how many review
+// threads of the PR keep it from being ready to merge now (LADO #85); it is
+// read for the view and stays out of the record and its hash.
 type HeadView struct {
-	Verification *domain.LadoVerification
-	SHA256       string
-	Approval     *domain.LadoIntegrationApproval
-	Revoked      *domain.LadoIntegrationApproval
+	Verification            *domain.LadoVerification
+	SHA256                  string
+	Approval                *domain.LadoIntegrationApproval
+	Revoked                 *domain.LadoIntegrationApproval
+	UnresolvedReviewThreads int
 }
 
 // Head reads the verification record of one head of an execution's PR and
-// the PR's integration approval at that head into target. An empty head has
-// neither.
+// the PR's integration approval at that head into target, with the PR's
+// unresolved review threads; a failed read of these counts none. An empty
+// head has none of them.
 func (s *Service) Head(ctx context.Context, session domain.SessionID, prURL, headSHA, target string) (HeadView, error) {
 	var view HeadView
 	if headSHA == "" {
 		return view, nil
 	}
+	view.UnresolvedReviewThreads = s.unresolvedReviewThreadCount(ctx, prURL)
 	record, ok, err := s.deps.Store.GetLadoVerification(ctx, session, headSHA)
 	if err != nil {
 		s.deps.Log.Error("LADO could not read the verification of a head", "session", session, "head", headSHA, "err", err)

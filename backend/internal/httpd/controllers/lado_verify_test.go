@@ -506,6 +506,65 @@ func TestLadoAPI_ExecutionCarriesVerification(t *testing.T) {
 	}
 }
 
+// LADO #85: the execution view carries the PR's unresolved review threads
+// next to the head's record, in the execution's verification and the
+// tracked PR's record alike, and omits the field while there are none.
+func TestLadoAPI_ExecutionCarriesUnresolvedReviewThreads(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	now := time.Now().UTC().Truncate(time.Second)
+	seed := seedLadoQueued(t, store, "mer", 1, now.Add(-time.Hour))
+	worker := runLado(t, store, "mer", seed, now.Add(-30*time.Minute), domain.LadoExecution{})
+	prURL := writeLadoHeadPR(t, store, worker, 7, ladoVerifyHead, now.Add(-time.Minute))
+	record := ladoVerifyRecord(t, worker, prURL, ladoVerifyHead, now.Add(-5*time.Minute))
+	if _, err := store.UpsertLadoVerification(ctx, record); err != nil {
+		t.Fatalf("store the head's record: %v", err)
+	}
+	srv := newLadoTestServer(t, httpd.APIDeps{
+		LadoQueue:  ladoqueue.New(ladoqueue.Deps{Store: store}),
+		LadoVerify: ladoverify.New(ladoverify.Deps{Store: store, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}),
+	})
+	get := func() ([]byte, controllers.LadoExecutionResponse) {
+		t.Helper()
+		body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/executions/"+string(worker), "")
+		if status != http.StatusOK {
+			t.Fatalf("status = %d, body %s", status, body)
+		}
+		return body, decodeLadoJSON[controllers.LadoExecutionResponse](t, body)
+	}
+
+	// Without unresolved threads the field is left out.
+	body, got := get()
+	if got.Verification == nil || got.Verification.UnresolvedReviewThreads != 0 || strings.Contains(string(body), "unresolvedReviewThreads") {
+		t.Fatalf("body %s, want the record without unresolvedReviewThreads", body)
+	}
+
+	// Two comments of one thread, a resolved thread, a bot's chatter and a
+	// bot's anchored comment: two threads keep the PR from being ready.
+	comments := []domain.PullRequestComment{
+		{ThreadID: "T1", ID: "c1", Author: "reviewer", Body: "rename this", CreatedAt: now},
+		{ThreadID: "T1", ID: "c2", Author: "reviewer", Body: "and this", CreatedAt: now},
+		{ThreadID: "T2", ID: "c3", Author: "reviewer", Body: "done", Resolved: true, CreatedAt: now},
+		{ID: "c4", Author: "ci-bot", IsBot: true, Body: "Build passed", CreatedAt: now},
+		{ThreadID: "T3", ID: "c5", Author: "lint-bot", IsBot: true, File: "src/a.go", Line: 4, Body: "possible nil", CreatedAt: now},
+	}
+	if err := store.WriteSCMObservation(ctx, domain.PullRequest{
+		URL: prURL, SessionID: worker, Number: 7, HeadSHA: ladoVerifyHead, TargetBranch: "main", Title: "검증 화면 추가", UpdatedAt: now,
+	}, nil, nil, nil, comments, ports.ReviewWriteReplace); err != nil {
+		t.Fatalf("write the PR's comments: %v", err)
+	}
+	body, got = get()
+	if got.Verification == nil || got.Verification.UnresolvedReviewThreads != 2 {
+		t.Fatalf("verification = %+v, want 2 unresolved review threads (body %s)", got.Verification, body)
+	}
+	if got.Verification.SHA256 != ladoRecordSHA(t, record) {
+		t.Fatalf("record hash = %s, want %s as without threads", got.Verification.SHA256, ladoRecordSHA(t, record))
+	}
+	if len(got.TrackedPRs) != 1 || got.TrackedPRs[0].Record == nil || got.TrackedPRs[0].Record.UnresolvedReviewThreads != 2 {
+		t.Fatalf("tracked PRs = %+v, want the PR's record with 2 unresolved review threads", got.TrackedPRs)
+	}
+}
+
 func setLadoChecks(t *testing.T, store *sqlite.Store, project domain.ProjectID, at time.Time, commands ...domain.LadoCheckCommand) {
 	t.Helper()
 	if err := store.SetLadoProjectCheckCommands(context.Background(), project, domain.LadoCheckCommandsSHA256(nil), commands, nil, domain.LadoAuditEvent{

@@ -4074,6 +4074,8 @@
 	"lado.verify.commands.dirty_other": "커밋 안 된 파일 {{count}}개 때문에 검사를 기다림 — 커밋·삭제하거나 .gitignore에 넣으면 시작",
 	"lado.verify.commands.dirtyMore_one": "외 {{count}}개",
 	"lado.verify.commands.dirtyMore_other": "외 {{count}}개",
+	"lado.verify.reviewThreads_one": "미해결 리뷰 스레드 {{count}}개",
+	"lado.verify.reviewThreads_other": "미해결 리뷰 스레드 {{count}}개",
 	"lado.verify.commits.passed_one": "커밋 {{count}}개와 PR 제목이 한국어",
 	"lado.verify.commits.passed_other": "커밋 {{count}}개와 PR 제목이 한국어",
 	"lado.verify.commits.notKorean_one": "한국어가 아닌 메시지 {{count}}개",

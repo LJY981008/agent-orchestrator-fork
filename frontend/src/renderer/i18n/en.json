@@ -4055,6 +4055,8 @@
 	"lado.verify.commands.dirty_other": "Checks wait for {{count}} uncommitted files: commit or delete them, or add them to .gitignore, and they start",
 	"lado.verify.commands.dirtyMore_one": "and {{count}} more file",
 	"lado.verify.commands.dirtyMore_other": "and {{count}} more files",
+	"lado.verify.reviewThreads_one": "{{count}} unresolved review thread",
+	"lado.verify.reviewThreads_other": "{{count}} unresolved review threads",
 	"lado.verify.commits.passed_one": "{{count}} commit and the PR title are in Korean",
 	"lado.verify.commits.passed_other": "{{count}} commits and the PR title are in Korean",
 	"lado.verify.commits.notKorean_one": "{{count}} message is not in Korean",
