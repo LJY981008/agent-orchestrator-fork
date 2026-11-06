@@ -3,12 +3,16 @@
 // integration; the task view shows how far each part of the running task got,
 // with its session and the merge into the integration branch. A workspace
 // run across repositories (#64) has an integration branch in each, and a
-// part's merge can conflict in one of them.
+// part's merge can conflict in one of them. Both say how big each part is
+// (#69): the plan view warns about parts over the sizing limits, and the task
+// view shows each part's steps, compactions and cost.
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
-import { useLadoTaskParts } from "../../hooks/useLado";
-import type { LadoPlan, LadoPlanPart, LadoTask, LadoTaskPart, LadoTaskPartState } from "../../lib/lado";
+import { useLadoTaskParts, useLadoTaskUsage } from "../../hooks/useLado";
+import type { LadoPlan, LadoPlanPart, LadoTask, LadoTaskPart, LadoTaskPartState, LadoTaskUsage } from "../../lib/lado";
 import { ladoErrorText, ladoPartStateText, ladoPartWaitingText } from "../../lib/lado-errors";
+import { ladoCostText } from "../../lib/lado-usage";
+import type { MessageKey } from "../../i18n/messages";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import { type LadoTaskStatusTone, ladoTaskToneDotClass } from "./lado-task-status";
@@ -33,16 +37,25 @@ function phaseTitle(t: TFunction, phase: number, count: number): string {
 	return count > 1 ? `${title} · ${t("lado.view.phaseAtOnce")}` : title;
 }
 
+const warningClass = "text-caption leading-4 text-[var(--color-status-in-review)]";
+
+const partWarningKeys: Record<LadoPlanPart["warnings"][number]["code"], MessageKey> = {
+	part_many_steps: "lado.view.partWarning.part_many_steps",
+	part_many_paths: "lado.view.partWarning.part_many_paths",
+	part_many_files: "lado.view.partWarning.part_many_files",
+};
+
 /**
  * A plan's parts by phase, then the integration that follows them; or, for a
- * large plan without parts, the warning that one worker does it all.
+ * large plan without parts, the warning that one worker does it all. A small
+ * plan split into parts, and a part over the sizing limits, are warned about
+ * the same way; none of these warnings blocks the approval.
  */
 export function LadoPlanParts({ content }: { content: LadoPlan["plan"] }) {
 	const { t } = useTranslation();
-	const warn = content.warnings.includes("unsplit_large_plan");
 	if (content.parts.length === 0) {
-		return warn ? (
-			<p className="text-caption leading-4 text-[var(--color-status-in-review)]" role="note" data-testid="lado-plan-unsplit">
+		return content.warnings.includes("unsplit_large_plan") ? (
+			<p className={warningClass} role="note" data-testid="lado-plan-unsplit">
 				{t("lado.view.planWarning.unsplit_large_plan")}
 			</p>
 		) : null;
@@ -51,6 +64,11 @@ export function LadoPlanParts({ content }: { content: LadoPlan["plan"] }) {
 		<section className="flex flex-col gap-2" aria-label={t("lado.view.parts")} data-testid="lado-plan-parts">
 			<h4 className="text-xs font-semibold text-foreground">{t("lado.view.parts")}</h4>
 			<p className="text-caption leading-4 text-settings-muted">{t("lado.view.partsNote")}</p>
+			{content.warnings.includes("split_small_plan") ? (
+				<p className={warningClass} role="note" data-testid="lado-plan-split-small">
+					{t("lado.view.planWarning.split_small_plan")}
+				</p>
+			) : null}
 			<ol className="flex flex-col gap-2">
 				{byPhase(content.parts).map(([phase, parts]) => (
 					<li key={phase} className="flex flex-col gap-1" data-testid="lado-plan-phase" data-phase={phase}>
@@ -88,8 +106,35 @@ function PlanPartRow({ part }: { part: LadoPlanPart }) {
 				) : null}
 			</div>
 			<span className="break-all font-mono text-2xs text-muted-foreground">{part.affectedPaths.join("  ")}</span>
+			{part.warnings.map((warning) => (
+				<p key={warning.code} className={warningClass} role="note" data-testid="lado-plan-part-warning" data-code={warning.code}>
+					{t(partWarningKeys[warning.code], { value: warning.value, limit: warning.limit })}
+				</p>
+			))}
 		</li>
 	);
+}
+
+/** What a part's worker sessions used: their compactions and cost added up. */
+type PartMeasure = { compactions: number; costNanos: number };
+
+/**
+ * Each part's measure from the task's usage. Only the sessions of the run the
+ * parts view shows count, its retries included, so an earlier approval's run
+ * of a part with the same id does not add to it. Without that run's queue
+ * entry no part has a measure, and the rows show their steps alone.
+ */
+function partMeasures(usage: LadoTaskUsage | undefined, queueEntryId: string | undefined): Map<string, PartMeasure> | null {
+	if (!usage || !queueEntryId) return null;
+	const measures = new Map<string, PartMeasure>();
+	for (const session of usage.sessions) {
+		if (session.role !== "part" || !session.partId || session.queueEntryId !== queueEntryId) continue;
+		const measure = measures.get(session.partId) ?? { compactions: 0, costNanos: 0 };
+		measure.compactions += session.compactions;
+		measure.costNanos += session.totals.costNanos;
+		measures.set(session.partId, measure);
+	}
+	return measures;
 }
 
 const partTone: Record<LadoTaskPartState, LadoTaskStatusTone> = {
@@ -111,6 +156,7 @@ const partTone: Record<LadoTaskPartState, LadoTaskStatusTone> = {
 export function LadoPartsProgress({ task, onClose }: { task: LadoTask; onClose: () => void }) {
 	const { t } = useTranslation();
 	const parts = useLadoTaskParts(task.id, Boolean(task.parts));
+	const usage = useLadoTaskUsage(task.id, Boolean(task.parts));
 	const navigateToSession = useNavigateToSession();
 	const open = (sessionId: string) => {
 		onClose();
@@ -128,6 +174,7 @@ export function LadoPartsProgress({ task, onClose }: { task: LadoTask; onClose: 
 	const integration = task.execution;
 	// A run in one repository keeps the one branch line it always had.
 	const manyRepos = (data?.repos?.length ?? 0) > 1;
+	const measures = partMeasures(usage.isError ? undefined : usage.data, data?.queueEntryId);
 	return (
 		<section className="flex flex-col gap-2" aria-label={t("lado.parts.title")} data-testid="lado-parts-progress">
 			<div className="flex min-w-0 items-baseline gap-2">
@@ -166,7 +213,12 @@ export function LadoPartsProgress({ task, onClose }: { task: LadoTask; onClose: 
 							<span className="text-2xs font-medium text-muted-foreground">{phaseTitle(t, phase, rows.length)}</span>
 							<ul className="flex flex-col divide-y divide-[var(--color-border-settings-dialog)] overflow-hidden rounded-md border border-[var(--color-border-settings-dialog)]">
 								{rows.map((part) => (
-									<PartProgressRow key={part.id} part={part} onOpen={open} />
+									<PartProgressRow
+										key={part.id}
+										part={part}
+										measure={measures ? (measures.get(part.id) ?? { compactions: 0, costNanos: 0 }) : null}
+										onOpen={open}
+									/>
 								))}
 							</ul>
 						</li>
@@ -191,8 +243,16 @@ export function LadoPartsProgress({ task, onClose }: { task: LadoTask; onClose: 
 	);
 }
 
-function PartProgressRow({ part, onOpen }: { part: LadoTaskPart; onOpen: (sessionId: string) => void }) {
-	const { t } = useTranslation();
+function PartProgressRow({
+	part,
+	measure,
+	onOpen,
+}: {
+	part: LadoTaskPart;
+	measure: PartMeasure | null;
+	onOpen: (sessionId: string) => void;
+}) {
+	const { t, i18n } = useTranslation();
 	const waiting = ladoPartWaitingText(t, part.waitingReason, part.waitingDetail);
 	const why = waiting || (part.state === "failed" ? part.error : "");
 	const repos = part.repos ?? [];
@@ -212,6 +272,15 @@ function PartProgressRow({ part, onOpen }: { part: LadoTaskPart; onOpen: (sessio
 					{part.mergeSessionId ? <SessionLink label={t("lado.parts.mergeWorker")} onClick={() => onOpen(part.mergeSessionId ?? "")} /> : null}
 				</span>
 			</div>
+			<span className="pl-3.5 text-2xs tabular-nums text-muted-foreground" data-testid="lado-part-measure">
+				{measure
+					? t("lado.parts.measure", {
+							steps: part.steps.length,
+							compactions: measure.compactions,
+							cost: ladoCostText(measure.costNanos, i18n.language),
+						})
+					: t("lado.parts.measureSteps", { steps: part.steps.length })}
+			</span>
 			{why ? (
 				<span className="truncate pl-3.5 text-settings-muted" title={why}>
 					{why}
