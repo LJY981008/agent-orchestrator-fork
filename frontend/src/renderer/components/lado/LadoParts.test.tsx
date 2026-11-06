@@ -252,12 +252,12 @@ describe("LadoPartsProgress", () => {
 			],
 		});
 		renderWithClient(<LadoPartsProgress task={runningTask} onClose={() => undefined} />);
-		await waitFor(() => expect(screen.getAllByTestId("lado-part-measure")[0]).toHaveTextContent("1 steps · 3 compactions · $2.50"));
+		await waitFor(() => expect(screen.getAllByTestId("lado-part-measure")[0]).toHaveTextContent("Steps 1 · Compactions 3 · $2.50"));
 		expect(lado.fetchLadoTaskUsage).toHaveBeenCalledWith("lado-task-1");
 		const measures = screen.getAllByTestId("lado-part-measure");
-		expect(measures[1]).toHaveTextContent("1 steps · 0 compactions · <$0.01");
+		expect(measures[1]).toHaveTextContent("Steps 1 · Compactions 0 · <$0.01");
 		// A part no session ran yet.
-		expect(measures[2]).toHaveTextContent("1 steps · 0 compactions · $0.00");
+		expect(measures[2]).toHaveTextContent("Steps 1 · Compactions 0 · $0.00");
 	});
 
 	it("shows only the steps without the task's usage or the run's queue entry", async () => {
@@ -265,7 +265,7 @@ describe("LadoPartsProgress", () => {
 		await screen.findAllByTestId("lado-part");
 		await waitFor(() => expect(lado.fetchLadoTaskUsage).toHaveBeenCalled());
 		for (const measure of screen.getAllByTestId("lado-part-measure")) {
-			expect(measure).toHaveTextContent(/^1 steps$/);
+			expect(measure).toHaveTextContent(/^Steps 1$/);
 		}
 		cleanup();
 
@@ -277,7 +277,7 @@ describe("LadoPartsProgress", () => {
 		renderWithClient(<LadoPartsProgress task={runningTask} onClose={() => undefined} />);
 		await screen.findAllByTestId("lado-part");
 		await waitFor(() => expect(lado.fetchLadoTaskUsage).toHaveBeenCalledTimes(2));
-		expect(screen.getAllByTestId("lado-part-measure")[0]).toHaveTextContent(/^1 steps$/);
+		expect(screen.getAllByTestId("lado-part-measure")[0]).toHaveTextContent(/^Steps 1$/);
 	});
 
 	it("reads nothing for a task without parts", () => {
