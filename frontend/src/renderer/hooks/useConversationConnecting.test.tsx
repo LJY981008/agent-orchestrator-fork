@@ -57,9 +57,13 @@ function LiveConversation() {
 let queryClient: QueryClient;
 let disconnect: (() => void) | undefined;
 let serverController: string;
+let visibility: { mockRestore: () => void } | undefined;
 
 beforeEach(() => {
 	vi.useFakeTimers();
+	// These tests count conversation fetches over a minute of fake time. A hidden
+	// document turns off the idle safety-net poll, so only readiness refetches count.
+	visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
 	vi.stubGlobal("EventSource", EventSourceStub);
 	EventSourceStub.instances = [];
 	serverController = "connecting";
@@ -74,6 +78,8 @@ afterEach(() => {
 	cleanup();
 	queryClient.clear();
 	vi.unstubAllGlobals();
+	visibility?.mockRestore();
+	visibility = undefined;
 	vi.useRealTimers();
 });
 
