@@ -218,6 +218,34 @@ describe("SessionsBoardView", () => {
 		expect(lanes[0].parentElement).toHaveClass("grid-cols-6");
 	});
 
+	it("widens the grid for three leading lanes", () => {
+		render(
+			<SessionsBoardGridView
+				columns={boardKanbanColumnOrder.map((column) => getKanbanColumnView(column))}
+				labels={columnLabels}
+				leadingColumn={
+					<>
+						<section aria-label="Plan lane">plan</section>
+						<section aria-label="Plan review lane">plan review</section>
+						<section aria-label="Queued lane">queued</section>
+					</>
+				}
+				leadingColumnCount={3}
+				renderSessionCard={(session) => <div data-testid={`card-${session.id}`}>{session.title}</div>}
+				sessions={[] as BoardSessionPresentation[]}
+			/>,
+		);
+
+		const lanes = screen.getAllByRole("region");
+		expect(lanes.slice(0, 3).map((lane) => lane.getAttribute("aria-label"))).toEqual([
+			"Plan lane",
+			"Plan review lane",
+			"Queued lane",
+		]);
+		expect(lanes).toHaveLength(boardKanbanColumnOrder.length + 3);
+		expect(lanes[0].parentElement).toHaveClass("grid-cols-7");
+	});
+
 	it("pins display-status attention cards first inside the lane", () => {
 		render(
 			<SessionsBoardGridView

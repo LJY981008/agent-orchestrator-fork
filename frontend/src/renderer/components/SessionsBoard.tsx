@@ -145,7 +145,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	});
 	const showStartup = !hostId && presentation.showStartup;
 	const showWelcome = !hostId && presentation.showWelcome;
-	// LADO fork: a LADO project shows its Plan lane before the session columns,
+	// LADO fork: a LADO project shows its lanes before the session columns,
 	// also while it has no sessions (docs/LJY-PRD/TDD.md §3.3).
 	const ladoMode = useLadoMode(projectId && !hostId && workspace?.kind !== CLOUD_PROJECT_KIND ? projectId : undefined);
 	const showProjectEmpty = !ladoMode && (hostId
@@ -321,7 +321,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						key={scopeKey}
 						labels={boardLabels}
 						leadingColumn={ladoMode && projectId ? <LadoLanes projectId={projectId} /> : undefined}
-						leadingColumnCount={2}
+						leadingColumnCount={3}
 						renderSessionCard={(session) => (
 							<BoardSessionCardAdapter
 								memory={memoryBySession?.get(session.id)}
