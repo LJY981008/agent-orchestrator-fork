@@ -58,8 +58,8 @@ export function ladoSetupEntryKey(entry: { tool: string; kind: string; name: str
 	return `${entry.tool}/${entry.kind}/${entry.name}`;
 }
 
-// The states a tool's card lists; what LADO leaves to the tool or the
-// repository waits in its collapsed group.
+// The states a tool's card lists; what LADO leaves to the tool and what the
+// repository tracks wait in their collapsed groups.
 const shownStatuses: ReadonlySet<string> = new Set(["managed", "adoptable", "not_adoptable"]);
 
 /** What a tool's card lists: managed items and what LADO can or cannot adopt. */
@@ -67,9 +67,43 @@ export function ladoSetupShownEntries(inventory: LadoSetupInventory, tool: LadoS
 	return inventory.entries.filter((entry) => entry.tool === tool && shownStatuses.has(entry.status));
 }
 
-/** What LADO never adopts or leaves to the tool, and the files projects' repositories track. */
+/** What LADO never adopts or leaves to the tool. */
 export function ladoSetupOtherEntries(inventory: LadoSetupInventory, tool: LadoSetupTool): LadoSetupEntry[] {
-	return inventory.entries.filter((entry) => entry.tool === tool && !shownStatuses.has(entry.status));
+	return inventory.entries.filter((entry) => entry.tool === tool && (entry.status === "never" || entry.status === "not_managed"));
+}
+
+/** The setup files projects' repositories track; they reach workers through the worktree (#29). */
+export function ladoSetupRepoEntries(inventory: LadoSetupInventory, tool: LadoSetupTool): LadoSetupEntry[] {
+	return inventory.entries.filter((entry) => entry.tool === tool && entry.status === "repo_tracked");
+}
+
+// One path segment: no slash, and not empty.
+const citedPaths = [/^\.claude\/skills\/[^/]+\/SKILL\.md$/, /^\.agents\/skills\/[^/]+\/SKILL\.md$/];
+const citedAgent = /^\.claude\/agents\/[^/]+\.md$/;
+
+/**
+ * Whether LADO lists a repository file to workers as a project expert (#29):
+ * a skill's SKILL.md right under .claude/skills/<n> or .agents/skills/<n>,
+ * an agent right under .claude/agents, or a CLAUDE.md or AGENTS.md anywhere.
+ * The daemon decides from the same path shapes, but it also leaves out the
+ * project's agent rules file and a path with control characters, which the
+ * page does not know; this is an approximation, and the repoCited sentence
+ * stays true for those files too.
+ */
+export function ladoSetupCited(entry: Pick<LadoSetupEntry, "status" | "kind" | "name">): boolean {
+	if (entry.status !== "repo_tracked") return false;
+	switch (entry.kind) {
+		case "skill":
+			return citedPaths.some((shape) => shape.test(entry.name));
+		case "agent":
+			return citedAgent.test(entry.name);
+		case "instructions": {
+			const base = entry.name.split("/").at(-1);
+			return base === "CLAUDE.md" || base === "AGENTS.md";
+		}
+		default:
+			return false;
+	}
 }
 
 /** The names LADO manages now. */
@@ -132,7 +166,9 @@ export function ladoSetupStatusText(
 		case "not_managed":
 			return why("lado.setup.status.notManaged", entry.reason);
 		case "repo_tracked":
-			return t("lado.setup.status.repoTracked");
+			return `${t("lado.setup.status.repoTracked")} · ${t(
+				ladoSetupCited(entry) ? "lado.setup.reason.repoCited" : "lado.setup.reason.repoReachesWorkers",
+			)}`;
 	}
 }
 

@@ -17,7 +17,13 @@ import { LadoSetupConflictsCard } from "../lado/setup/LadoSetupConflictsCard";
 import { LadoSetupCreateDialog } from "../lado/setup/LadoSetupCreateDialog";
 import { LadoSetupDriftCard } from "../lado/setup/LadoSetupDriftReview";
 import { LadoSetupItemList } from "../lado/setup/LadoSetupItemList";
-import { ladoSetupAdoptable, ladoSetupOSLabel, ladoSetupShownEntries, ladoSetupTools } from "../lado/setup/lado-setup-view";
+import {
+	ladoSetupAdoptable,
+	ladoSetupOSLabel,
+	ladoSetupRepoEntries,
+	ladoSetupShownEntries,
+	ladoSetupTools,
+} from "../lado/setup/lado-setup-view";
 import { Button } from "../ui/button";
 import { formatResetTime } from "./CodexAccountDetails";
 import { SettingsSection } from "./SettingsSection";
@@ -40,7 +46,8 @@ export function LocalSetupSection({ titleHidden }: { titleHidden?: boolean }) {
 	const scannedAt = data ? formatResetTime(data.scannedAt, i18n.language) : null;
 	const empty =
 		data !== undefined &&
-		ladoSetupTools.every((tool) => ladoSetupShownEntries(data, tool).length === 0) &&
+		// Repository files keep the page: their group says how workers get them.
+		ladoSetupTools.every((tool) => ladoSetupShownEntries(data, tool).length === 0 && ladoSetupRepoEntries(data, tool).length === 0) &&
 		data.adoptions.length === 0 &&
 		data.roots.every((root) => !root.error);
 

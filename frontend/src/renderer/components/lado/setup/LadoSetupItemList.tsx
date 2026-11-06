@@ -3,8 +3,9 @@
 // each entry with its state in one line and where it lives. A managed item
 // has its Global switch, which the desktop app confirms for a kind that can
 // run commands, and a menu: Edit, History, the review of a copy changed by
-// hand, and Delete. What LADO never adopts or leaves to the tool waits in a
-// collapsed group under the card.
+// hand, and Delete. The files projects' repositories track, which reach
+// workers through the worktree, and what LADO never adopts or leaves to the
+// tool wait in their own collapsed groups under the card.
 import { agentLabel } from "@aoagents/product-ui";
 import { ChevronDown, FileDiff, History, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import { useId, useState, type ReactNode } from "react";
@@ -35,6 +36,7 @@ import {
 	ladoSetupKinds,
 	ladoSetupManagedKeys,
 	ladoSetupOtherEntries,
+	ladoSetupRepoEntries,
 	ladoSetupShortPath,
 	ladoSetupShownEntries,
 	ladoSetupStatusText,
@@ -50,13 +52,13 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 	const [changing, setChanging] = useState<string | null>(null);
 	const [failure, setFailure] = useState<{ itemId: string; error: unknown } | null>(null);
 	const [deleting, setDeleting] = useState<Deleting>({ open: false, entry: null, error: null });
-	const [otherOpen, setOtherOpen] = useState(false);
 	const [opening, setOpening] = useState<Opening>({ key: 0, open: false, view: "edit", itemId: null });
 
 	const shown = ladoSetupShownEntries(inventory, tool).sort(compareEntries);
 	const other = ladoSetupOtherEntries(inventory, tool).sort(compareEntries);
+	const repo = ladoSetupRepoEntries(inventory, tool).sort(compareEntries);
 	const rootErrors = inventory.roots.filter((root) => root.tool === tool && root.error);
-	if (shown.length === 0 && other.length === 0 && rootErrors.length === 0) return null;
+	if (shown.length === 0 && other.length === 0 && repo.length === 0 && rootErrors.length === 0) return null;
 
 	const context = {
 		managed: ladoSetupManagedKeys(inventory),
@@ -138,24 +140,8 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 						<p className="settings-content-row text-control leading-4 text-settings-muted">{t("lado.setup.list.nothing")}</p>
 					) : null}
 				</SettingsSection>
-				{other.length > 0 ? (
-					<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
-						<button
-							type="button"
-							aria-expanded={otherOpen}
-							onClick={() => setOtherOpen((open) => !open)}
-							className="flex h-5 w-fit items-center gap-1.5 rounded-sm px-(--settings-row-inset) text-foreground"
-						>
-							<span className="text-sm font-medium leading-5">{t("lado.setup.list.otherGroup")}</span>
-							<span className="text-sm leading-5 tabular-nums text-settings-muted">{other.length}</span>
-							<ChevronDown
-								aria-hidden="true"
-								className={cn("size-icon-sm text-settings-muted transition-transform duration-fast", otherOpen && "rotate-180")}
-							/>
-						</button>
-						{otherOpen ? <div className="settings-grouped-rows flex w-full flex-col">{other.map(row)}</div> : null}
-					</section>
-				) : null}
+				{repo.length > 0 ? <CollapsedGroup label={t("lado.setup.list.repoGroup")} entries={repo} row={row} /> : null}
+				{other.length > 0 ? <CollapsedGroup label={t("lado.setup.list.otherGroup")} entries={other} row={row} /> : null}
 			</div>
 			<LadoRuleImpactDialog
 				impact={change.pending?.result.impact ?? null}
@@ -198,6 +184,29 @@ export function LadoSetupItemList({ tool, inventory }: { tool: LadoSetupTool; in
 				}}
 			/>
 		</>
+	);
+}
+
+/** Entries under the card behind a heading with their count, closed until the developer opens them. */
+function CollapsedGroup({ label, entries, row }: { label: string; entries: LadoSetupEntry[]; row: (entry: LadoSetupEntry) => ReactNode }) {
+	const [open, setOpen] = useState(false);
+	return (
+		<section className="flex w-full flex-col items-stretch gap-(--size-settings-section-inner-gap)">
+			<button
+				type="button"
+				aria-expanded={open}
+				onClick={() => setOpen((current) => !current)}
+				className="flex h-5 w-fit items-center gap-1.5 rounded-sm px-(--settings-row-inset) text-foreground"
+			>
+				<span className="text-sm font-medium leading-5">{label}</span>
+				<span className="text-sm leading-5 tabular-nums text-settings-muted">{entries.length}</span>
+				<ChevronDown
+					aria-hidden="true"
+					className={cn("size-icon-sm text-settings-muted transition-transform duration-fast", open && "rotate-180")}
+				/>
+			</button>
+			{open ? <div className="settings-grouped-rows flex w-full flex-col">{entries.map(row)}</div> : null}
+		</section>
 	);
 }
 
