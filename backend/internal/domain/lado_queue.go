@@ -407,8 +407,15 @@ type LadoExecutionVerification struct {
 // whether the PR's current head has one and how posting its commit status
 // went, and, once the PR merged, whether the merged head had one.
 type LadoExecutionIntegration struct {
-	HeadApproved       bool
-	StatusState        LadoIntegrationStatusState
+	HeadApproved bool
+	StatusState  LadoIntegrationStatusState
+	// MergedHeadApproved says the PR merged with an approval of its merged
+	// head that held at the merge: one that still holds, or one LADO revoked
+	// for a base overlap (LadoCodeBaseOverlap or
+	// LadoIntegrationSiblingRevoked) no earlier than the host's merge time,
+	// as when LADO saw the PR's own merge as a base move before AO observed
+	// the merge (#75). Without the host's merge time a revoked approval does
+	// not count. Settling audits execution.merged_without_approval by it.
 	MergedHeadApproved bool
 }
 

@@ -657,11 +657,16 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 }
 
 const listLadoIntegrationApprovalStates = `-- name: ListLadoIntegrationApprovalStates :many
-SELECT execution_session_id, pr_url, head_sha, target_branch, status_state
+SELECT lado_integration_approvals.execution_session_id, lado_integration_approvals.pr_url,
+    lado_integration_approvals.head_sha, lado_integration_approvals.target_branch,
+    lado_integration_approvals.status_state, lado_integration_approvals.revoked_at,
+    lado_integration_approvals.revoked_reason, pr.merged_at_provider
 FROM lado_integration_approvals
-WHERE execution_session_id IN (/*SLICE:session_ids*/?)
-  AND head_sha IN (/*SLICE:head_shas*/?)
-  AND revoked_at IS NULL
+LEFT JOIN pr ON pr.url = lado_integration_approvals.pr_url
+    AND pr.pr_state = 'merged'
+    AND pr.head_sha = lado_integration_approvals.head_sha
+WHERE lado_integration_approvals.execution_session_id IN (/*SLICE:session_ids*/?)
+  AND lado_integration_approvals.head_sha IN (/*SLICE:head_shas*/?)
 `
 
 type ListLadoIntegrationApprovalStatesParams struct {
@@ -675,11 +680,17 @@ type ListLadoIntegrationApprovalStatesRow struct {
 	HeadSha            string
 	TargetBranch       string
 	StatusState        string
+	RevokedAt          sql.NullTime
+	RevokedReason      string
+	MergedAtProvider   sql.NullTime
 }
 
 // The PR, target branch and status state of the approvals of the given
-// executions and heads, revoked ones left out: they no longer count. The
-// caller keeps the (execution, PR, head, target) it asked for.
+// executions and heads, revoked ones with when and why LADO withdrew them,
+// and, when the approval's PR merged at the approved head, when the host
+// says it merged (#75): an approval revoked no earlier than that held when
+// the head merged. The caller keeps the (execution, PR, head, target) it
+// asked for.
 func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg ListLadoIntegrationApprovalStatesParams) ([]ListLadoIntegrationApprovalStatesRow, error) {
 	query := listLadoIntegrationApprovalStates
 	var queryParams []interface{}
@@ -713,6 +724,9 @@ func (q *Queries) ListLadoIntegrationApprovalStates(ctx context.Context, arg Lis
 			&i.HeadSha,
 			&i.TargetBranch,
 			&i.StatusState,
+			&i.RevokedAt,
+			&i.RevokedReason,
+			&i.MergedAtProvider,
 		); err != nil {
 			return nil, err
 		}
