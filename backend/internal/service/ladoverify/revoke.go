@@ -51,13 +51,24 @@ func baseOverlapped(record domain.LadoVerification) bool {
 // for its base, now or before, the approvals of the current heads of the
 // execution's other tracked PRs that have not merged are revoked as
 // sibling_revoked the same way (#64). It returns the approvals it revoked.
-func (s *Service) revokeOverlapped(ctx context.Context, exec domain.LadoExecution, record domain.LadoVerification) ([]domain.LadoIntegrationApproval, error) {
+//
+// With host, the loop's memo of the pass, an approval that still holds is
+// revoked only once the PR's host says it has not merged (#75): a PR merged
+// a moment ago, whose own squash or rebase merge moved the base, keeps its
+// approval and its siblings', and a sibling the host merged keeps its own.
+// A nil host revokes without asking, as the merge gate does.
+func (s *Service) revokeOverlapped(ctx context.Context, exec domain.LadoExecution, record domain.LadoVerification, host *hostMerges) ([]domain.LadoIntegrationApproval, error) {
 	if !baseOverlapped(record) {
 		return nil, nil
 	}
 	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, record.ExecutionSessionID, record.PRURL, record.HeadSHA)
 	if err != nil {
 		return nil, fmt.Errorf("read the integration approvals of head %s: %w", record.HeadSHA, err)
+	}
+	if holding(approvals) && host.mergedOnHost(ctx, record.PRURL) {
+		s.deps.Log.Info("LADO kept an integration approval: the base moved, but the host merged the pull request",
+			"session", record.ExecutionSessionID, "pr", record.PRURL, "head", record.HeadSHA)
+		return nil, nil
 	}
 	revoked, err := s.revokeApprovals(ctx, exec, approvals, domain.LadoCodeBaseOverlap, "")
 	if err != nil {
@@ -76,6 +87,11 @@ func (s *Service) revokeOverlapped(ctx context.Context, exec domain.LadoExecutio
 		approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, record.ExecutionSessionID, sibling.PR.URL, sibling.PR.HeadSHA)
 		if err != nil {
 			return revoked, fmt.Errorf("read the integration approvals of head %s: %w", sibling.PR.HeadSHA, err)
+		}
+		if holding(approvals) && host.mergedOnHost(ctx, sibling.PR.URL) {
+			s.deps.Log.Info("LADO kept an integration approval of a sibling pull request: the host merged it",
+				"session", record.ExecutionSessionID, "pr", sibling.PR.URL, "head", sibling.PR.HeadSHA, "cause", record.PRURL)
+			continue
 		}
 		more, err := s.revokeApprovals(ctx, exec, approvals, domain.LadoIntegrationSiblingRevoked, record.PRURL)
 		revoked = append(revoked, more...)
