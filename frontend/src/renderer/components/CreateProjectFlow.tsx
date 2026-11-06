@@ -107,6 +107,8 @@ type DisplayImportRepo = ImportFolderScan["repos"][number] & {
 	isRepo?: boolean;
 	hasCommit?: boolean;
 	hasOrigin?: boolean;
+	/** LADO #22: the repository uses Git LFS and git-lfs is not installed here. */
+	gitLfsMissing?: boolean;
 };
 type ProjectGitHubRepository = { owner: string; name: string; private: boolean };
 type GitHubOwner = { login: string; avatarUrl: string };
@@ -380,7 +382,9 @@ export function CreateProjectFlow({
 					openProjectStep("prepare_git");
 					return;
 				}
-				if (validation.warning) {
+				// LADO #22: a repository that needs git-lfs this computer lacks is
+				// named before agent selection, without blocking the import.
+				if (validation.warning || validation.root.gitLfsMissing) {
 					openProjectStep("blocked");
 					return;
 				}
@@ -2339,6 +2343,7 @@ function ProjectImportDialog({
 								{validation.warning}
 							</div>
 						) : null}
+						<GitLfsMissingNotes names={validation.root.gitLfsMissing ? [projectNameFromPath(validation.root.repoPath)] : []} />
 						{step === "prepare_git" ? (
 							<section className="space-y-2">
 								{needsRemote ? (
@@ -2546,7 +2551,7 @@ function ProjectImportDialog({
 								<Button type="button" variant="outline" disabled={disabled} onClick={onBack}>
 									{t("createProject.back")}
 								</Button>
-								{hasChildRepos || Boolean(validation.warning) ? <Button type="button" variant="primary" disabled={disabled} onClick={onContinueProject}>{t("createProject.cloneContinue")}</Button> : null}
+								{hasChildRepos || Boolean(validation.warning) || validation.root.gitLfsMissing === true ? <Button type="button" variant="primary" disabled={disabled} onClick={onContinueProject}>{t("createProject.cloneContinue")}</Button> : null}
 							</>
 						) : null}
 						{step === "prepare_git" ? (
@@ -2693,6 +2698,7 @@ function CreateProjectFolderDialog({
 								{workspaceRootIsProject && !error ? <p className="text-[14px] leading-6 text-[var(--color-text-import-muted)]">{t("createProject.workspaceRootIsProject")}</p> : null}
 								{workspaceReposNeedSetup && !error ? <p className="text-[13px] leading-5 text-destructive">{t("createProject.workspaceRemoteSetupRequired")}</p> : null}
 								{workspaceReposExcluded && !error ? <p className="text-[13px] leading-5 text-[var(--color-text-import-muted)]">{t("createProject.workspaceReposExcluded", { count: workspaceExcludedRepos.length })}</p> : null}
+								{isWorkspace ? <GitLfsMissingNotes names={displayRepos.filter((repo) => repo.gitLfsMissing).map((repo) => repo.name)} /> : null}
 
 							{workspaceRootIsProject || workspaceHasNoChildGitRepos ? null : isWorkspace ? <WorkspaceImportRepoList excludeUnready={workspaceReposExcluded} repos={displayRepos} /> : displayRepos.length > 0 ? <div className="divide-y divide-border/50 overflow-hidden rounded-sm bg-[var(--color-bg-import-card)]">
 								{displayRepos.map((repo) => <ImportRepoRow key={repo.path} repo={repo} />)}
@@ -2730,6 +2736,19 @@ function CreateProjectFolderDialog({
 			</Dialog.Portal>
 		</Dialog.Root>
 	);
+}
+
+/**
+ * LADO #22: one line per repository that uses Git LFS while git-lfs is not
+ * installed on this computer. It does not block the import (git-lfs can be
+ * installed later), but sessions cannot start until it is.
+ */
+function GitLfsMissingNotes({ names }: { names: readonly string[] }) {
+	const { t } = useTranslation();
+	if (names.length === 0) return null;
+	return <div className="space-y-1" data-testid="import-git-lfs-missing">
+		{names.map((name) => <p key={name} role="note" className="border-l-2 border-amber-500/60 pl-3 text-[12px] leading-5 text-muted-foreground">{t("createProject.gitLfsMissing", { name })}</p>)}
+	</div>;
 }
 
 function ImportRepoRow({ excluded = false, failed = false, onSetup, repo, setupExpanded = false }: { excluded?: boolean; failed?: boolean; onSetup?: () => void; repo: DisplayImportRepo; setupExpanded?: boolean }) {
@@ -2813,6 +2832,7 @@ function mergeWorkspaceImportRepos(scan: ImportFolderScan | null, validation: Im
 			isRepo: status?.isRepo ?? repo?.isRepo ?? false,
 			hasCommit: status?.hasCommit ?? repo?.hasCommit ?? false,
 			hasOrigin: status?.hasOrigin ?? repo?.hasRemote,
+			gitLfsMissing: status?.gitLfsMissing === true,
 		};
 	}).filter((repo) => repo.isRepo).sort((left, right) => left.name.localeCompare(right.name));
 }

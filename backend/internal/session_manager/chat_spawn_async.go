@@ -415,7 +415,7 @@ func (m *Manager) failAsyncChatSpawn(ctx context.Context, id domain.SessionID, c
 	cleanupCtx, cancel := spawnRollbackContext(ctx)
 	defer cancel()
 	m.stopChatBestEffort(cleanupCtx, id)
-	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, cause.Error()); err != nil {
+	if _, err := m.setProvisionState(cleanupCtx, id, domain.SessionProvisionFailed, ladoProvisionError(cause)); err != nil { // LADO #22
 		m.logger.Error("spawn: record failed start", "sessionID", id, "error", err)
 	}
 }

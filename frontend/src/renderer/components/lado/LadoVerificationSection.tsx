@@ -364,6 +364,7 @@ function VerifyItemRow({
 				<p className="pl-3.5 text-xs text-muted-foreground">{t("lado.protection.anySourceGuide")}</p>
 			) : null}
 			{item.kind === "base_branch" && item.code === "base_overlap" ? <OverlapFiles item={item} /> : null}
+			{item.kind === "commands" && item.code === "worktree_dirty" ? <DirtyFiles item={item} /> : null}
 			{runs.length > 0 ? <CommandRuns projectId={projectId} sessionId={execution.sessionId} runs={runs} canRun={canRun} /> : null}
 			{item.kind === "evidence" && verification.evidence.length > 0 ? (
 				<EvidenceList execution={execution} verification={verification} />
@@ -389,6 +390,28 @@ function OverlapFiles({ item }: { item: LadoVerifyItem }) {
 				</li>
 			))}
 			{rest > 0 ? <li>{t("lado.verify.base.overlapMore", { count: rest })}</li> : null}
+		</ul>
+	);
+}
+
+/**
+ * The uncommitted or untracked files that keep the checks waiting on a
+ * worktree that is at the head (#22): the first ones LADO kept, then how
+ * many more there are.
+ */
+function DirtyFiles({ item }: { item: LadoVerifyItem }) {
+	const { t } = useTranslation();
+	const files = item.details.dirty ?? [];
+	if (files.length === 0) return null;
+	const rest = Math.max(0, (item.details.dirtyCount ?? 0) - files.length);
+	return (
+		<ul className="flex min-w-0 flex-col pl-3.5 text-xs text-muted-foreground" data-testid="lado-verify-dirty">
+			{files.map((file) => (
+				<li key={file} className="truncate font-mono" title={file}>
+					{file}
+				</li>
+			))}
+			{rest > 0 ? <li>{t("lado.verify.commands.dirtyMore", { count: rest })}</li> : null}
 		</ul>
 	);
 }
@@ -452,6 +475,11 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 				case "command_timed_out": {
 					const late = named(["timed_out"]);
 					return late.length > 0 ? t("lado.verify.commands.timedOut", { names: nameList(t, late) }) : fallback;
+				}
+				case "worktree_dirty": {
+					// A daemon that could not list the files sends only the code.
+					const count = Math.max(details.dirtyCount ?? 0, details.dirty?.length ?? 0);
+					return count > 0 ? t("lado.verify.commands.dirty", { count }) : fallback;
 				}
 			}
 			if (code) return fallback;

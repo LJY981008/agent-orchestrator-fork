@@ -94,7 +94,10 @@ type Git interface {
 // ExecGit runs the system git.
 type ExecGit struct{}
 
-var _ Git = ExecGit{}
+var (
+	_ Git         = ExecGit{}
+	_ dirtyPather = ExecGit{}
+)
 
 // commitID matches a full SHA-1 or SHA-256 commit id.
 var commitID = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
@@ -324,6 +327,32 @@ func (ExecGit) Status(ctx context.Context, dir string) (string, error) {
 		status.WriteString(" " + contentDigest(filepath.Join(dir, filepath.FromSlash(entry[3:]))) + "\n")
 	}
 	return status.String(), nil
+}
+
+// DirtyPaths lists the paths git status --porcelain lists for the work tree
+// at dir, relative to its root and in git's order, untracked files of an
+// untracked folder each on its own: a rename or a copy by its new name. The
+// names are as git keeps them, spaces and arrows included, for -z quotes
+// nothing (LADO #22).
+func (ExecGit) DirtyPaths(ctx context.Context, dir string) ([]string, error) {
+	out, err := runGit(ctx, dir, gitTimeout, "status", "--porcelain=v1", "-z", "--untracked-files=all")
+	if err != nil {
+		return nil, fmt.Errorf("read the status of %s: %w", dir, err)
+	}
+	var paths []string
+	entries := strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+	for i := 0; i < len(entries); i++ {
+		entry := entries[i]
+		if len(entry) < 4 {
+			continue
+		}
+		paths = append(paths, entry[3:])
+		// A rename or a copy names its source in the next entry.
+		if entry[0] == 'R' || entry[0] == 'C' {
+			i++
+		}
+	}
+	return paths, nil
 }
 
 // contentDigest names what is at file: the sha256 of a regular file's

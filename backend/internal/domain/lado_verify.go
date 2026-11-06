@@ -77,7 +77,12 @@ const (
 	// LadoCodeWorktreeChanged means the worktree changed since LADO's last
 	// check command on the head ended, as with an edit the worker did not
 	// commit: the next command waits rather than test it.
-	LadoCodeWorktreeChanged = "worktree_changed"  // wait
+	LadoCodeWorktreeChanged = "worktree_changed" // wait
+	// LadoCodeWorktreeDirty means the worktree is at the head but has
+	// changes or untracked files before the head's first check command, as
+	// hooks a tool wrote there: the commands wait for a clean worktree
+	// (LADO #22).
+	LadoCodeWorktreeDirty   = "worktree_dirty"    // wait
 	LadoCodeCommandsFailed  = "commands_failed"   // fail
 	LadoCodeCommandTimedOut = "command_timed_out" // fail
 	LadoCodeWorktreeMissing = "worktree_missing"  // fail
@@ -259,7 +264,16 @@ type LadoVerifyCheck struct {
 // project check command for the head.
 type LadoCommandsDetails struct {
 	Runs []LadoVerifyCommandRun `json:"runs"`
+	// Dirty are the first LadoDirtyFilesMax paths that keep the worktree
+	// from being clean while the item waits as worktree_dirty, and
+	// DirtyCount how many there are (LADO #22). Both stay out of the JSON
+	// otherwise, so older records keep their hash.
+	Dirty      []string `json:"dirty,omitempty"`
+	DirtyCount int      `json:"dirtyCount,omitempty"`
 }
+
+// LadoDirtyFilesMax caps the paths a worktree_dirty commands item lists.
+const LadoDirtyFilesMax = 5
 
 // LadoVerifyCommandRun is one check command's run for the head. CommandSHA256
 // is the hash of the command's text (LadoCheckCommandSHA256): a run counts
@@ -454,6 +468,10 @@ type LadoVerification struct {
 // LadoNotifiedWorktreeBehind is the Notified entry of the one message that
 // asks a worker whose worktree is behind a head made on the host to pull it.
 const LadoNotifiedWorktreeBehind = "worktree_behind"
+
+// LadoNotifiedWorktreeDirty is the Notified entry of the one message that
+// asks a worker whose worktree stayed worktree_dirty to clean it (LADO #22).
+const LadoNotifiedWorktreeDirty = "worktree_dirty"
 
 // Overall returns the record's outcome: fail if any item fails, else wait if
 // any waits, else confirm if any needs confirming, else pass. The reason is

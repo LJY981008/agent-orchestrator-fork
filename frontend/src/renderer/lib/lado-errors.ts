@@ -586,6 +586,8 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	checks_failed: "lado.reason.checks_failed",
 	commands_running: "lado.reason.commands_running",
 	worktree_not_at_head: "lado.reason.worktree_not_at_head",
+	// The worktree is at the head but has uncommitted or untracked files (#22).
+	worktree_dirty: "lado.reason.worktree_dirty",
 	worktree_changed: "lado.reason.worktree_changed",
 	head_unavailable: "lado.reason.head_unavailable",
 	commands_failed: "lado.reason.commands_failed",

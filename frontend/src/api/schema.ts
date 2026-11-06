@@ -6692,6 +6692,11 @@ export interface components {
             selection: string;
             sourceRole: string;
         };
+        DomainWorkspaceAssetsConfig: {
+            /** @enum {string} */
+            absoluteLinks?: "skip" | "keep";
+            exclude: string[];
+        };
         EditConversationMessageRequest: {
             clientMessageId?: string;
             text: string;
@@ -7301,7 +7306,7 @@ export interface components {
              * @description Why the run is in its state, as the task's stateReason says it; reported_pr_untracked while the worker reported a pull request its session does not track.
              * @enum {string}
              */
-            stateReason?: "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
+            stateReason?: "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
             task: components["schemas"]["LadoExecutionTaskResponse"];
             /**
              * Format: date-time
@@ -7391,7 +7396,7 @@ export interface components {
              * @description Why the PR is in its state, as the task's stateReason says it.
              * @enum {string}
              */
-            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
+            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
             /** @description The branch the PR merges into. */
             targetBranch?: string;
             title?: string;
@@ -8880,7 +8885,7 @@ export interface components {
              * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; reported_pr_untracked for running while the worker reported a pull request its session does not track, and for validating while LADO still tries to track one before an approval; for validating, pr_missing while a repository the task is expected to open a pull request in has none yet (a workspace task across repositories), conflict_unresolved when LADO's resolve workers could not resolve the open PR, resolving while one takes the base into it, merge_conflict while the PR conflicts with its base and base_overlap when the base moved under the head with a change to the same paths, all four before an approval; else verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
         };
         LadoTaskTimelineResponse: {
             approvals: number;
@@ -9065,7 +9070,7 @@ export interface components {
              * @description The code of the first item that fails, else of the first that waits; omitted otherwise.
              * @enum {string}
              */
-            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "base_overlap" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested";
+            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "base_overlap" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested";
             /** @description The record's hash, which an integration approval signs as verificationSha256. */
             sha256: string;
         };
@@ -9121,6 +9126,10 @@ export interface components {
             defaultBranch?: string;
             /** @description base_branch: the local base branch existed at dispatch and is gone. */
             deleted?: boolean;
+            /** @description commands: for worktree_dirty, the first 5 changed or untracked paths of the worktree, relative to its root (the new name of a rename). */
+            dirty?: string[];
+            /** @description commands: for worktree_dirty, how many paths keep the worktree from being clean. */
+            dirtyCount?: number;
             /** @description base_branch: for base_not_default, the base branch the dispatcher chose in the issue's repository. */
             dispatchBranch?: string;
             /** @description base_branch: the local base branch's commit when the run was dispatched; omitted when it had none or LADO did not record it. */
@@ -9182,10 +9191,10 @@ export interface components {
         };
         LadoVerifyItemResponse: {
             /**
-             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone; base_advanced: the remote base branch moved past the head's merge base without touching its files; base_overlap: it moved with a change to files the head changed or the plan names, so the head must take in the base; pr_repo_not_in_workspace: the PR is open in a repository that is none of the workspace's child repositories, so LADO cannot verify it; base_not_default: the PR's repository is not the issue's and the PR's target or the dispatch's base branch is not that repository's default branch.
+             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_dirty: the worktree is at the head but has uncommitted changes or untracked files before the head's first check command, so the commands wait (details.dirty lists them); worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone; base_advanced: the remote base branch moved past the head's merge base without touching its files; base_overlap: it moved with a change to files the head changed or the plan names, so the head must take in the base; pr_repo_not_in_workspace: the PR is open in a repository that is none of the workspace's child repositories, so LADO cannot verify it; base_not_default: the PR's repository is not the issue's and the PR's target or the dispatch's base branch is not that repository's default branch.
              * @enum {string}
              */
-            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "base_advanced" | "base_overlap" | "pr_repo_not_in_workspace" | "base_not_default" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
+            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "base_advanced" | "base_overlap" | "pr_repo_not_in_workspace" | "base_not_default" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
             details: components["schemas"]["LadoVerifyItemDetailsResponse"];
             /** @enum {string} */
             kind: "required_checks" | "commands" | "commit_messages" | "paths" | "base_branch" | "protection" | "review" | "evidence";
@@ -9571,6 +9580,7 @@ export interface components {
             trackerIntake?: components["schemas"]["TrackerIntakeConfig"];
             worker?: components["schemas"]["RoleOverride"];
             workersRequestReview?: boolean;
+            workspaceAssets?: components["schemas"]["DomainWorkspaceAssetsConfig"];
         };
         ProjectGetResponse: {
             project: components["schemas"]["ProjectOrDegraded"];
@@ -9731,6 +9741,7 @@ export interface components {
         };
         RepoGitStatus: {
             blockingErrors: string[];
+            gitLfsMissing?: boolean;
             hasCommit: boolean;
             hasOrigin: boolean;
             isEmptyFolder: boolean;

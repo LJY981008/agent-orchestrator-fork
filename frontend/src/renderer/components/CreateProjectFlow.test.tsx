@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { useState, type ComponentProps, type ReactNode } from "react";
@@ -313,6 +313,7 @@ function projectValidation(
 			needsGitInit: boolean;
 			requiredActions: string[];
 			blockingErrors: string[];
+			gitLfsMissing: boolean;
 		}>;
 		childRepos: Array<{
 			repoPath: string;
@@ -323,6 +324,7 @@ function projectValidation(
 			needsGitInit: boolean;
 			requiredActions: string[];
 			blockingErrors: string[];
+			gitLfsMissing?: boolean;
 		}>;
 		warning: string;
 	}> = {},
@@ -340,6 +342,7 @@ function projectValidation(
 			needsGitInit: overrides.root?.needsGitInit ?? false,
 			requiredActions: overrides.root?.requiredActions ?? [],
 			blockingErrors: overrides.root?.blockingErrors ?? [],
+			...(overrides.root?.gitLfsMissing !== undefined && { gitLfsMissing: overrides.root.gitLfsMissing }),
 		},
 		childRepos: overrides.childRepos,
 		nextStep: overrides.nextStep ?? "continue",
@@ -982,6 +985,41 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(screen.getByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/workspace");
 	});
 
+	// LADO #22: a child repository that uses Git LFS while git-lfs is missing.
+	it("names a workspace repository that needs git-lfs without blocking the import", async () => {
+		const user = userEvent.setup();
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/workspace");
+		bridgeMocks.scanImportFolder.mockResolvedValue({
+			path: "/repo/workspace",
+			repos: [
+				{ name: "api", path: "/repo/workspace/api", relativePath: "api", branch: "main", remote: "git@github.com:acme/api.git", hasRemote: true, isRepo: true, hasCommit: true, status: "ok", needsGitInit: false },
+				{ name: "web", path: "/repo/workspace/web", relativePath: "web", branch: "main", remote: "git@github.com:acme/web.git", hasRemote: true, isRepo: true, hasCommit: true, status: "ok", needsGitInit: false },
+			],
+		});
+		apiMocks.POST.mockResolvedValueOnce({
+			data: {
+				...projectValidation("/repo/workspace", {
+					root: { isRepo: false, hasCommit: false, hasOrigin: false, needsGitInit: true, requiredActions: [] },
+					childRepos: [
+						{ repoPath: "/repo/workspace/api", isRepo: true, hasCommit: true, hasOrigin: true, isEmptyFolder: false, needsGitInit: false, requiredActions: [], blockingErrors: [], gitLfsMissing: true },
+						{ repoPath: "/repo/workspace/web", isRepo: true, hasCommit: true, hasOrigin: true, isEmptyFolder: false, needsGitInit: false, requiredActions: [], blockingErrors: [] },
+					],
+				}),
+				importKind: "workspace",
+			},
+		});
+
+		renderChooseFlow();
+		await openSource(user, "Open a workspace");
+		const notes = await screen.findByTestId("import-git-lfs-missing");
+		expect(within(notes).getAllByRole("note")).toHaveLength(1);
+		expect(notes).toHaveTextContent("api uses Git LFS, but git-lfs is not installed on this computer. Sessions cannot start until you install it.");
+		const next = screen.getByRole("button", { name: "Continue" });
+		expect(next).toBeEnabled();
+		await user.click(next);
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-kind", "workspace");
+	});
+
 	it("disables workspace import when no child Git repositories exist", async () => {
 		const user = userEvent.setup();
 		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/workspace");
@@ -1210,6 +1248,24 @@ describe("CreateProjectFlow project import validation", () => {
 		expect(await screen.findByText("This folder contains child Git repositories and will be imported as one project.")).toBeInTheDocument();
 		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
 		await user.click(screen.getByRole("button", { name: "Continue" }));
+		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/project");
+		expect(apiMocks.POST).toHaveBeenCalledTimes(1);
+	});
+
+	// LADO #22: the project uses Git LFS while git-lfs is missing.
+	it("names a project that needs git-lfs before agent selection without blocking it", async () => {
+		const user = userEvent.setup();
+		bridgeMocks.chooseDirectory.mockResolvedValue("/repo/project");
+		apiMocks.POST.mockResolvedValueOnce({ data: projectValidation("/repo/project", { root: { gitLfsMissing: true } }) });
+
+		renderChooseFlow();
+		await openSource(user, "Open a local folder");
+
+		expect(await screen.findByText("project uses Git LFS, but git-lfs is not installed on this computer. Sessions cannot start until you install it.")).toBeInTheDocument();
+		expect(screen.queryByTestId("agent-sheet")).not.toBeInTheDocument();
+		const next = screen.getByRole("button", { name: "Continue" });
+		expect(next).toBeEnabled();
+		await user.click(next);
 		expect(await screen.findByTestId("agent-sheet")).toHaveAttribute("data-path", "/repo/project");
 		expect(apiMocks.POST).toHaveBeenCalledTimes(1);
 	});

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -107,6 +106,9 @@ type Options struct {
 	// Logger receives the failures background removal cannot return to a
 	// caller. Optional; nil silences them.
 	Logger *slog.Logger
+	// GitLFSInstalled (LADO #22) reports whether git-lfs is installed. Nil
+	// asks `git lfs version`.
+	GitLFSInstalled func(context.Context) bool
 }
 
 // Workspace creates per-session git worktrees under a managed root. It
@@ -117,6 +119,8 @@ type Workspace struct {
 	repos       RepoResolver
 	run         commandRunner
 	logger      *slog.Logger
+	// lfsInstalled is Options.GitLFSInstalled (LADO #22).
+	lfsInstalled func(context.Context) bool
 	// discards tracks background worktree removals so tests can wait for them.
 	// Production never waits: that deferral is the point (see discard.go).
 	discards sync.WaitGroup
@@ -154,6 +158,8 @@ func New(opts Options) (*Workspace, error) {
 		repos:       opts.RepoResolver,
 		run:         runCommand,
 		logger:      opts.Logger,
+
+		lfsInstalled: opts.GitLFSInstalled,
 	}
 	// A daemon that died mid-removal leaves directories under the discard root
 	// that nothing else will ever look at again. Sweeping at construction is
@@ -333,6 +339,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
 		}
+	}
+	if err := w.ladoRequireGitLFS(ctx, repo, firstNonEmpty(seedRef, cfg.BaseRef)); err != nil { // LADO #22
+		return ports.WorkspaceInfo{}, err
 	}
 	baseRef, err := w.addWorktree(ctx, repo, path, cfg.Branch, cfg.BaseBranch, cfg.BaseRef, seedRef, true)
 	if err != nil {
@@ -579,9 +588,12 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if repoIndex == 0 {
 			_, rootAlreadyExisted := existing[repoIndex]
 			if !rootAlreadyExisted {
-				if err := copyWorkspaceAssets(rootRepo, rootPath, cfg.Assets); err != nil {
+				// LADO #22: exclude list and link policy; skipped links are reported.
+				skipped, skippedCount, err := w.ladoCopyWorkspaceAssets(rootRepo, rootPath, cfg.Assets, cfg.AssetExclude, cfg.KeepAbsoluteAssetLinks)
+				if err != nil {
 					return fail(err)
 				}
+				out.SkippedAssetLinks, out.SkippedAssetLinkCount = skipped, skippedCount
 			}
 		}
 	}
@@ -656,136 +668,6 @@ func (w *Workspace) repairWorkspaceRootDefault(ctx context.Context, repo string)
 		return worktreeRefs{}, err
 	}
 	return worktreeRefs{seedRef: ref, baseRef: ref}, nil
-}
-
-func copyWorkspaceAssets(sourceRoot, destinationRoot string, assets []ports.WorkspaceProjectAssetConfig) error {
-	for _, asset := range assets {
-		rel, err := cleanRelativePath(asset.RelativePath)
-		if err != nil || hasWorkspaceManagedComponent(rel) {
-			return fmt.Errorf("gitworktree: workspace asset %q: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		source, err := physicalAbs(asset.SourcePath)
-		if err != nil || !assetPathWithin(sourceRoot, source) {
-			return fmt.Errorf("gitworktree: workspace asset %q source: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		destination := filepath.Join(destinationRoot, filepath.FromSlash(rel))
-		if !assetPathWithin(destinationRoot, destination) {
-			return fmt.Errorf("gitworktree: workspace asset %q destination: %w", asset.RelativePath, ErrUnsafePath)
-		}
-		if err := copyWorkspaceAssetTree(sourceRoot, source, destination); err != nil {
-			return fmt.Errorf("gitworktree: copy workspace asset %q: %w", asset.RelativePath, err)
-		}
-	}
-	return nil
-}
-
-func copyWorkspaceAssetTree(sourceRoot, source, destination string) error {
-	info, err := os.Lstat(source)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		target, err := os.Readlink(source)
-		if err != nil {
-			return err
-		}
-		if filepath.IsAbs(target) {
-			return fmt.Errorf("absolute symlink %q: %w", source, ErrUnsafePath)
-		}
-		resolved := filepath.Clean(filepath.Join(filepath.Dir(source), target))
-		if !assetPathWithin(sourceRoot, resolved) || hasWorkspaceManagedComponent(relativeOrEmpty(sourceRoot, resolved)) {
-			return fmt.Errorf("symlink %q escapes or targets managed data: %w", source, ErrUnsafePath)
-		}
-		physicalTarget, err := filepath.EvalSymlinks(resolved)
-		if err != nil || !assetPathWithin(sourceRoot, physicalTarget) {
-			return fmt.Errorf("symlink %q has an unsafe or unresolved target: %w", source, ErrUnsafePath)
-		}
-		if existing, err := os.Lstat(destination); err == nil {
-			if existing.IsDir() {
-				return fmt.Errorf("cannot overlay symlink on directory %q", destination)
-			}
-			if err := os.Remove(destination); err != nil {
-				return err
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return os.Symlink(target, destination)
-	}
-	if info.IsDir() {
-		if existing, err := os.Lstat(destination); err == nil {
-			if !existing.IsDir() || existing.Mode()&os.ModeSymlink != 0 {
-				return fmt.Errorf("cannot overlay directory on non-directory %q", destination)
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			if err := os.Mkdir(destination, info.Mode().Perm()); err != nil {
-				return err
-			}
-		} else {
-			return err
-		}
-		entries, err := os.ReadDir(source)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			if entry.Name() == ".git" || entry.Name() == ".ao" {
-				continue
-			}
-			if err := copyWorkspaceAssetTree(sourceRoot, filepath.Join(source, entry.Name()), filepath.Join(destination, entry.Name())); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	if !info.Mode().IsRegular() {
-		return fmt.Errorf("unsupported file type at %q", source)
-	}
-	if existing, err := os.Lstat(destination); err == nil {
-		if !existing.Mode().IsRegular() {
-			return fmt.Errorf("cannot overlay file on non-regular path %q", destination)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if err := out.Chmod(info.Mode().Perm()); err != nil {
-		_ = out.Close()
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
-func assetPathWithin(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func relativeOrEmpty(root, path string) string {
-	rel, _ := filepath.Rel(root, path)
-	return rel
-}
-
-func hasWorkspaceManagedComponent(path string) bool {
-	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
-		if component == ".git" || component == ".ao" {
-			return true
-		}
-	}
-	return false
 }
 
 // DestroyWorkspaceProject removes worktrees children first, preserving any
@@ -1596,8 +1478,9 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 			baseRef = refs.baseRef
 		}
 		if _, err := w.run(ctx, w.binary, worktreeAddBranchArgs(repo, path, branch, force)...); err != nil {
-			return "", fmt.Errorf("gitworktree: worktree add existing branch %q: %w", branch, err)
+			return "", ladoWrapWorktreeAddError(repo, fmt.Errorf("gitworktree: worktree add existing branch %q: %w", branch, err)) // LADO #22
 		}
+		w.ladoGuardHooksDir(ctx, path) // LADO #22
 		return baseRef, nil
 	}
 	if baseRef == "" {
@@ -1611,8 +1494,9 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 		}
 		baseRef = refs.baseRef
 		if err := w.addNewBranchWorktree(ctx, repo, branch, path, refs.seedRef, force); err != nil {
-			return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, refs.seedRef, err)
+			return "", ladoWrapWorktreeAddError(repo, fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, refs.seedRef, err)) // LADO #22
 		}
+		w.ladoGuardHooksDir(ctx, path) // LADO #22
 		return baseRef, nil
 	}
 	if seedRef == "" {
@@ -1629,8 +1513,9 @@ func (w *Workspace) addWorktree(ctx context.Context, repo, path, branch, baseBra
 	// comparison ref remains. Fresh creation returns above after resolving its
 	// seed and comparison refs independently.
 	if err := w.addNewBranchWorktree(ctx, repo, branch, path, seedRef, force); err != nil {
-		return "", fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, seedRef, err)
+		return "", ladoWrapWorktreeAddError(repo, fmt.Errorf("gitworktree: worktree add branch %q from %q: %w", branch, seedRef, err)) // LADO #22
 	}
+	w.ladoGuardHooksDir(ctx, path) // LADO #22
 	return baseRef, nil
 }
 
@@ -1785,6 +1670,9 @@ func (w *Workspace) createWorkspaceProjectRepo(ctx context.Context, repo workspa
 	seedRef := firstNonEmpty(strings.TrimSpace(repo.seedRef), baseRef)
 	baseSHA, err := w.revParse(ctx, repo.repoPath, baseRef)
 	if err != nil {
+		return "", err
+	}
+	if err := w.ladoRequireGitLFS(ctx, repo.repoPath, seedRef); err != nil { // LADO #22
 		return "", err
 	}
 	// addWorktree handles both the ordinary new-branch path and a preparation

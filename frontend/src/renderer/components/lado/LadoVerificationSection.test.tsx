@@ -685,6 +685,36 @@ test("names a remote base that moved past the head, and the files it overlaps", 
 	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Base moved");
 });
 
+// The worktree is at the head with uncommitted or untracked files (#22).
+test("names the uncommitted files the check commands wait for", () => {
+	const dirty = (details: Item["details"]) =>
+		renderSection(
+			execution({
+				verification: verification({
+					outcome: "wait",
+					reason: "worktree_dirty",
+					items: items({ commands: { outcome: "wait", code: "worktree_dirty", details } }),
+				}),
+			}),
+		);
+	const { unmount } = dirty({ dirty: [".husky/_/post-checkout", "notes with space <- old.txt"], dirtyCount: 7 });
+	const commands = row("commands");
+	expect(commands).toHaveAttribute("data-outcome", "wait");
+	expect(
+		within(commands).getByText("Checks wait for 7 uncommitted files: commit or delete them, or add them to .gitignore, and they start"),
+	).toBeInTheDocument();
+	const files = within(commands).getByTestId("lado-verify-dirty");
+	expect(within(files).getByText(".husky/_/post-checkout")).toHaveClass("font-mono");
+	expect(within(files).getByText("notes with space <- old.txt")).toBeInTheDocument();
+	expect(within(files).getByText("and 5 more files")).toBeInTheDocument();
+	unmount();
+
+	// A daemon that could not list the files sends only the code.
+	dirty({});
+	expect(within(row("commands")).getByText("Waiting for the worktree's uncommitted files to be cleaned up")).toBeInTheDocument();
+	expect(within(row("commands")).queryByTestId("lado-verify-dirty")).not.toBeInTheDocument();
+});
+
 // A workspace task with a pull request in each of two repositories (#64).
 const BACK_URL = "https://github.com/acme/back/pull/3";
 const FRONT_URL = "https://github.com/acme/front/pull/5";

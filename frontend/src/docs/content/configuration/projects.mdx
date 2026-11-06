@@ -57,6 +57,7 @@ ao project rm <project-id>
 | `reviewers` | Harnesses used for Orchestrator review runs. |
 | `trackerIntake` | Opt-in, read-only issue intake that can start workers. Also requires `AO_TRACKER_INTAKE=on` in the daemon environment. |
 | `containerReap` | Project-wide opt-out from Orchestrator's session-container cleanup. |
+| `workspaceAssets` | Workspace projects only: which non-repository folders are left out of each session workspace (`exclude`) and what happens to symbolic links that point outside the workspace (`absoluteLinks`). See [Workspace folders](#workspace-folders). |
 
 `symlinks` and `agentRulesFile` must stay inside the repository. Orchestrator rejects absolute paths and paths that traverse outside it. Scratch projects do not support Git-only fields such as `defaultBranch` or `symlinks`.
 
@@ -174,6 +175,25 @@ For interactive edits, use Project Settings. For a complete CLI reference, use `
 
 Orchestrator chooses isolation from the project kind. Git projects use worktrees. Workspace projects materialize the root and its child repositories together. Scratch projects use Orchestrator-managed plain directories. There are no `workspace: clone` or `runtime: process` settings in the current configuration.
 
+### Workspace folders
+
+A workspace project copies its folders that are not Git repositories (assets) into every session workspace. Open **Project Settings → Scripts → Workspace folders** to choose what is left out of that copy and how links are handled, or set `workspaceAssets`:
+
+```json
+{
+  "workspaceAssets": {
+    "exclude": [".venv", "node_modules", "data/raw"],
+    "absoluteLinks": "skip"
+  }
+}
+```
+
+- `exclude` lists glob patterns. A pattern without a slash matches a folder or file name at any depth (`node_modules` also leaves out `web/app/node_modules`). A pattern with a slash matches a path from the workspace root (`data/raw`). Patterns must be relative, must not contain `..`, and are limited to 100 patterns of up to 200 characters.
+- When `workspaceAssets` or its `exclude` is missing or `null`, Orchestrator uses its default list: `.venv`, `venv`, `node_modules`, `__pycache__`, `.cache`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.next`, `.turbo`, and `.parcel-cache`. An empty list (`[]`) copies everything. Project Settings saves a list only after you edit it, so a project on the defaults follows later changes to them; **Restore defaults** removes the saved list.
+- `absoluteLinks` decides what happens to a symbolic link with an absolute target or one that resolves outside the workspace root, such as a virtual environment's `bin/python`. `skip` (the default) leaves the link out of the session workspace; the session still starts and the daemon log lists the skipped links. `keep` recreates the link pointing where the original points, as an absolute path. Links whose final target passes through `.git` or `.ao`, or lies inside Orchestrator's managed worktrees, are never created. Relative links that stay inside the workspace are copied as they are.
+
+To use an excluded folder in sessions exactly as it is in the original workspace, add it to `symlinks` instead. The CLI's project-config mirror does not know `workspaceAssets`, so `ao project set-config` drops it; edit it in Project Settings or through the daemon API.
+
 For work without a project, start a standalone worker:
 
 ```bash
@@ -215,6 +235,12 @@ Keep the harness installed and signed in. Recovery may restore the session, work
 **The agent starts without environment variables.** Add `.env` or the relevant tool configuration directory to `symlinks`. Orchestrator does not copy secrets into worktrees by default.
 
 **Setup fails before the agent starts.** Check `postCreate`. A failing command stops the session before the agent launches.
+
+**A session fails because git-lfs is missing.** When the commit a new session checks out has `filter=lfs` in a `.gitattributes` file and git-lfs is not installed, Orchestrator stops before it creates the worktree and names the repository. Install [Git LFS](https://git-lfs.com), run `git lfs install`, then start the session again. Adding the project warns about such repositories but does not block the import. Restoring an existing session does not check.
+
+**Hooks show up as untracked files in a new worktree.** When `core.hooksPath` points to an untracked folder inside the repository (Husky's `.husky/_`), Orchestrator creates that folder in each new worktree with a `.gitignore` of `*`, so hooks written there (for example by git-lfs) stay out of `git status`. It does not change the original repository's config or `.git/info/exclude`.
+
+**A workspace session fails while copying folders.** The error names the folder. Leave it out under **Workspace folders**, or remove the file that cannot be copied.
 
 **Two projects have confusing session names.** Set `sessionPrefix` in Project Settings or typed config. Do not include path separators or traversal components.
 

@@ -2004,7 +2004,7 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 			BaseRef:    baseRefs[filepath.Clean(repoPath)],
 		})
 	}
-	info, err := workspaceProject.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{
+	projectCfg := ports.WorkspaceProjectConfig{
 		ProjectID:     cfg.ProjectID,
 		SessionID:     id,
 		Kind:          cfg.Kind,
@@ -2018,7 +2018,10 @@ func (m *Manager) createSessionWorkspace(ctx context.Context, project domain.Pro
 		Assets:        assets,
 
 		ReuseExistingBranch: cfg.ReuseExistingBranch, // LADO #60
-	})
+	}
+	ladoApplyWorkspaceAssets(&projectCfg, project) // LADO #22
+	info, err := workspaceProject.CreateWorkspaceProject(ctx, projectCfg)
+	m.ladoWarnSkippedAssetLinks(id, info) // LADO #22
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
 	}
