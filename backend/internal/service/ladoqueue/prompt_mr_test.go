@@ -63,7 +63,7 @@ func wantAll(t *testing.T, name, prompt string, want, absent []string) {
 // options against the base branch the dispatch resolved (#20).
 func TestSpawnConfigTellsAGitLabWorkerHowToOpenTheMergeRequest(t *testing.T) {
 	agent := ladopolicy.SnapshotAgent{Harness: "claude-code"}
-	cfg := spawnConfig(gitlabTask(t), domain.LadoQueueEntry{ID: "entry-1"}, mrRunInput(mrPlanText), agent, "develop", nil)
+	cfg := spawnConfig(gitlabTask(t), domain.LadoQueueEntry{ID: "entry-1"}, mrRunInput(mrPlanText), agent, "develop", false, nil)
 	wantAll(t, "worker", cfg.Prompt, append([]string{
 		"`git push -o merge_request.create -o merge_request.target=develop -o merge_request.title=\"<title>\" -o merge_request.description=\"Closes #7\" origin HEAD`",
 	}, mrGuidance...), []string{"commit message rule", "gh` is not installed"})
@@ -74,7 +74,7 @@ func TestSpawnConfigTellsAGitLabWorkerHowToOpenTheMergeRequest(t *testing.T) {
 	}
 
 	// Without a base branch the target option is left out.
-	prompt := workerPrompt(gitlabTask(t), mrRunInput(mrPlanText), "", nil)
+	prompt := workerPrompt(gitlabTask(t), mrRunInput(mrPlanText), "", false, nil)
 	wantAll(t, "no base", prompt, []string{"`git push -o merge_request.create -o merge_request.title="}, []string{"merge_request.target="})
 }
 
@@ -100,7 +100,7 @@ func TestWorkerPromptOfAGitHubTaskHasNoMergeRequestOptions(t *testing.T) {
 	want := []string{"If `gh` is not installed or not logged in, push the branch you work on and run " +
 		"`ao report --needs-input --note \"<branch> pushed; gh unavailable, please open the pull request\"`"}
 	for name, prompt := range map[string]string{
-		"worker":      workerPrompt(task, in, "main", nil),
+		"worker":      workerPrompt(task, in, "main", false, nil),
 		"integration": integrationPrompt(task, in, nil, run, []domain.LadoTaskPart{part}, nil),
 	} {
 		wantAll(t, name, prompt, want, []string{"merge_request.", "glab"})
@@ -111,7 +111,7 @@ func TestWorkerPromptOfAGitHubTaskHasNoMergeRequestOptions(t *testing.T) {
 // it leaves the target out, and names the issue in full so every repository's
 // merge request links it.
 func TestWorkerPromptInSeveralGitLabReposLeavesTheMergeRequestTargetOut(t *testing.T) {
-	prompt := workerPrompt(gitlabTask(t), mrRunInput(mrMultiRepoPlanText), "develop", nil)
+	prompt := workerPrompt(gitlabTask(t), mrRunInput(mrMultiRepoPlanText), "develop", false, nil)
 	wantAll(t, "multi-repo worker", prompt, append([]string{
 		"`back/`, then `front/`",
 		"-o merge_request.description=\"Closes group/proj#7\" origin HEAD`",

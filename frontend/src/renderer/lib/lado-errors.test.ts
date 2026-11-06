@@ -170,6 +170,8 @@ const reasons = [
 	"attempts_exhausted",
 	"timed_out",
 	"ended_without_pr",
+	// The worker reported a PR its session does not track (#71).
+	"reported_pr_untracked",
 	"slot_global",
 	"slot_project",
 	"memory_tight",
@@ -331,6 +333,8 @@ describe("LADO queue errors and reasons", () => {
 		expect(ladoReasonText(ko, "account_limited")).toBe("계정 사용 한도가 풀릴 때까지 대기");
 		expect(ladoReasonText(en, "pr_repo_not_in_workspace")).toBe("The PR is open in a repository outside this workspace");
 		expect(ladoReasonText(ko, "pr_repo_not_in_workspace")).toBe("PR이 이 워크스페이스 밖의 저장소에 열려 있음");
+		expect(ladoReasonText(ko, "reported_pr_untracked")).toBe("보고된 PR/MR 이 추적되지 않음");
+		expect(ladoReasonText(en, "reported_pr_untracked")).toBe("The reported pull request is not tracked");
 		// A plan worker request waits for the same two holds.
 		expect(ladoPlanWaitingText(ko, "account_limited")).toBe("계정이 사용 한도에 걸려 있습니다");
 		expect(ladoPlanWaitingText(en, "agent_unavailable")).toBe("The agent cannot start");

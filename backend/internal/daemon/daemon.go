@@ -691,7 +691,7 @@ func Run() error {
 	// tasks track their issues until shutdown (docs/LJY-PRD/TDD.md §5.1).
 	lado := wireLadoWork(ctx, cfg, store, projectSvc, ladoWorkDeps{sender: sessMgr, artifacts: lcStack.ArtifactVersions, sessions: sessionSvc, branches: sessMgr, memory: memoryReader,
 		setup: ladoSetupDeps{folders: ladoFolders, sessions: sessMgr, agents: agents, knowledge: ladoKnowledge}, reviews: reviewSvc, ladoModes: ladoProjects,
-		accounts: agentAccountSvc, preflight: agentSvc}, log)
+		accounts: agentAccountSvc, preflight: agentSvc, claims: sessionSvc}, log)
 	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup, ladoVerify := lado.connections, lado.tasks, lado.rules, lado.queue, lado.setup, lado.verify
 	ladoTasksDone := ladoTasks.Start(ctx)
 	ladoSetupDone := startLadoSetup(ctx, ladoSetup, log)

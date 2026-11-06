@@ -82,6 +82,10 @@ type ladoWorkDeps struct {
 	// preflight checks that an agent can start before LADO starts a worker
 	// on it (issue #42): AO's agent service.
 	preflight ladoqueue.Preflight
+	// claims attaches the PRs workers reported to their sessions (issue
+	// #71): AO's session service. Without it the verification loop attaches
+	// none.
+	claims ladoPRClaims
 }
 
 // ladoMessageSender is AO's session manager.

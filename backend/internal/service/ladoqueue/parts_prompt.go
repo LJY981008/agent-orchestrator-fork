@@ -178,6 +178,7 @@ func integrationPrompt(task domain.LadoTask, in ladotask.RunInput, checks []doma
 		b.WriteString(changeRequestParagraph(task, changeRequest{targetPerRepo: true, refspec: refspec, multiRepo: true}))
 	} else {
 		fmt.Fprintf(&b, "Run the plan's checks on the whole result, push `%s` and open the task's pull request against the plan's base_ref. Link the issue in its description%s.\n\n", run.Branch, example)
+		b.WriteString(sessionBranchParagraph(sessionBranch{name: run.Branch}))
 		b.WriteString(changeRequestParagraph(task, changeRequest{target: run.BaseBranch, refspec: refspec}))
 	}
 	b.WriteString("\n")
@@ -191,7 +192,8 @@ func integrationPrompt(task domain.LadoTask, in ladotask.RunInput, checks []doma
 // integrationPRs asks the integration worker of a run in several
 // repositories (#64) for one pull request in each repository the parts
 // changed, in the plan's order, which is the order they merge in, and for
-// none in a repository they did not change.
+// none in a repository they did not change, all from the integration branch
+// (#71).
 func integrationPRs(run domain.LadoPartRun, repos []domain.LadoPartRunRepo, example string) string {
 	var changed, unchanged []string
 	for _, repo := range repos {
@@ -219,6 +221,7 @@ func integrationPRs(run domain.LadoPartRun, repos []domain.LadoPartRunRepo, exam
 		fmt.Fprintf(&b, "Open no pull request in %s, which the parts did not change, unless your own fixes change it; then open its pull request in the plan's order too. ", codeList(unchanged))
 	}
 	fmt.Fprintf(&b, "Link the issue in each description%s. LADO verifies each pull request, and the developer approves them together; open every pull request before you report done.\n\n", example)
+	b.WriteString(sessionBranchParagraph(sessionBranch{name: run.Branch, multiRepo: true}))
 	return b.String()
 }
 

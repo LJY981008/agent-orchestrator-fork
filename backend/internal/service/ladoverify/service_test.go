@@ -933,6 +933,9 @@ type verifyStore struct {
 	// multi holds the sessions' PRs and the PRs executions track (#64,
 	// multirepo_test.go); an execution without them reads as before.
 	multi verifyMulti
+	// reported holds the reads and refusals of reported PRs (#71,
+	// reported_test.go).
+	reported verifyReported
 	// sourceBranches are the PRs' source branches, by URL, and
 	// onApprovalsRead runs after each read of a head's integration
 	// approvals, outside the lock (gitlab_status_test.go).

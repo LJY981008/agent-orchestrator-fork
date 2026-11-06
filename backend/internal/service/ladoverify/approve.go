@@ -380,7 +380,9 @@ type pendingApproval struct {
 // order, and returns those to record. It refuses a PR head whose approval
 // into its target LADO revoked for its own base (#53), a record other than
 // the one signed, an execution still without a PR in a repository it is
-// expected to open one in (pr_missing) or with an item of a record that
+// expected to open one in (pr_missing), an execution with several PRs or
+// expected repositories whose worker reported a PR LADO still attaches to
+// its session (reported_pr_untracked, #71) or with an item of a record that
 // waits or fails, and acknowledgements other than a record's confirm codes.
 // A head approved already into its target is left out, its approval in its
 // result; when every head is, the approval is refused.
@@ -407,6 +409,17 @@ func (s *Service) approvable(ctx context.Context, exec domain.LadoExecution, exe
 	if len(missing) > 0 {
 		reasons = append(reasons, domain.LadoValidatingPRMissing)
 	}
+	// A reported PR LADO still attaches to the session may be one more PR
+	// of the task's (#71); one LADO refused holds nothing.
+	var reported []string
+	if len(exec.PRRepos) > 1 || len(exec.PRs) > 1 {
+		for _, pr := range exec.PendingReportedPRs() {
+			reported = append(reported, pr.URL)
+		}
+	}
+	if len(reported) > 0 {
+		reasons = append(reasons, domain.LadoRunningReportedPRUntracked)
+	}
 	for _, result := range results {
 		if outcome, _ := result.Verification.Overall(); outcome == domain.LadoVerifyWait || outcome == domain.LadoVerifyFail {
 			for _, reason := range notReadyReasons(result.Verification.Items) {
@@ -421,9 +434,12 @@ func (s *Service) approvable(ctx context.Context, exec domain.LadoExecution, exe
 		if len(missing) > 0 {
 			details["missingRepos"] = missing
 		}
+		if len(reported) > 0 {
+			details["reportedPrUrls"] = reported
+		}
 		message := "LADO still verifies this head, or some of its checks fail. Approve its integration once they pass."
-		if len(results) > 1 || len(missing) > 0 {
-			message = "LADO still verifies the task's pull requests, some of their checks fail, or a pull request the task needs is not open yet. Approve its integration once they pass."
+		if len(results) > 1 || len(missing) > 0 || len(reported) > 0 {
+			message = "LADO still verifies the task's pull requests, some of their checks fail, or a pull request the task needs is not open or tracked yet. Approve its integration once they pass."
 		}
 		return nil, apierr.Conflict("LADO_INTEGRATION_NOT_READY", message, details)
 	}

@@ -3586,6 +3586,7 @@
 	"lado.reason.attempts_exhausted": "3 回試してもワーカーが起動しなかった",
 	"lado.reason.timed_out": "最大実行時間に達して停止した",
 	"lado.reason.ended_without_pr": "ワーカーが PR なしで終了した",
+	"lado.reason.reported_pr_untracked": "報告されたプルリクエストが追跡されていません",
 	"lado.reason.slot_global": "空いている実行枠を待っています",
 	"lado.reason.slot_project": "このプロジェクトの空いている実行枠を待っています",
 	"lado.reason.memory_tight": "メモリが逼迫しているため待っています",

@@ -203,7 +203,8 @@ export function ladoTaskStatus(task: LadoTask, t: TFunction): { label: string; t
  * The card's second line: what a queued task waits for and which attempt
  * starts it, why a task needs the human again or failed, what LADO's
  * verification of its pull request waits for or found, why an approved head
- * has no status yet, or that its work merged without approval. While a new
+ * has no status yet, that a running worker reported a pull request its
+ * session does not track, or that its work merged without approval. While a new
  * plan is on its way, why its plan worker waits or what it does instead, and
  * for a task without a plan, why its plan worker failed. Null when the status
  * line says it all.
@@ -239,9 +240,14 @@ export function ladoTaskReason(task: LadoTask, t: TFunction, locale: string): st
 		case "draft":
 			if (ladoPlanComing(task)) return planComingReason(task, t);
 			return task.plan.worker?.phase === "failed" ? ladoPlanFailureText(t, task.plan.worker.failureCode) || null : null;
-		case "running":
-			// A task split into parts says how many are merged.
-			return task.parts ? t("lado.task.parts", { merged: task.parts.merged, total: task.parts.total }) : null;
+		case "running": {
+			// A task split into parts says how many are merged, and a run says
+			// when its worker reported a pull request its session does not track (#71).
+			const parts: string[] = [];
+			if (task.parts) parts.push(t("lado.task.parts", { merged: task.parts.merged, total: task.parts.total }));
+			if (reason === "reported_pr_untracked") parts.push(ladoReasonText(t, reason));
+			return parts.length > 0 ? parts.join(" · ") : null;
+		}
 		case "validating":
 		case "integrating":
 			return reason ? ladoReasonText(t, reason) : null;

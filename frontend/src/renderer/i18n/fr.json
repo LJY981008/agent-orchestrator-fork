@@ -3638,6 +3638,7 @@
 	"lado.reason.attempts_exhausted": "Le worker n'a pas démarré après 3 tentatives",
 	"lado.reason.timed_out": "Arrêté à la durée maximale d'exécution",
 	"lado.reason.ended_without_pr": "Le worker s'est terminé sans PR",
+	"lado.reason.reported_pr_untracked": "La pull request signalée n’est pas suivie",
 	"lado.reason.slot_global": "En attente d'un créneau d'exécution libre",
 	"lado.reason.slot_project": "En attente d'un créneau d'exécution libre dans ce projet",
 	"lado.reason.memory_tight": "En attente tant que la mémoire est saturée",

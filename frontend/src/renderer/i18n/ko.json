@@ -3586,6 +3586,7 @@
 	"lado.reason.attempts_exhausted": "3번 시도했지만 워커가 시작되지 않음",
 	"lado.reason.timed_out": "최대 실행 시간에 도달해 중지됨",
 	"lado.reason.ended_without_pr": "워커가 PR 없이 끝남",
+	"lado.reason.reported_pr_untracked": "보고된 PR/MR 이 추적되지 않음",
 	"lado.reason.slot_global": "빈 실행 자리를 기다리는 중",
 	"lado.reason.slot_project": "이 프로젝트의 빈 실행 자리를 기다리는 중",
 	"lado.reason.memory_tight": "메모리가 부족해 기다리는 중",
