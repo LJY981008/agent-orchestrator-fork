@@ -60,6 +60,28 @@ const inventory = setupInventory({
 			path: "/work/demo/CLAUDE.md",
 			tracked: true,
 		}),
+		setupEntry({
+			tool: "claude-code",
+			kind: "agent",
+			name: ".claude/agents/review.md",
+			status: "repo_tracked",
+			reason: "repo_tracked",
+			location: "project",
+			projectId: "demo",
+			path: "/work/demo/.claude/agents/review.md",
+			tracked: true,
+		}),
+		setupEntry({
+			tool: "claude-code",
+			kind: "skill",
+			name: ".claude/skills/review/scripts/run.sh",
+			status: "repo_tracked",
+			reason: "repo_tracked",
+			location: "project",
+			projectId: "demo",
+			path: "/work/demo/.claude/skills/review/scripts/run.sh",
+			tracked: true,
+		}),
 		setupEntry({ tool: "codex", kind: "instructions", name: "AGENTS.md", status: "adoptable", path: `${CODEX_HOME}/AGENTS.md`, defaultAction: "move" }),
 		setupEntry({ tool: "codex", kind: "mcp_server", name: "notion", status: "not_adoptable", reason: "literal_credentials", path: `${CODEX_HOME}/config.toml#mcp_servers.notion` }),
 		setupEntry({ tool: "codex", name: "auth.json", status: "never", reason: "credentials", path: `${CODEX_HOME}/auth.json` }),
@@ -70,6 +92,24 @@ const inventory = setupInventory({
 	],
 	projects: [{ id: "demo", name: "demo", path: "/work/demo", error: "" }],
 });
+
+const repoCited =
+	"This project's workers read it in their worktree. In a single-repository project in LADO mode, LADO also lists it for workers as a project expert (AO puts the project's agent rules file into their instructions instead), and plans update it when the work changes what it says.";
+
+/** A file the demo project's repository tracks. */
+function repoEntry(tool: "claude-code" | "codex", kind: string, name: string) {
+	return setupEntry({
+		tool,
+		kind,
+		name,
+		status: "repo_tracked",
+		reason: "repo_tracked",
+		location: "project",
+		projectId: "demo",
+		path: `/work/demo/${name}`,
+		tracked: true,
+	});
+}
 
 function serve(routes: DaemonRoutes = {}) {
 	routeDaemon(apiClient, {
@@ -184,16 +224,72 @@ describe("LocalSetupSection", () => {
 			),
 		).toBeInTheDocument();
 
-		// What LADO leaves alone waits collapsed under each card.
+		// What LADO leaves alone waits collapsed under each card; repository files are not counted there.
 		const others = within(claude).getByRole("button", { name: /^Not managed/ });
 		expect(others).toHaveAttribute("aria-expanded", "false");
-		expect(others).toHaveTextContent("2");
+		expect(others).toHaveTextContent("1");
 		expect(document.querySelector(`[data-path="${CLAUDE_DIR}/.credentials.json"]`)).toBeNull();
 		await user.click(others);
 		expect(within(entryRow(`${CLAUDE_DIR}/.credentials.json`)).getByText("Never adopted · Logins stay where the tools keep them.")).toBeInTheDocument();
+		expect(document.querySelector('[data-path="/work/demo/CLAUDE.md"]')).toBeNull();
+
+		// The files the repository tracks wait in their own group, saying how workers get them.
+		const repo = within(claude).getByRole("button", { name: /^Repository files/ });
+		expect(repo).toHaveAttribute("aria-expanded", "false");
+		expect(repo).toHaveTextContent("3");
+		await user.click(repo);
 		const repoFile = entryRow("/work/demo/CLAUDE.md");
-		expect(within(repoFile).getByText("Repository file")).toBeInTheDocument();
+		expect(within(repoFile).getByText(`Repository file · ${repoCited}`)).toBeInTheDocument();
 		expect(within(repoFile).getByText("demo/CLAUDE.md")).toBeInTheDocument();
+		expect(within(entryRow("/work/demo/.claude/agents/review.md")).getByText(`Repository file · ${repoCited}`)).toBeInTheDocument();
+		// A skill folder's other files are not listed to workers; they read them in the worktree.
+		expect(
+			within(entryRow("/work/demo/.claude/skills/review/scripts/run.sh")).getByText(
+				"Repository file · This project's workers read it in their worktree.",
+			),
+		).toBeInTheDocument();
+	});
+
+	it("shows a tool's card for its repository files alone", async () => {
+		serve({
+			"GET /api/v1/lado/setup/inventory": () => ({
+				data: setupInventory({
+					entries: [
+						setupEntry({ tool: "claude-code", kind: "skill", name: "review", status: "adoptable", path: `${CLAUDE_DIR}/skills/review`, defaultAction: "move" }),
+						repoEntry("codex", "instructions", "AGENTS.md"),
+					],
+					projects: [{ id: "demo", name: "demo", path: "/work/demo", error: "" }],
+				}),
+			}),
+		});
+		renderSection();
+
+		await waitFor(() => toolCard("codex"));
+		expect(within(toolCard("codex")).getByRole("button", { name: /^Repository files/ })).toHaveTextContent("Repository files1");
+		expect(within(toolCard("codex")).queryByRole("button", { name: /^Not managed/ })).not.toBeInTheDocument();
+	});
+
+	it("shows the repository files instead of saying nothing was found", async () => {
+		const user = userEvent.setup();
+		serve({
+			"GET /api/v1/lado/setup/inventory": () => ({
+				data: setupInventory({
+					entries: [
+						repoEntry("claude-code", "instructions", "CLAUDE.md"),
+						// The inventory calls it a skill file; the daemon lists it as an instruction file by its name.
+						repoEntry("claude-code", "skill", ".claude/skills/review/AGENTS.md"),
+					],
+					projects: [{ id: "demo", name: "demo", path: "/work/demo", error: "" }],
+				}),
+			}),
+		});
+		renderSection();
+
+		await waitFor(() => toolCard("claude-code"));
+		expect(screen.queryByText("No Claude Code or Codex setup was found on this computer.")).not.toBeInTheDocument();
+		await user.click(within(toolCard("claude-code")).getByRole("button", { name: /^Repository files/ }));
+		expect(within(entryRow("/work/demo/CLAUDE.md")).getByText(`Repository file · ${repoCited}`)).toBeInTheDocument();
+		expect(within(entryRow("/work/demo/.claude/skills/review/AGENTS.md")).getByText(`Repository file · ${repoCited}`)).toBeInTheDocument();
 	});
 
 	it("turns a managed item off at Global after a dry run", async () => {
