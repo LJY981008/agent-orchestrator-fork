@@ -2,8 +2,9 @@ package daemon
 
 // LADO fork: LADO's clients for a repository's tracker (docs/LJY-PRD/TDD.md
 // §5.1). They are AO's tracker adapters built per host, so LADO reaches a host
-// connected after startup, including a self-managed GitLab that AO's own
-// allowlist only learns on the next daemon start.
+// connected after startup, including a self-managed GitLab. Their GitLab
+// host tokens are the environment's (AO_GITLAB_HOST_TOKENS) only; a stored
+// token is read on every call, so a replaced one is used at once.
 
 import (
 	"context"

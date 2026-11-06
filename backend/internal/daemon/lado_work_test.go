@@ -40,12 +40,23 @@ func (m *memGitHubTokens) DeletePAT(context.Context) error {
 
 func (m *memGitHubTokens) GetToken(context.Context) (string, error) { return m.token, nil }
 
-// useLadoStoredTokens points the token chains at creds for one test.
+// useLadoStoredTokens points the token chains at creds for one test, with no
+// GitLab host hub. Both globals are restored after the test, so a hub that
+// wireLadoWork or installLadoCredentials sets does not leak into the next.
 func useLadoStoredTokens(t *testing.T, creds *ladoconnect.Credentials) {
 	t.Helper()
-	previous := ladoStoredTokens
-	ladoStoredTokens = creds
-	t.Cleanup(func() { ladoStoredTokens = previous })
+	previous, previousHub := ladoStoredTokens, ladoGitLabHub
+	ladoStoredTokens, ladoGitLabHub = creds, nil
+	t.Cleanup(func() { ladoStoredTokens, ladoGitLabHub = previous, previousHub })
+}
+
+// useLadoGitLabHub points the token chains at creds and installs a GitLab
+// host hub on base and creds for one test.
+func useLadoGitLabHub(t *testing.T, base config.GitLabConfig, creds *ladoconnect.Credentials) *ladoGitLabHosts {
+	t.Helper()
+	useLadoStoredTokens(t, creds)
+	ladoGitLabHub = newLadoGitLabHosts(base, creds, slog.New(slog.DiscardHandler))
+	return ladoGitLabHub
 }
 
 func newTestLadoCredentials(t *testing.T) (*ladoconnect.Credentials, *memGitHubTokens) {
@@ -123,7 +134,7 @@ func TestLadoStoredTokensComeAfterTheEnvOverrides(t *testing.T) {
 	}
 }
 
-func TestLadoGitLabConfigAddsStoredSelfManagedHosts(t *testing.T) {
+func TestLadoGitLabHubSnapshotAddsStoredSelfManagedHosts(t *testing.T) {
 	ctx := context.Background()
 	creds, _ := newTestLadoCredentials(t)
 	for host, token := range map[string]string{"gitlab.example.com": "stored-a", "gitlab.other.com": "stored-b", "gitlab.com": "stored-com"} {
@@ -135,14 +146,27 @@ func TestLadoGitLabConfigAddsStoredSelfManagedHosts(t *testing.T) {
 		AllowedHosts: []string{"GitLab.Example.com"},
 		HostTokens:   map[string]string{"gitlab.example.com": "env-a"},
 	}
+	hub := useLadoGitLabHub(t, base, creds)
 
-	merged := ladoGitLabConfig(ctx, base, creds, slog.New(slog.DiscardHandler))
-
-	if strings.Join(merged.AllowedHosts, ",") != "GitLab.Example.com,gitlab.other.com" {
-		t.Fatalf("allowed hosts = %v, want the stored self-managed host added once", merged.AllowedHosts)
+	set, err := hub.snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(merged.HostTokens) != 2 || merged.HostTokens["gitlab.example.com"] != "env-a" || merged.HostTokens["gitlab.other.com"] != "stored-b" {
-		t.Fatalf("host tokens = %v, want the env token kept and the stored one added", merged.HostTokens)
+
+	if strings.Join(set.allowed, ",") != "GitLab.Example.com,gitlab.other.com" {
+		t.Fatalf("allowed hosts = %v, want the stored self-managed host added once", set.allowed)
+	}
+	if len(set.tokens) != 2 {
+		t.Fatalf("host tokens = %v, want the env one and the stored one", set.tokens)
+	}
+	if token, err := set.tokens["gitlab.example.com"].Token(ctx); err != nil || token != "env-a" {
+		t.Fatalf("env host token = %q, %v; want the env token to win", token, err)
+	}
+	if _, ok := set.tokens["gitlab.other.com"].(ladoGitLabToken); !ok {
+		t.Fatalf("stored host token source = %T, want one that reads the store on every call", set.tokens["gitlab.other.com"])
+	}
+	if token, err := set.tokens["gitlab.other.com"].Token(ctx); err != nil || token != "stored-b" {
+		t.Fatalf("stored host token = %q, %v", token, err)
 	}
 	if len(base.AllowedHosts) != 1 || len(base.HostTokens) != 1 {
 		t.Fatalf("base config changed: %+v", base)
