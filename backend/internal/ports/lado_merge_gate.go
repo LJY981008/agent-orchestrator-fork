@@ -18,3 +18,15 @@ type LadoMergeGate interface {
 	// A refusal is an *apierr.Error, which the merge route renders as it is.
 	AuthorizeMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error
 }
+
+// LadoCIWaiver is an optional interface of a LadoMergeGate (#21). AO's merge
+// asks it only when the one thing that stops a merge is a GitLab head no CI
+// pipeline runs for (domain.MergeBlockerCINoPipeline).
+type LadoCIWaiver interface {
+	// WaivesMissingPipeline reports whether LADO lets pr merge at headSHA
+	// although no pipeline runs for it: pr is a GitLab PR of LADO whose
+	// integration the developer approved at headSHA into pr.TargetBranch,
+	// and the approval is not revoked. A read that fails returns its error
+	// and the merge does not go on.
+	WaivesMissingPipeline(ctx context.Context, pr domain.PullRequest, headSHA string) (bool, error)
+}

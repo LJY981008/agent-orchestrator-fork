@@ -45,15 +45,11 @@ var _ ports.LadoMergeGate = (*Service)(nil)
 // merged; until then the gate refuses with LADO_INTEGRATION_MERGE_ORDER.
 func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error {
 	head := strings.ToLower(strings.TrimSpace(headSHA))
-	_, isExecution, err := s.deps.Store.LadoExecution(ctx, pr.SessionID)
+	isLado, approvals, err := s.ladoPRApprovals(ctx, pr, head)
 	if err != nil {
 		return s.mergeGateFailed(pr, head, err)
 	}
-	naming, err := s.deps.Store.LadoSessionsNamingPR(ctx, pr.URL)
-	if err != nil {
-		return s.mergeGateFailed(pr, head, err)
-	}
-	if !isExecution && len(naming) == 0 {
+	if !isLado {
 		inLado, err := s.inLadoProject(ctx, pr.SessionID)
 		switch {
 		case err != nil:
@@ -63,14 +59,6 @@ func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, hea
 		}
 		return nil
 	}
-	approvals, err := s.deps.Store.ListLadoIntegrationApprovalsForPR(ctx, pr.URL, head)
-	if err != nil {
-		return s.mergeGateFailed(pr, head, err)
-	}
-	// Only the approvals of the executions the PR belongs to count.
-	approvals = slices.DeleteFunc(approvals, func(a domain.LadoIntegrationApproval) bool {
-		return a.ExecutionSessionID != pr.SessionID && !slices.Contains(naming, a.ExecutionSessionID)
-	})
 	if approval, ok := domain.LadoApprovalFor(approvals, pr.TargetBranch); ok {
 		if err := s.approvedBaseHolds(ctx, pr, head, approval); err != nil {
 			return err
@@ -91,6 +79,34 @@ func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, hea
 		return targetChanged(pr, head, approvals[len(approvals)-1].TargetBranch)
 	}
 	return approvalRequired(pr, head)
+}
+
+// ladoPRApprovals reports whether pr is LADO's, its session an execution or
+// any LADO record naming its URL, and, when it is, the integration
+// approvals of pr at head that count for it: those of the executions it
+// belongs to. The merge gate and the missing pipeline waiver (ciwaiver.go)
+// share it so they agree on which PR is LADO's. head is lower case.
+func (s *Service) ladoPRApprovals(ctx context.Context, pr domain.PullRequest, head string) (bool, []domain.LadoIntegrationApproval, error) {
+	_, isExecution, err := s.deps.Store.LadoExecution(ctx, pr.SessionID)
+	if err != nil {
+		return false, nil, err
+	}
+	naming, err := s.deps.Store.LadoSessionsNamingPR(ctx, pr.URL)
+	if err != nil {
+		return false, nil, err
+	}
+	if !isExecution && len(naming) == 0 {
+		return false, nil, nil
+	}
+	approvals, err := s.deps.Store.ListLadoIntegrationApprovalsForPR(ctx, pr.URL, head)
+	if err != nil {
+		return true, nil, err
+	}
+	// Only the approvals of the executions the PR belongs to count.
+	approvals = slices.DeleteFunc(approvals, func(a domain.LadoIntegrationApproval) bool {
+		return a.ExecutionSessionID != pr.SessionID && !slices.Contains(naming, a.ExecutionSessionID)
+	})
+	return true, approvals, nil
 }
 
 // approvedBaseHolds checks that the approval still holds for the remote
