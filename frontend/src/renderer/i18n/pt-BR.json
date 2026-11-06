@@ -3368,6 +3368,8 @@
 	"lado.error.workspaceReservedName": "Um repositório com esse nome não pode ir para um workspace.",
 	"lado.lane.queued": "Na fila",
 	"lado.lane.queuedEmpty": "As tarefas aprovadas esperam aqui até o LADO iniciar o trabalho.",
+	"lado.lane.planReview": "Revisão do plano",
+	"lado.lane.planReviewEmpty": "As tarefas esperam aqui desde o pedido do plano até você aprová-lo.",
 	"lado.task.open": "Abrir a tarefa {{issue}}",
 	"lado.task.state.planRequested": "Plano solicitado",
 	"lado.task.state.planRequestFailed": "Falha ao solicitar o plano",

@@ -123,6 +123,9 @@ test("an empty lane says where tasks come from", async () => {
 
 	expect(await screen.findByText("Create an issue from New task, or import open issues.")).toBeInTheDocument();
 	expect(within(screen.getByTestId("lado-plan-lane")).getByText("0")).toBeInTheDocument();
+	const review = screen.getByTestId("lado-plan-review-lane");
+	expect(within(review).getByText("0")).toBeInTheDocument();
+	expect(within(review).getByText("Tasks wait here from the plan request until you approve the plan.")).toBeInTheDocument();
 	expect(within(screen.getByTestId("lado-queued-lane")).getByText("Approved tasks wait here until LADO starts their work.")).toBeInTheDocument();
 });
 
@@ -154,7 +157,7 @@ test("approved tasks wait in the Queued lane", async () => {
 	expect(within(screen.getByTestId("lado-plan-lane")).queryByText("Ship it")).not.toBeInTheDocument();
 });
 
-test("shows rules that need review and blocked tasks in the Plan lane", async () => {
+test("shows rules that need review and blocked tasks in the Plan review lane", async () => {
 	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
 		{ ...task, id: "lado-task-review", state: "review_required", plan: approvedPlan, issue: { ...task.issue, title: "Rules changed" } },
@@ -163,7 +166,7 @@ test("shows rules that need review and blocked tasks in the Plan lane", async ()
 	]);
 	renderLane();
 
-	const lane = await screen.findByTestId("lado-plan-lane");
+	const lane = await screen.findByTestId("lado-plan-review-lane");
 	await within(lane).findByText("Rules changed");
 	for (const [title, label] of [["Rules changed", "Rules need review"], ["Blocked run", "Blocked"]]) {
 		const card = within(lane).getByText(title).closest("[data-testid='lado-task-card']") as HTMLElement;
@@ -176,7 +179,7 @@ test("shows rules that need review and blocked tasks in the Plan lane", async ()
 	expect(within(queued).getAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"))).toEqual(["lado-task-approved"]);
 });
 
-test("a starting task stays in Queued in the working color, and a failed run comes back to Plan", async () => {
+test("a starting task stays in Queued in the working color, and a failed run comes back to Plan review", async () => {
 	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
 		{ ...task, id: "lado-task-starting", state: "dispatching", plan: approvedPlan, queue: entry({ state: "dispatching", attempts: 2 }), issue: { ...task.issue, title: "Starting" } },
@@ -199,8 +202,8 @@ test("a starting task stays in Queued in the working color, and a failed run com
 	expect(within(starting).getByTestId("lado-task-state").previousElementSibling).toHaveClass("bg-[var(--color-status-working)]");
 	expect(within(starting).getByTestId("lado-task-reason")).toHaveTextContent("Attempt 2 of 3");
 
-	const plan = screen.getByTestId("lado-plan-lane");
-	const failed = within(plan).getByText("Timed out").closest("[data-testid='lado-task-card']") as HTMLElement;
+	const review = screen.getByTestId("lado-plan-review-lane");
+	const failed = within(review).getByText("Timed out").closest("[data-testid='lado-task-card']") as HTMLElement;
 	expect(within(failed).getByTestId("lado-task-state")).toHaveTextContent("Failed");
 	expect(within(failed).getByTestId("lado-task-state").previousElementSibling).toHaveClass("bg-[var(--color-status-needs-you)]");
 	expect(within(failed).getByTestId("lado-task-reason")).toHaveTextContent("Stopped at the maximum run time");
@@ -315,7 +318,7 @@ test("the second line says why an approval needs the human again", async () => {
 	})));
 	renderLane();
 
-	const lane = await screen.findByTestId("lado-plan-lane");
+	const lane = await screen.findByTestId("lado-plan-review-lane");
 	await within(lane).findByText("rules");
 	for (const [name, , , label, line] of cases) {
 		const card = within(lane).getByText(name).closest("[data-testid='lado-task-card']") as HTMLElement;
@@ -361,7 +364,7 @@ test("shows plan requested for a task whose rules need review", async () => {
 	]);
 	renderLane();
 
-	const lane = await screen.findByTestId("lado-plan-lane");
+	const lane = await screen.findByTestId("lado-plan-review-lane");
 	await within(lane).findByText("Rules changed");
 	for (const title of ["Rules changed", "Blocked run"]) {
 		const card = within(lane).getByText(title).closest("[data-testid='lado-task-card']") as HTMLElement;
@@ -369,6 +372,102 @@ test("shows plan requested for a task whose rules need review", async () => {
 		expect(state, title).toHaveTextContent("Plan requested");
 		expect(state.previousElementSibling, title).toHaveClass("bg-[var(--color-status-idle)]");
 	}
+});
+
+/** A task titled and identified by its id, created at 09:00 unless said otherwise. */
+function laneTask(id: string, state: lado.LadoTask["state"], plan: lado.LadoTask["plan"], fields: Partial<lado.LadoTask> = {}): lado.LadoTask {
+	return { ...task, id, state, plan, ...fields, issue: { ...task.issue, title: id, ...fields.issue } };
+}
+
+const laneIds = (testId: string) => within(screen.getByTestId(testId)).queryAllByTestId("lado-task-card").map((card) => card.getAttribute("data-task-id"));
+const laneCount = (testId: string) => within(screen.getByTestId(testId)).getByText(/^\d+$/, { selector: "span.text-passive" }).textContent;
+
+// Issue #30: Plan holds the drafts, Plan review the tasks from the plan
+// request until the approval, Queued the approved ones.
+test("each lane holds its tasks: drafts in Plan, plans on their way or to review in Plan review, approvals in Queued", async () => {
+	const approvedPlan = { requestPending: false, latest: revision, approvedRevisionId: revision.id };
+	const worker = (phase: lado.LadoPlanWorkerPhase): NonNullable<lado.LadoTask["plan"]["worker"]> => ({ requestId: `r-${phase}`, phase });
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		// Plan: no request, a request that failed, and an issue closed before any run.
+		laneTask("plan-draft", "draft", { requestPending: false }),
+		laneTask("plan-request-error", "draft", { requestPending: false, requestError: "the orchestrator has ended" }),
+		laneTask("plan-worker-failed", "draft", { requestPending: false, worker: { ...worker("failed"), failureCode: "plan_worker_timed_out" } }),
+		laneTask("plan-closed", "closed_unmerged", { requestPending: true }, { createdAt: "2026-10-19T10:00:00Z", issue: { ...task.issue, state: "done" } }),
+		// Plan review: a plan on its way, a plan to review, and approvals that need the human again.
+		laneTask("review-requested", "draft", { requestPending: true, requestedAt: "2026-10-19T09:10:00Z" }),
+		laneTask("review-waiting", "draft", { requestPending: true, worker: { ...worker("waiting"), waitingReason: "plan_worker_capacity" } }),
+		laneTask("review-designing", "draft", { requestPending: true, worker: { ...worker("designing"), designerSessionId: "demo-plan-1" } }),
+		laneTask("review-critiquing", "draft", { requestPending: true, worker: { ...worker("critiquing"), review: "running" } }),
+		laneTask("review-ready", "planned", { requestPending: false, latest: revision }),
+		laneTask("review-invalid", "planned", { requestPending: false, latest: { ...revision, valid: false } }),
+		laneTask("review-fixing", "planned", { requestPending: false, latest: { ...revision, valid: false }, worker: worker("fixing") }),
+		laneTask("review-rules", "review_required", approvedPlan, { stateReason: "rules_changed" }),
+		laneTask("review-blocked", "blocked", approvedPlan, { stateReason: "base_ref_mismatch" }),
+		laneTask("review-blocked-revising", "blocked", { ...approvedPlan, requestPending: true, worker: worker("revising") }, { stateReason: "base_ref_mismatch" }),
+		laneTask("review-failed", "failed", approvedPlan, { stateReason: "attempts_exhausted" }),
+		// Queued: approvals LADO starts next, and a task running its parts.
+		laneTask("queued-queued", "queued", approvedPlan, { queue: entry({ enqueuedAt: "2026-10-19T09:30:00Z" }) }),
+		laneTask("queued-dispatching", "dispatching", approvedPlan, { queue: entry({ state: "dispatching", enqueuedAt: "2026-10-19T09:31:00Z" }) }),
+		laneTask("queued-approved", "approved", approvedPlan, { queue: entry({ enqueuedAt: "2026-10-19T09:32:00Z" }) }),
+		laneTask("queued-parts", "running", approvedPlan, { parts: { total: 3, merged: 1 }, queue: entry({ state: "running_parts", enqueuedAt: "2026-10-19T09:33:00Z" }) }),
+	]);
+	renderLane();
+
+	await screen.findByText("plan-draft");
+	expect(new Set(laneIds("lado-plan-lane"))).toEqual(new Set(["plan-draft", "plan-request-error", "plan-worker-failed", "plan-closed"]));
+	expect(laneIds("lado-plan-lane").at(-1)).toBe("plan-closed");
+	expect(laneCount("lado-plan-lane")).toBe("4");
+	for (const id of ["plan-request-error", "plan-worker-failed"]) {
+		expect(within(screen.getByText(id).closest("[data-testid='lado-task-card']") as HTMLElement).getByTestId("lado-task-state"), id).toHaveTextContent("Plan request failed");
+	}
+	expect(new Set(laneIds("lado-plan-review-lane"))).toEqual(new Set([
+		"review-requested",
+		"review-waiting",
+		"review-designing",
+		"review-critiquing",
+		"review-ready",
+		"review-invalid",
+		"review-fixing",
+		"review-rules",
+		"review-blocked",
+		"review-blocked-revising",
+		"review-failed",
+	]));
+	expect(laneCount("lado-plan-review-lane")).toBe("11");
+	expect(laneIds("lado-queued-lane")).toEqual(["queued-queued", "queued-dispatching", "queued-approved", "queued-parts"]);
+	expect(laneCount("lado-queued-lane")).toBe("4");
+});
+
+// The plans ready for approval first, then the oldest request first; a task
+// with no request time counts from its creation.
+test("the Plan review lane lists plans ready for review first, then the oldest request first", async () => {
+	const at = (time: string) => `2026-10-19T${time}:00Z`;
+	const late = { createdAt: at("12:00") };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		laneTask("draft-0830", "draft", { requestPending: true, requestedAt: at("08:30") }, late),
+		laneTask("ready-10", "planned", { requestPending: false, requestedAt: at("10:00"), latest: revision }, late),
+		laneTask("invalid-0845", "planned", { requestPending: false, requestedAt: at("08:45"), latest: { ...revision, valid: false } }, late),
+		laneTask("failed-08", "failed", { requestPending: false, requestedAt: at("08:00"), latest: revision, approvedRevisionId: revision.id }, late),
+		laneTask("fixing-06", "planned", { requestPending: false, requestedAt: at("06:00"), latest: { ...revision, valid: false }, worker: { requestId: "r1", phase: "fixing" } }, late),
+		laneTask("rules-07", "review_required", { requestPending: false, latest: revision, approvedRevisionId: revision.id }, { createdAt: at("07:00") }),
+		laneTask("ready-09", "planned", { requestPending: false, requestedAt: "2026-10-19T09:00:00.5Z", latest: revision }, late),
+	]);
+	renderLane();
+
+	await screen.findByText("ready-09");
+	expect(laneIds("lado-plan-review-lane")).toEqual(["ready-09", "ready-10", "fixing-06", "rules-07", "failed-08", "draft-0830", "invalid-0845"]);
+	for (const id of ["ready-09", "ready-10"]) {
+		expect(within(screen.getByText(id).closest("[data-testid='lado-task-card']") as HTMLElement).getByTestId("lado-task-state"), id).toHaveTextContent("Plan ready for review");
+	}
+	expect(within(screen.getByText("fixing-06").closest("[data-testid='lado-task-card']") as HTMLElement).getByTestId("lado-task-state")).toHaveTextContent("Plan worker writing");
+});
+
+test("the lanes read Plan, Plan review, then Queued", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([]);
+	renderLane();
+
+	await screen.findByText("Create an issue from New task, or import open issues.");
+	expect(screen.getAllByRole("region").map((lane) => lane.getAttribute("aria-label"))).toEqual(["Plan lane", "Plan review lane", "Queued lane"]);
 });
 
 test("the status line follows the task's plans", async () => {
@@ -421,9 +520,11 @@ test("a plan worker's card says what it does and links the session that works no
 	]);
 	renderLane();
 
-	const lane = await screen.findByTestId("lado-plan-lane");
+	const lane = await screen.findByTestId("lado-plan-review-lane");
 	await within(lane).findByText("Add login");
-	const [designing, critiquing, waiting] = within(lane).getAllByTestId("lado-task-card");
+	// The lane orders cards by their plan request, so they are found by id.
+	const card = (id: string) => within(lane).getAllByTestId("lado-task-card").find((item) => item.getAttribute("data-task-id") === id) as HTMLElement;
+	const [designing, critiquing, waiting] = [card("lado-task-1"), card("lado-task-2"), card("lado-task-3")];
 	expect(within(designing).getByTestId("lado-task-state")).toHaveTextContent("Plan worker writing");
 	expect(within(designing).getByTestId("lado-task-reason")).toHaveTextContent("Designing the plan");
 	expect(within(critiquing).getByTestId("lado-task-reason")).toHaveTextContent("Reviewing the draft");
