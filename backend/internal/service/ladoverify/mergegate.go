@@ -147,7 +147,9 @@ func (s *Service) approvedBaseHolds(ctx context.Context, pr domain.PullRequest, 
 	if err != nil {
 		return s.mergeGateFailed(pr, head, err)
 	}
-	revoked, err := s.revokeOverlapped(ctx, exec, record)
+	// The PR merges now, so it is open: the gate does not ask its host
+	// whether it merged (#75).
+	revoked, err := s.revokeOverlapped(ctx, exec, record, nil)
 	if err != nil {
 		return s.mergeGateFailed(pr, head, err)
 	}

@@ -42,13 +42,16 @@ var errHeadUnavailable = errors.New("the repository does not have the head, and 
 // lacks it, as an integration approval does.
 // loopFetch fetches the base branch as the loop does, at most every
 // baseFetchEvery per repository, remote and branch, and forceFetch past
-// that, as after a merge into it (#53).
+// that, as after a merge into it (#53). host is the loop's memo of the
+// pass, which a base_overlap fix request asks whether the PR merged (#75);
+// nil asks no host.
 type verifyOptions struct {
 	forceProtection bool
 	startWork       bool
 	fetchBase       bool
 	loopFetch       bool
 	forceFetch      bool
+	host            *hostMerges
 }
 
 // headInputs is what a head's record is computed from.
@@ -208,7 +211,7 @@ func (s *Service) verifyHeadIn(ctx context.Context, exec domain.LadoExecution, o
 		}
 	}
 	if opts.startWork {
-		record.Notified = s.requestFixes(ctx, in, ev, record.Notified)
+		record.Notified = s.requestFixes(ctx, in, ev, record.Notified, opts.host)
 		record.Notified = s.requestPull(ctx, in, record.Notified)
 	}
 	if _, err := s.deps.Store.UpsertLadoVerification(ctx, record); err != nil {
