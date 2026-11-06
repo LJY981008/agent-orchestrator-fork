@@ -600,6 +600,14 @@ type WorkspaceProjectConfig struct {
 	// branch; repos without it create it from their base. It cannot be combined
 	// with FreshBranch.
 	ReuseExistingBranch bool
+
+	// AssetExclude (LADO #22) lists domain.WorkspaceAssetExcluded patterns for
+	// asset paths that are not copied. The caller resolves project defaults;
+	// nil excludes nothing.
+	AssetExclude []string
+	// KeepAbsoluteAssetLinks (LADO #22) recreates asset links whose target is
+	// absolute or outside the workspace root instead of skipping them.
+	KeepAbsoluteAssetLinks bool
 }
 
 // WorkspaceProjectAssetConfig describes a non-repository child directory that
@@ -626,7 +634,16 @@ type WorkspaceProjectRepoConfig struct {
 type WorkspaceProjectInfo struct {
 	Root      WorkspaceInfo
 	Worktrees []WorkspaceRepoInfo
+
+	// SkippedAssetLinks (LADO #22) are asset links left out of the session
+	// workspace, as paths relative to the workspace root (at most
+	// MaxSkippedAssetLinks). SkippedAssetLinkCount is the full count.
+	SkippedAssetLinks     []string
+	SkippedAssetLinkCount int
 }
+
+// MaxSkippedAssetLinks caps WorkspaceProjectInfo.SkippedAssetLinks (LADO #22).
+const MaxSkippedAssetLinks = 20
 
 // WorkspaceRepoInfo describes one materialized repo worktree in a workspace
 // project session.

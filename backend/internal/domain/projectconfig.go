@@ -83,6 +83,11 @@ type ProjectConfig struct {
 	// the feature but check with the user or orchestrator before using it.
 	// Read at spawn, when the worker prompt is built.
 	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
+
+	// WorkspaceAssets (LADO #22) controls how a workspace project's
+	// non-repository folders are copied into each session workspace. Nil uses
+	// the defaults (see ResolvedWorkspaceAssets).
+	WorkspaceAssets *WorkspaceAssetsConfig `json:"workspaceAssets,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker
@@ -261,6 +266,9 @@ func (c ProjectConfig) Validate() error {
 		}
 	}
 	if err := c.TrackerIntake.Validate(); err != nil {
+		return err
+	}
+	if err := validateWorkspaceAssets(c.WorkspaceAssets); err != nil { // LADO #22
 		return err
 	}
 	return nil
