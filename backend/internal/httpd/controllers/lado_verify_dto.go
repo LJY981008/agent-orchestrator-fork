@@ -105,7 +105,7 @@ type LadoVerifyItemDetailsResponse struct {
 	// protection
 	Provider       string   `json:"provider,omitempty" enum:"github,gitlab" description:"protection: the repository's host."`
 	Repo           string   `json:"repo,omitempty" description:"protection: the repository, as owner/name."`
-	Missing        []string `json:"missing,omitempty" description:"protection: what the base branch's rules lack: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion."`
+	Missing        []string `json:"missing,omitempty" description:"protection: what the base branch's rules lack. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed)."`
 	RequiredChecks []string `json:"requiredChecks,omitempty" description:"protection: the checks the rules require."`
 	ErrorClass     string   `json:"errorClass,omitempty" description:"protection: the class of a failed read of the rules, which the record's hash covers: http_<status>, rate_limited, transport or other."`
 	Error          string   `json:"error,omitempty" description:"protection: why the rules could not be read, without secrets; outside the record's hash."`
@@ -156,7 +156,7 @@ type LadoIntegrationApprovalResponse struct {
 	Acknowledged       []string   `json:"acknowledged" description:"The confirm codes the developer acknowledged, sorted."`
 	Actor              string     `json:"actor" description:"human, or human:dev-presence for a proof made without the desktop app's key."`
 	ApprovedAt         time.Time  `json:"approvedAt"`
-	StatusState        string     `json:"statusState" enum:"pending,posted,failed,not_applicable" description:"How posting the lado/integration commit status went; not_applicable on GitLab, which gets none."`
+	StatusState        string     `json:"statusState" enum:"pending,posted,failed,not_applicable" description:"How posting the lado/integration commit status went; not_applicable on GitLab approvals given before LADO posted statuses there."`
 	StatusAttempts     int        `json:"statusAttempts" description:"Attempts to post the status so far; LADO stops after 12."`
 	StatusPostedAt     *time.Time `json:"statusPostedAt,omitempty"`
 	StatusError        string     `json:"statusError,omitempty" description:"Why the last post failed, without secrets."`
@@ -224,8 +224,8 @@ type LadoRunChecksResponse struct {
 type LadoBranchProtectionResponse struct {
 	Repository     string     `json:"repository" description:"Canonical id of the repository, such as github:owner/repo."`
 	Branch         string     `json:"branch" description:"The base branch workers start from; empty when LADO could not tell it."`
-	State          string     `json:"state" enum:"protected,unprotected,unknown,unsupported" description:"protected: the rules require a pull request, the lado/integration status, no force pushes and no deletion; unknown: they could not be read; unsupported: LADO does not read GitLab's protection, it only detects."`
-	Missing        []string   `json:"missing" description:"What the rules lack, for unprotected: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion."`
+	State          string     `json:"state" enum:"protected,unprotected,unknown,unsupported" description:"protected: on GitHub the rules require a pull request, the lado/integration status, no force pushes and no deletion; on GitLab the branch is protected with push allowed to no one and no force push, the project requires a succeeding pipeline and does not count skipped ones, and LADO can post its status; unknown: they could not be read; unsupported: the GitLab client reads no protection, LADO only detects."`
+	Missing        []string   `json:"missing" description:"What the rules lack, for unprotected. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed)."`
 	RequiredChecks []string   `json:"requiredChecks" description:"The checks the rules require, lado/integration left out."`
 	CheckedAt      *time.Time `json:"checkedAt,omitempty" description:"When LADO asked the host."`
 	Error          string     `json:"error,omitempty" description:"Why the rules could not be read, without secrets."`

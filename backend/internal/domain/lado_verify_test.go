@@ -183,6 +183,8 @@ func TestLadoVerificationContentIsTheFormat(t *testing.T) {
 		{domain.LadoVerifyPaths, domain.LadoPathsDetails{}, `{"protected":[],"outsidePlan":[],"outsideCount":0}`},
 		{domain.LadoVerifyBaseBranch, domain.LadoBaseBranchDetails{}, `{"branch":"","remote":"","moved":[],"alreadyOnBase":false,"dispatchCommit":"","deleted":false}`},
 		{domain.LadoVerifyProtection, domain.LadoProtectionDetails{}, `{"provider":"","repo":"","branch":"","missing":[],"requiredChecks":[],"errorClass":""}`},
+		{domain.LadoVerifyProtection, domain.LadoProtectionDetails{Provider: "gitlab", Missing: []string{domain.LadoGitLabMissingIntegrationStatus}, CodeOwnerApproval: true},
+			`{"provider":"gitlab","repo":"","branch":"","missing":["integration_status"],"requiredChecks":[],"errorClass":"","codeOwnerApproval":true}`},
 		{domain.LadoVerifyReview, domain.LadoReviewDetails{}, `{"rounds":0,"runId":"","verdict":"","harness":"","note":""}`},
 		{domain.LadoVerifyEvidence, domain.LadoEvidenceDetails{Criteria: []domain.LadoEvidenceCriterion{{Index: 1, State: domain.LadoEvidenceClaimed}}}, `{"fileVersion":0,"fileSha256":"","fileHead":"","criteria":[{"index":1,"state":"claimed","refs":[]}]}`},
 		{domain.LadoVerifyEvidence, domain.LadoEvidenceDetails{}, `{"fileVersion":0,"fileSha256":"","fileHead":"","criteria":[]}`},
