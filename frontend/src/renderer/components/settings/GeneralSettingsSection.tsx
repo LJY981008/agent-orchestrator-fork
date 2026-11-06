@@ -9,6 +9,7 @@ import { useUiStore } from "../../stores/ui-store";
 import { useTelemetryPolicyStore } from "../../stores/telemetry-policy-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { CliLinkSettings } from "./CliLinkSettingsRow";
+import { DaemonRestartRow } from "./DaemonRestartRow";
 import { useTerminalShellStore } from "../../stores/terminal-shell-store";
 import { DefaultCloudSandboxSection } from "./DefaultCloudSandboxRow";
 import { SettingsOptionMenu, type SettingsOption } from "./SettingsOptionMenu";
@@ -256,6 +257,7 @@ export function GeneralSettingsSection({
 						onCheckedChange={setDeveloperMode}
 					/>
 				</SettingsRow>
+				<DaemonRestartRow />
 				{developerMode && <CloudOfferingRow />}
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
