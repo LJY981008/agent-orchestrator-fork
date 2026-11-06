@@ -26,9 +26,9 @@ function planContent(change: Partial<lado.LadoPlan["plan"]> = {}): lado.LadoPlan
 		reviewRequired: false,
 		changeKinds: [],
 		parts: [
-			{ id: "api", title: "API", steps: [1], affectedPaths: ["api/**"], dependsOn: [], phase: 1 },
-			{ id: "web", title: "Page", steps: [2], affectedPaths: ["web/**"], dependsOn: [], phase: 1 },
-			{ id: "docs", title: "Docs", steps: [3], affectedPaths: ["docs/**"], dependsOn: ["api", "web"], phase: 2 },
+			{ id: "api", title: "API", steps: [1], affectedPaths: ["api/**"], dependsOn: [], phase: 1, warnings: [] },
+			{ id: "web", title: "Page", steps: [2], affectedPaths: ["web/**"], dependsOn: [], phase: 1, warnings: [] },
+			{ id: "docs", title: "Docs", steps: [3], affectedPaths: ["docs/**"], dependsOn: ["api", "web"], phase: 2, warnings: [] },
 		],
 		integrationSteps: [4],
 		warnings: [],

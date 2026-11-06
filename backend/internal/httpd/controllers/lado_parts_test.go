@@ -25,7 +25,7 @@ func TestLadoAPI_TaskParts(t *testing.T) {
 	seed := seedLadoQueued(t, store, "mer", 1, now.Add(-time.Minute))
 
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/tasks/"+string(seed.task)+"/parts", "")
-	if got := decodeLadoJSON[controllers.LadoTaskPartsResponse](t, body); status != http.StatusOK || got.Branch != "" || len(got.Parts) != 0 {
+	if got := decodeLadoJSON[controllers.LadoTaskPartsResponse](t, body); status != http.StatusOK || got.Branch != "" || got.QueueEntryID != "" || len(got.Parts) != 0 {
 		t.Fatalf("parts of a task without them = %d %s", status, body)
 	}
 	if _, status, _ := doRequest(t, srv, "GET", "/api/v1/lado/tasks/lado-task-9/parts", ""); status != http.StatusNotFound {
@@ -47,6 +47,11 @@ func TestLadoAPI_TaskParts(t *testing.T) {
 	got := decodeLadoJSON[controllers.LadoTaskPartsResponse](t, body)
 	if status != http.StatusOK || got.Branch != "lado/task-1/integration" || got.HeadSHA != base || len(got.Parts) != 2 {
 		t.Fatalf("parts = %d %s", status, body)
+	}
+	// The run's queue entry tells its sessions in the task's usage apart
+	// from an earlier approval's that named the same parts (#69).
+	if got.QueueEntryID != string(seed.entry) {
+		t.Fatalf("queue entry = %q, want %q", got.QueueEntryID, seed.entry)
 	}
 	web := got.Parts[1]
 	if web.ID != "web" || web.Phase != 2 || web.State != "waiting" || web.WaitingReason != "part_dependency" ||

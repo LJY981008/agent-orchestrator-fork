@@ -114,6 +114,10 @@ type SessionUsage struct {
 	Role domain.LadoSessionRole
 	// PartID is the part of a part or merge worker.
 	PartID string
+	// QueueEntryID is the queue entry of the execution the session ran; it
+	// is empty for a plan session. Two approvals of one task can name the
+	// same part ids; the queue entry tells their sessions apart.
+	QueueEntryID domain.LadoQueueEntryID
 	// Attempt is the session's attempt from 1, 0 when it cannot be read
 	// (a deleted session).
 	Attempt int
@@ -173,6 +177,7 @@ type taskSession struct {
 	id      domain.SessionID
 	role    domain.LadoSessionRole
 	part    string
+	queue   domain.LadoQueueEntryID
 	attempt int
 }
 
@@ -302,7 +307,7 @@ func (s *Service) taskSessions(ctx context.Context, facts domain.LadoTaskTimingF
 		add(taskSession{id: a.SessionID, role: a.SessionRole(), attempt: a.Attempt})
 	}
 	for _, e := range facts.Executions {
-		add(taskSession{id: e.SessionID, role: domain.LadoSessionRoleOfExecution(e.Role), part: e.PartID})
+		add(taskSession{id: e.SessionID, role: domain.LadoSessionRoleOfExecution(e.Role), part: e.PartID, queue: e.QueueEntryID})
 	}
 	// An execution's attempt is in its session's client request id.
 	for i := range out {
@@ -330,7 +335,7 @@ func isPlanRole(r domain.LadoSessionRole) bool {
 // sessionUsage reads one session's usage. A session AO no longer has is
 // UsageMissing and used nothing.
 func (s *Service) sessionUsage(ctx context.Context, session taskSession, detail bool) (SessionUsage, error) {
-	out := SessionUsage{SessionID: session.id, Role: session.role, PartID: session.part, Attempt: session.attempt}
+	out := SessionUsage{SessionID: session.id, Role: session.role, PartID: session.part, QueueEntryID: session.queue, Attempt: session.attempt}
 	summary, err := s.deps.Usage.Get(ctx, session.id)
 	var apiErr *apierr.Error
 	if errors.As(err, &apiErr) && apiErr.Kind == apierr.KindNotFound {

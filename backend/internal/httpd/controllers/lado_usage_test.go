@@ -43,8 +43,8 @@ func sampleLadoTaskUsage() ladousage.TaskUsage {
 		EndReason: ladousage.EndInProgress, UsageMissing: 1,
 		Sessions: []ladousage.SessionUsage{
 			{SessionID: "demo-plan-1", Role: domain.LadoSessionDesigner, Attempt: 2, Totals: ladousage.Totals{CostNanos: 10_340_000_000}},
-			{SessionID: "demo-7", Role: domain.LadoSessionPart, PartID: "store", Attempt: 1, ContextUsed: 150_000, ContextWindow: 200_000, Compactions: 3},
-			{SessionID: "demo-6", Role: domain.LadoSessionPart, PartID: "store", UsageMissing: true},
+			{SessionID: "demo-7", Role: domain.LadoSessionPart, PartID: "store", QueueEntryID: "lado-queue-2", Attempt: 1, ContextUsed: 150_000, ContextWindow: 200_000, Compactions: 3},
+			{SessionID: "demo-6", Role: domain.LadoSessionPart, PartID: "store", QueueEntryID: "lado-queue-1", UsageMissing: true},
 		},
 	}
 }
@@ -73,6 +73,14 @@ func TestLadoAPI_TaskUsage(t *testing.T) {
 	}
 	if !got.Sessions[2].UsageMissing || got.Sessions[2].Totals.CostNanos != 0 {
 		t.Errorf("deleted session = %+v", got.Sessions[2])
+	}
+	// Two approvals ran part store; each session names its own run (#69),
+	// and the plan session names none.
+	if got.Sessions[0].QueueEntryID != "" || part.QueueEntryID != "lado-queue-2" || got.Sessions[2].QueueEntryID != "lado-queue-1" {
+		t.Errorf("queue entries = %q, %q, %q", got.Sessions[0].QueueEntryID, part.QueueEntryID, got.Sessions[2].QueueEntryID)
+	}
+	if strings.Count(string(body), `"queueEntryId"`) != 2 {
+		t.Errorf("body = %s, want queueEntryId on the two part sessions only", body)
 	}
 	if !strings.Contains(string(body), `"role":"designer"`) || !strings.Contains(string(body), `"costNanos":12340000000`) {
 		t.Errorf("body = %s", body)
