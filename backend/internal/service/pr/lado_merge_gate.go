@@ -53,6 +53,37 @@ func (m *ladoMergeGate) authorizeFresh(ctx context.Context, tracked domain.PullR
 	return m.authorize(ctx, tracked, headSHA)
 }
 
+// waive decides a merge the live read found blockers for (#21). It lets the
+// merge go on only when the one blocker is ci_no_pipeline and the installed
+// gate, as a ports.LadoCIWaiver, waives the missing pipeline of pr at
+// headSHA into the branch it merges into on the host. Otherwise it returns a
+// *MergeBlockedError; a waiver that cannot read returns its error.
+func (m *ladoMergeGate) waive(ctx context.Context, tracked domain.PullRequest, fresh ports.SCMPRObservation, headSHA string, blockers []string) error {
+	blocked := &MergeBlockedError{Blockers: blockers}
+	if len(blockers) != 1 || blockers[0] != domain.MergeBlockerCINoPipeline {
+		return blocked
+	}
+	gate := m.gate.Load()
+	if gate == nil {
+		return blocked
+	}
+	waiver, ok := (*gate).(ports.LadoCIWaiver)
+	if !ok {
+		return blocked
+	}
+	if target := strings.TrimSpace(fresh.TargetBranch); target != "" {
+		tracked.TargetBranch = target
+	}
+	waived, err := waiver.WaivesMissingPipeline(ctx, tracked, headSHA)
+	switch {
+	case err != nil:
+		return err
+	case !waived:
+		return blocked
+	}
+	return nil
+}
+
 // LadoSCMRef is the reference AO's merge reads pr through, for LADO's read of
 // a PR's head from its host. It reports false when pr's repository or number
 // is unknown.

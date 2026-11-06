@@ -32,6 +32,8 @@ func TestPRMergeRendersLadoRefusal(t *testing.T) {
 		{"a gate that cannot read", apierr.Internal("LADO_MERGE_GATE_FAILED", "LADO could not check this pull request's integration approval."), http.StatusInternalServerError, "LADO_MERGE_GATE_FAILED", nil},
 		{"a moved head", prsvc.ErrPRHeadChanged, http.StatusConflict, "PR_HEAD_CHANGED", nil},
 		{"preconditions", fmt.Errorf("%w: pull request head is unknown", prsvc.ErrPRPreconditions), http.StatusUnprocessableEntity, "PR_PRECONDITIONS_UNMET", nil},
+		{"blockers", &prsvc.MergeBlockedError{Blockers: []string{"ci_no_pipeline"}}, http.StatusUnprocessableEntity, "PR_PRECONDITIONS_UNMET", map[string]any{"blockers": []any{"ci_no_pipeline"}}},
+		{"blockers wrapped", fmt.Errorf("merge: %w", &prsvc.MergeBlockedError{Blockers: []string{"ci_pending", "not_mergeable"}}), http.StatusUnprocessableEntity, "PR_PRECONDITIONS_UNMET", map[string]any{"blockers": []any{"ci_pending", "not_mergeable"}}},
 		{"anything else", errors.New("provider exploded"), http.StatusInternalServerError, "PR_OPERATION_FAILED", nil},
 	}
 	for _, c := range cases {
