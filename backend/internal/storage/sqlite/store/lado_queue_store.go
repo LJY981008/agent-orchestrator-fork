@@ -169,7 +169,9 @@ type ladoPRKey struct {
 // UntrackedPRs are the session's other PRs, newest first: the open ones that
 // LADO does not track, or with all, every PR without a tracking row,
 // merged and closed ones too, and for an execution without tracked PRs its
-// newest PR as well. It returns each PR's source branch.
+// newest PR as well. ReportedPRs are the PRs the worker reported that its
+// session does not have (fillLadoReportedPRs). It returns each PR's source
+// branch.
 func (s *Store) readLadoExecutionPRs(ctx context.Context, executions []domain.LadoExecution, all bool) (map[ladoPRKey]string, error) {
 	if len(executions) == 0 {
 		return nil, nil
@@ -252,6 +254,9 @@ func (s *Store) readLadoExecutionPRs(ctx context.Context, executions []domain.La
 		}
 		execution.UntrackedPRs = untracked[execution.SessionID]
 		execution.WorkerDone = done[execution.SessionID]
+	}
+	if err := s.fillLadoReportedPRs(ctx, executions, rows); err != nil {
+		return nil, err
 	}
 	return branches, nil
 }

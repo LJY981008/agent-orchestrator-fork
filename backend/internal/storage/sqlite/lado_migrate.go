@@ -161,6 +161,11 @@ END`,
     OLD.settled_pr_state IS NOT NEW.settled_pr_state OR
     OLD.position IS NOT NEW.position OR
     OLD.repo_key IS NOT NEW.repo_key`),
+	// A refused reported PR publishes its execution's change when it is
+	// recorded and when its reason changes (issue #71).
+	ladoExecutionChildCDCTrigger("lado_cdc_reported_pr_refusals_insert", "AFTER INSERT ON lado_reported_pr_refusals", ""),
+	ladoExecutionChildCDCTrigger("lado_cdc_reported_pr_refusals_update", "AFTER UPDATE ON lado_reported_pr_refusals",
+		"WHEN OLD.reason IS NOT NEW.reason"),
 	// A relay of a developer instruction publishes its task's change when it
 	// is recorded and when it is delivered or fails, so the task view's relay
 	// tab follows (issue #49).
