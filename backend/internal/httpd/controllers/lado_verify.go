@@ -284,12 +284,13 @@ func ladoVerificationResponse(v domain.LadoVerification, sum string) LadoVerific
 }
 
 // ladoHeadVerificationResponse is the execution view's record, nil without
-// one.
+// one, with the PR's unresolved review threads beside it (LADO #85).
 func ladoHeadVerificationResponse(head ladoverify.HeadView) *LadoVerificationResponse {
 	if head.Verification == nil {
 		return nil
 	}
 	resp := ladoVerificationResponse(*head.Verification, head.SHA256)
+	resp.UnresolvedReviewThreads = head.UnresolvedReviewThreads
 	return &resp
 }
 

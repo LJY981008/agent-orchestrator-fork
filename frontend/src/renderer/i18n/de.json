@@ -4074,6 +4074,8 @@
 	"lado.verify.commands.dirty_other": "Die Prüfungen warten auf {{count}} nicht committete Dateien: committen, löschen oder in .gitignore aufnehmen, dann starten sie",
 	"lado.verify.commands.dirtyMore_one": "und {{count}} weitere Datei",
 	"lado.verify.commands.dirtyMore_other": "und {{count}} weitere Dateien",
+	"lado.verify.reviewThreads_one": "{{count}} offener Review-Thread",
+	"lado.verify.reviewThreads_other": "{{count}} offene Review-Threads",
 	"lado.verify.commits.passed_one": "{{count}} Commit und der PR-Titel sind auf Koreanisch",
 	"lado.verify.commits.passed_other": "{{count}} Commits und der PR-Titel sind auf Koreanisch",
 	"lado.verify.commits.notKorean_one": "{{count}} Nachricht ist nicht auf Koreanisch",
