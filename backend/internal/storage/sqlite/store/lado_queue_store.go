@@ -15,7 +15,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"strings"
 	"time"
 
@@ -262,8 +261,17 @@ func (s *Store) readLadoExecutionPRs(ctx context.Context, executions []domain.La
 // into the branch it merges into now, by its status state, which once the PR
 // merged is the merged head's. The PRs must be read first. A record or an
 // approval of another head says nothing about the current one, an approval
-// of another PR or into another branch neither, a revoked approval does not
-// count, and a PR whose head AO has not observed has neither.
+// of another PR or into another branch neither, and a PR whose head AO has
+// not observed has neither.
+//
+// A revoked approval does not count, but for one case (#75): once the PR
+// merged at the approved head, an approval LADO withdrew for a base overlap
+// (its own or a sibling's) no earlier than the host's merge time held when
+// the head merged, so it counts as the merged head's. That is LADO seeing
+// the PR's own merge as a base move before AO observed the merge. Only the
+// host's merge time (merged_at_provider) counts: without it the approval
+// does not. The rule reads past records right as well; it changes no row
+// and no audit event. An open PR's revoked approval never counts.
 func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.LadoExecution) error {
 	type head struct {
 		session domain.SessionID
@@ -308,11 +316,25 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 		return fmt.Errorf("read LADO integration approvals: %w", err)
 	}
 	approved := make(map[head][]domain.LadoIntegrationApproval, len(approvals))
+	// heldAtMerge are the revoked approvals that held when their PR merged at
+	// their head, by approval index in approved[key].
+	heldAtMerge := make(map[head]map[int]bool)
 	for _, row := range approvals {
 		key := head{domain.SessionID(row.ExecutionSessionID), row.HeadSha}
-		approved[key] = append(approved[key], domain.LadoIntegrationApproval{
+		approval := domain.LadoIntegrationApproval{
 			PRURL: row.PRURL, TargetBranch: row.TargetBranch, StatusState: domain.LadoIntegrationStatusState(row.StatusState),
-		})
+			RevokedReason: row.RevokedReason,
+		}
+		if row.RevokedAt.Valid {
+			approval.RevokedAt = row.RevokedAt.Time
+		}
+		if ladoRevokedAfterMerge(approval, row.MergedAtProvider) {
+			if heldAtMerge[key] == nil {
+				heldAtMerge[key] = map[int]bool{}
+			}
+			heldAtMerge[key][len(approved[key])] = true
+		}
+		approved[key] = append(approved[key], approval)
 	}
 	facts := func(session domain.SessionID, pr domain.LadoExecutionPR) (domain.LadoExecutionVerification, domain.LadoExecutionIntegration) {
 		var verification domain.LadoExecutionVerification
@@ -327,7 +349,17 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 			verification = verified[key]
 		}
 		// An approval holds for its PR and the branch it was approved into.
-		ofPR := slices.DeleteFunc(slices.Clone(approved[key]), func(a domain.LadoIntegrationApproval) bool { return a.PRURL != pr.URL })
+		// Once the PR merged, so does one revoked after the merge.
+		var ofPR []domain.LadoIntegrationApproval
+		for i, approval := range approved[key] {
+			if approval.PRURL != pr.URL {
+				continue
+			}
+			if pr.Merged && heldAtMerge[key][i] {
+				approval.RevokedAt, approval.RevokedReason = time.Time{}, ""
+			}
+			ofPR = append(ofPR, approval)
+		}
 		if approval, ok := domain.LadoApprovalFor(ofPR, pr.TargetBranch); ok {
 			integration = domain.LadoExecutionIntegration{
 				HeadApproved:       true,
@@ -346,6 +378,22 @@ func (s *Store) fillLadoVerification(ctx context.Context, executions []domain.La
 		}
 	}
 	return nil
+}
+
+// ladoRevokedAfterMerge reports whether approval was revoked for a base
+// overlap, its own or a sibling PR's, no earlier than mergedAt, the host's
+// merge time of its PR at its head (#75): the approval held when the head
+// merged. Without a merge time it was not.
+func ladoRevokedAfterMerge(approval domain.LadoIntegrationApproval, mergedAt sql.NullTime) bool {
+	if !approval.Revoked() || !mergedAt.Valid || mergedAt.Time.IsZero() {
+		return false
+	}
+	switch approval.RevokedReason {
+	case domain.LadoCodeBaseOverlap, domain.LadoIntegrationSiblingRevoked:
+	default:
+		return false
+	}
+	return !approval.RevokedAt.Before(mergedAt.Time)
 }
 
 // ladoExecutionPR is the PR of an execution from AO's PR row.
