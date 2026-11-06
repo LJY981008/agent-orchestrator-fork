@@ -937,7 +937,7 @@ func reviewThreadResolveInstructions(prNumber int) string {
 	return fmt.Sprintf("After you push, resolve each thread you addressed with `ao pr resolve-comments %s <thread id...>`. "+
 		"The AO daemon handles this for both GitHub and GitLab, so you do not need glab, gh or a token. "+
 		"Called without IDs the command resolves every unresolved thread, so list only the thread IDs you addressed. "+
-		"Do not resolve a thread you decided not to address; report why with `ao report --checkpoint --note \"<reason>\"`. "+
+		"Do not resolve a thread you decided not to address; report why with `ao report --checkpoint --note \"<thread id>: <reason>\"`. "+
 		"If the command fails (for example because AO tracks the same number in more than one repository), do not try another tool to resolve the thread; "+
 		"report it with `ao report --needs-input --note \"<PR URL> <thread id...>: <error>\"`.", number)
 }
