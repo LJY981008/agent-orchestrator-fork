@@ -73,17 +73,24 @@ func newGitLabSCMProvider(gitlabCfg config.GitLabConfig, logger *slog.Logger) (*
 		ladoGitLabToken{host: "gitlab.com"}, // LADO fork: stored gitlab.com token (lado_tokens.go)
 		&scmgitlab.GLabTokenSource{},
 	}
+	opts := scmgitlab.ProviderOptions{
+		Token:              tokens,
+		SkipTokenPreflight: true,
+		Logger:             logger,
+	}
+	// LADO fork: with the GitLab host hub, the provider takes the
+	// environment's and the stored hosts from it and follows later token
+	// changes (lado_tokens.go, issue #19).
+	if hub := ladoGitLabHub; hub != nil {
+		return hub.newSCMProvider(opts)
+	}
 	hostTokens := make(map[string]scmgitlab.TokenSource, len(gitlabCfg.HostTokens))
 	for host, token := range gitlabCfg.HostTokens {
 		hostTokens[host] = scmgitlab.StaticTokenSource(token)
 	}
-	return scmgitlab.NewProvider(scmgitlab.ProviderOptions{
-		Token:              tokens,
-		SkipTokenPreflight: true,
-		Logger:             logger,
-		AllowedHosts:       gitlabCfg.AllowedHosts,
-		HostTokens:         hostTokens,
-	})
+	opts.AllowedHosts = gitlabCfg.AllowedHosts
+	opts.HostTokens = hostTokens
+	return scmgitlab.NewProvider(opts)
 }
 
 func logSCMProviderDisabled(logger *slog.Logger, provider string, err error) {
