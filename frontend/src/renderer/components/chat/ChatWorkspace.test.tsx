@@ -5342,3 +5342,137 @@ describe("sent message recall", () => {
 		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
 	});
 });
+
+describe("pending interactions in the composer", () => {
+	// A pending approval or question is drawn only on the composer, so it must
+	// appear as soon as a snapshot carries it, with no typing first (#39).
+	function withoutPendingInteractions(): ConversationSnapshot {
+		const snapshot = structuredClone(chatFixture);
+		snapshot.items = snapshot.items.filter(
+			(item) =>
+				!(
+					item.kind === "activity" &&
+					(item.activityKind === "approval" || item.activityKind === "user_input") &&
+					item.status === "pending"
+				),
+		);
+		return snapshot;
+	}
+	function pendingApproval(turnId: string | undefined, requestId = "approval-live"): ConversationItem {
+		return {
+			kind: "activity",
+			id: requestId,
+			sequence: 200,
+			revision: 1,
+			turnId,
+			activityKind: "approval",
+			status: "pending",
+			summary: "Run command",
+			requestId,
+			decisions: [
+				{ id: "deny", label: "Deny", kind: "reject_once" },
+				{ id: "allow_once", label: "Allow Once", kind: "allow_once" },
+			],
+			detail: { command: "npm test" },
+			createdAt: "2026-11-02T04:33:20Z",
+		};
+	}
+	function pendingQuestion(turnId: string | undefined): ConversationItem {
+		return {
+			kind: "activity",
+			id: "input-live",
+			sequence: 201,
+			revision: 1,
+			turnId,
+			activityKind: "user_input",
+			status: "pending",
+			summary: "Choose a direction",
+			requestId: "input-live",
+			detail: { inputMode: "form", message: "Choose a direction" },
+			createdAt: "2026-11-02T04:33:20Z",
+		};
+	}
+	function withItem(item: ConversationItem, snapshot = withoutPendingInteractions()): ConversationSnapshot {
+		return { ...snapshot, latestSequence: Math.max(snapshot.latestSequence, item.sequence), items: [...snapshot.items, item] };
+	}
+	/** Two turns in flight: a nested provider turn can run beside the root turn. */
+	function withTwoRunningTurns(): ConversationSnapshot {
+		const snapshot = withoutPendingInteractions();
+		snapshot.turns = [
+			...snapshot.turns,
+			{ id: "turn-nested", state: "running", requestedAt: "2026-11-02T04:33:00Z", startedAt: "2026-11-02T04:33:01Z" },
+		];
+		return snapshot;
+	}
+	const approvalCard = (requestId = "approval-live") => screen.queryByRole("group", { name: `Approval request ${requestId}` });
+
+	it("shows a pending approval from a snapshot refresh alone, and again after remount", () => {
+		const view = render(<ChatWorkspace snapshot={withoutPendingInteractions()} onDecide={vi.fn()} onInterrupt={vi.fn()} />);
+		expect(approvalCard()).not.toBeInTheDocument();
+
+		const refreshed = withItem(pendingApproval("turn-2"));
+		view.rerender(<ChatWorkspace snapshot={refreshed} onDecide={vi.fn()} onInterrupt={vi.fn()} />);
+		expect(approvalCard()?.closest("form")).toHaveClass("cursor-chat-composer");
+
+		view.unmount();
+		render(<ChatWorkspace snapshot={refreshed} onDecide={vi.fn()} onInterrupt={vi.fn()} />);
+		expect(approvalCard()?.closest("form")).toHaveClass("cursor-chat-composer");
+	});
+
+	it("docks a pending question from a snapshot refresh alone, and again after remount", () => {
+		const view = render(<ChatWorkspace snapshot={withoutPendingInteractions()} onResolveInput={vi.fn()} />);
+		expect(screen.queryByTestId("elicitation-composer-dock")).not.toBeInTheDocument();
+
+		const refreshed = withItem(pendingQuestion("turn-2"));
+		view.rerender(<ChatWorkspace snapshot={refreshed} onResolveInput={vi.fn()} />);
+		expect(screen.getByTestId("elicitation-composer-dock")).toBeInTheDocument();
+
+		view.unmount();
+		render(<ChatWorkspace snapshot={refreshed} onResolveInput={vi.fn()} />);
+		expect(screen.getByTestId("elicitation-composer-dock")).toBeInTheDocument();
+	});
+
+	it("shows an approval attached to the second of two running turns", () => {
+		const onInterrupt = vi.fn();
+		render(
+			<ChatWorkspace snapshot={withItem(pendingApproval("turn-nested"), withTwoRunningTurns())} onDecide={vi.fn()} onInterrupt={onInterrupt} />,
+		);
+		expect(approvalCard()?.closest("form")).toHaveClass("cursor-chat-composer");
+		// Escape must not stop the turn while the agent waits on that decision.
+		fireEvent.keyDown(approvalCard()!, { key: "Escape" });
+		expect(onInterrupt).not.toHaveBeenCalled();
+	});
+
+	it("docks a question attached to the second of two running turns", () => {
+		render(<ChatWorkspace snapshot={withItem(pendingQuestion("turn-nested"), withTwoRunningTurns())} onResolveInput={vi.fn()} />);
+		expect(screen.getByTestId("elicitation-composer-dock")).toBeInTheDocument();
+	});
+
+	it("shows an approval on a queued turn", () => {
+		const snapshot = withoutPendingInteractions();
+		snapshot.turns = [...snapshot.turns, { id: "turn-queued", state: "queued", requestedAt: "2026-11-02T04:33:10Z" }];
+		render(<ChatWorkspace snapshot={withItem(pendingApproval("turn-queued"), snapshot)} onDecide={vi.fn()} onInterrupt={vi.fn()} />);
+		expect(approvalCard()).toBeInTheDocument();
+	});
+
+	it("shows a turnless approval even when no turn is in flight", () => {
+		const snapshot = withoutPendingInteractions();
+		snapshot.turns = snapshot.turns.map((turn) => ({ ...turn, state: "completed" as const }));
+		render(<ChatWorkspace snapshot={withItem(pendingApproval(undefined), snapshot)} onDecide={vi.fn()} />);
+		expect(approvalCard()).toBeInTheDocument();
+	});
+
+	it("keeps a turn-scoped approval ahead of a newer turnless one", () => {
+		const snapshot = withItem({ ...pendingApproval(undefined, "approval-turnless"), sequence: 300 }, withItem(pendingApproval("turn-nested"), withTwoRunningTurns()));
+		render(<ChatWorkspace snapshot={snapshot} onDecide={vi.fn()} />);
+		expect(approvalCard()).toBeInTheDocument();
+		expect(approvalCard("approval-turnless")).not.toBeInTheDocument();
+	});
+
+	it("hides a pending approval left on a turn that has finished", () => {
+		const snapshot = withoutPendingInteractions();
+		snapshot.turns = snapshot.turns.map((turn) => ({ ...turn, state: "completed" as const }));
+		render(<ChatWorkspace snapshot={withItem(pendingApproval("turn-2"), snapshot)} onDecide={vi.fn()} />);
+		expect(approvalCard()).not.toBeInTheDocument();
+	});
+});

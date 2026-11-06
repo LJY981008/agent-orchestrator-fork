@@ -88,6 +88,7 @@ function fakeQueryClient(cached: [unknown[], unknown][] = []) {
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
 		getQueryData: vi.fn((queryKey: unknown[]) => cache.get(JSON.stringify(queryKey))),
+		getQueryState: vi.fn().mockReturnValue(undefined),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
 
