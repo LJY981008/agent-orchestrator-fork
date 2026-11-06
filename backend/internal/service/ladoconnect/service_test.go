@@ -122,6 +122,8 @@ type connectFixture struct {
 	creds   *Credentials
 	home    string
 	logs    *bytes.Buffer
+	// changed counts CredentialsChanged calls.
+	changed int
 }
 
 func fullAccess() ports.LadoRepoAccess {
@@ -162,6 +164,9 @@ func newConnectFixtureWith(t *testing.T, projects fakeProjects) *connectFixture 
 		Git:         fx.git,
 		HomeDir:     func() (string, error) { return fx.home, nil },
 		Log:         slog.New(slog.NewTextHandler(fx.logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+		CredentialsChanged: func(context.Context) {
+			fx.changed++
+		},
 	})
 	return fx
 }
@@ -559,5 +564,134 @@ func TestConnectClonesWherePlacementSays(t *testing.T) {
 	}
 	if got := fx.cloner.requests[1]; got.Placement != PlaceWorkspace || got.WorkspaceID != "product" || got.RemoteURL != "git@github.com:acme/front.git" {
 		t.Fatalf("clone request = %+v, want the front repository in product", got)
+	}
+}
+
+// breakGitLabStore makes every later GitLab token read and write fail: the
+// token file's directory is a regular file.
+func (fx *connectFixture) breakGitLabStore(t *testing.T) {
+	t.Helper()
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fx.creds.gitlabPath = filepath.Join(blocker, "gitlab-tokens.json")
+}
+
+func (fx *connectFixture) wantChanged(t *testing.T, want int, when string) {
+	t.Helper()
+	if fx.changed != want {
+		t.Fatalf("%s: CredentialsChanged ran %d times, want %d", when, fx.changed, want)
+	}
+}
+
+func TestStoreAndDeleteCredentialReportTheChange(t *testing.T) {
+	fx := newConnectFixture(t)
+	ctx := context.Background()
+	if _, _, err := fx.svc.StoreCredential(ctx, "gitlab.example.com", secretToken); err != nil {
+		t.Fatalf("StoreCredential: %v", err)
+	}
+	fx.wantChanged(t, 1, "after a stored token")
+	if err := fx.svc.DeleteCredential(ctx, "gitlab.example.com"); err != nil {
+		t.Fatalf("DeleteCredential: %v", err)
+	}
+	fx.wantChanged(t, 2, "after a deleted token")
+
+	if _, _, err := fx.svc.StoreCredential(ctx, "https://gitlab.com", secretToken); err == nil {
+		t.Fatal("StoreCredential accepted a bad host")
+	}
+	if err := fx.svc.DeleteCredential(ctx, "https://gitlab.com"); err == nil {
+		t.Fatal("DeleteCredential accepted a bad host")
+	}
+	fx.wantChanged(t, 2, "after a bad host")
+
+	fx.clients.client.loginErr = fmt.Errorf("%w: 401 Unauthorized", ports.ErrLadoTokenRejected)
+	if _, _, err := fx.svc.StoreCredential(ctx, "gitlab.example.com", secretToken); apiCode(err) != "LADO_TOKEN_REJECTED" {
+		t.Fatalf("rejected token err = %v, want LADO_TOKEN_REJECTED", err)
+	}
+	fx.wantChanged(t, 2, "after a rejected token")
+
+	fx.clients.client.loginErr = nil
+	fx.breakGitLabStore(t)
+	if _, _, err := fx.svc.StoreCredential(ctx, "gitlab.example.com", secretToken); apiCode(err) != "LADO_TOKEN_INVALID" {
+		t.Fatalf("failed store err = %v, want LADO_TOKEN_INVALID", err)
+	}
+	if err := fx.svc.DeleteCredential(ctx, "gitlab.example.com"); apiCode(err) != "LADO_CREDENTIAL_DELETE_FAILED" {
+		t.Fatalf("failed delete err = %v, want LADO_CREDENTIAL_DELETE_FAILED", err)
+	}
+	fx.wantChanged(t, 2, "after a failed store and delete")
+}
+
+func TestConnectReportsAStoredToken(t *testing.T) {
+	const url = "git@gitlab.example.com:group/project.git"
+	ctx := context.Background()
+
+	t.Run("linked with a token", func(t *testing.T) {
+		fx := newConnectFixture(t, domain.ProjectRecord{ID: "demo", Path: "/src/demo", RepoOriginURL: url})
+		if _, err := fx.svc.Connect(ctx, ConnectInput{CheckInput: CheckInput{URL: url, Token: secretToken}}); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		fx.wantChanged(t, 1, "after linking with a token")
+	})
+
+	t.Run("without a token", func(t *testing.T) {
+		fx := newConnectFixture(t, domain.ProjectRecord{ID: "demo", Path: "/src/demo", RepoOriginURL: url})
+		if _, err := fx.creds.Store(ctx, "gitlab.example.com", "glpat-existing"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fx.svc.Connect(ctx, ConnectInput{CheckInput: CheckInput{URL: url}}); err != nil {
+			t.Fatalf("Connect: %v", err)
+		}
+		fx.wantChanged(t, 0, "after connecting without a token")
+	})
+
+	t.Run("clone fails after the token is stored", func(t *testing.T) {
+		fx := newConnectFixture(t)
+		fx.cloner.err = errors.New("clone failed")
+		_, err := fx.svc.Connect(ctx, ConnectInput{CheckInput: CheckInput{URL: url, Token: secretToken}, DestinationParent: "/src"})
+		if err == nil {
+			t.Fatal("Connect succeeded with a failing clone")
+		}
+		if _, ok, _ := fx.creds.Token(ctx, "gitlab.example.com"); !ok {
+			t.Fatal("the token was not stored before the clone")
+		}
+		fx.wantChanged(t, 1, "after a failed clone")
+	})
+
+	t.Run("not ready", func(t *testing.T) {
+		fx := newConnectFixture(t)
+		fx.git.lsRemoteErr = errors.New(hostKeyFailure)
+		if _, err := fx.svc.Connect(ctx, ConnectInput{CheckInput: CheckInput{URL: url, Token: secretToken}, DestinationParent: "/src"}); apiCode(err) != "LADO_CONNECTION_NOT_READY" {
+			t.Fatalf("err = %v, want LADO_CONNECTION_NOT_READY", err)
+		}
+		fx.wantChanged(t, 0, "after a refused connection")
+	})
+
+	t.Run("token store fails", func(t *testing.T) {
+		fx := newConnectFixture(t)
+		fx.breakGitLabStore(t)
+		_, err := fx.svc.Connect(ctx, ConnectInput{CheckInput: CheckInput{URL: url, Token: secretToken}, DestinationParent: "/src"})
+		if apiCode(err) != "LADO_CREDENTIAL_STORE_FAILED" {
+			t.Fatalf("err = %v, want LADO_CREDENTIAL_STORE_FAILED", err)
+		}
+		fx.wantChanged(t, 0, "after a failed token store")
+		if len(fx.cloner.requests) != 0 {
+			t.Fatal("a failed token store cloned the repository")
+		}
+	})
+}
+
+func TestNilCredentialsChangedIsSkipped(t *testing.T) {
+	creds, _, _ := newTestCredentials(t)
+	svc := New(Deps{
+		Credentials: creds,
+		Clients:     &fakeClients{client: &fakeRepoClient{access: fullAccess(), login: "ljy"}},
+		Log:         slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)),
+	})
+	if _, _, err := svc.StoreCredential(context.Background(), "gitlab.example.com", secretToken); err != nil {
+		t.Fatalf("StoreCredential: %v", err)
+	}
+	if err := svc.DeleteCredential(context.Background(), "gitlab.example.com"); err != nil {
+		t.Fatalf("DeleteCredential: %v", err)
 	}
 }
