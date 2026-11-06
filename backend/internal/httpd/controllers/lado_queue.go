@@ -80,21 +80,42 @@ func (c *LadoController) getExecution(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := ladoExecutionResponse(view)
 	// What LADO verified about the PR's current head and its integration
-	// approval, when verification is wired.
+	// approval, when verification is wired: the execution's PR's at the top,
+	// each tracked PR's in its own entry.
 	if c.Verify != nil {
-		target := view.Execution.PR.TargetBranch
-		if target == "" {
-			target = view.Execution.BaseBranch
-		}
-		head, err := c.Verify.Head(r.Context(), view.Execution.SessionID, view.Execution.PR.URL, view.Execution.PR.HeadSHA, target)
+		exec := view.Execution
+		head, err := c.Verify.Head(r.Context(), exec.SessionID, exec.PR.URL, exec.PR.HeadSHA, ladoPRTarget(exec, exec.PR))
 		if err != nil {
 			envelope.WriteError(w, r, err)
 			return
 		}
 		resp.Verification = ladoHeadVerificationResponse(head)
 		resp.Integration = ladoIntegrationApprovalResponse(head.Approval)
+		for i := range resp.TrackedPRs {
+			tracked := &resp.TrackedPRs[i]
+			pr := domain.LadoExecutionPR{URL: tracked.URL, HeadSHA: tracked.HeadSHA, TargetBranch: tracked.TargetBranch}
+			head, err := c.Verify.Head(r.Context(), exec.SessionID, pr.URL, pr.HeadSHA, ladoPRTarget(exec, pr))
+			if err != nil {
+				envelope.WriteError(w, r, err)
+				return
+			}
+			tracked.Record = ladoHeadVerificationResponse(head)
+			tracked.Approval = ladoIntegrationApprovalResponse(head.Approval)
+			if head.Approval == nil && head.Revoked != nil {
+				tracked.Integration.RevokedReason = head.Revoked.RevokedReason
+			}
+		}
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)
+}
+
+// ladoPRTarget is the branch an approval of one of the execution's PRs
+// holds for: the PR's target, else the base the dispatcher resolved.
+func ladoPRTarget(exec domain.LadoExecution, pr domain.LadoExecutionPR) string {
+	if pr.TargetBranch != "" {
+		return pr.TargetBranch
+	}
+	return exec.BaseBranch
 }
 
 func (c *LadoController) getDispatchSettings(w http.ResponseWriter, r *http.Request) {
@@ -242,11 +263,9 @@ func ladoTaskExecutionResponse(task domain.LadoTask, exec domain.LadoExecution) 
 		TimedOut:       !exec.TimedOutAt.IsZero(),
 		SessionEnded:   exec.SessionTerminated,
 		PR:             ladoExecutionPRResponse(exec.PR),
-	}
-	for _, pr := range exec.UntrackedPRs {
-		if untracked := ladoExecutionPRResponse(pr); untracked != nil {
-			resp.UntrackedPRs = append(resp.UntrackedPRs, *untracked)
-		}
+		UntrackedPRs:   ladoUntrackedPRResponses(exec),
+		TrackedPRs:     ladoTrackedPRResponses(exec),
+		PRRepos:        exec.PRRepos,
 	}
 	if task.Plan.Latest.ID == exec.PlanRevisionID {
 		resp.PlanRevisionNumber = task.Plan.Latest.Number
@@ -268,6 +287,49 @@ func ladoExecutionPRResponse(pr domain.LadoExecutionPR) *LadoExecutionPRResponse
 	}
 }
 
+// ladoUntrackedPRResponses are the execution's open PRs LADO does not
+// track, nil without any.
+func ladoUntrackedPRResponses(exec domain.LadoExecution) []LadoExecutionPRResponse {
+	var resps []LadoExecutionPRResponse
+	for _, pr := range exec.UntrackedPRs {
+		if untracked := ladoExecutionPRResponse(pr); untracked != nil {
+			resps = append(resps, *untracked)
+		}
+	}
+	return resps
+}
+
+// ladoTrackedPRResponses are the PRs LADO tracks for the execution in merge
+// order, each with the state it alone gives the task (#64); an execution
+// without tracked PRs gives its newest PR alone, and one without a PR nil.
+func ladoTrackedPRResponses(exec domain.LadoExecution) []LadoExecutionTrackedPRResponse {
+	var resps []LadoExecutionTrackedPRResponse
+	for _, pr := range exec.TrackedPRs() {
+		base := ladoExecutionPRResponse(pr.PR)
+		if base == nil {
+			continue
+		}
+		state, reason := exec.TrackedPRState(pr)
+		resp := LadoExecutionTrackedPRResponse{
+			LadoExecutionPRResponse: *base,
+			Repo:                    pr.Repo,
+			Position:                pr.Position,
+			State:                   string(state),
+			StateReason:             reason,
+			Settled:                 pr.Settled,
+			Integration: LadoTrackedPRIntegrationResponse{
+				HeadApproved: pr.Integration.HeadApproved,
+				StatusState:  string(pr.Integration.StatusState),
+			},
+		}
+		if v := pr.Verification; v.HeadSHA != "" {
+			resp.Verification = &LadoTrackedPRVerificationResponse{HeadSHA: v.HeadSHA, Outcome: string(v.Outcome), Reason: v.Reason}
+		}
+		resps = append(resps, resp)
+	}
+	return resps
+}
+
 // ladoExecutionResolveResponse is the execution's resolve, nil while none
 // was needed: no worker ran and none failed.
 func ladoExecutionResolveResponse(resolve domain.LadoExecutionResolve) *LadoExecutionResolveResponse {
@@ -276,6 +338,7 @@ func ladoExecutionResolveResponse(resolve domain.LadoExecutionResolve) *LadoExec
 	}
 	return &LadoExecutionResolveResponse{
 		State: string(resolve.State), Attempts: resolve.Attempts, SessionID: string(resolve.SessionID), Error: resolve.Error,
+		PRURL: resolve.PRURL,
 	}
 }
 
@@ -327,6 +390,10 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 		StateReason:  reason,
 		PR:           ladoExecutionPRResponse(exec.PR),
 		Resolve:      ladoExecutionResolveResponse(exec.Resolve),
+		TrackedPRs:   ladoTrackedPRResponses(exec),
+		UntrackedPRs: ladoUntrackedPRResponses(exec),
+		PRRepos:      exec.PRRepos,
+		PRReposFirm:  exec.PRReposFirm,
 	}
 }
 

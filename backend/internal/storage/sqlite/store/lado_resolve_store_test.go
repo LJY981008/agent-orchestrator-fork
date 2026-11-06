@@ -451,7 +451,7 @@ func TestRevokeLadoIntegrationApproval(t *testing.T) {
 	}
 	again := approval
 	again.ID = "approval-2"
-	if err := s.ApproveLadoIntegration(ctx, again, ladoIntegrationProof("nonce-approval-2", again), ladoIntegrationEvent(again)); !errors.Is(err, domain.ErrLadoIntegrationRevoked) {
+	if err := s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{again}, ladoIntegrationProof("nonce-approval-2", again), ladoIntegrationEvent(again)); !errors.Is(err, domain.ErrLadoIntegrationRevoked) {
 		t.Fatalf("approving the revoked head again = %v, want ErrLadoIntegrationRevoked", err)
 	}
 

@@ -217,6 +217,9 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	// The review fixes of step 8 (#15).
 	LADO_INTEGRATION_TARGET_CHANGED: "lado.error.integrationTargetChanged",
 	LADO_INTEGRATION_NOT_APPROVED: "lado.error.integrationNotApproved",
+	// A workspace task's pull requests across repositories (#64).
+	LADO_INTEGRATION_PRS_CHANGED: "lado.error.integrationPrsChanged",
+	LADO_INTEGRATION_MERGE_ORDER: "lado.error.integrationMergeOrder",
 	LADO_CHECK_COMMANDS_CHANGED: "lado.error.checkCommandsChanged",
 	// The desktop app's main process, before it reaches the daemon.
 	LADO_SESSION_ID_INVALID: "lado.error.executionNotFound",
@@ -360,6 +363,14 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 		paths: paths.join(", "),
 		revision: text("currentRevision"),
 		ownerPath: text("ownerPath"),
+		// The PRs a merge waits for, by number, as their URLs end (#64).
+		waitingFor: (Array.isArray(details?.waitingFor) ? details.waitingFor : [])
+			.filter((url): url is string => typeof url === "string")
+			.map((url) => {
+				const number = /(\d+)\/?$/.exec(url)?.[1];
+				return number ? `#${number}` : url;
+			})
+			.join(", "),
 	};
 }
 
@@ -443,8 +454,12 @@ const planProblemKeys: Partial<Record<string, LadoPlanProblemKey>> = {
 	part_step_shared: "lado.planProblem.part_step_shared",
 	part_path_outside: "lado.planProblem.part_path_outside",
 	part_missing_field: "lado.planProblem.part_missing_field",
-	// A workspace project runs parts in the issue's repository only (#60).
+	// A plan's or part's path outside the plan's repos (#60, #64).
 	part_repo_outside: "lado.planProblem.part_repo_outside",
+	// A workspace plan's repos, the repositories it changes in merge order (#64).
+	repos_invalid: "lado.planProblem.repos_invalid",
+	repos_missing: "lado.planProblem.repos_missing",
+	repo_unknown: "lado.planProblem.repo_unknown",
 };
 
 /**
@@ -576,6 +591,8 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	merge_conflict: "lado.reason.merge_conflict",
 	resolving: "lado.reason.resolving",
 	conflict_unresolved: "lado.reason.conflict_unresolved",
+	// A repository the workspace task is expected to open a PR in has none yet (#64).
+	pr_missing: "lado.reason.pr_missing",
 };
 
 /**

@@ -207,13 +207,14 @@ type ChangeSubject = {
 
 // The protected paths as the daemon has them, from LadoRuleResponse.
 type PathsSubject = { rule: LadoPresenceRule; version: number; globs: string[] };
-// The run an integration approval names, from LadoExecutionResponse; pr is
-// null when it has no open pull request.
-type IntegrationRun = {
-	title: string;
-	pr: { number: number; url: string; headSha: string; branch: string } | null;
-	approvedHead: string;
-};
+// One open pull request an integration approval names, from
+// LadoExecutionResponse: repo is its repository's folder under the
+// workspace's, empty for a single-repository project, and approved says its
+// current head has an approval that holds.
+type IntegrationPR = { number: number; url: string; headSha: string; branch: string; repo: string; approved: boolean };
+// The run an integration approval names: its task's title and its open pull
+// requests in merge order, none when it has no open pull request.
+type IntegrationRun = { title: string; prs: IntegrationPR[] };
 type VerifyItem = { kind: string; outcome: string; code: string; details: Record<string, unknown> };
 // What the integration's dry run verified and the approval signs, from
 // LadoIntegrationApproveResponse; reasons are the codes that hold it back.
@@ -755,24 +756,26 @@ async function approveIntegration(
 	if (!run) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this run could not be read.");
 	// The daemon refuses these as well; asking the human first would only
 	// waste a confirmation.
-	if (!run.pr) return failure("LADO_EXECUTION_NO_PR", "This run has no open pull request to integrate.", { sessionId });
-	if (!run.pr.headSha) {
+	if (run.prs.length === 0) return failure("LADO_EXECUTION_NO_PR", "This run has no open pull request to integrate.", { sessionId });
+	const approvePath = `${executionPath}/integration-approve`;
+	if (run.prs.length > 1) return approveIntegrations(deps, run, approvePath);
+	const pr = run.prs[0]!;
+	if (!pr.headSha) {
 		return failure("LADO_INTEGRATION_NOT_READY", "LADO has not verified this pull request's head yet.", { reasons: ["verifying"] });
 	}
-	if (run.approvedHead === run.pr.headSha) {
+	if (pr.approved) {
 		return failure("LADO_INTEGRATION_ALREADY_APPROVED", "The integration of this head is approved already.");
 	}
 	// The dry run reads the live head, the remote rules and the base branch
 	// again and verifies the head as the approval would.
-	const approvePath = `${executionPath}/integration-approve`;
 	const preview = await callDaemon(
 		deps,
 		approvePath,
-		jsonRequest("POST", JSON.stringify({ prUrl: run.pr.url, headSha: run.pr.headSha, dryRun: true })),
+		jsonRequest("POST", JSON.stringify({ prUrl: pr.url, headSha: pr.headSha, dryRun: true })),
 		INTEGRATION_TIMEOUT_MS,
 	);
 	if (!preview.ok) return preview.failure;
-	const verified = verifiedSubject(preview.body, run.pr);
+	const verified = verifiedSubject(preview.body, pr);
 	if (!verified) return failure(ANSWER_UNREADABLE, "The AO daemon's dry run of this approval could not be read.");
 	if (verified.outcome === "wait" || verified.outcome === "fail") {
 		return failure("LADO_INTEGRATION_NOT_READY", "LADO is still verifying this head, or a check on it failed.", {
@@ -780,7 +783,7 @@ async function approveIntegration(
 		});
 	}
 	const t = await translator(deps);
-	const title = t("lado.presence.integration.title", { number: run.pr.number, branch: run.pr.branch || "—" });
+	const title = t("lado.presence.integration.title", { number: pr.number, branch: pr.branch || "—" });
 	if (!(await confirm(deps, t, title, integrationDetail(t, run.title, verified), t("lado.presence.integration.approve")))) {
 		return { status: "cancelled" };
 	}
@@ -798,6 +801,60 @@ async function approveIntegration(
 	if (!sent.ok) return sent.failure;
 	const integration = record(sent.body);
 	if (!record(integration?.approval)) {
+		return failure(ANSWER_UNREADABLE, "The approval was sent, but the AO daemon's answer could not be read.");
+	}
+	return { status: "approved", integration: integration as LadoPresenceIntegration };
+}
+
+// A task that opened a pull request in each of several repositories (#64) is
+// approved as one: main sends one dry run naming every open pull request,
+// lists them all in one confirmation, then signs one request naming each head
+// with what its dry run verified. The daemon refuses the approval unless it
+// names exactly the open pull requests it tracks.
+async function approveIntegrations(deps: LadoPresenceDeps, run: IntegrationRun, approvePath: string): Promise<LadoPresenceIntegrationResult> {
+	if (run.prs.some((pr) => !pr.headSha)) {
+		return failure("LADO_INTEGRATION_NOT_READY", "LADO has not verified the head of each pull request yet.", { reasons: ["verifying"] });
+	}
+	if (run.prs.every((pr) => pr.approved)) {
+		return failure("LADO_INTEGRATION_ALREADY_APPROVED", "The integration of these heads is approved already.");
+	}
+	const preview = await callDaemon(
+		deps,
+		approvePath,
+		jsonRequest("POST", JSON.stringify({ prs: run.prs.map((pr) => ({ prUrl: pr.url, headSha: pr.headSha })), dryRun: true })),
+		INTEGRATION_TIMEOUT_MS,
+	);
+	if (!preview.ok) return preview.failure;
+	const verified = verifiedSubjects(preview.body, run.prs);
+	if (!verified) return failure(ANSWER_UNREADABLE, "The AO daemon's dry run of this approval could not be read.");
+	const held = verified.filter((one) => one.outcome === "wait" || one.outcome === "fail");
+	if (held.length > 0) {
+		return failure("LADO_INTEGRATION_NOT_READY", "LADO is still verifying a head, or a check on one failed.", {
+			reasons: [...new Set(held.flatMap((one) => one.reasons))],
+		});
+	}
+	const t = await translator(deps);
+	const title = t("lado.presence.integration.titleMany", { count: run.prs.length });
+	if (!(await confirm(deps, t, title, integrationsDetail(t, run, verified), t("lado.presence.integration.approve")))) {
+		return { status: "cancelled" };
+	}
+
+	// Each head with its record's hash and the codes confirmed, in merge
+	// order, the heads approved already too: the daemon leaves those as they
+	// are.
+	const body = JSON.stringify({
+		prs: verified.map((one) => ({
+			prUrl: one.prUrl,
+			headSha: one.headSha,
+			verificationSha256: one.sha256,
+			acknowledge: one.confirm,
+		})),
+	});
+	const sent = await callDaemon(deps, approvePath, signed(deps, "POST", approvePath, body), INTEGRATION_TIMEOUT_MS);
+	if (!sent.ok) return sent.failure;
+	const integration = record(sent.body);
+	const prs = integration?.prs;
+	if (!Array.isArray(prs) || prs.length !== verified.length || !prs.every((pr) => record(record(pr)?.approval))) {
 		return failure(ANSWER_UNREADABLE, "The approval was sent, but the AO daemon's answer could not be read.");
 	}
 	return { status: "approved", integration: integration as LadoPresenceIntegration };
@@ -1412,18 +1469,45 @@ function checkChangeLines(
 	return lines;
 }
 
-// The run an integration names, from LadoExecutionResponse: its task's title,
-// its open pull request, and the head an approval already names. A merged or
-// closed pull request has nothing left to integrate.
+// The run an integration names, from LadoExecutionResponse: its task's title
+// and its open pull requests, each with whether its head is approved
+// already. A run that tracks several pull requests (#64) lists them in
+// trackedPrs; an older daemon sends its one PR alone. A merged or closed pull
+// request has nothing left to integrate.
 function integrationRun(body: unknown, sessionId: string): IntegrationRun | null {
 	const run = record(body);
 	const task = record(run?.task);
 	if (run?.sessionId !== sessionId || typeof task?.title !== "string") return null;
+	const title = oneLine(task.title);
+	if (run.trackedPrs !== undefined) {
+		if (!Array.isArray(run.trackedPrs)) return null;
+		const tracked: (IntegrationPR & { position: number; open: boolean })[] = [];
+		for (const value of run.trackedPrs) {
+			const entry = record(value);
+			const parsed = entry ? integrationPR(entry) : null;
+			const integration = record(entry?.integration);
+			const { position, repo } = entry ?? {};
+			if (!parsed || typeof position !== "number" || typeof repo !== "string" || typeof integration?.headApproved !== "boolean") return null;
+			tracked.push({ ...parsed.pr, repo: oneLine(repo), approved: integration.headApproved, position, open: parsed.open });
+		}
+		tracked.sort((a, b) => a.position - b.position);
+		const prs = tracked.filter((pr) => pr.open).map(({ position: _position, open: _open, ...pr }) => pr);
+		return { title, prs };
+	}
 	const pr = run.pr === undefined ? null : record(run.pr);
 	const integration = run.integration === undefined ? null : record(run.integration);
 	if ((run.pr !== undefined && !pr) || (run.integration !== undefined && typeof integration?.headSha !== "string")) return null;
 	const approvedHead = typeof integration?.headSha === "string" ? integration.headSha.toLowerCase() : "";
-	if (!pr) return { title: oneLine(task.title), pr: null, approvedHead };
+	if (!pr) return { title, prs: [] };
+	const parsed = integrationPR(pr);
+	if (!parsed) return null;
+	if (!parsed.open) return { title, prs: [] };
+	return { title, prs: [{ ...parsed.pr, approved: approvedHead !== "" && approvedHead === parsed.pr.headSha }] };
+}
+
+// One pull request of a run, from LadoExecutionPRResponse or
+// LadoExecutionTrackedPRResponse, and whether it is still open.
+function integrationPR(pr: Record<string, unknown>): { pr: Omit<IntegrationPR, "approved">; open: boolean } | null {
 	const { number, url, merged, closed, headSha = "", targetBranch = "" } = pr;
 	if (
 		typeof number !== "number" ||
@@ -1436,11 +1520,23 @@ function integrationRun(body: unknown, sessionId: string): IntegrationRun | null
 	) {
 		return null;
 	}
-	return {
-		title: oneLine(task.title),
-		pr: merged || closed ? null : { number, url, headSha: headSha.toLowerCase(), branch: oneLine(targetBranch) },
-		approvedHead,
-	};
+	return { pr: { number, url, headSha: headSha.toLowerCase(), branch: oneLine(targetBranch), repo: "" }, open: !merged && !closed };
+}
+
+// The dry run of several pull requests, from LadoIntegrationApproveResponse's
+// prs: one verification for each pull request asked for, in their order.
+function verifiedSubjects(body: unknown, prs: readonly IntegrationPR[]): VerifiedSubject[] | null {
+	const answers = record(body)?.prs;
+	if (!Array.isArray(answers) || answers.length !== prs.length) return null;
+	const verified: VerifiedSubject[] = [];
+	for (const pr of prs) {
+		const matching = answers.filter((answer) => record(answer)?.prUrl === pr.url);
+		if (matching.length !== 1) return null;
+		const one = verifiedSubject(matching[0], pr);
+		if (!one) return null;
+		verified.push(one);
+	}
+	return verified;
 }
 
 // The dry run's verification, from LadoIntegrationApproveResponse: about the
@@ -1483,9 +1579,36 @@ function verifiedSubject(body: unknown, pr: { url: string; headSha: string }): V
 // one line for each thing to confirm, and what happens next. Each line is
 // cleaned on its own.
 function integrationDetail(t: Translate, task: string, verified: VerifiedSubject): string {
+	const lines = [t("lado.presence.integration.task", { task }), ...headLines(t, verified)];
+	return [lines.join("\n"), nextLines(t, [verified], false)].join("\n\n");
+}
+
+// The confirmation of a task's pull requests approved together: the task,
+// then each pull request with its repository, target, head and what to
+// confirm about it, then what happens next.
+function integrationsDetail(t: Translate, run: IntegrationRun, verified: readonly VerifiedSubject[]): string {
+	const blocks = [t("lado.presence.integration.task", { task: run.title })];
+	verified.forEach((one, index) => {
+		const pr = run.prs[index]!;
+		blocks.push(
+			[
+				t("lado.presence.integration.prLine", {
+					number: pr.number,
+					repo: excerpt(pr.repo, MAX_EXAMPLE_CHARS) || "—",
+					branch: excerpt(pr.branch, MAX_EXAMPLE_CHARS) || "—",
+				}),
+				...headLines(t, one),
+				...(pr.approved ? [t("lado.presence.integration.approvedAlready")] : []),
+			].join("\n"),
+		);
+	});
+	return [...blocks, nextLines(t, verified, true)].join("\n\n");
+}
+
+// The head, how many of its items passed and one line for each to confirm.
+function headLines(t: Translate, verified: VerifiedSubject): string[] {
 	const counted = verified.items.filter((item) => item.outcome !== "info");
-	const lines = [
-		t("lado.presence.integration.task", { task }),
+	return [
 		t("lado.presence.integration.head", { head: verified.headSha.slice(0, 12) }),
 		t("lado.presence.integration.passed", {
 			passed: counted.filter((item) => item.outcome === "pass").length,
@@ -1493,16 +1616,21 @@ function integrationDetail(t: Translate, task: string, verified: VerifiedSubject
 		}),
 		...verified.items.filter((item) => item.outcome === "confirm").map((item) => confirmLine(t, item)),
 	];
-	// GitLab gets no status; a branch whose rules do not require the status
-	// lets a pull request merge without the approval, which LADO only notices.
-	const protection = verified.items.find((item) => item.kind === "protection");
+}
+
+// What happens next. GitLab gets no status; a branch whose rules do not
+// require the status lets a pull request merge without the approval, which
+// LADO only notices.
+function nextLines(t: Translate, verified: readonly VerifiedSubject[], many: boolean): string {
+	const protections = verified.map((one) => one.items.find((item) => item.kind === "protection"));
 	// Rules LADO could not read may well protect the branch (U4 of #15).
-	const unprotected = protection?.code === "unprotected" || protection?.code === "unprotected_gitlab";
+	const unprotected = protections.some((protection) => protection?.code === "unprotected" || protection?.code === "unprotected_gitlab");
+	const posts = protections.some((protection) => protection?.details.provider !== "gitlab");
 	const next = [
-		...(protection?.details.provider === "gitlab" ? [] : [t("lado.presence.integration.nextStatus")]),
-		...(unprotected ? [t("lado.presence.integration.nextUnprotected")] : []),
+		...(posts ? [t(many ? "lado.presence.integration.nextStatusMany" : "lado.presence.integration.nextStatus")] : []),
+		...(unprotected ? [t(many ? "lado.presence.integration.nextUnprotectedMany" : "lado.presence.integration.nextUnprotected")] : []),
 	];
-	return [lines.join("\n"), next.join(" ")].join("\n\n");
+	return next.join(" ");
 }
 
 // One thing to confirm, with how many there are and up to three examples.

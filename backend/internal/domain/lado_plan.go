@@ -337,6 +337,12 @@ type LadoPlan struct {
 	// LADO runs in parallel workers (docs/LJY-PRD/TDD.md §5.4). Without it
 	// one worker runs the whole plan.
 	Parts []LadoPlanPart
+	// Repos is the optional repos list of a workspace project's plan (#64):
+	// the slash-separated folders of the child repositories the work changes,
+	// in the order their pull requests merge (the database's and the API's
+	// first). A plan whose paths lie in more than one child repository needs
+	// it (LadoPlanRepos).
+	Repos []string
 	// Body is the Markdown after the front matter.
 	Body string
 }
@@ -387,6 +393,7 @@ func ParseLadoPlan(content []byte, want LadoPlanExpectations) (LadoPlan, []LadoP
 	plan.PlanSource = r.text("plan_source")
 	plan.ChangeKinds = r.changeKinds()
 	plan.Parts = r.parts()
+	plan.Repos = r.repos()
 
 	if plan.Task != "" && plan.Task != string(want.Task) {
 		r.add(LadoPlanWrongTask, "task", plan.Task)

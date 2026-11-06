@@ -3,7 +3,7 @@
 // waits for, why a task needs the human again or failed, or what its plan
 // worker does (§5.1).
 import type { TFunction } from "i18next";
-import { LADO_MAX_ATTEMPTS, type LadoPlanWorker, type LadoTask } from "../../lib/lado";
+import { LADO_MAX_ATTEMPTS, type LadoExecutionTrackedPR, type LadoPlanWorker, type LadoTask, type LadoTaskExecution } from "../../lib/lado";
 import { ladoPlanFailureText, ladoPlanWaitingText, ladoPlanWorkerPhaseText, ladoReasonText } from "../../lib/lado-errors";
 import { formatResetTime } from "../settings/CodexAccountDetails";
 
@@ -34,6 +34,60 @@ export function ladoRunStatus(state: LadoRunState, reason: string | undefined, t
 		case "closed_unmerged":
 			return { label: t("lado.task.state.closedUnmerged"), tone: "muted" };
 	}
+}
+
+const runStates: readonly string[] = ["validating", "integration_pending", "integrating", "completed", "closed_unmerged"];
+
+/**
+ * How one of a run's tracked pull requests is named (#64): the state it
+ * alone gives its task, as the daemon derives it, in the run's words.
+ */
+export function ladoTrackedPRStatus(pr: LadoExecutionTrackedPR, t: TFunction): { label: string; tone: LadoTaskStatusTone } {
+	if (runStates.includes(pr.state)) return ladoRunStatus(pr.state as LadoRunState, pr.stateReason, t);
+	return pr.state === "failed" ? { label: t("lado.task.state.failed"), tone: "attention" } : { label: t("lado.task.state.running"), tone: "working" };
+}
+
+type LadoRunPRs = Pick<LadoTaskExecution, "trackedPrs" | "prRepos">;
+
+/**
+ * The pull requests LADO tracks for a run, in merge order; several only for a
+ * workspace task that changes several repositories (#64).
+ */
+export function ladoTrackedPRs(execution: LadoRunPRs): LadoExecutionTrackedPR[] {
+	return [...(execution.trackedPrs ?? [])].sort((a, b) => a.position - b.position);
+}
+
+/**
+ * The repositories the run is expected to open a pull request in that have
+ * none yet, while the task waits for them (pr_missing).
+ */
+export function ladoMissingPRRepos(execution: LadoRunPRs, reason: string | undefined): string[] {
+	if (reason !== "pr_missing") return [];
+	const tracked = new Set((execution.trackedPrs ?? []).map((pr) => pr.repo));
+	return (execution.prRepos ?? []).filter((repo) => !tracked.has(repo));
+}
+
+// A repository's folder as the daemon compares it, without a leading or
+// trailing "/".
+function ladoRepoFolder(repo: string): string {
+	return repo.replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * Whether the approved pull request can merge now: the merge gate holds one
+ * back until every open pull request of a repository before its own in the
+ * plan's repos order merged (LADO_INTEGRATION_MERGE_ORDER), so the app offers
+ * only that one.
+ */
+export function ladoMergeable(execution: LadoRunPRs, pr: LadoExecutionTrackedPR): boolean {
+	if (pr.merged || pr.closed || pr.state !== "integrating" || !pr.integration.headApproved) return false;
+	// As the daemon's merge gate: only the plan's repos order, and a pull
+	// request that closed without merging holds nothing back.
+	const order = (execution.prRepos ?? []).map(ladoRepoFolder);
+	const at = order.indexOf(ladoRepoFolder(pr.repo));
+	if (at < 0) return true;
+	const before = order.slice(0, at);
+	return ladoTrackedPRs(execution).every((other) => other.merged || other.closed || !before.includes(ladoRepoFolder(other.repo)));
 }
 
 /**

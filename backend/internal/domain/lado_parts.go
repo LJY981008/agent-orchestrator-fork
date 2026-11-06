@@ -56,11 +56,28 @@ const (
 	LadoPlanPartStepShared        = "part_step_shared"
 	LadoPlanPartPathOutside       = "part_path_outside"
 	LadoPlanPartMissing           = "part_missing_field"
-	// LadoPlanPartRepoOutside is a path of a workspace project's plan with
-	// parts that lies outside the folder of the repository holding the
-	// issue: LADO merges the parts in that repository only (#60). Field is
-	// "affected_paths" for a plan's path, "parts" for a part's.
+	// LadoPlanPartRepoOutside is a path of a workspace project's plan that
+	// lies outside the repositories the plan runs in: its repos list, or,
+	// without one, the repository holding the issue (#60, #64). LADO keeps
+	// branches in those repositories only, so work elsewhere would be lost.
+	// Field is "affected_paths" for a plan's path, "parts" for a part's.
 	LadoPlanPartRepoOutside = "part_repo_outside"
+)
+
+// Plan problem codes of the repos list (#64). Field is "repos".
+const (
+	// LadoPlanReposInvalid is a repos entry that is blank, starts with "/",
+	// has a ".." segment or repeats another; Detail is the entry.
+	LadoPlanReposInvalid = "repos_invalid"
+	// LadoPlanReposMissing is a workspace plan whose paths lie in more than
+	// one child repository without a repos list that says the order of
+	// their pull requests; Detail lists the repositories, comma-separated.
+	LadoPlanReposMissing = "repos_missing"
+	// LadoPlanRepoUnknown is a repos entry that is no child repository of the
+	// project, or any repos list in a single-repository project; Detail is
+	// the entry. LADO checks it when it pins a revision, with the project's
+	// repositories at hand.
+	LadoPlanRepoUnknown = "repo_unknown"
 )
 
 // LadoPlanWarningUnsplit warns of a large plan that names no parts: one
@@ -210,30 +227,129 @@ func (r *planReader) checkParts(plan LadoPlan) {
 
 // LadoPlanOutsideRepo lists the paths of a plan with parts that lie outside
 // relative, the slash-separated folder of the workspace repository that holds
-// the task's issue: the plan's own paths and each part's. A parts run merges
-// the parts in that one repository, so work elsewhere would be lost. A plan
-// without parts, which one worker runs, is not checked, and an empty
-// relative, the project's root, holds every path.
+// the task's issue. It is LadoPlanOutsideRepos with that one repository.
 func LadoPlanOutsideRepo(plan LadoPlan, relative string) []LadoPlanProblem {
-	relative = strings.Trim(relative, "/")
-	if len(plan.Parts) == 0 || relative == "" {
+	return LadoPlanOutsideRepos(plan, []string{relative})
+}
+
+// LadoPlanOutsideRepos lists the paths of a plan that lie outside repos, the
+// slash-separated folders of the workspace repositories the plan runs in: the
+// plan's own paths and each part's (#64). Only a plan with parts or with a
+// repos list is checked: a parts run keeps its branches in those repositories
+// and a repos list names where the pull requests are, so work elsewhere would
+// be lost. A plan without either, which one worker runs, is not checked, and
+// an empty folder, the project's root, holds every path.
+func LadoPlanOutsideRepos(plan LadoPlan, repos []string) []LadoPlanProblem {
+	if len(plan.Parts) == 0 && len(plan.Repos) == 0 {
 		return nil
 	}
-	repo := []string{relative + "/**"}
+	globs := make([]string, 0, len(repos))
+	for _, relative := range repos {
+		relative = strings.Trim(relative, "/")
+		if relative == "" {
+			return nil
+		}
+		globs = append(globs, relative+"/**")
+	}
 	var problems []LadoPlanProblem
 	for _, glob := range plan.AffectedPaths {
-		if !ladoPathInside(glob, repo) {
+		if !ladoPathInside(glob, globs) {
 			problems = append(problems, LadoPlanProblem{Code: LadoPlanPartRepoOutside, Field: "affected_paths", Detail: glob})
 		}
 	}
 	for _, part := range plan.Parts {
 		for _, glob := range part.AffectedPaths {
-			if !ladoPathInside(glob, repo) {
+			if !ladoPathInside(glob, globs) {
 				problems = append(problems, LadoPlanProblem{Code: LadoPlanPartRepoOutside, Field: "parts", Detail: part.ID + ": " + glob})
 			}
 		}
 	}
 	return problems
+}
+
+// LadoPlanRepos returns the workspace repositories a plan runs in, in the
+// order their pull requests merge (#64): the plan's repos list as written
+// when it has one. Without it, the child repositories (childRelatives, the
+// slash-separated folders of the workspace's children) its paths lie in
+// decide, the plan's and its parts' alike: the one child they lie in, or,
+// when they lie in none, issueRelative, the repository holding the issue
+// ("" for a single-repository project or the workspace's root). Paths in more
+// than one child need a repos list that says the order, so that is a
+// LadoPlanReposMissing problem, with or without parts. A path lies in a child
+// when its fixed prefix starts with the child's folder; a glob such as "**"
+// lies in none.
+func LadoPlanRepos(plan LadoPlan, childRelatives []string, issueRelative string) ([]string, []LadoPlanProblem) {
+	if len(plan.Repos) > 0 {
+		return slices.Clone(plan.Repos), nil
+	}
+	globs := slices.Clone(plan.AffectedPaths)
+	for _, part := range plan.Parts {
+		globs = append(globs, part.AffectedPaths...)
+	}
+	var touched []string
+	for _, child := range childRelatives {
+		child = strings.Trim(child, "/")
+		if child == "" || slices.Contains(touched, child) {
+			continue
+		}
+		inside := []string{child + "/**"}
+		if slices.ContainsFunc(globs, func(glob string) bool { return ladoPathInside(glob, inside) }) {
+			touched = append(touched, child)
+		}
+	}
+	switch len(touched) {
+	case 0:
+		return []string{strings.Trim(issueRelative, "/")}, nil
+	case 1:
+		return touched, nil
+	}
+	return nil, []LadoPlanProblem{{Code: LadoPlanReposMissing, Field: "repos", Detail: strings.Join(touched, ", ")}}
+}
+
+// repos reads the optional repos list (#64): the slash-separated folders of
+// the workspace's child repositories the plan changes, in the order their
+// pull requests merge. Missing or null is none. An entry is trimmed of
+// spaces and of a trailing "/"; a blank entry, one that starts with "/" or
+// has a "." or ".." segment, and a repeat, without case, are
+// LadoPlanReposInvalid.
+func (r *planReader) repos() []string {
+	node, ok := r.fields["repos"]
+	if !ok || node.Tag == "!!null" {
+		return nil
+	}
+	var values []string
+	if node.Kind != yaml.SequenceNode || node.Decode(&values) != nil {
+		r.add(LadoPlanInvalidField, "repos", "")
+		return nil
+	}
+	repos := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		relative := strings.TrimRight(value, "/")
+		if !validLadoRepoRelative(relative) || slices.ContainsFunc(repos, func(other string) bool { return strings.EqualFold(other, relative) }) {
+			r.add(LadoPlanReposInvalid, "repos", value)
+			continue
+		}
+		repos = append(repos, relative)
+	}
+	return repos
+}
+
+// validLadoRepoRelative accepts a repository folder relative to the
+// workspace's root that stays inside it and is not the root itself.
+func validLadoRepoRelative(relative string) bool {
+	if relative == "" || strings.HasPrefix(relative, "/") || strings.ContainsAny(relative, "\\*?[") || strings.ContainsRune(relative, 0) {
+		return false
+	}
+	if len(relative) >= 2 && relative[1] == ':' {
+		return false
+	}
+	for _, segment := range strings.Split(relative, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 // ladoPartCycle returns the id of a part on a dependency cycle, or "". Unknown
@@ -509,6 +625,15 @@ type LadoTaskPart struct {
 	MergedSHA      string
 	MergeSessionID SessionID
 	MergeBranch    string
+	// MergeRepo is the slash-separated folder of the repository whose merge
+	// conflicted, where the part's merge worker resolves it (#64); empty
+	// while no merge conflicts and for a run in one repository.
+	MergeRepo string
+	// MergeAttemptsBase is MergeAttempts when the merge in MergeRepo began to
+	// conflict: each conflicting repository gets LadoMaxPartAttempts merge
+	// workers of its own, while MergeAttempts keeps numbering the merge
+	// workers' branches and requests. Zero for a run in one repository.
+	MergeAttemptsBase int
 	// Summary is the part worker's done report.
 	Summary   string
 	Error     string
@@ -540,6 +665,55 @@ type LadoPartRun struct {
 	// IntegrationRetryAt is when a start that failed may be tried again.
 	IntegrationAttempts int
 	IntegrationRetryAt  time.Time
+}
+
+// LadoPartRunRepo is one repository of a parts run (#64): the parts run
+// keeps an integration branch, of the same name, in each repository the plan
+// runs in (LadoPlanRepos). Position 0 is the first repository of the plan's
+// order, whose values LadoPartRun's own fields repeat; a run started before
+// a run had repositories reads as that one repository.
+type LadoPartRunRepo struct {
+	// Relative is the repository's slash-separated folder under the
+	// project's, empty for a single-repository project; Dir is its folder.
+	Relative string
+	Position int
+	Dir      string
+	// BaseSHA is the commit the repository's integration branch started
+	// from, HeadSHA where LADO last moved it.
+	BaseSHA string
+	HeadSHA string
+	// The base the dispatch resolved for the repository, as LadoPartRun's.
+	BaseBranch           string
+	BaseRemote           string
+	DispatchLocalBaseSHA string
+	BaseCommitsAhead     *int
+}
+
+// Changed reports whether the repository's integration branch moved past its
+// base: the parts changed something there, so the integration worker opens a
+// pull request for it.
+func (r LadoPartRunRepo) Changed() bool {
+	return r.HeadSHA != "" && r.HeadSHA != r.BaseSHA
+}
+
+// LadoTaskPartRepo is how one part's merge went in one repository of its
+// parts run (#64): the integration head the part's branch started from
+// there, the integration head and the part's tip LADO recorded before it
+// merged, and the integration head once merged. LadoTaskPart's own SHA fields
+// repeat the first repository's.
+type LadoTaskPartRepo struct {
+	Relative     string
+	StartSHA     string
+	MergeFromSHA string
+	MergeTipSHA  string
+	MergedSHA    string
+}
+
+// Empty reports whether the part left the repository as it found it: its
+// tip there, once LADO recorded it, is the integration head its branch
+// started from.
+func (r LadoTaskPartRepo) Empty() bool {
+	return r.MergeTipSHA != "" && r.MergeTipSHA == r.StartSHA
 }
 
 // LadoTaskPartsSummary is how far a task's newest parts run got: merged parts

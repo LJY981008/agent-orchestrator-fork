@@ -165,8 +165,8 @@ func ladoIntegrationEvent(a domain.LadoIntegrationApproval) domain.LadoAuditEven
 // mustApproveLadoIntegration approves a with the proof "nonce-<id>".
 func mustApproveLadoIntegration(t *testing.T, s *sqlite.Store, a domain.LadoIntegrationApproval) {
 	t.Helper()
-	if err := s.ApproveLadoIntegration(context.Background(), a, ladoIntegrationProof("nonce-"+a.ID, a), ladoIntegrationEvent(a)); err != nil {
-		t.Fatalf("ApproveLadoIntegration %s: %v", a.ID, err)
+	if err := s.ApproveLadoIntegrations(context.Background(), []domain.LadoIntegrationApproval{a}, ladoIntegrationProof("nonce-"+a.ID, a), ladoIntegrationEvent(a)); err != nil {
+		t.Fatalf("ApproveLadoIntegrations %s: %v", a.ID, err)
 	}
 }
 
@@ -470,8 +470,8 @@ func TestApproveLadoIntegrationRecordsProofAndAuditTogether(t *testing.T) {
 	proof := ladoIntegrationProof("nonce-integration-1", approval)
 
 	before := ladoAuditProbe(t, s)
-	if err := s.ApproveLadoIntegration(ctx, approval, proof, ladoIntegrationEvent(approval)); err != nil {
-		t.Fatalf("ApproveLadoIntegration: %v", err)
+	if err := s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{approval}, proof, ladoIntegrationEvent(approval)); err != nil {
+		t.Fatalf("ApproveLadoIntegrations: %v", err)
 	}
 	if after := ladoAuditProbe(t, s); after != before+2 {
 		t.Fatalf("the approval appended %d audit events, want 1", after-before-1)
@@ -512,7 +512,7 @@ func TestApproveLadoIntegrationRecordsProofAndAuditTogether(t *testing.T) {
 	}
 	before = ladoAuditProbe(t, s)
 	for _, r := range refusals {
-		if err := s.ApproveLadoIntegration(ctx, r.approval, ladoIntegrationProof(r.nonce, r.approval), ladoIntegrationEvent(r.approval)); !errors.Is(err, r.want) {
+		if err := s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{r.approval}, ladoIntegrationProof(r.nonce, r.approval), ladoIntegrationEvent(r.approval)); !errors.Is(err, r.want) {
 			t.Fatalf("%s = %v, want %v", r.name, err, r.want)
 		}
 		if r.nonce != proof.Nonce && r.nonce != "nonce-lado-approval-1" {
@@ -534,7 +534,7 @@ func TestApproveLadoIntegrationRecordsProofAndAuditTogether(t *testing.T) {
 	}
 
 	// A proof a refused approval carried is still unused.
-	if err := s.ApproveLadoIntegration(ctx, nextApproval, ladoIntegrationProof("nonce-integration-3", nextApproval), ladoIntegrationEvent(nextApproval)); err != nil {
+	if err := s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{nextApproval}, ladoIntegrationProof("nonce-integration-3", nextApproval), ladoIntegrationEvent(nextApproval)); err != nil {
 		t.Fatalf("approving the next head with a proof a refused call carried: %v", err)
 	}
 
@@ -542,7 +542,7 @@ func TestApproveLadoIntegrationRecordsProofAndAuditTogether(t *testing.T) {
 	// The same head approved into another branch is another approval.
 	release := approval
 	release.ID, release.TargetBranch = "lado-integration-5", "release"
-	if err := s.ApproveLadoIntegration(ctx, release, ladoIntegrationProof("nonce-integration-5", release), ladoIntegrationEvent(release)); err != nil {
+	if err := s.ApproveLadoIntegrations(ctx, []domain.LadoIntegrationApproval{release}, ladoIntegrationProof("nonce-integration-5", release), ladoIntegrationEvent(release)); err != nil {
 		t.Fatalf("approving the head into another branch: %v", err)
 	}
 	approvals, err := s.ListLadoIntegrationApprovals(ctx, exec.SessionID, prURL, record.HeadSHA)
@@ -874,8 +874,8 @@ func TestListLadoExecutionsToVerify(t *testing.T) {
 	settle := func(exec *domain.LadoExecution, number int, state domain.PRState, settled time.Time, audit *domain.LadoAuditEvent) {
 		t.Helper()
 		url := fmt.Sprintf("https://github.com/acme/demo/pull/%d", number)
-		if err := s.SettleLadoExecution(ctx, exec.SessionID, url, state, settled, audit); err != nil {
-			t.Fatalf("SettleLadoExecution %s: %v", exec.SessionID, err)
+		if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, url, state, settled, audit); err != nil {
+			t.Fatalf("SettleLadoExecutionPR %s: %v", exec.SessionID, err)
 		}
 		if exec.SettledAt.IsZero() {
 			exec.SettledAt = settled
@@ -952,7 +952,7 @@ func TestListLadoExecutionsToVerify(t *testing.T) {
 	}
 	settle(&closed, 45, domain.PRStateClosed, at.Add(4*time.Hour), nil)
 	expect("settled", 50, reopened, open)
-	if err := s.SettleLadoExecution(ctx, open.SessionID, open.PR.URL, domain.PRStateOpen, at, nil); err == nil {
+	if err := s.SettleLadoExecutionPR(ctx, open.SessionID, open.PR.URL, domain.PRStateOpen, at, nil); err == nil {
 		t.Fatal("settling an open PR was accepted")
 	}
 }
@@ -1040,7 +1040,7 @@ func TestSettleLadoExecutionPerPRAndState(t *testing.T) {
 		return &domain.LadoAuditEvent{At: at, Actor: "lado", Action: "execution.merged_without_approval", SubjectKind: "execution", SubjectID: string(exec.SessionID), Payload: []byte(`{"state":"` + state + `"}`)}
 	}
 	pr := mustWriteLadoHeadPR(t, s, exec.SessionID, 7, domain.PRStateClosed, ladoHead('1'), at.Add(time.Hour))
-	if err := s.SettleLadoExecution(ctx, exec.SessionID, pr.URL, domain.PRStateClosed, at.Add(time.Hour), nil); err != nil {
+	if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, pr.URL, domain.PRStateClosed, at.Add(time.Hour), nil); err != nil {
 		t.Fatalf("settle the closed PR: %v", err)
 	}
 	if listed() {
@@ -1058,7 +1058,7 @@ func TestSettleLadoExecutionPerPRAndState(t *testing.T) {
 	}
 	before := ladoAuditProbe(t, s)
 	for range 2 {
-		if err := s.SettleLadoExecution(ctx, exec.SessionID, pr.URL, domain.PRStateMerged, at.Add(4*time.Hour), audit("merged")); err != nil {
+		if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, pr.URL, domain.PRStateMerged, at.Add(4*time.Hour), audit("merged")); err != nil {
 			t.Fatalf("settle the merged PR: %v", err)
 		}
 	}
@@ -1073,7 +1073,7 @@ func TestSettleLadoExecutionPerPRAndState(t *testing.T) {
 	if !listed() {
 		t.Fatal("a newer merged PR is not listed")
 	}
-	if err := s.SettleLadoExecution(ctx, exec.SessionID, newer.URL, domain.PRStateMerged, at.Add(6*time.Hour), nil); err != nil {
+	if err := s.SettleLadoExecutionPR(ctx, exec.SessionID, newer.URL, domain.PRStateMerged, at.Add(6*time.Hour), nil); err != nil {
 		t.Fatalf("settle the newer PR: %v", err)
 	}
 	if got, _, err := s.LadoExecution(ctx, exec.SessionID); err != nil || !got.SettledAt.Equal(at.Add(6*time.Hour)) {

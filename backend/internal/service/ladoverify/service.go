@@ -1,9 +1,10 @@
 package ladoverify
 
 // LADO fork: the verification loop (decisions a, b, c, l, m and r of the
-// step 8 plan; docs/LJY-PRD/TDD.md §8). Each pass reads the executions whose
-// session's newest PR is open, or merged or closed and not settled yet. For
-// an open PR it computes the record of the PR's current head, starting what
+// step 8 plan; docs/LJY-PRD/TDD.md §8). Each pass first pins the PRs the
+// executions' sessions opened (track.go, #64), then reads each tracked PR
+// that is open, or merged or closed and not settled yet (an execution without
+// tracked PRs: its session's newest PR). For an open PR it computes the record of the PR's current head, starting what
 // the record still waits for (a check command, a review, the evidence pin),
 // and tells the worker once about each of LADO's own items that fails on the
 // head. A merged or closed PR is settled once. At the end the pass posts
@@ -63,6 +64,10 @@ const (
 // Store is what the loop reads and writes in LADO's store (*store.Store).
 type Store interface {
 	ListLadoExecutionsToVerify(ctx context.Context, limit int) ([]domain.LadoExecution, error)
+	// The tracked PRs of executions (track.go, #64).
+	ListLadoExecutionPRsToTrack(ctx context.Context, limit int) ([]domain.LadoExecution, error)
+	TrackLadoExecutionPR(ctx context.Context, session domain.SessionID, prURL, repo string, position int, at time.Time) (bool, error)
+	ReplaceLadoExecutionPR(ctx context.Context, session domain.SessionID, oldURL, newURL string, at time.Time, audit *domain.LadoAuditEvent) (bool, error)
 	LadoExecution(ctx context.Context, sessionID domain.SessionID) (domain.LadoExecution, bool, error)
 	LadoProjectChecks(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoCheckCommand, int, error)
 	// GetPR reads AO's PR row, for the base tip AO recorded.
@@ -77,14 +82,20 @@ type Store interface {
 	UpsertLadoVerification(ctx context.Context, v domain.LadoVerification) (bool, error)
 	ListLadoExecutionReviews(ctx context.Context, session domain.SessionID) ([]domain.LadoExecutionReview, error)
 	AddLadoExecutionReview(ctx context.Context, r domain.LadoExecutionReview) error
+	// The review rounds of one PR of an execution with several (#64).
+	ListLadoExecutionPRReviews(ctx context.Context, session domain.SessionID, prURL string) ([]domain.LadoExecutionReview, error)
+	AddLadoExecutionPRReview(ctx context.Context, r domain.LadoExecutionReview, prURL string) error
 	MarkLadoExecutionReviewCancelled(ctx context.Context, runID string, at time.Time) error
 	ReplaceLadoEvidenceLinks(ctx context.Context, session domain.SessionID, headSHA string, links []domain.LadoEvidenceLink) error
-	SettleLadoExecution(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error
+	SettleLadoExecutionPR(ctx context.Context, session domain.SessionID, prURL string, state domain.PRState, at time.Time, audit *domain.LadoAuditEvent) error
+	// Settles the executions that waited for a repository's PR and no
+	// longer do (#64).
+	SettleLadoExecutionsAwaitingRepos(ctx context.Context) (int64, error)
 	ListLadoIntegrationStatusRetries(ctx context.Context, limit int) ([]domain.LadoIntegrationApproval, error)
 	SetLadoIntegrationStatus(ctx context.Context, id string, state domain.LadoIntegrationStatusState, attempts int, postedAt time.Time, errorMessage string) error
 	// The integration approval and the merge gate.
 	LadoPresenceProofUsed(ctx context.Context, nonce string) (bool, error)
-	ApproveLadoIntegration(ctx context.Context, a domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
+	ApproveLadoIntegrations(ctx context.Context, approvals []domain.LadoIntegrationApproval, proof domain.LadoPresenceProof, audit domain.LadoAuditEvent) error
 	ListLadoIntegrationApprovals(ctx context.Context, session domain.SessionID, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error)
 	ListLadoIntegrationApprovalsForPR(ctx context.Context, prURL, headSHA string) ([]domain.LadoIntegrationApproval, error)
 	LadoSessionsNamingPR(ctx context.Context, prURL string) ([]domain.SessionID, error)
@@ -202,10 +213,12 @@ type Service struct {
 	// its status.
 	statusTried map[string]time.Time
 	// headFetched holds, by execution and head, when the loop last fetched
-	// a head the repository lacked; failedAt, by execution, when a pass last
-	// could not verify it.
-	headFetched map[string]time.Time
-	failedAt    map[domain.SessionID]time.Time
+	// a head the repository lacked; failedAt, by execution and PR
+	// (passKey), when a pass last could not verify it; trackFailedAt, by
+	// execution, when a pass last could not pin its PRs.
+	headFetched   map[string]time.Time
+	failedAt      map[domain.SessionID]time.Time
+	trackFailedAt map[domain.SessionID]time.Time
 	// baseFetched holds, by repository, remote and branch (fetchKey), when
 	// LADO last fetched a base branch; urgent holds the targets
 	// (targetKey) a settled merge moved, which the next pass fetches at
@@ -257,18 +270,19 @@ func New(deps Deps) *Service {
 		deps.Interval = defaultInterval
 	}
 	return &Service{
-		deps:         deps,
-		protection:   NewProtection(deps.Clients, deps.Clock, protectionTTL),
-		kick:         make(chan struct{}, 1),
-		statusTried:  map[string]time.Time{},
-		headFetched:  map[string]time.Time{},
-		failedAt:     map[domain.SessionID]time.Time{},
-		baseFetched:  map[string]time.Time{},
-		urgent:       map[string]bool{},
-		baseResolved: map[string]resolvedBase{},
-		prURLWarned:  map[string]bool{},
-		prSeen:       map[domain.SessionID]bool{},
-		verified:     map[domain.SessionID]bool{},
+		deps:          deps,
+		protection:    NewProtection(deps.Clients, deps.Clock, protectionTTL),
+		kick:          make(chan struct{}, 1),
+		statusTried:   map[string]time.Time{},
+		headFetched:   map[string]time.Time{},
+		failedAt:      map[domain.SessionID]time.Time{},
+		trackFailedAt: map[domain.SessionID]time.Time{},
+		baseFetched:   map[string]time.Time{},
+		urgent:        map[string]bool{},
+		baseResolved:  map[string]resolvedBase{},
+		prURLWarned:   map[string]bool{},
+		prSeen:        map[domain.SessionID]bool{},
+		verified:      map[domain.SessionID]bool{},
 	}
 }
 
@@ -436,12 +450,15 @@ func (s *Service) baseBranchOf(ctx context.Context, place repoPlace) (string, er
 
 // Tick runs one pass. The first pass cancels the check runs a stopped daemon
 // left running, so that they run again; a pass that cannot does nothing
-// else. Each execution is verified or settled on its own: what fails for one
-// is returned, joined with the others, after the rest ran, and the loop
-// leaves that execution for failedRetryAfter. A pass verifies up to
+// else. A pass then pins the PRs executions opened (trackPRs). Each PR of an
+// execution is verified or settled on its own: what fails for one is
+// returned, joined with the others, after the rest ran, and the loop leaves
+// that PR of the execution for failedRetryAfter. A pass verifies up to
 // verifyBatch executions in the store's order, except that after a merge
 // moved a target the open executions of that target come first, those with
-// an approved head before the others.
+// an approved head before the others. An execution whose PRs all settled
+// while a repository still waited for its PR settles once it no longer
+// waits.
 func (s *Service) Tick(ctx context.Context) error {
 	s.passMu.Lock()
 	defer s.passMu.Unlock()
@@ -449,6 +466,9 @@ func (s *Service) Tick(ctx context.Context) error {
 		return err
 	}
 	var problems []error
+	if err := s.trackPRs(ctx); err != nil {
+		problems = append(problems, err)
+	}
 	resting := s.resting()
 	urgent := s.takeUrgent()
 	limit := verifyBatch
@@ -468,13 +488,14 @@ func (s *Service) Tick(ctx context.Context) error {
 		if ctx.Err() != nil || verified == verifyBatch {
 			break
 		}
-		if resting[exec.SessionID] {
+		pass := passKey(exec)
+		if resting[pass] {
 			continue
 		}
 		verified++
 		// The first open head of an urgent target fetches it; the others
 		// of that target compare with that fetch.
-		key := keys[exec.SessionID]
+		key := keys[pass]
 		force := urgent[key] && !exec.PR.Merged && !exec.PR.Closed && exec.PR.HeadSHA != ""
 		if force {
 			urgent[key] = false
@@ -485,13 +506,18 @@ func (s *Service) Tick(ctx context.Context) error {
 		}
 		s.mu.Lock()
 		if err != nil {
-			s.failedAt[exec.SessionID] = s.now()
+			s.failedAt[pass] = s.now()
 		} else {
-			delete(s.failedAt, exec.SessionID)
+			delete(s.failedAt, pass)
 		}
 		s.mu.Unlock()
 		if err != nil {
-			problems = append(problems, fmt.Errorf("execution %s: %w", exec.SessionID, err))
+			problems = append(problems, fmt.Errorf("execution %s, pull request %s: %w", exec.SessionID, exec.PR.URL, err))
+		}
+	}
+	if ctx.Err() == nil {
+		if _, err := s.deps.Store.SettleLadoExecutionsAwaitingRepos(ctx); err != nil {
+			problems = append(problems, fmt.Errorf("settle the executions awaiting repositories: %w", err))
 		}
 	}
 	if ctx.Err() == nil {
@@ -502,18 +528,28 @@ func (s *Service) Tick(ctx context.Context) error {
 	return errors.Join(problems...)
 }
 
-// resting returns the executions a pass could not verify less than
-// failedRetryAfter ago, and forgets the others.
+// passKey names what one turn of a pass verifies: the execution, or, for an
+// execution with several tracked PRs, which comes once for each (#64), the
+// execution and its PR.
+func passKey(exec domain.LadoExecution) domain.SessionID {
+	if len(exec.PRs) <= 1 {
+		return exec.SessionID
+	}
+	return exec.SessionID + "\x00" + domain.SessionID(exec.PR.URL)
+}
+
+// resting returns the executions or their PRs (passKey) a pass could not
+// verify less than failedRetryAfter ago, and forgets the others.
 func (s *Service) resting() map[domain.SessionID]bool {
 	now := s.now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	resting := map[domain.SessionID]bool{}
-	for session, at := range s.failedAt {
+	for key, at := range s.failedAt {
 		if now.Sub(at) < failedRetryAfter {
-			resting[session] = true
+			resting[key] = true
 		} else {
-			delete(s.failedAt, session)
+			delete(s.failedAt, key)
 		}
 	}
 	return resting
@@ -608,8 +644,8 @@ func (s *Service) takeUrgent() map[string]bool {
 
 // urgentFirst orders the open executions of an urgent target first, those
 // whose head is approved before the others, and keeps the store's order
-// otherwise. It returns the target keys of the executions whose task it
-// could read.
+// otherwise. It returns the target keys of the executions' PRs (passKey)
+// whose task it could read.
 func (s *Service) urgentFirst(ctx context.Context, executions []domain.LadoExecution, urgent map[string]bool) ([]domain.LadoExecution, map[domain.SessionID]string) {
 	keys := map[domain.SessionID]string{}
 	tasks := map[domain.LadoTaskID]domain.LadoTask{}
@@ -623,11 +659,11 @@ func (s *Service) urgentFirst(ctx context.Context, executions []domain.LadoExecu
 			}
 			task, tasks[exec.TaskID] = found, found
 		}
-		keys[exec.SessionID] = targetKey(task, exec)
+		keys[passKey(exec)] = targetKey(task, exec)
 	}
 	rank := func(exec domain.LadoExecution) int {
 		switch {
-		case exec.PR.Merged || exec.PR.Closed || !urgent[keys[exec.SessionID]]:
+		case exec.PR.Merged || exec.PR.Closed || !urgent[keys[passKey(exec)]]:
 			return 2
 		case exec.Integration.HeadApproved:
 			return 0

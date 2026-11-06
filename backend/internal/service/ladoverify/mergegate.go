@@ -36,6 +36,13 @@ var _ ports.LadoMergeGate = (*Service)(nil)
 // record again (no check command starts). A record that turned base_overlap
 // revokes the approval and refuses with LADO_INTEGRATION_REVOKED; a fetch or
 // computation that fails refuses with LADO_MERGE_GATE_FAILED.
+//
+// #64: an approval LADO withdrew because a sibling PR's base moved
+// (domain.LadoIntegrationSiblingRevoked) counts as none
+// (LADO_INTEGRATION_APPROVAL_REQUIRED): the task's PRs are approved again
+// together. An approved PR of an execution whose plan orders its
+// repositories merges only once the PRs of the repositories before its own
+// merged; until then the gate refuses with LADO_INTEGRATION_MERGE_ORDER.
 func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error {
 	head := strings.ToLower(strings.TrimSpace(headSHA))
 	_, isExecution, err := s.deps.Store.LadoExecution(ctx, pr.SessionID)
@@ -65,11 +72,16 @@ func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, hea
 		return a.ExecutionSessionID != pr.SessionID && !slices.Contains(naming, a.ExecutionSessionID)
 	})
 	if approval, ok := domain.LadoApprovalFor(approvals, pr.TargetBranch); ok {
-		return s.approvedBaseHolds(ctx, pr, head, approval)
+		if err := s.approvedBaseHolds(ctx, pr, head, approval); err != nil {
+			return err
+		}
+		return s.mergeOrderHolds(ctx, pr, head, approval)
 	}
-	// A revoked approval does not count; one into this target says why.
+	// A revoked approval does not count; one into this target says why,
+	// unless LADO withdrew it for a sibling PR's base: that one is approved
+	// again with its siblings.
 	revoked := slices.ContainsFunc(approvals, func(a domain.LadoIntegrationApproval) bool {
-		return a.Revoked() && (a.TargetBranch == "" || strings.EqualFold(a.TargetBranch, pr.TargetBranch))
+		return a.Revoked() && !a.Renewable() && (a.TargetBranch == "" || strings.EqualFold(a.TargetBranch, pr.TargetBranch))
 	})
 	approvals = slices.DeleteFunc(approvals, domain.LadoIntegrationApproval.Revoked)
 	switch {
@@ -127,6 +139,30 @@ func (s *Service) approvedBaseHolds(ctx context.Context, pr domain.PullRequest, 
 		return integrationRevoked()
 	}
 	return nil
+}
+
+// mergeOrderHolds refuses the merge of an approved PR while a PR the
+// approval's execution tracks in a repository before the PR's own, in the
+// plan's repos order, has not merged (domain.LadoMergeBlockers).
+func (s *Service) mergeOrderHolds(ctx context.Context, pr domain.PullRequest, head string, approval domain.LadoIntegrationApproval) error {
+	exec, ok, err := s.deps.Store.LadoExecution(ctx, approval.ExecutionSessionID)
+	switch {
+	case err != nil:
+		return s.mergeGateFailed(pr, head, err)
+	case !ok:
+		return s.mergeGateFailed(pr, head, fmt.Errorf("execution %s not found", approval.ExecutionSessionID))
+	}
+	blockers := domain.LadoMergeBlockers(exec, cmp.Or(approval.PRURL, pr.URL))
+	if len(blockers) == 0 {
+		return nil
+	}
+	waiting := make([]string, 0, len(blockers))
+	for _, blocker := range blockers {
+		waiting = append(waiting, blocker.PR.URL)
+	}
+	return apierr.Conflict("LADO_INTEGRATION_MERGE_ORDER",
+		"The task's plan merges its pull requests in order: merge the ones it waits for first.",
+		map[string]any{"prUrl": pr.URL, "waitingFor": waiting})
 }
 
 // inLadoProject reports whether the session belongs to a project in LADO

@@ -928,6 +928,9 @@ type verifyStore struct {
 	// timings holds the stage times and session metrics the loop records
 	// (timings_test.go).
 	timings verifyTimings
+	// multi holds the sessions' PRs and the PRs executions track (#64,
+	// multirepo_test.go); an execution without them reads as before.
+	multi verifyMulti
 }
 
 func verifyKey(session domain.SessionID, head string) string { return string(session) + "@" + head }
@@ -986,6 +989,15 @@ func (s *verifyStore) ListLadoExecutionsToVerify(_ context.Context, limit int) (
 	s.listed = nil
 	var out []domain.LadoExecution
 	for _, exec := range s.executions {
+		if s.multiLocked(exec.SessionID) {
+			for _, one := range s.toVerifyLocked(exec) {
+				if len(out) < limit {
+					out = append(out, one)
+					s.listed = append(s.listed, exec.SessionID)
+				}
+			}
+			continue
+		}
 		ended := exec.PR.Merged || exec.PR.Closed
 		if (!ended || s.settledPR[exec.SessionID] != settleKey(exec.PR.URL, prState(exec.PR))) && len(out) < limit {
 			out = append(out, exec)
@@ -1018,7 +1030,7 @@ func (s *verifyStore) LadoExecution(_ context.Context, session domain.SessionID)
 	defer s.mu.Unlock()
 	for _, exec := range s.executions {
 		if exec.SessionID == session {
-			return exec, true, nil
+			return s.withTrackedLocked(exec), true, nil
 		}
 	}
 	return domain.LadoExecution{}, false, nil
@@ -1035,6 +1047,9 @@ func (s *verifyStore) LadoProjectChecks(context.Context, domain.ProjectID) ([]do
 func (s *verifyStore) GetPR(_ context.Context, url string) (domain.PullRequest, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if pr, ok := s.sessionPRLocked(url); ok {
+		return pr, true, nil
+	}
 	for _, exec := range s.executions {
 		if exec.PR.URL == url {
 			return domain.PullRequest{

@@ -85,6 +85,9 @@ export type LadoQueueState = LadoQueueItem["state"];
 export type LadoQueueReason = NonNullable<LadoQueueItem["reason"]>;
 export type LadoExecution = components["schemas"]["LadoExecutionResponse"];
 export type LadoExecutionPR = components["schemas"]["LadoExecutionPRResponse"];
+export type LadoExecutionTrackedPR = components["schemas"]["LadoExecutionTrackedPRResponse"];
+export type LadoPartRunRepo = components["schemas"]["LadoPartRunRepoResponse"];
+export type LadoTaskPartRepo = components["schemas"]["LadoTaskPartRepoResponse"];
 export type LadoExecutionResolve = components["schemas"]["LadoExecutionResolveResponse"];
 export type LadoDispatchSettings = components["schemas"]["LadoDispatchSettingsResponse"];
 export type LadoDispatchSettingsInput = components["schemas"]["UpdateLadoDispatchSettingsRequest"];
@@ -631,6 +634,20 @@ export async function fetchLadoExecution(sessionId: string): Promise<LadoExecuti
 }
 
 /**
+ * The open pull requests LADO tracks for a run, in merge order: one per
+ * repository for a workspace task across repositories (#64), else the run's
+ * PR alone while it is open.
+ */
+export function ladoOpenTrackedPRs(execution: Pick<LadoExecution, "pr" | "trackedPrs">): LadoExecutionPR[] {
+	const tracked = execution.trackedPrs;
+	if (tracked && tracked.length > 0) {
+		return [...tracked].sort((a, b) => a.position - b.position).filter((pr) => !pr.merged && !pr.closed);
+	}
+	const { pr } = execution;
+	return pr && !pr.merged && !pr.closed ? [pr] : [];
+}
+
+/**
  * Approves the integration of a run's pull request head (docs/LJY-PRD/TDD.md
  * §7.1). In the desktop app the main process reads the run, sends the dry
  * run, asks the developer to confirm what it verified, then signs and sends
@@ -648,9 +665,26 @@ export async function approveLadoIntegration(sessionId: string): Promise<LadoInt
 	}
 	const execution = await fetchLadoExecution(sessionId);
 	if (!execution) throw new LadoApiError("This session is not a LADO run.", "LADO_EXECUTION_NOT_FOUND", { sessionId });
-	const { pr } = execution;
-	if (!pr || pr.merged || pr.closed) {
+	const prs = ladoOpenTrackedPRs(execution);
+	const pr = prs[0];
+	if (!pr) {
 		throw new LadoApiError("This run has no open pull request to integrate.", "LADO_EXECUTION_NO_PR", { sessionId });
+	}
+	// A task with a pull request in each of several repositories is approved
+	// as one (#64): every open pull request LADO tracks, in one request.
+	if (prs.length > 1) {
+		const previews = await postLadoIntegration(sessionId, {
+			prs: prs.map((one) => ({ prUrl: one.url, headSha: one.headSha ?? "" })),
+			dryRun: true,
+		});
+		return postLadoIntegration(sessionId, {
+			prs: (previews.prs ?? []).map((one) => ({
+				prUrl: one.prUrl,
+				headSha: one.verification.headSha,
+				verificationSha256: one.verificationSha256,
+				acknowledge: one.confirm,
+			})),
+		});
 	}
 	const preview = await postLadoIntegration(sessionId, { prUrl: pr.url, headSha: pr.headSha ?? "", dryRun: true });
 	return postLadoIntegration(sessionId, {
@@ -684,9 +718,10 @@ export async function runLadoChecks(sessionId: string): Promise<LadoRunChecksRes
  * its attempts started over, as after the token was fixed. It needs no
  * confirmation: the head is approved already.
  */
-export async function repostLadoIntegrationStatus(sessionId: string): Promise<LadoIntegrationApproval> {
+export async function repostLadoIntegrationStatus(sessionId: string, prUrl?: string): Promise<LadoIntegrationApproval> {
 	const { data, error } = await apiClient.POST("/api/v1/lado/executions/{sessionId}/integration-status", {
-		params: { path: { sessionId } },
+		// Without prUrl, the first open PR in merge order (#64).
+		params: { path: { sessionId }, ...(prUrl ? { query: { prUrl } } : {}) },
 	});
 	if (error) throw ladoError(error, "Could not post the status again");
 	return data;

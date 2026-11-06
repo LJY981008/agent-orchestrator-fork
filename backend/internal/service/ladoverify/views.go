@@ -8,6 +8,8 @@ package ladoverify
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
@@ -16,10 +18,14 @@ import (
 // HeadView is what LADO holds about one head of an execution's PR: the
 // head's verification record with its hash, and its integration approval
 // into the branch the PR merges into now. Each is nil while there is none.
+// Revoked is the newest approval of the head into that branch that LADO
+// withdrew, while the head has no approval that holds (#64: a sibling PR's
+// base overlap withdraws it too).
 type HeadView struct {
 	Verification *domain.LadoVerification
 	SHA256       string
 	Approval     *domain.LadoIntegrationApproval
+	Revoked      *domain.LadoIntegrationApproval
 }
 
 // Head reads the verification record of one head of an execution's PR and
@@ -50,19 +56,35 @@ func (s *Service) Head(ctx context.Context, session domain.SessionID, prURL, hea
 	}
 	if approval, ok := domain.LadoApprovalFor(approvals, target); ok {
 		view.Approval = &approval
+		return view, nil
+	}
+	for _, approval := range approvals {
+		if approval.Revoked() && (approval.TargetBranch == "" || strings.EqualFold(approval.TargetBranch, target)) &&
+			(view.Revoked == nil || approval.RevokedAt.After(view.Revoked.RevokedAt)) {
+			view.Revoked = &approval
+		}
 	}
 	return view, nil
 }
 
 // RepostIntegrationStatus posts the lado/integration status of the approved
-// current head of the execution's open PR again, its attempts started over
-// (S8 of #15): after twelve failed posts, as with a token that may not write
-// commit statuses, nothing else would post it once the token is fixed. It
-// needs no presence: the head is approved, and the same status goes up
-// again. It answers the approval as recorded after the post; a post that
-// fails again is in its status. GitLab gets no status: its approval stays
-// not_applicable.
+// current head of the execution's open PR again, as
+// RepostIntegrationStatusOf does for its first open tracked PR.
 func (s *Service) RepostIntegrationStatus(ctx context.Context, session domain.SessionID) (domain.LadoIntegrationApproval, error) {
+	return s.RepostIntegrationStatusOf(ctx, session, "")
+}
+
+// RepostIntegrationStatusOf posts the lado/integration status of the
+// approved current head of one open PR of the execution again, its attempts
+// started over (S8 of #15): after twelve failed posts, as with a token that
+// may not write commit statuses, nothing else would post it once the token
+// is fixed. prURL names the PR among the open PRs LADO tracks for the
+// execution (#64); empty names the first of them in merge order. It needs no
+// presence: the head is approved, and the same status goes up again. It
+// answers the approval as recorded after the post; a post that fails again
+// is in its status. GitLab gets no status: its approval stays
+// not_applicable.
+func (s *Service) RepostIntegrationStatusOf(ctx context.Context, session domain.SessionID, prURL string) (domain.LadoIntegrationApproval, error) {
 	exec, ok, err := s.deps.Store.LadoExecution(ctx, session)
 	switch {
 	case err != nil:
@@ -70,9 +92,16 @@ func (s *Service) RepostIntegrationStatus(ctx context.Context, session domain.Se
 		return domain.LadoIntegrationApproval{}, verifyFailed()
 	case !ok:
 		return domain.LadoIntegrationApproval{}, apierr.NotFound("LADO_EXECUTION_NOT_FOUND", "This session is not a LADO execution")
-	case exec.PR.URL == "" || exec.PR.Merged || exec.PR.Closed || exec.PR.HeadSHA == "":
+	}
+	open := openTrackedPRs(exec)
+	at := 0
+	if prURL != "" {
+		at = slices.IndexFunc(open, func(pr domain.LadoExecutionTrackedPR) bool { return pr.PR.URL == prURL })
+	}
+	if at < 0 || at >= len(open) || open[at].PR.HeadSHA == "" {
 		return domain.LadoIntegrationApproval{}, noOpenPR(session)
 	}
+	exec = withTrackedPR(exec, open[at])
 	approvals, err := s.deps.Store.ListLadoIntegrationApprovals(ctx, session, exec.PR.URL, exec.PR.HeadSHA)
 	if err != nil {
 		s.deps.Log.Error("LADO could not read the integration approvals of a head", "session", session, "err", err)
@@ -137,7 +166,8 @@ type RunAgain struct {
 const runAgainNote = "The developer asked LADO to run the command again."
 
 // RunChecksAgain runs the project's check commands again on the current head
-// of the execution's open PR. Each command whose newest run on the head
+// of the execution's open PR, the first in merge order of an execution with
+// several (#64). Each command whose newest run on the head
 // finished gets a cancelled run, which the loop runs again in order, as it
 // does a run a stopped daemon left; one that never ran or was cancelled runs
 // anyway, and one still running is left to finish. A pass is kicked.
@@ -149,7 +179,11 @@ func (s *Service) RunChecksAgain(ctx context.Context, session domain.SessionID) 
 		return RunAgain{}, verifyFailed()
 	case !ok:
 		return RunAgain{}, apierr.NotFound("LADO_EXECUTION_NOT_FOUND", "This session is not a LADO execution")
-	case exec.PR.URL == "" || exec.PR.Merged || exec.PR.Closed || exec.PR.HeadSHA == "":
+	}
+	if open := openTrackedPRs(exec); len(open) > 0 {
+		exec = withTrackedPR(exec, open[0])
+	}
+	if exec.PR.URL == "" || exec.PR.Merged || exec.PR.Closed || exec.PR.HeadSHA == "" {
 		return RunAgain{}, noOpenPR(session)
 	}
 	task, ok, err := s.deps.Tasks.LadoTask(ctx, exec.TaskID)

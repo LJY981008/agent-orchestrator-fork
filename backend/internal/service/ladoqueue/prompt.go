@@ -26,7 +26,11 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.La
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "You are implementing a plan the developer approved in LADO for %s: %s.\n", task.IssueRef, oneLine(task.Issue.Title))
-	fmt.Fprintf(&b, "Follow the approved plan below and keep to its scope. When you open the pull request, link the issue in its description%s.\n\n", example)
+	fmt.Fprintf(&b, "Follow the approved plan below and keep to its scope. When you open the pull request, link the issue in its description%s.\n", example)
+	if plan, _ := domain.ParseLadoPlan([]byte(in.PlanText), domain.LadoPlanExpectations{}); len(plan.Repos) > 0 {
+		b.WriteString(reposParagraph(plan.Repos))
+	}
+	b.WriteString("\n")
 	fmt.Fprintf(&b, "## Approved plan (revision %d, sha256 %s)\n\n", in.Revision.Number, shortSHA(in.Revision.SHA256))
 	b.WriteString(in.PlanText)
 	if !strings.HasSuffix(in.PlanText, "\n") {
@@ -37,6 +41,22 @@ func workerPrompt(task domain.LadoTask, in ladotask.RunInput, checks []domain.La
 	b.WriteString(verificationParagraph(in.Snapshot, checks))
 	b.WriteString("\n\n" + evidenceForm)
 	return b.String()
+}
+
+// reposParagraph tells a worker whose plan names the workspace repositories
+// it changes (#64) to open one pull request in each it changes, in the
+// plan's order, which is the order they merge in, and to say in its done
+// report which it had nothing to change in: LADO waits for a pull request in
+// each until the worker reports done.
+func reposParagraph(repos []string) string {
+	folders := make([]string, len(repos))
+	for i, repo := range repos {
+		folders[i] = "`" + strings.Trim(repo, "/") + "/`"
+	}
+	return fmt.Sprintf("The plan changes the workspace repositories %s, in this order. "+
+		"In each of them that you change, open one pull request, in that order, which is the order they merge in, and link the issue in each. "+
+		"A repository you have nothing to change in gets no pull request: say so in your done report. "+
+		"Open every pull request before you run `ao report --done`.\n", strings.Join(folders, ", then "))
 }
 
 // planFileNote names the read-only copy of the approved plan and asks the

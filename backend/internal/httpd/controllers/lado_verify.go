@@ -23,7 +23,7 @@ import (
 type LadoVerifyService interface {
 	Head(ctx context.Context, session domain.SessionID, prURL, headSHA, target string) (ladoverify.HeadView, error)
 	ApproveIntegration(ctx context.Context, in ladoverify.ApproveInput) (ladoverify.ApproveResult, error)
-	RepostIntegrationStatus(ctx context.Context, session domain.SessionID) (domain.LadoIntegrationApproval, error)
+	RepostIntegrationStatusOf(ctx context.Context, session domain.SessionID, prURL string) (domain.LadoIntegrationApproval, error)
 	RunChecksAgain(ctx context.Context, session domain.SessionID) (ladoverify.RunAgain, error)
 	CheckLog(ctx context.Context, session domain.SessionID, runID string) ([]byte, error)
 	Protection(ctx context.Context, projectID domain.ProjectID, refresh bool) ([]ladoverify.ProtectionRead, error)
@@ -52,14 +52,18 @@ func (c *LadoController) approveIntegration(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// The approval needs a presence proof over these exact bytes. Its
-	// subject names the head the body names, so the service checks it first,
-	// before it reads anything.
+	// subject names the heads the body names, so the service checks it
+	// first, before it reads anything but the execution.
 	body, ok := readLadoPresenceBody(w, r, maxLadoPresenceBody)
 	if !ok {
 		return
 	}
 	var req ApproveLadoIntegrationRequest
 	if !decodeLadoBytes(w, r, body, &req) {
+		return
+	}
+	if problem := ladoApproveRequestProblem(req); problem != "" {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", problem, nil)
 		return
 	}
 	in := ladoverify.ApproveInput{
@@ -69,6 +73,11 @@ func (c *LadoController) approveIntegration(w http.ResponseWriter, r *http.Reque
 		VerificationSHA256: req.VerificationSHA256,
 		Acknowledge:        req.Acknowledge,
 		DryRun:             req.DryRun,
+	}
+	for _, pr := range req.PRs {
+		in.PRs = append(in.PRs, ladoverify.ApprovePR{
+			PRURL: pr.PRURL, HeadSHA: pr.HeadSHA, VerificationSHA256: pr.VerificationSHA256, Acknowledge: pr.Acknowledge,
+		})
 	}
 	// A preview needs no confirmation, so it never checks one.
 	if !req.DryRun {
@@ -84,19 +93,49 @@ func (c *LadoController) approveIntegration(w http.ResponseWriter, r *http.Reque
 		VerificationSHA256: result.SHA256,
 		Confirm:            ladoOrEmptyStrings(result.Confirm),
 		Approval:           ladoIntegrationApprovalResponse(result.Approval),
+		PRs:                make([]LadoIntegrationApprovePRResponse, 0, len(result.PRs)),
+	}
+	for _, pr := range result.PRs {
+		resp.PRs = append(resp.PRs, LadoIntegrationApprovePRResponse{
+			PRURL:              pr.PRURL,
+			Verification:       ladoVerificationResponse(pr.Verification, pr.SHA256),
+			VerificationSHA256: pr.SHA256,
+			Confirm:            ladoOrEmptyStrings(pr.Confirm),
+			Approval:           ladoIntegrationApprovalResponse(pr.Approval),
+		})
 	}
 	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
+// ladoApproveRequestProblem says what is wrong with the PRs an integration
+// approval names in prs, empty when nothing is: each needs its PR and head,
+// and prs leaves the single PR's fields out. A body without prs goes to the
+// service as it did before the task's PRs were approved together.
+func ladoApproveRequestProblem(req ApproveLadoIntegrationRequest) string {
+	if len(req.PRs) == 0 {
+		return ""
+	}
+	if req.PRURL != "" || req.HeadSHA != "" || req.VerificationSHA256 != "" || len(req.Acknowledge) > 0 {
+		return "Name the pull requests in prs, or one in prUrl and headSha, not both"
+	}
+	for _, pr := range req.PRs {
+		if pr.PRURL == "" || pr.HeadSHA == "" {
+			return "Name each pull request of prs and its head"
+		}
+	}
+	return ""
+}
+
 // repostIntegrationStatus posts the approved head's lado/integration status
-// again. The head is approved already and the same status goes up, so it
-// needs no presence proof.
+// again: of the open tracked PR the prUrl query names, else of the first in
+// merge order. The head is approved already and the same status goes up, so
+// it needs no presence proof.
 func (c *LadoController) repostIntegrationStatus(w http.ResponseWriter, r *http.Request) {
 	if c.Verify == nil {
 		apispec.NotImplemented(w, r, "POST", ladoIntegrationStatusPath)
 		return
 	}
-	approval, err := c.Verify.RepostIntegrationStatus(r.Context(), ladoSessionID(r))
+	approval, err := c.Verify.RepostIntegrationStatusOf(r.Context(), ladoSessionID(r), r.URL.Query().Get("prUrl"))
 	if err != nil {
 		envelope.WriteError(w, r, err)
 		return

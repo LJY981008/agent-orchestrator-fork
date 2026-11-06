@@ -22,67 +22,82 @@ import (
 // run with its integration branch, one waiting row per part, and the entry's
 // parts_started_at, which clears its lease, in one transaction with the
 // run's audit event. When token no longer holds the entry nothing is written
-// and the error is domain.ErrLadoLeaseLost.
+// and the error is domain.ErrLadoLeaseLost. It writes no repository rows, as
+// a run started before migration 0015 has none: the dispatcher starts runs
+// with StartLadoPartRunRepos (#64), and this one stays to write that older
+// shape, which the reads still take as one repository.
 func (s *Store) StartLadoPartRun(ctx context.Context, token string, run domain.LadoPartRun, parts []domain.LadoTaskPart, event domain.LadoAuditEvent) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
 	}
 	defer s.writeMu.Unlock()
 	err := s.inTx(ctx, "start LADO parts run", func(q *gen.Queries) error {
-		n, err := q.StartLadoPartRunEntry(ctx, gen.StartLadoPartRunEntryParams{
-			PartsStartedAt: ladoNullTime(run.StartedAt),
-			ID:             string(run.QueueEntryID),
-			LeaseToken:     ladoNullString(token),
-		})
-		if err != nil {
+		if err := startLadoPartRunTx(ctx, q, token, run, parts); err != nil {
 			return err
 		}
-		if n == 0 || token == "" {
-			return domain.ErrLadoLeaseLost
-		}
-		var ahead sql.NullInt64
-		if run.BaseCommitsAhead != nil {
-			ahead = sql.NullInt64{Int64: int64(*run.BaseCommitsAhead), Valid: true}
-		}
-		if err := q.InsertLadoPartRun(ctx, gen.InsertLadoPartRunParams{
-			QueueEntryID:         string(run.QueueEntryID),
-			TaskID:               string(run.TaskID),
-			ProjectID:            string(run.ProjectID),
-			PlanRevisionID:       string(run.PlanRevisionID),
-			RepoDir:              run.RepoDir,
-			Branch:               run.Branch,
-			BaseSha:              run.BaseSHA,
-			HeadSha:              run.HeadSHA,
-			PlanBaseSha:          run.PlanBaseSHA,
-			BaseCommitsAhead:     ahead,
-			BaseBranch:           run.BaseBranch,
-			BaseRemote:           run.BaseRemote,
-			DispatchLocalBaseSha: run.DispatchLocalBaseSHA,
-			StartedAt:            run.StartedAt.UTC(),
-		}); err != nil {
-			return err
-		}
-		for _, part := range parts {
-			if err := q.InsertLadoTaskPart(ctx, gen.InsertLadoTaskPartParams{
-				QueueEntryID:  string(run.QueueEntryID),
-				PartID:        part.PartID,
-				TaskID:        string(run.TaskID),
-				Title:         part.Title,
-				Position:      int64(part.Position),
-				Phase:         int64(part.Phase),
-				StepsJson:     ladoJSON(part.Steps),
-				PathsJson:     ladoJSON(part.AffectedPaths),
-				DependsOnJson: ladoJSON(part.DependsOn),
-				WaitingReason: part.WaitingReason,
-				UpdatedAt:     run.StartedAt.UTC(),
-			}); err != nil {
-				return err
-			}
-		}
-		_, err = appendLadoAuditEventTx(ctx, q, event)
+		_, err := appendLadoAuditEventTx(ctx, q, event)
 		return err
 	})
 	return unwrapLadoSentinel(err)
+}
+
+// startLadoPartRunTx writes StartLadoPartRun's rows but its audit event.
+func startLadoPartRunTx(ctx context.Context, q *gen.Queries, token string, run domain.LadoPartRun, parts []domain.LadoTaskPart) error {
+	n, err := q.StartLadoPartRunEntry(ctx, gen.StartLadoPartRunEntryParams{
+		PartsStartedAt: ladoNullTime(run.StartedAt),
+		ID:             string(run.QueueEntryID),
+		LeaseToken:     ladoNullString(token),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 || token == "" {
+		return domain.ErrLadoLeaseLost
+	}
+	if err := q.InsertLadoPartRun(ctx, gen.InsertLadoPartRunParams{
+		QueueEntryID:         string(run.QueueEntryID),
+		TaskID:               string(run.TaskID),
+		ProjectID:            string(run.ProjectID),
+		PlanRevisionID:       string(run.PlanRevisionID),
+		RepoDir:              run.RepoDir,
+		Branch:               run.Branch,
+		BaseSha:              run.BaseSHA,
+		HeadSha:              run.HeadSHA,
+		PlanBaseSha:          run.PlanBaseSHA,
+		BaseCommitsAhead:     ladoNullInt(run.BaseCommitsAhead),
+		BaseBranch:           run.BaseBranch,
+		BaseRemote:           run.BaseRemote,
+		DispatchLocalBaseSha: run.DispatchLocalBaseSHA,
+		StartedAt:            run.StartedAt.UTC(),
+	}); err != nil {
+		return err
+	}
+	for _, part := range parts {
+		if err := q.InsertLadoTaskPart(ctx, gen.InsertLadoTaskPartParams{
+			QueueEntryID:  string(run.QueueEntryID),
+			PartID:        part.PartID,
+			TaskID:        string(run.TaskID),
+			Title:         part.Title,
+			Position:      int64(part.Position),
+			Phase:         int64(part.Phase),
+			StepsJson:     ladoJSON(part.Steps),
+			PathsJson:     ladoJSON(part.AffectedPaths),
+			DependsOnJson: ladoJSON(part.DependsOn),
+			WaitingReason: part.WaitingReason,
+			UpdatedAt:     run.StartedAt.UTC(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ladoNullInt stores an optional count.
+func ladoNullInt(n *int) sql.NullInt64 {
+	if n == nil {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(*n), Valid: true}
 }
 
 // ActiveLadoPartRuns returns the parts runs in progress: started, without an
@@ -158,6 +173,11 @@ func (s *Store) MergeLadoTaskPart(ctx context.Context, part domain.LadoTaskPart,
 		}
 		if n == 0 {
 			return errStale
+		}
+		// A run with repository rows (issue #64) keeps its first one the
+		// same as the run's own columns.
+		if err := mirrorLadoFirstRepoTx(ctx, q, part); err != nil {
+			return err
 		}
 		_, err = appendLadoAuditEventTx(ctx, q, event)
 		return err
@@ -339,6 +359,8 @@ func (s *Store) LinkLadoPartExecution(ctx context.Context, request string, exec 
 			PartID:               exec.PartID,
 			Branch:               exec.Branch,
 			StartSha:             exec.StartSHA,
+			PRReposJson:          ladoPRReposJSON(exec.PRRepos),
+			PRReposFirm:          boolInt(exec.PRReposFirm),
 		}); err != nil {
 			return err
 		}
@@ -464,28 +486,30 @@ func (s *Store) BumpLadoPartRunIntegrationAttempts(ctx context.Context, entryID 
 
 func ladoTaskPartFromGen(row gen.LadoTaskPart) domain.LadoTaskPart {
 	part := domain.LadoTaskPart{
-		QueueEntryID:   domain.LadoQueueEntryID(row.QueueEntryID),
-		TaskID:         domain.LadoTaskID(row.TaskID),
-		PartID:         row.PartID,
-		Title:          row.Title,
-		Position:       int(row.Position),
-		Phase:          int(row.Phase),
-		State:          domain.LadoPartState(row.State),
-		Attempts:       int(row.Attempts),
-		MergeAttempts:  int(row.MergeAttempts),
-		WaitingReason:  row.WaitingReason,
-		WaitingDetail:  row.WaitingDetail,
-		SessionID:      domain.SessionID(row.SessionID),
-		Branch:         row.Branch,
-		StartSHA:       row.StartSha,
-		MergeFromSHA:   row.MergeFromSha,
-		MergeTipSHA:    row.MergeTipSha,
-		MergedSHA:      row.MergedSha,
-		MergeSessionID: domain.SessionID(row.MergeSessionID),
-		MergeBranch:    row.MergeBranch,
-		Summary:        row.Summary,
-		Error:          row.ErrorMessage,
-		UpdatedAt:      row.UpdatedAt.UTC(),
+		QueueEntryID:      domain.LadoQueueEntryID(row.QueueEntryID),
+		TaskID:            domain.LadoTaskID(row.TaskID),
+		PartID:            row.PartID,
+		Title:             row.Title,
+		Position:          int(row.Position),
+		Phase:             int(row.Phase),
+		State:             domain.LadoPartState(row.State),
+		Attempts:          int(row.Attempts),
+		MergeAttempts:     int(row.MergeAttempts),
+		WaitingReason:     row.WaitingReason,
+		WaitingDetail:     row.WaitingDetail,
+		SessionID:         domain.SessionID(row.SessionID),
+		Branch:            row.Branch,
+		StartSHA:          row.StartSha,
+		MergeFromSHA:      row.MergeFromSha,
+		MergeTipSHA:       row.MergeTipSha,
+		MergedSHA:         row.MergedSha,
+		MergeSessionID:    domain.SessionID(row.MergeSessionID),
+		MergeBranch:       row.MergeBranch,
+		MergeRepo:         row.MergeRepo,
+		MergeAttemptsBase: int(row.MergeAttemptsBase),
+		Summary:           row.Summary,
+		Error:             row.ErrorMessage,
+		UpdatedAt:         row.UpdatedAt.UTC(),
 	}
 	// The columns only ever hold what the store wrote.
 	_ = json.Unmarshal([]byte(row.StepsJson), &part.Steps)
@@ -500,25 +524,27 @@ func ladoTaskPartParams(part domain.LadoTaskPart, oldState domain.LadoPartState)
 		updated = time.Now()
 	}
 	return gen.UpdateLadoTaskPartParams{
-		State:          string(part.State),
-		Attempts:       int64(part.Attempts),
-		MergeAttempts:  int64(part.MergeAttempts),
-		WaitingReason:  part.WaitingReason,
-		WaitingDetail:  part.WaitingDetail,
-		SessionID:      string(part.SessionID),
-		Branch:         part.Branch,
-		StartSha:       part.StartSHA,
-		MergeFromSha:   part.MergeFromSHA,
-		MergeTipSha:    part.MergeTipSHA,
-		MergedSha:      part.MergedSHA,
-		MergeSessionID: string(part.MergeSessionID),
-		MergeBranch:    part.MergeBranch,
-		Summary:        part.Summary,
-		ErrorMessage:   part.Error,
-		UpdatedAt:      updated.UTC(),
-		QueueEntryID:   string(part.QueueEntryID),
-		PartID:         part.PartID,
-		OldState:       string(oldState),
+		State:             string(part.State),
+		Attempts:          int64(part.Attempts),
+		MergeAttempts:     int64(part.MergeAttempts),
+		WaitingReason:     part.WaitingReason,
+		WaitingDetail:     part.WaitingDetail,
+		SessionID:         string(part.SessionID),
+		Branch:            part.Branch,
+		StartSha:          part.StartSHA,
+		MergeFromSha:      part.MergeFromSHA,
+		MergeTipSha:       part.MergeTipSHA,
+		MergedSha:         part.MergedSHA,
+		MergeSessionID:    string(part.MergeSessionID),
+		MergeBranch:       part.MergeBranch,
+		MergeRepo:         part.MergeRepo,
+		MergeAttemptsBase: int64(part.MergeAttemptsBase),
+		Summary:           part.Summary,
+		ErrorMessage:      part.Error,
+		UpdatedAt:         updated.UTC(),
+		QueueEntryID:      string(part.QueueEntryID),
+		PartID:            part.PartID,
+		OldState:          string(oldState),
 	}
 }
 

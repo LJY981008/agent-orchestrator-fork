@@ -91,7 +91,7 @@ func (q *Queries) InsertLadoRelay(ctx context.Context, arg InsertLadoRelayParams
 }
 
 const listLadoRelayExecutionsByTask = `-- name: ListLadoRelayExecutionsByTask :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha, e.pr_repos_json, e.pr_repos_firm,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
     ) AS session_terminated,
@@ -144,6 +144,8 @@ func (q *Queries) ListLadoRelayExecutionsByTask(ctx context.Context, taskID stri
 			&i.LadoExecution.PartID,
 			&i.LadoExecution.Branch,
 			&i.LadoExecution.StartSha,
+			&i.LadoExecution.PRReposJson,
+			&i.LadoExecution.PRReposFirm,
 			&i.SessionTerminated,
 			&i.SessionActivity,
 		); err != nil {

@@ -122,7 +122,7 @@ func (q *Queries) GetLadoCheckRun(ctx context.Context, id string) (LadoCheckRun,
 }
 
 const getLadoExecutionReview = `-- name: GetLadoExecutionReview :one
-SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at
+SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at, pr_url
 FROM lado_execution_reviews
 WHERE review_run_id = ?
 `
@@ -137,6 +137,7 @@ func (q *Queries) GetLadoExecutionReview(ctx context.Context, reviewRunID string
 		&i.Round,
 		&i.CreatedAt,
 		&i.CancelledAt,
+		&i.PRURL,
 	)
 	return i, err
 }
@@ -237,8 +238,8 @@ func (q *Queries) InsertLadoEvidenceLink(ctx context.Context, arg InsertLadoEvid
 
 const insertLadoExecutionReview = `-- name: InsertLadoExecutionReview :exec
 INSERT INTO lado_execution_reviews (
-    review_run_id, execution_session_id, head_sha, round, created_at
-) VALUES (?, ?, ?, ?, ?)
+    review_run_id, execution_session_id, head_sha, round, created_at, pr_url
+) VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type InsertLadoExecutionReviewParams struct {
@@ -247,6 +248,7 @@ type InsertLadoExecutionReviewParams struct {
 	HeadSha            string
 	Round              int64
 	CreatedAt          time.Time
+	PRURL              string
 }
 
 func (q *Queries) InsertLadoExecutionReview(ctx context.Context, arg InsertLadoExecutionReviewParams) error {
@@ -256,6 +258,7 @@ func (q *Queries) InsertLadoExecutionReview(ctx context.Context, arg InsertLadoE
 		arg.HeadSha,
 		arg.Round,
 		arg.CreatedAt,
+		arg.PRURL,
 	)
 	return err
 }
@@ -447,7 +450,8 @@ func (q *Queries) ListLadoEvidenceLinksForHead(ctx context.Context, arg ListLado
 }
 
 const listLadoExecutionPRs = `-- name: ListLadoExecutionPRs :many
-SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title, pr.mergeability
+SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title, pr.mergeability,
+    pr.source_branch
 FROM pr
 WHERE pr.session_id IN (/*SLICE:session_ids*/?)
 ORDER BY pr.session_id, pr.updated_at DESC, pr.url DESC
@@ -462,6 +466,7 @@ type ListLadoExecutionPRsRow struct {
 	TargetBranch string
 	Title        string
 	Mergeability domain.Mergeability
+	SourceBranch string
 }
 
 // The PRs of the given sessions, newest first within each session: by update
@@ -494,6 +499,7 @@ func (q *Queries) ListLadoExecutionPRs(ctx context.Context, sessionIds []domain.
 			&i.TargetBranch,
 			&i.Title,
 			&i.Mergeability,
+			&i.SourceBranch,
 		); err != nil {
 			return nil, err
 		}
@@ -509,7 +515,7 @@ func (q *Queries) ListLadoExecutionPRs(ctx context.Context, sessionIds []domain.
 }
 
 const listLadoExecutionReviews = `-- name: ListLadoExecutionReviews :many
-SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at
+SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at, pr_url
 FROM lado_execution_reviews
 WHERE execution_session_id = ?
 ORDER BY round, created_at, review_run_id
@@ -531,6 +537,7 @@ func (q *Queries) ListLadoExecutionReviews(ctx context.Context, executionSession
 			&i.Round,
 			&i.CreatedAt,
 			&i.CancelledAt,
+			&i.PRURL,
 		); err != nil {
 			return nil, err
 		}
@@ -546,16 +553,18 @@ func (q *Queries) ListLadoExecutionReviews(ctx context.Context, executionSession
 }
 
 const listLadoExecutionsToVerify = `-- name: ListLadoExecutionsToVerify :many
-SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha,
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha, e.pr_repos_json, e.pr_repos_firm,
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
     p.target_branch AS pr_target_branch, p.title AS pr_title, p.mergeability AS pr_mergeability,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
-    ) AS session_terminated
+    ) AS session_terminated,
+    v.computed_at AS verified_at
 FROM lado_executions e
 JOIN pr p ON p.session_id = e.session_id
 LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
 WHERE e.role IN ('', 'integration')
+  AND NOT EXISTS (SELECT 1 FROM lado_execution_prs x WHERE x.execution_session_id = e.session_id)
   AND NOT EXISTS (
         SELECT 1 FROM pr newer
         WHERE newer.session_id = p.session_id
@@ -579,13 +588,15 @@ type ListLadoExecutionsToVerifyRow struct {
 	PRTitle           string
 	PRMergeability    domain.Mergeability
 	SessionTerminated bool
+	VerifiedAt        sql.NullTime
 }
 
-// Executions whose session's newest PR is open with a head AO observed, or
-// merged or closed and not settled in that state yet, with that PR and
-// whether the session ended (as in GetLadoExecution). The heads without a
-// record come first, then the records computed longest ago, so every
-// execution takes its turn however many there are.
+// Executions without tracked PRs (lado_execution_prs) whose session's newest
+// PR is open with a head AO observed, or merged or closed and not settled in
+// that state yet, with that PR, whether the session ended (as in
+// GetLadoExecution) and when the head's record was computed. The heads
+// without a record come first, then the records computed longest ago, so
+// every execution takes its turn however many there are.
 func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions int64) ([]ListLadoExecutionsToVerifyRow, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoExecutionsToVerify, maxExecutions)
 	if err != nil {
@@ -620,6 +631,8 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 			&i.LadoExecution.PartID,
 			&i.LadoExecution.Branch,
 			&i.LadoExecution.StartSha,
+			&i.LadoExecution.PRReposJson,
+			&i.LadoExecution.PRReposFirm,
 			&i.PRURL,
 			&i.PRNumber,
 			&i.PRState,
@@ -628,6 +641,7 @@ func (q *Queries) ListLadoExecutionsToVerify(ctx context.Context, maxExecutions 
 			&i.PRTitle,
 			&i.PRMergeability,
 			&i.SessionTerminated,
+			&i.VerifiedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -906,6 +920,107 @@ func (q *Queries) ListLadoSessionsNamingPR(ctx context.Context, prUrl string) ([
 			return nil, err
 		}
 		items = append(items, execution_session_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLadoTrackedPRsToVerify = `-- name: ListLadoTrackedPRsToVerify :many
+SELECT e.session_id, e.task_id, e.queue_entry_id, e.plan_revision_id, e.plan_approval_id, e.policy_snapshot_id, e.attempt, e.plan_base_sha, e.dispatch_base_sha, e.base_commits_ahead, e.started_at, e.deadline_at, e.timed_out_at, e.base_branch, e.base_remote, e.dispatch_local_base_sha, e.integration_gated, e.settled_at, e.settled_pr_url, e.settled_pr_state, e.role, e.part_id, e.branch, e.start_sha, e.pr_repos_json, e.pr_repos_firm,
+    p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
+    p.target_branch AS pr_target_branch, p.title AS pr_title, p.mergeability AS pr_mergeability,
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated,
+    v.computed_at AS verified_at,
+    x.position AS pr_position
+FROM lado_executions e
+JOIN lado_execution_prs x ON x.execution_session_id = e.session_id AND x.replaced_at IS NULL
+JOIN pr p ON p.url = x.pr_url
+LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
+WHERE e.role IN ('', 'integration')
+  AND (
+        (p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> '')
+        OR (p.pr_state IN ('merged', 'closed') AND x.settled_pr_state <> p.pr_state)
+    )
+ORDER BY v.computed_at IS NOT NULL, v.computed_at, e.started_at, e.session_id, x.position
+LIMIT ?1
+`
+
+type ListLadoTrackedPRsToVerifyRow struct {
+	LadoExecution     LadoExecution
+	PRURL             string
+	PRNumber          int64
+	PRState           domain.PRState
+	PRHeadSha         string
+	PRTargetBranch    string
+	PRTitle           string
+	PRMergeability    domain.Mergeability
+	SessionTerminated bool
+	VerifiedAt        sql.NullTime
+	PRPosition        int64
+}
+
+// The live tracked PRs (issue #64) of executions that ran a PR that are open
+// with a head AO observed, or merged or closed and not settled in that state
+// yet, one row per PR, with the execution, whether its session ended and
+// when the head's record was computed, in ListLadoExecutionsToVerify's
+// order.
+func (q *Queries) ListLadoTrackedPRsToVerify(ctx context.Context, maxExecutions int64) ([]ListLadoTrackedPRsToVerifyRow, error) {
+	rows, err := q.db.QueryContext(ctx, listLadoTrackedPRsToVerify, maxExecutions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListLadoTrackedPRsToVerifyRow{}
+	for rows.Next() {
+		var i ListLadoTrackedPRsToVerifyRow
+		if err := rows.Scan(
+			&i.LadoExecution.SessionID,
+			&i.LadoExecution.TaskID,
+			&i.LadoExecution.QueueEntryID,
+			&i.LadoExecution.PlanRevisionID,
+			&i.LadoExecution.PlanApprovalID,
+			&i.LadoExecution.PolicySnapshotID,
+			&i.LadoExecution.Attempt,
+			&i.LadoExecution.PlanBaseSha,
+			&i.LadoExecution.DispatchBaseSha,
+			&i.LadoExecution.BaseCommitsAhead,
+			&i.LadoExecution.StartedAt,
+			&i.LadoExecution.DeadlineAt,
+			&i.LadoExecution.TimedOutAt,
+			&i.LadoExecution.BaseBranch,
+			&i.LadoExecution.BaseRemote,
+			&i.LadoExecution.DispatchLocalBaseSha,
+			&i.LadoExecution.IntegrationGated,
+			&i.LadoExecution.SettledAt,
+			&i.LadoExecution.SettledPRURL,
+			&i.LadoExecution.SettledPRState,
+			&i.LadoExecution.Role,
+			&i.LadoExecution.PartID,
+			&i.LadoExecution.Branch,
+			&i.LadoExecution.StartSha,
+			&i.LadoExecution.PRReposJson,
+			&i.LadoExecution.PRReposFirm,
+			&i.PRURL,
+			&i.PRNumber,
+			&i.PRState,
+			&i.PRHeadSha,
+			&i.PRTargetBranch,
+			&i.PRTitle,
+			&i.PRMergeability,
+			&i.SessionTerminated,
+			&i.VerifiedAt,
+			&i.PRPosition,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Close(); err != nil {
 		return nil, err

@@ -72,8 +72,8 @@ WHERE execution_session_id IN (sqlc.slice('session_ids'))
 
 -- name: InsertLadoExecutionReview :exec
 INSERT INTO lado_execution_reviews (
-    review_run_id, execution_session_id, head_sha, round, created_at
-) VALUES (?, ?, ?, ?, ?);
+    review_run_id, execution_session_id, head_sha, round, created_at, pr_url
+) VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: CountLadoExecutionReviews :one
 SELECT COUNT(*)
@@ -81,13 +81,13 @@ FROM lado_execution_reviews
 WHERE execution_session_id = ?;
 
 -- name: ListLadoExecutionReviews :many
-SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at
+SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at, pr_url
 FROM lado_execution_reviews
 WHERE execution_session_id = ?
 ORDER BY round, created_at, review_run_id;
 
 -- name: GetLadoExecutionReview :one
-SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at
+SELECT review_run_id, execution_session_id, head_sha, round, created_at, cancelled_at, pr_url
 FROM lado_execution_reviews
 WHERE review_run_id = ?;
 
@@ -122,27 +122,31 @@ ORDER BY name, created_at;
 -- name: ListLadoExecutionPRs :many
 -- The PRs of the given sessions, newest first within each session: by update
 -- time, then by URL, as ListLadoExecutionsToVerify picks the newest.
-SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title, pr.mergeability
+SELECT pr.session_id, pr.url, pr.number, pr.pr_state, pr.head_sha, pr.target_branch, pr.title, pr.mergeability,
+    pr.source_branch
 FROM pr
 WHERE pr.session_id IN (sqlc.slice('session_ids'))
 ORDER BY pr.session_id, pr.updated_at DESC, pr.url DESC;
 
 -- name: ListLadoExecutionsToVerify :many
--- Executions whose session's newest PR is open with a head AO observed, or
--- merged or closed and not settled in that state yet, with that PR and
--- whether the session ended (as in GetLadoExecution). The heads without a
--- record come first, then the records computed longest ago, so every
--- execution takes its turn however many there are.
+-- Executions without tracked PRs (lado_execution_prs) whose session's newest
+-- PR is open with a head AO observed, or merged or closed and not settled in
+-- that state yet, with that PR, whether the session ended (as in
+-- GetLadoExecution) and when the head's record was computed. The heads
+-- without a record come first, then the records computed longest ago, so
+-- every execution takes its turn however many there are.
 SELECT sqlc.embed(e),
     p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
     p.target_branch AS pr_target_branch, p.title AS pr_title, p.mergeability AS pr_mergeability,
     NOT EXISTS (
         SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
-    ) AS session_terminated
+    ) AS session_terminated,
+    v.computed_at AS verified_at
 FROM lado_executions e
 JOIN pr p ON p.session_id = e.session_id
 LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
 WHERE e.role IN ('', 'integration')
+  AND NOT EXISTS (SELECT 1 FROM lado_execution_prs x WHERE x.execution_session_id = e.session_id)
   AND NOT EXISTS (
         SELECT 1 FROM pr newer
         WHERE newer.session_id = p.session_id
@@ -153,6 +157,32 @@ WHERE e.role IN ('', 'integration')
         OR (p.pr_state IN ('merged', 'closed') AND NOT (e.settled_pr_url = p.url AND e.settled_pr_state = p.pr_state))
     )
 ORDER BY v.computed_at IS NOT NULL, v.computed_at, e.started_at, e.session_id
+LIMIT sqlc.arg(max_executions);
+
+-- name: ListLadoTrackedPRsToVerify :many
+-- The live tracked PRs (issue #64) of executions that ran a PR that are open
+-- with a head AO observed, or merged or closed and not settled in that state
+-- yet, one row per PR, with the execution, whether its session ended and
+-- when the head's record was computed, in ListLadoExecutionsToVerify's
+-- order.
+SELECT sqlc.embed(e),
+    p.url AS pr_url, p.number AS pr_number, p.pr_state AS pr_state, p.head_sha AS pr_head_sha,
+    p.target_branch AS pr_target_branch, p.title AS pr_title, p.mergeability AS pr_mergeability,
+    NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.id = e.session_id AND s.is_terminated = 0
+    ) AS session_terminated,
+    v.computed_at AS verified_at,
+    x.position AS pr_position
+FROM lado_executions e
+JOIN lado_execution_prs x ON x.execution_session_id = e.session_id AND x.replaced_at IS NULL
+JOIN pr p ON p.url = x.pr_url
+LEFT JOIN lado_verifications v ON v.execution_session_id = e.session_id AND v.head_sha = p.head_sha
+WHERE e.role IN ('', 'integration')
+  AND (
+        (p.pr_state NOT IN ('merged', 'closed') AND p.head_sha <> '')
+        OR (p.pr_state IN ('merged', 'closed') AND x.settled_pr_state <> p.pr_state)
+    )
+ORDER BY v.computed_at IS NOT NULL, v.computed_at, e.started_at, e.session_id, x.position
 LIMIT sqlc.arg(max_executions);
 
 -- name: SettleLadoExecution :execrows

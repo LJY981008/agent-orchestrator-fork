@@ -114,6 +114,9 @@ func (s *Service) postStatus(ctx context.Context, repo domain.TrackerRepo, appro
 	}
 	if approval.Revoked() {
 		status.State, status.Description = "pending", revokedStatusDescription
+		if approval.RevokedReason == domain.LadoIntegrationSiblingRevoked {
+			status.Description = siblingRevokedStatusDescription
+		}
 	}
 	return client.PostCommitStatus(ctx, repo, approval.HeadSHA, status)
 }

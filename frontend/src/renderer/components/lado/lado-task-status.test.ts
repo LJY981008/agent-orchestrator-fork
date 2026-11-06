@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { createFullAppI18n } from "../../i18n/all-messages";
 import { APP_LOCALES } from "../../../shared/ui-locale";
-import type { LadoTask, LadoTaskState, LadoTaskStateReason } from "../../lib/lado";
-import { ladoTaskReason, ladoTaskStatus } from "./lado-task-status";
+import type { LadoExecutionTrackedPR, LadoTask, LadoTaskState, LadoTaskStateReason } from "../../lib/lado";
+import { ladoMergeable, ladoTaskReason, ladoTaskStatus } from "./lado-task-status";
 
 function task(state: LadoTaskState, stateReason?: LadoTaskStateReason): LadoTask {
 	return {
@@ -157,5 +157,40 @@ describe("parts and overlapping work", () => {
 		expect(ladoTaskReason({ ...queued, queue: { ...queued.queue!, waitingDetail: undefined } }, en, "en")).toBe("Waiting for a task that changes the same files");
 		expect(ladoTaskReason({ ...task("queued", "slot_workers"), execution: undefined }, en, "en")).toBe("Waiting for a free worker slot");
 		expect(ladoTaskReason({ ...task("queued", "disk_low"), execution: undefined }, ko, "ko")).toBe("디스크 공간을 기다리는 중");
+	});
+});
+
+describe("ladoMergeable", () => {
+	const pr = (repo: string, position: number, fields: Partial<LadoExecutionTrackedPR> = {}): LadoExecutionTrackedPR => ({
+		url: `https://github.com/acme/${repo}/pull/${position + 1}`,
+		number: position + 1,
+		repo,
+		position,
+		closed: false,
+		merged: false,
+		settled: false,
+		state: "integrating",
+		targetBranch: "main",
+		integration: { headApproved: true },
+		...fields,
+	});
+
+	it("holds a later repository's pull request until the earlier one merged, as the merge gate does", () => {
+		const back = pr("back", 0);
+		const front = pr("front", 1);
+		const run = { prRepos: ["back", "front"], trackedPrs: [back, front] };
+		expect(ladoMergeable(run, back)).toBe(true);
+		expect(ladoMergeable(run, front)).toBe(false);
+		expect(ladoMergeable({ ...run, trackedPrs: [{ ...back, merged: true }, front] }, front)).toBe(true);
+	});
+
+	it("does not hold a pull request back for one that closed without merging", () => {
+		const front = pr("front", 1);
+		expect(ladoMergeable({ prRepos: ["back", "front"], trackedPrs: [pr("back", 0, { closed: true }), front] }, front)).toBe(true);
+	});
+
+	it("does not order a pull request outside the plan's repos", () => {
+		const side = pr("side", 2);
+		expect(ladoMergeable({ prRepos: ["back", "front"], trackedPrs: [pr("back", 0), side] }, side)).toBe(true);
 	});
 });

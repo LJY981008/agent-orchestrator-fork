@@ -44,7 +44,7 @@ ORDER BY e.enqueued_at, e.id;
 SELECT queue_entry_id, part_id, task_id, title, position, phase, steps_json, paths_json, depends_on_json,
     state, attempts, merge_attempts, waiting_reason, waiting_detail, session_id, branch, start_sha,
     merge_from_sha, merge_tip_sha, merged_sha, merge_session_id, merge_branch, summary, error_message,
-    updated_at
+    updated_at, merge_repo, merge_attempts_base
 FROM lado_task_parts
 WHERE queue_entry_id = ?
 ORDER BY position, part_id;
@@ -53,7 +53,7 @@ ORDER BY position, part_id;
 SELECT queue_entry_id, part_id, task_id, title, position, phase, steps_json, paths_json, depends_on_json,
     state, attempts, merge_attempts, waiting_reason, waiting_detail, session_id, branch, start_sha,
     merge_from_sha, merge_tip_sha, merged_sha, merge_session_id, merge_branch, summary, error_message,
-    updated_at
+    updated_at, merge_repo, merge_attempts_base
 FROM lado_task_parts
 WHERE queue_entry_id IN (sqlc.slice('entry_ids'))
 ORDER BY queue_entry_id, position, part_id;
@@ -75,6 +75,8 @@ SET state = sqlc.arg(state),
     merged_sha = sqlc.arg(merged_sha),
     merge_session_id = sqlc.arg(merge_session_id),
     merge_branch = sqlc.arg(merge_branch),
+    merge_repo = sqlc.arg(merge_repo),
+    merge_attempts_base = sqlc.arg(merge_attempts_base),
     summary = sqlc.arg(summary),
     error_message = sqlc.arg(error_message),
     updated_at = sqlc.arg(updated_at)
