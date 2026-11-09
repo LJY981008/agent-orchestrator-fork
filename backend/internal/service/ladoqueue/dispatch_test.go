@@ -25,7 +25,8 @@ func wantPrompt() string {
 		"LADO tracks only a pull request opened from the session branch; one opened from another branch stays untracked, and the task stays running.\n" +
 		"If `gh` is not installed or not logged in, push the branch you work on and run " +
 		"`ao report --needs-input --note \"<branch> pushed; gh unavailable, please open the pull request\"`: " +
-		"a pull request the developer opens from that branch is tracked as this session's.\n\n" +
+		"a pull request the developer opens from that branch is tracked as this session's.\n" +
+		reviewThreadsParagraph(domain.LadoTask{IssueRef: testIssueRef}) + "\n" +
 		"## Approved plan (revision 2, sha256 a1b2c3d4e5f6)\n\n" + testPlanText +
 		"\n## Verification and evidence\n\n" +
 		"Before the developer approves the integration, LADO verifies your pull request's head. " +

@@ -152,6 +152,45 @@ func TestEmbeddedReviewGuidanceSeparatesExternalReviewFromOwnership(t *testing.T
 	}
 }
 
+// TestEmbeddedPRGuidanceNamesResolveComments: the pr guidance tells a worker
+// to resolve only the review threads it addressed with ao, which needs no
+// provider tool, to leave the others open, and to hand a failure to the
+// developer rather than try another tool (#85). The catalog links it.
+func TestEmbeddedPRGuidanceNamesResolveComments(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/pr.md")
+	if err != nil {
+		t.Fatalf("read embedded pr guidance: %v", err)
+	}
+	text := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"ao pr resolve-comments <pr-number> [thread-or-comment-id...]",
+		"ao pr merge <pr-number>",
+		"need no `glab`, no `gh` and no token",
+		"on GitHub and GitLab alike",
+		"Without ids the command resolves every unresolved thread",
+		"Leave unaddressed threads open",
+		"\"tracked in multiple active repositories\"",
+		"do not try another tool",
+		"`ao report --needs-input --note \"<PR URL> <thread id...>: <the error>\"`",
+		"Merge only when the user asks for it.",
+		"the developer approves the integration in LADO",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("pr guidance missing %q:\n%s", want, body)
+		}
+	}
+
+	for _, path := range []string{"using-ao/SKILL.md", "using-ao/references.md"} {
+		catalog, err := files.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(catalog), "[commands/pr.md](commands/pr.md)") {
+			t.Fatalf("%s does not link commands/pr.md:\n%s", path, catalog)
+		}
+	}
+}
+
 // TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
 // skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
 // second run must clobber cleanly, leaving no stale files. This is the whole
@@ -177,6 +216,9 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "browser.md")); err != nil {
 		t.Fatalf("commands/browser.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "pr.md")); err != nil {
+		t.Fatalf("commands/pr.md missing: %v", err)
 	}
 
 	// A stale file inside the skill dir must not survive a reinstall (clobber).

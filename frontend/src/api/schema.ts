@@ -9073,6 +9073,8 @@ export interface components {
             reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "base_overlap" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested";
             /** @description The record's hash, which an integration approval signs as verificationSha256. */
             sha256: string;
+            /** @description How many review threads of the PR are unresolved now and keep it from being ready to merge. Only the execution view fills it; it is outside the record and its hash, and omitted when there are none. */
+            unresolvedReviewThreads?: number;
         };
         LadoVerifyCheckResponse: {
             name: string;

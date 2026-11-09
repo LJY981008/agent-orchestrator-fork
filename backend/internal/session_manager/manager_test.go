@@ -6089,7 +6089,10 @@ func TestSpawnWorker_IncludesReviewCIAndPlanningInstructions(t *testing.T) {
 	systemPrompt := agent.lastLaunch.SystemPrompt
 	for _, want := range []string{
 		"## Review, CI, and Task Planning",
-		"mark every thread you fixed as resolved",
+		"resolve every thread you fixed with `ao pr resolve-comments <pr-number> <thread-id...>`",
+		"no glab, gh or token needed",
+		"Leave a thread you did not address open and report why",
+		"report it with `ao report --needs-input` instead of trying another tool",
 		"multiple PRs/MRs with CI failures or review comments",
 		"decide the order based on blockers, stack order, failing scope, and user priority",
 		"Do not use the agent runtime's built-in subagent or task-delegation tools",
@@ -6098,6 +6101,9 @@ func TestSpawnWorker_IncludesReviewCIAndPlanningInstructions(t *testing.T) {
 		if !strings.Contains(systemPrompt, want) {
 			t.Fatalf("worker system prompt missing %q:\n%s", want, systemPrompt)
 		}
+	}
+	if strings.Contains(systemPrompt, "when the platform supports it") {
+		t.Fatalf("worker system prompt kept the old command-less thread wording:\n%s", systemPrompt)
 	}
 }
 

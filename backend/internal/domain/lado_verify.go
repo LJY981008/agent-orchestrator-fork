@@ -473,6 +473,11 @@ const LadoNotifiedWorktreeBehind = "worktree_behind"
 // asks a worker whose worktree stayed worktree_dirty to clean it (LADO #22).
 const LadoNotifiedWorktreeDirty = "worktree_dirty"
 
+// LadoNotifiedReviewThreads is the Notified entry of the one message that
+// asks a resting worker to resolve the review threads it addressed with
+// `ao pr resolve-comments` once they outlived a push (LADO #85).
+const LadoNotifiedReviewThreads = "review_threads"
+
 // Overall returns the record's outcome: fail if any item fails, else wait if
 // any waits, else confirm if any needs confirming, else pass. The reason is
 // the code of the first failing item, else of the first waiting one, else

@@ -25843,6 +25843,11 @@ components:
         sha256:
           description: The record's hash, which an integration approval signs as verificationSha256.
           type: string
+        unresolvedReviewThreads:
+          description: How many review threads of the PR are unresolved now and keep
+            it from being ready to merge. Only the execution view fills it; it is
+            outside the record and its hash, and omitted when there are none.
+          type: integer
       required:
       - headSha
       - prUrl

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { appCatalogs } from "../../i18n/all-messages";
 import * as lado from "../../lib/lado";
 import { LadoVerificationSection } from "./LadoVerificationSection";
 
@@ -715,6 +716,41 @@ test("names the uncommitted files the check commands wait for", () => {
 	expect(within(row("commands")).queryByTestId("lado-verify-dirty")).not.toBeInTheDocument();
 });
 
+// The PR's review threads that are still unresolved (#85): the execution
+// view counts them next to the head's record.
+test("counts the unresolved review threads above the items, and hides the line without any", () => {
+	renderSection(execution({ verification: verification({ unresolvedReviewThreads: 2 }) }));
+	const threads = screen.getByTestId("lado-verify-review-threads");
+	expect(threads).toHaveTextContent("2 unresolved review threads");
+	// Above the items, in the section.
+	expect(threads.compareDocumentPosition(screen.getByTestId("lado-verify-items")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	cleanup();
+
+	renderSection(execution({ verification: verification({ unresolvedReviewThreads: 1 }) }));
+	expect(screen.getByTestId("lado-verify-review-threads")).toHaveTextContent("1 unresolved review thread");
+	cleanup();
+
+	renderSection(execution({ verification: verification({ unresolvedReviewThreads: 0 }) }));
+	expect(screen.queryByTestId("lado-verify-review-threads")).not.toBeInTheDocument();
+	cleanup();
+
+	// A daemon that sends none leaves the field out.
+	renderSection(execution());
+	expect(screen.getByTestId("lado-verify-items")).toBeInTheDocument();
+	expect(screen.queryByTestId("lado-verify-review-threads")).not.toBeInTheDocument();
+});
+
+test("every locale words the unresolved review threads with its plural forms", () => {
+	for (const [locale, catalog] of Object.entries(appCatalogs)) {
+		const messages = catalog as Record<string, string>;
+		const forms = ["es", "fr", "pt-BR"].includes(locale) ? ["one", "many", "other"] : ["one", "other"];
+		for (const form of forms) {
+			expect(messages[`lado.verify.reviewThreads_${form}`], `${locale} ${form}`).toContain("{{count}}");
+		}
+	}
+	expect((appCatalogs.ko as Record<string, string>)["lado.verify.reviewThreads_other"]).toBe("미해결 리뷰 스레드 {{count}}개");
+});
+
 // A workspace task with a pull request in each of two repositories (#64).
 const BACK_URL = "https://github.com/acme/back/pull/3";
 const FRONT_URL = "https://github.com/acme/front/pull/5";
@@ -842,4 +878,27 @@ test("reposts the status of the PR whose post failed, and names a repository sti
 	expect(screen.queryByTestId("lado-verify-prs")).not.toBeInTheDocument();
 	expect(screen.getByTestId("lado-verify-state")).toHaveTextContent("Waiting for a pull request in each repository");
 	expect(screen.getByTestId("lado-verify-missing")).toHaveTextContent("No pull request yet in: front");
+});
+
+test("counts each tracked PR's unresolved review threads under that PR", () => {
+	renderSection(
+		twoPRs(
+			{ record: verification({ headSha: BACK_HEAD, prUrl: BACK_URL, unresolvedReviewThreads: 3 }) },
+			{ record: verification({ headSha: FRONT_HEAD, prUrl: FRONT_URL }) },
+		),
+	);
+	const [back, front] = screen.getAllByTestId("lado-verify-pr");
+	expect(within(back!).getByTestId("lado-verify-review-threads")).toHaveTextContent("3 unresolved review threads");
+	expect(within(front!).queryByTestId("lado-verify-review-threads")).not.toBeInTheDocument();
+	cleanup();
+
+	renderSection(
+		twoPRs(
+			{ record: verification({ headSha: BACK_HEAD, prUrl: BACK_URL, unresolvedReviewThreads: 0 }) },
+			{ record: verification({ headSha: FRONT_HEAD, prUrl: FRONT_URL, unresolvedReviewThreads: 1 }) },
+		),
+	);
+	const prs = screen.getAllByTestId("lado-verify-pr");
+	expect(within(prs[0]!).queryByTestId("lado-verify-review-threads")).not.toBeInTheDocument();
+	expect(within(prs[1]!).getByTestId("lado-verify-review-threads")).toHaveTextContent("1 unresolved review thread");
 });
