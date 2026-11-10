@@ -36,6 +36,14 @@ type fakeStore struct {
 	defaults map[domain.AgentAccountProvider]string
 	alerts   []domain.LadoAlert
 	audits   []domain.LadoAuditEvent
+	notices  []domain.LadoOrchestratorNotice
+	// ladoProjects are the LADO mode projects; waiting is what
+	// CountLadoAccountLimitedWaits answers, and waitCounts how often it was
+	// asked. records counts the account limit records.
+	ladoProjects []domain.ProjectID
+	waiting      int
+	waitCounts   int
+	records      int
 	// failLimitWrite fails the next limit watch writes.
 	failLimitWrite int
 }
@@ -138,22 +146,69 @@ func (f *fakeStore) SetLadoSessionWatchStall(_ context.Context, s domain.Session
 	return true, nil
 }
 
+// RecordLadoAccountLimit keeps the real upsert's rules: a record over a live
+// limit keeps its detection time and its first known identity; one over a
+// released or expired limit starts it again.
 func (f *fakeStore) RecordLadoAccountLimit(_ context.Context, l domain.LadoAccountLimit) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if old, ok := f.limits[l.AccountKey]; ok {
+	f.records++
+	if old, ok := f.limits[l.AccountKey]; ok && old.ReleasedAt.IsZero() && old.ResetAt.After(l.DetectedAt) {
 		l.DetectedAt = old.DetectedAt
+		if old.Identity != "" {
+			l.Identity = old.Identity
+		}
 	}
+	l.ReleasedAt, l.ReleaseReason, l.ReleasedWaiting = time.Time{}, domain.LadoLimitReleaseNone, 0
 	f.limits[l.AccountKey] = l
 	return nil
 }
 
-func (f *fakeStore) ReleaseLadoAccountLimit(_ context.Context, key string) (bool, error) {
+func (f *fakeStore) MarkLadoAccountLimitReleased(_ context.Context, key string, reason domain.LadoLimitReleaseReason, at time.Time) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	_, ok := f.limits[key]
-	delete(f.limits, key)
-	return ok, nil
+	l, ok := f.limits[key]
+	if !ok || !l.ReleasedAt.IsZero() {
+		return false, nil
+	}
+	l.ReleasedAt, l.ReleaseReason, l.ReleasedWaiting, l.UpdatedAt = at, reason, 0, at
+	f.limits[key] = l
+	return true, nil
+}
+
+func (f *fakeStore) SetLadoAccountLimitReleasedWaiting(_ context.Context, key string, waiting int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if l, ok := f.limits[key]; ok && !l.ReleasedAt.IsZero() {
+		l.ReleasedWaiting = waiting
+		f.limits[key] = l
+	}
+	return nil
+}
+
+func (f *fakeStore) CountLadoAccountLimitedWaits(context.Context) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.waitCounts++
+	return f.waiting, nil
+}
+
+func (f *fakeStore) ListLadoModeProjectIDs(context.Context) ([]domain.ProjectID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]domain.ProjectID(nil), f.ladoProjects...), nil
+}
+
+func (f *fakeStore) AddLadoOrchestratorNotice(_ context.Context, n domain.LadoOrchestratorNotice) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, old := range f.notices {
+		if old.Key == n.Key {
+			return false, nil
+		}
+	}
+	f.notices = append(f.notices, n)
+	return true, nil
 }
 
 func (f *fakeStore) LadoAccountLimit(_ context.Context, key string) (domain.LadoAccountLimit, bool, error) {
@@ -208,6 +263,38 @@ func (f *fakeStore) alertKinds() []domain.LadoAlertKind {
 		kinds = append(kinds, a.Kind)
 	}
 	return kinds
+}
+
+// limit reads an account's limit.
+func (f *fakeStore) limit(key string) (domain.LadoAccountLimit, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.limits[key]
+	return l, ok
+}
+
+// noticeTexts lists the orchestrator notices' texts.
+func (f *fakeStore) noticeTexts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, n := range f.notices {
+		out = append(out, string(n.ProjectID)+" "+n.Text)
+	}
+	return out
+}
+
+// audited returns the audit events of action.
+func (f *fakeStore) audited(action string) []domain.LadoAuditEvent {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []domain.LadoAuditEvent
+	for _, ev := range f.audits {
+		if ev.Action == action {
+			out = append(out, ev)
+		}
+	}
+	return out
 }
 
 func (f *fakeStore) auditCount(action string) int {
@@ -274,6 +361,53 @@ type fakeAccounts struct{ ids map[domain.SessionID]string }
 
 func (f fakeAccounts) SessionAccountID(_ context.Context, id domain.SessionID, _ domain.AgentHarness) (string, error) {
 	return f.ids[id], nil
+}
+
+// fakeIdentities answers each account's login fingerprint, or fails.
+type fakeIdentities struct {
+	mu    sync.Mutex
+	fps   map[string]string
+	fail  error
+	calls int
+	// block, when set, holds every read until it is closed.
+	block chan struct{}
+	// entered gets a value as each read starts, when set.
+	entered chan struct{}
+}
+
+func (f *fakeIdentities) AccountFingerprint(ctx context.Context, accountID string) (string, error) {
+	f.mu.Lock()
+	f.calls++
+	block, entered := f.block, f.entered
+	f.mu.Unlock()
+	if entered != nil {
+		entered <- struct{}{}
+	}
+	if block != nil {
+		select {
+		case <-block:
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.fail != nil {
+		return "", f.fail
+	}
+	return f.fps[accountID], nil
+}
+
+func (f *fakeIdentities) set(accountID, fp string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fps[accountID] = fp
+}
+
+func (f *fakeIdentities) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls
 }
 
 type sent struct {
@@ -380,36 +514,69 @@ func seoul(t *testing.T) *time.Location {
 }
 
 // rest shows the worker idle since at.
-func (f *fixture) rest(at time.Time) {
-	f.sessions.set(domain.SessionRecord{
-		ID: worker1, ProjectID: proj1, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
-		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: at},
-	})
+func (f *fixture) rest(at time.Time) { f.restOf(worker1, at) }
+
+// restOf shows session id idle since at, in its project and with the time it
+// was made kept.
+func (f *fixture) restOf(id domain.SessionID, at time.Time) {
+	rec := f.record(id)
+	rec.Activity = domain.Activity{State: domain.ActivityIdle, LastActivityAt: at}
+	f.sessions.set(rec)
+}
+
+// record is session id's record, or a new Chat worker of proj1.
+func (f *fixture) record(id domain.SessionID) domain.SessionRecord {
+	rec, ok, _ := f.sessions.Session(context.Background(), id)
+	if !ok {
+		rec = domain.SessionRecord{ID: id, ProjectID: proj1, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat}
+	}
+	return rec
 }
 
 // work shows the worker active at at, with a turn running.
 func (f *fixture) work(at time.Time) {
-	f.sessions.set(domain.SessionRecord{
-		ID: worker1, ProjectID: proj1, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
-		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: at},
-	})
+	rec := f.record(worker1)
+	rec.Activity = domain.Activity{State: domain.ActivityActive, LastActivityAt: at}
+	f.sessions.set(rec)
 	started := at
 	f.convs.set(worker1, domain.ConversationTurn{ID: "turn-run", State: domain.TurnStateRunning, RequestedAt: at, StartedAt: &started})
 }
 
 // endTurn makes the worker's newest turn one that ended at at.
 func (f *fixture) endTurn(state domain.TurnState, errText string, at time.Time) {
+	f.endTurnOf(worker1, state, errText, at)
+}
+
+// endTurnOf makes session id's newest turn one that ended at at.
+func (f *fixture) endTurnOf(id domain.SessionID, state domain.TurnState, errText string, at time.Time) {
 	started, done := at.Add(-time.Minute), at
-	f.convs.set(worker1, domain.ConversationTurn{
+	f.convs.set(id, domain.ConversationTurn{
 		ID: "turn-" + at.Format(time.RFC3339Nano), State: state, ErrorMessage: errText,
 		RequestedAt: started, StartedAt: &started, CompletedAt: &done,
 	})
 }
 
 // limitAt makes the worker stop at its session limit at at, resting.
-func (f *fixture) limitAt(at time.Time, text string) {
-	f.endTurn(domain.TurnStateFailed, text, at)
-	f.rest(at)
+func (f *fixture) limitAt(at time.Time, text string) { f.limitOf(worker1, at, text) }
+
+// limitOf makes session id stop at its limit at at, resting.
+func (f *fixture) limitOf(id domain.SessionID, at time.Time, text string) {
+	f.endTurnOf(id, domain.TurnStateFailed, text, at)
+	f.restOf(id, at)
+}
+
+// addWorker runs another part worker, session id of task in project, made at
+// created and resting since then.
+func (f *fixture) addWorker(id domain.SessionID, task domain.LadoTaskID, project domain.ProjectID, created time.Time) {
+	f.store.mu.Lock()
+	f.store.tasks[task] = domain.LadoTask{ID: task, ProjectID: project, IssueRef: "github:o/r#8"}
+	f.store.execs = append(f.store.execs, domain.LadoExecution{SessionID: id, TaskID: task, Role: domain.LadoRolePart, PartID: "b"})
+	f.store.mu.Unlock()
+	f.sessions.set(domain.SessionRecord{
+		ID: id, ProjectID: project, Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		CreatedAt: created, Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: created},
+	})
+	f.endTurnOf(id, domain.TurnStateCompleted, "", created)
 }
 
 func (f *fixture) tick(at time.Time) {
