@@ -162,6 +162,34 @@ func TestParseGitLabCIEdges(t *testing.T) {
 	if len(got.Hosts) != 1 || got.Hosts[0].Unresolved != "$LOOP_HOST" {
 		t.Fatalf("self reference = %#v", got.Hosts)
 	}
+
+	// A variable that names itself many times would double on every pass
+	// (500 references of 7 bytes: about 1.75 MB, then 875 MB, ...). The
+	// expansion stops at its growth bound and leaves the value unresolved,
+	// for a *_HOST variable and for a compose project name alike.
+	many := strings.Repeat("$A_HOST", 500)
+	project := strings.Repeat("${GRP}", 500)
+	data := "variables:\n  A_HOST: \"" + many + "\"\n  GRP: \"" + project + "\"\n  COMPOSE_PROJECT_NAME: $GRP\n" +
+		"deploy:\n  script:\n    - docker-compose -p $GRP up -d\n"
+	got = ParseGitLabCI([]byte(data))
+	if len(got.Hosts) != 1 || got.Hosts[0].Unresolved != "$A_HOST" || len(got.Hosts[0].Endpoint) > len(many)+ciMaxExpandGrowth+16 {
+		t.Fatalf("doubling host = %d hosts, unresolved %q, endpoint %d bytes", len(got.Hosts), got.Hosts[0].Unresolved, len(got.Hosts[0].Endpoint))
+	}
+	if len(got.ComposeProjects) != 0 {
+		t.Fatalf("doubling compose project = %q", got.ComposeProjects)
+	}
+
+	// Within the bound, a value that names another one several times still
+	// expands, through more than one pass.
+	scope := ciScope{"A": "$B-$B", "B": "$C$C", "C": "x"}
+	if v := ciExpand("$A.$A", scope); v != "xx-xx.xx-xx" {
+		t.Fatalf("ciExpand = %q", v)
+	}
+	// One pass that would pass the bound gives the value back as it was.
+	big := ciScope{"V": strings.Repeat("y", ciMaxExpandGrowth)}
+	if v := ciExpand("$V$V", big); v != "$V$V" {
+		t.Fatalf("ciExpand over the bound = %d bytes", len(v))
+	}
 }
 
 func TestCIEndpoint(t *testing.T) {

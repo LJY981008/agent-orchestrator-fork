@@ -16,6 +16,10 @@ const (
 	ciDefaultPort = "2375"
 	// ciMaxExpand bounds variable expansion (variables that name others).
 	ciMaxExpand = 8
+	// ciMaxExpandGrowth bounds how much expansion may lengthen a value: a
+	// variable that names itself several times would otherwise double on
+	// every pass and exhaust the daemon's memory.
+	ciMaxExpandGrowth = 4 << 10
 	// ciMaxDepth bounds the walk through nested nodes and aliases.
 	ciMaxDepth = 64
 )
@@ -422,22 +426,48 @@ func ciVarValue(n *yaml.Node) (string, bool) {
 
 // ciExpand replaces $VAR and ${VAR} with the scope's values, again for
 // values that name other variables, and leaves unknown references as they
-// are.
+// are. A value whose expansion would grow by more than ciMaxExpandGrowth
+// bytes is given back as it was, so its first reference shows as
+// unresolved.
 func ciExpand(s string, scope ciScope) string {
+	limit := len(s) + ciMaxExpandGrowth
+	cur := s
 	for range ciMaxExpand {
-		next := ciVarRef.ReplaceAllStringFunc(s, func(m string) string {
-			name := strings.Trim(m, "${}")
-			if v, ok := scope[name]; ok {
-				return v
-			}
-			return m
-		})
-		if next == s {
+		next, ok := ciExpandOnce(cur, scope, limit)
+		if !ok {
+			return s
+		}
+		if next == cur {
 			break
 		}
-		s = next
+		cur = next
 	}
-	return s
+	return cur
+}
+
+// ciExpandOnce makes one pass of ciExpand. It stops as soon as the result
+// would pass limit bytes and then reports false.
+func ciExpandOnce(s string, scope ciScope, limit int) (string, bool) {
+	var b strings.Builder
+	last := 0
+	for _, loc := range ciVarRef.FindAllStringIndex(s, -1) {
+		m := s[loc[0]:loc[1]]
+		v, ok := scope[strings.Trim(m, "${}")]
+		if !ok {
+			v = m
+		}
+		if b.Len()+(loc[0]-last)+len(v) > limit {
+			return "", false
+		}
+		b.WriteString(s[last:loc[0]])
+		b.WriteString(v)
+		last = loc[1]
+	}
+	if b.Len()+len(s)-last > limit {
+		return "", false
+	}
+	b.WriteString(s[last:])
+	return b.String(), true
 }
 
 // ciUnresolved is the first variable reference left in a value.
