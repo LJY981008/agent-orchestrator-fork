@@ -5,9 +5,11 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
 func TestCreateFromLogMakesALogTask(t *testing.T) {
@@ -86,6 +88,71 @@ func TestCreateFromLogReturnsTheUnconfirmedTask(t *testing.T) {
 	created, err := fx.svc.Create(context.Background(), CreateInput{ProjectID: "demo", Text: "Add login"})
 	if apiCode(err) != "LADO_ISSUE_CREATE_UNCONFIRMED" || created.ID != "" {
 		t.Fatalf("Create = %+v, %v; want no task with the unconfirmed error", created, err)
+	}
+}
+
+// linkFailStore fails the next links of a created issue to its task, as a
+// busy database would.
+type linkFailStore struct {
+	*sqlite.Store
+	fails int
+}
+
+func (s *linkFailStore) LinkLadoTaskIssue(ctx context.Context, id domain.LadoTaskID, ref domain.IssueID, issue domain.LadoObservedIssue, at time.Time) (domain.LadoTask, error) {
+	if s.fails > 0 {
+		s.fails--
+		return domain.LadoTask{}, errors.New("database is locked")
+	}
+	return s.Store.LinkLadoTaskIssue(ctx, id, ref, issue, at)
+}
+
+// TestCreateFromLogReturnsThePendingTaskWhenTheLinkFails: the issue exists
+// but LADO could not save it on the task. The log watch gets the pending
+// task, so it does not create a second issue, and ResolvePending links the
+// issue by its marker. Create still returns nothing.
+func TestCreateFromLogReturnsThePendingTaskWhenTheLinkFails(t *testing.T) {
+	fx := newGitHubTaskFixture(t)
+	ctx := context.Background()
+	store := &linkFailStore{Store: fx.store, fails: 1}
+	fx.svc.deps.Store = store
+	task, err := fx.svc.CreateFromLog(ctx, LogCreateInput{ProjectID: "demo", Title: "운영 오류", Body: "x"})
+	if apiCode(err) != "LADO_TASK_LINK_FAILED" {
+		t.Fatalf("err = %v, want LADO_TASK_LINK_FAILED", err)
+	}
+	pending := fx.pending(t)
+	if task.ID == "" || task.IssueRef != "" || len(pending) != 1 || pending[0].ID != task.ID || pending[0].Source != domain.LadoTaskSourceLog {
+		t.Fatalf("task = %+v, pending = %+v; want the pending log task returned", task, pending)
+	}
+
+	fx.svc.ResolvePending(ctx, fx.now.Add(time.Hour))
+	linked, ok, err := fx.store.LadoTask(ctx, task.ID)
+	if err != nil || !ok || linked.IssueRef != "github:acme/demo#1" {
+		t.Fatalf("task after ResolvePending = %+v, %v, %v; want the created issue linked", linked, ok, err)
+	}
+	if creates, _ := fx.tracker.counts(); creates != 1 {
+		t.Fatalf("issues created = %d, want 1", creates)
+	}
+
+	store.fails = 1
+	created, err := fx.svc.Create(ctx, CreateInput{ProjectID: "demo", Text: "Add login"})
+	if apiCode(err) != "LADO_TASK_LINK_FAILED" || created.ID != "" {
+		t.Fatalf("Create = %+v, %v; want no task with the link error", created, err)
+	}
+}
+
+// TestCreateFromLogLinksAfterTheContextEnds: a request whose context ends
+// right after the tracker created the issue still saves it on the task.
+func TestCreateFromLogLinksAfterTheContextEnds(t *testing.T) {
+	fx := newGitHubTaskFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.tracker.onCreate = cancel
+	task, err := fx.svc.CreateFromLog(ctx, LogCreateInput{ProjectID: "demo", Title: "운영 오류", Body: "x"})
+	if err != nil || task.IssueRef != "github:acme/demo#1" {
+		t.Fatalf("CreateFromLog = %+v, %v; want the issue linked although the context ended", task, err)
+	}
+	if pending := fx.pending(t); len(pending) != 0 {
+		t.Fatalf("pending = %+v, want none", pending)
 	}
 }
 

@@ -310,9 +310,12 @@ type newTask struct {
 }
 
 // create creates the issue for a new task, then links it to the task, as
-// Create documents. When LADO cannot confirm whether the tracker created the
-// issue, it returns the pending task (without an issue ref) together with the
-// LADO_ISSUE_CREATE_UNCONFIRMED error; on every other error the task is zero.
+// Create documents. When the task stays pending with an issue that may exist
+// (LADO_ISSUE_CREATE_UNCONFIRMED: the tracker's answer was lost;
+// LADO_TASK_LINK_FAILED: the issue was created but LADO could not save it on
+// the task), it returns the pending task (without an issue ref) together
+// with the error, and ResolvePending finds the issue by its marker later; on
+// every other error the task is zero.
 func (s *Service) create(ctx context.Context, in newTask) (domain.LadoTask, error) {
 	repos, err := s.ladoRepos(ctx, in.ProjectID)
 	if err != nil {
@@ -624,13 +627,17 @@ func (s *Service) Cancel(ctx context.Context, id domain.LadoTaskID) (domain.Lado
 }
 
 // link records a created issue on its pending task.
+// link saves a created issue on its pending task. The issue exists already,
+// so the write goes on when the request's context ends. When it fails, the
+// pending task is returned with LADO_TASK_LINK_FAILED: the task keeps
+// waiting and ResolvePending links it by its marker.
 func (s *Service) link(ctx context.Context, pending domain.LadoTask, repo domain.TrackerRepo, issue domain.Issue) (domain.LadoTask, error) {
 	issue.ID.Host = repo.Host
 	now := s.deps.Clock().UTC()
-	linked, err := s.deps.Store.LinkLadoTaskIssue(ctx, pending.ID, domain.LadoIssueRef(issue.ID), observedIssue(issue, now), now)
+	linked, err := s.deps.Store.LinkLadoTaskIssue(context.WithoutCancel(ctx), pending.ID, domain.LadoIssueRef(issue.ID), observedIssue(issue, now), now)
 	if err != nil {
 		s.deps.Log.Error("LADO could not link a created issue to its task", "task", pending.ID, "issue", domain.LadoIssueRef(issue.ID), "err", err)
-		return domain.LadoTask{}, apierr.Internal("LADO_TASK_LINK_FAILED", "The issue was created, but LADO failed to save it on the task")
+		return pending, apierr.Internal("LADO_TASK_LINK_FAILED", "The issue was created, but LADO failed to save it on the task")
 	}
 	return linked, nil
 }

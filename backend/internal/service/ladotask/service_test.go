@@ -37,6 +37,8 @@ type fakeTracker struct {
 	// comments are each issue's comments, by native id.
 	comments    map[string][]domain.LadoIssueComment
 	commentsErr error
+	// onCreate is called as an issue is created.
+	onCreate func()
 }
 
 func newFakeTracker() *fakeTracker {
@@ -74,6 +76,9 @@ func (f *fakeTracker) CreateIssue(_ context.Context, repo domain.TrackerRepo, ti
 		return domain.Issue{}, createErr
 	}
 	issue := f.add(repo, title, body, domain.IssueOpen)
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	if lost != nil {
 		return domain.Issue{}, lost
 	}

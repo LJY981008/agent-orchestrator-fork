@@ -487,7 +487,9 @@ func (h *IncidentHandler) incidentCreate(ctx context.Context, p *incidentProject
 			h.incidentCreated(ctx, st, task, st.previous, now)
 		}
 	case task.ID != "":
-		// Unconfirmed: keep the task id; a later occurrence finds out.
+		// The issue may exist while the task waits (unconfirmed, or created
+		// but not saved on the task): keep the task id; ResolvePending links
+		// or drops it and a later occurrence finds out.
 		task.IssueRef = ""
 		h.incidentLink(ctx, st, task, st.previous, now)
 	default:

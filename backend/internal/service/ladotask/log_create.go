@@ -29,9 +29,12 @@ type LogCreateInput struct {
 // a task with Source domain.LadoTaskSourceLog. The title is cut to 256
 // characters and the body to 65,000, where Create would refuse them, because
 // no developer is there to shorten them. It fails like Create, with one
-// difference: when LADO cannot confirm whether the tracker created the issue
-// (LADO_ISSUE_CREATE_UNCONFIRMED), it also returns the pending task, without
-// an issue ref, so the log watch can find it again by its id.
+// difference: when the issue may exist while the task stays pending (LADO
+// cannot confirm whether the tracker created the issue,
+// LADO_ISSUE_CREATE_UNCONFIRMED, or could not save the created issue on the
+// task, LADO_TASK_LINK_FAILED), it also returns the pending task, without an
+// issue ref, so the log watch can find it again by its id and does not create
+// a second issue.
 func (s *Service) CreateFromLog(ctx context.Context, in LogCreateInput) (domain.LadoTask, error) {
 	title := logCut(strings.Join(strings.Fields(in.Title), " "), maxTitleRunes)
 	if title == "" {
