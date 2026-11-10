@@ -53,6 +53,7 @@ function fingerprint(over: Partial<LadoLogFingerprint>): LadoLogFingerprint {
 		lastSeenAt: "2026-11-10T00:01:00Z",
 		ignored: false,
 		instances: [],
+		serviceInstances: 0,
 		...over,
 	};
 }

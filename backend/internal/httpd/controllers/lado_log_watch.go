@@ -391,6 +391,7 @@ func ladoLogFingerprintResponse(fp domain.LadoLogFingerprint) LadoLogFingerprint
 		Ignored:             fp.Ignored,
 		IgnoredAt:           ladoOptionalUTC(fp.IgnoredAt),
 		Instances:           make([]LadoLogInstanceCountResponse, 0, len(fp.Instances)),
+		ServiceInstances:    fp.ServiceInstances,
 	}
 	for _, inst := range fp.Instances {
 		resp.Instances = append(resp.Instances, LadoLogInstanceCountResponse{

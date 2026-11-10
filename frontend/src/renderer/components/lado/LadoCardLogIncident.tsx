@@ -2,7 +2,8 @@
 // log watch created (issue #87). The board reads the project's incidents once
 // for all its cards, only while a log task is in the lanes; the log watch
 // events refresh them. A card shows "Production error · n×" while its task is
-// open; the task view also lists the instances that logged the error and lets
+// open; the task view also lists the instances that logged the error (m of
+// the n instances of the service the log watch follows now) and lets
 // the developer ignore it, so it creates no further issue.
 import { TriangleAlert } from "lucide-react";
 import { useMemo } from "react";
@@ -88,7 +89,9 @@ export function LadoTaskLogIncident({ projectId, task }: { projectId: string; ta
 				</dd>
 				<dt className="text-settings-muted">{t("lado.logIncident.instances")}</dt>
 				<dd className="text-foreground" data-testid="lado-log-instances">
-					{t("lado.logIncident.instanceCount", { count: fingerprint.instances.length })}
+					{fingerprint.serviceInstances >= fingerprint.instances.length && fingerprint.serviceInstances > 0
+						? t("lado.logIncident.instanceOfTotal", { instances: fingerprint.instances.length, count: fingerprint.serviceInstances })
+						: t("lado.logIncident.instanceCount", { count: fingerprint.instances.length })}
 				</dd>
 			</dl>
 			{fingerprint.instances.length > 0 ? (

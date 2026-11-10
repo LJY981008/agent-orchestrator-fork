@@ -403,6 +403,10 @@ func (s *Service) Incidents(ctx context.Context, project domain.ProjectID) ([]do
 	if fps == nil {
 		fps = []domain.LadoLogFingerprint{}
 	}
+	attached := s.attachedServices(project)
+	for i := range fps {
+		fps[i].ServiceInstances = attached[fps[i].Service]
+	}
 	return fps, nil
 }
 

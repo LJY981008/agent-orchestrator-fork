@@ -691,6 +691,30 @@ func (s *Service) serviceInstances(project domain.ProjectID, inst Instance) int 
 	return len(ids)
 }
 
+// attachedServices is how many instances of each service the project's
+// sources follow now, counted once per container id.
+func (s *Service) attachedServices(project domain.ProjectID) map[string]int {
+	ids := map[string]map[string]bool{}
+	for _, run := range s.runningSources() {
+		if run.project != project {
+			continue
+		}
+		run.mu.Lock()
+		for _, inst := range run.status.Instances {
+			if ids[inst.Service] == nil {
+				ids[inst.Service] = map[string]bool{}
+			}
+			ids[inst.Service][inst.ID] = true
+		}
+		run.mu.Unlock()
+	}
+	out := make(map[string]int, len(ids))
+	for service, set := range ids {
+		out[service] = len(set)
+	}
+	return out
+}
+
 // status records a Follower's status and lets go of the Detectors of
 // instances that are gone.
 func (s *Service) status(ctx context.Context, run *serviceSource, st FollowerStatus) {

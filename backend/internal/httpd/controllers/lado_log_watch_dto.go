@@ -208,6 +208,7 @@ type LadoLogFingerprintResponse struct {
 	Ignored             bool                           `json:"ignored"`
 	IgnoredAt           *time.Time                     `json:"ignoredAt,omitempty"`
 	Instances           []LadoLogInstanceCountResponse `json:"instances"`
+	ServiceInstances    int                            `json:"serviceInstances" minimum:"0" description:"How many instances of the service LADO follows now across the project's sources, the n of 'm of n instances'; 0 when none is attached."`
 }
 
 // LadoLogIncidentListResponse is a project's fingerprints: every one of an

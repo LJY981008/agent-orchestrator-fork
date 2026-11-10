@@ -724,6 +724,7 @@ function incident(taskId: string, count: number): logWatch.LadoLogFingerprint {
 		lastSeenAt: "2026-11-10T00:01:00Z",
 		ignored: false,
 		instances: [],
+		serviceInstances: 0,
 		taskId,
 	};
 }

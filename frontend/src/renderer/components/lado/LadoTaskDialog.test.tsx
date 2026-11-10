@@ -908,6 +908,7 @@ const fingerprint: logWatch.LadoLogFingerprint = {
 		{ instance: "prod1/grp-api-1", image: "grp/api:1.4.2", count: 6, lastSeenAt: "2026-11-10T00:05:00Z" },
 		{ instance: "prod2/grp-api-1", image: "grp/api:1.4.1", count: 3, lastSeenAt: "2026-11-10T00:04:00Z" },
 	],
+	serviceInstances: 3,
 	taskId: "lado-task-1",
 };
 
@@ -921,7 +922,7 @@ test("a log task leads with its incident, and the developer can ignore the error
 	const incident = await screen.findByTestId("lado-task-log-incident");
 	expect(within(incident).getByTestId("lado-card-log-incident")).toHaveTextContent("Production error · 9×");
 	expect(within(incident).getByText("grp/api")).toBeInTheDocument();
-	expect(within(incident).getByTestId("lado-log-instances")).toHaveTextContent("2 instances");
+	expect(within(incident).getByTestId("lado-log-instances")).toHaveTextContent("2 of 3 instances");
 	const rows = within(incident).getAllByTestId("lado-log-instance");
 	expect(rows[0]).toHaveTextContent("prod1/grp-api-1");
 	expect(rows[0]).toHaveTextContent("grp/api:1.4.2");

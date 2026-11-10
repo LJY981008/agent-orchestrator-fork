@@ -357,6 +357,7 @@ func TestLadoAPI_LogWatchCheckImportIncidents(t *testing.T) {
 			{Instance: "prod1/grp-api-1", Image: "grp/api:1.2", Count: 3, LastSeenAt: ladoLogTime},
 			{Instance: "prod2/grp-api-1", Image: "grp/api:1.1", Count: 1, LastSeenAt: ladoLogTime},
 		},
+		ServiceInstances: 3,
 	}}
 	body, status, _ = doRequest(t, srv, "GET", "/api/v1/lado/projects/mer/log-watch/incidents", "")
 	list := decodeLadoJSON[controllers.LadoLogIncidentListResponse](t, body)
@@ -364,7 +365,7 @@ func TestLadoAPI_LogWatchCheckImportIncidents(t *testing.T) {
 		t.Fatalf("incidents = %d %s", status, body)
 	}
 	if fp := list.Fingerprints[0]; fp.ID != 7 || fp.Count != 4 || fp.TaskID != "lado-task-1" || fp.AutoPlanHeld != "cap" || fp.AutoPlanRequestedAt != nil ||
-		fp.PreviousIssueRef != "" || len(fp.Instances) != 2 || fp.Instances[1].Image != "grp/api:1.1" {
+		fp.PreviousIssueRef != "" || len(fp.Instances) != 2 || fp.Instances[1].Image != "grp/api:1.1" || fp.ServiceInstances != 3 {
 		t.Fatalf("fingerprint = %+v", fp)
 	}
 

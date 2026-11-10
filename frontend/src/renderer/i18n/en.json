@@ -4629,6 +4629,8 @@
 	"lado.logIncident.instances": "Instances",
 	"lado.logIncident.instanceCount_one": "{{count}} instance",
 	"lado.logIncident.instanceCount_other": "{{count}} instances",
+	"lado.logIncident.instanceOfTotal_one": "{{instances}} of {{count}} instance",
+	"lado.logIncident.instanceOfTotal_other": "{{instances}} of {{count}} instances",
 	"lado.logIncident.times": "{{count}}×",
 	"lado.logIncident.ignore": "Ignore this error",
 	"lado.logIncident.unignore": "Stop ignoring",

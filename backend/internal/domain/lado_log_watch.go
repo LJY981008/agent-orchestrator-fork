@@ -281,6 +281,10 @@ type LadoLogFingerprint struct {
 	IgnoredAt           time.Time
 	// Instances are the counts per instance, by instance name.
 	Instances []LadoLogInstanceCount
+	// ServiceInstances is how many instances of the service the log watch
+	// follows now, across the project's sources: the n of "n개 중 m개". It is
+	// not stored; the runner fills it in, 0 when none is attached.
+	ServiceInstances int
 }
 
 // LadoLogInstanceCount is how often one instance showed a fingerprint.

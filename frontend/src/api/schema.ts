@@ -7710,6 +7710,8 @@ export interface components {
             previousIssueRef?: string;
             projectId: string;
             service: string;
+            /** @description How many instances of the service LADO follows now across the project's sources, the n of 'm of n instances'; 0 when none is attached. */
+            serviceInstances: number;
             /** @description The task LADO created for it; omitted before it did or after that task was deleted unconfirmed. */
             taskId?: string;
         };

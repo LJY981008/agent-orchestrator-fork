@@ -77,6 +77,7 @@ const ignoredFingerprint: logWatch.LadoLogFingerprint = {
 	lastSeenAt: "2026-11-10T00:00:00Z",
 	ignored: true,
 	instances: [],
+	serviceInstances: 0,
 };
 
 function renderCard() {

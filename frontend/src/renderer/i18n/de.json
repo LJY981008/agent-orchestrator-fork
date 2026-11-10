@@ -4648,6 +4648,8 @@
 	"lado.logIncident.instances": "Instanzen",
 	"lado.logIncident.instanceCount_one": "{{count}} Instanz",
 	"lado.logIncident.instanceCount_other": "{{count}} Instanzen",
+	"lado.logIncident.instanceOfTotal_one": "{{instances}} von {{count}} Instanz",
+	"lado.logIncident.instanceOfTotal_other": "{{instances}} von {{count}} Instanzen",
 	"lado.logIncident.times": "{{count}}×",
 	"lado.logIncident.ignore": "Diesen Fehler ignorieren",
 	"lado.logIncident.unignore": "Nicht mehr ignorieren",

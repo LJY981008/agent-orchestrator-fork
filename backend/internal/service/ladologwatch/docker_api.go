@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 // The Docker Engine API client is read-only by construction (ADR 0012). An
@@ -183,27 +185,14 @@ func NewDockerSource(cfg DockerConfig) (*DockerSource, error) {
 }
 
 // dockerEndpointHost reads host:port out of tcp://host:port. The domain
-// validates endpoints before they are saved; this is the client's own guard.
+// validates endpoints before they are saved; the client checks again with
+// the same validator, so there is one rule for what an endpoint may be.
 func dockerEndpointHost(endpoint string) (string, error) {
-	u, err := url.Parse(strings.TrimSpace(endpoint))
+	host, port, err := domain.ParseLadoLogEndpoint(strings.TrimSpace(endpoint))
 	if err != nil {
-		return "", fmt.Errorf("docker endpoint is not a URL")
+		return "", fmt.Errorf("docker endpoint: %w", err)
 	}
-	if u.Scheme != "tcp" {
-		return "", fmt.Errorf("docker endpoint must be tcp://host:port")
-	}
-	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || (u.Path != "" && u.Path != "/") {
-		return "", fmt.Errorf("docker endpoint must be tcp://host:port with nothing else")
-	}
-	host, port := u.Hostname(), u.Port()
-	if host == "" || strings.HasPrefix(host, "-") {
-		return "", fmt.Errorf("docker endpoint has no valid host")
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return "", fmt.Errorf("docker endpoint needs a port from 1 to 65535")
-	}
-	return u.Host, nil
+	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
 
 // dockerReadOnlyTransport checks every request against the allow list again

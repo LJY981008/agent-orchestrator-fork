@@ -633,6 +633,25 @@ func TestServiceLinesBecomeOccurrences(t *testing.T) {
 			t.Errorf("prod2 target status = %+v", st.Targets)
 		}
 	}
+
+	// The incidents say how many instances of their service are attached
+	// now: the n of "n개 중 m개" in the task view.
+	fx.store.mu.Lock()
+	fx.store.fingerprints[1] = domain.LadoLogFingerprint{ID: 1, ProjectID: "demo", Fingerprint: "aa", Service: "grp/api"}
+	fx.store.fingerprints[2] = domain.LadoLogFingerprint{ID: 2, ProjectID: "demo", Fingerprint: "bb", Service: "grp/worker"}
+	fx.store.fingerprints[3] = domain.LadoLogFingerprint{ID: 3, ProjectID: "demo", Fingerprint: "cc", Service: "grp/gone"}
+	fx.store.mu.Unlock()
+	fps, err := fx.svc.Incidents(context.Background(), "demo")
+	if err != nil {
+		t.Fatalf("Incidents: %v", err)
+	}
+	attached := map[string]int{}
+	for _, fp := range fps {
+		attached[fp.Service] = fp.ServiceInstances
+	}
+	if want := map[string]int{"grp/api": 2, "grp/worker": 1, "grp/gone": 0}; !reflect.DeepEqual(attached, want) {
+		t.Errorf("service instances = %v, want %v", attached, want)
+	}
 }
 
 // TestServiceSourceDownIsToldOnceAndReadsOnFromTheCursor: a source down

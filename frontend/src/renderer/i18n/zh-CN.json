@@ -4630,6 +4630,8 @@
 	"lado.logIncident.instances": "实例",
 	"lado.logIncident.instanceCount_one": "{{count}} 个实例",
 	"lado.logIncident.instanceCount_other": "{{count}} 个实例",
+	"lado.logIncident.instanceOfTotal_one": "{{count}} 个实例中的 {{instances}} 个",
+	"lado.logIncident.instanceOfTotal_other": "{{count}} 个实例中的 {{instances}} 个",
 	"lado.logIncident.times": "{{count}} 次",
 	"lado.logIncident.ignore": "忽略此错误",
 	"lado.logIncident.unignore": "取消忽略",

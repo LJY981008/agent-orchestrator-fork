@@ -4648,6 +4648,8 @@
 	"lado.logIncident.instances": "인스턴스",
 	"lado.logIncident.instanceCount_one": "인스턴스 {{count}}개",
 	"lado.logIncident.instanceCount_other": "인스턴스 {{count}}개",
+	"lado.logIncident.instanceOfTotal_one": "인스턴스 {{count}}개 중 {{instances}}개",
+	"lado.logIncident.instanceOfTotal_other": "인스턴스 {{count}}개 중 {{instances}}개",
 	"lado.logIncident.times": "{{count}}회",
 	"lado.logIncident.ignore": "이 오류 무시",
 	"lado.logIncident.unignore": "무시 해제",

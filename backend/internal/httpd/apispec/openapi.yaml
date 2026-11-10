@@ -22576,6 +22576,11 @@ components:
           type: string
         service:
           type: string
+        serviceInstances:
+          description: How many instances of the service LADO follows now across the
+            project's sources, the n of 'm of n instances'; 0 when none is attached.
+          minimum: 0
+          type: integer
         taskId:
           description: The task LADO created for it; omitted before it did or after
             that task was deleted unconfirmed.
@@ -22591,6 +22596,7 @@ components:
       - lastSeenAt
       - ignored
       - instances
+      - serviceInstances
       type: object
     LadoLogIncidentListResponse:
       properties:
