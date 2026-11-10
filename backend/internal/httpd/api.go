@@ -75,6 +75,8 @@ type APIDeps struct {
 	// LadoRelay relays a developer's instruction from an orchestrator to a
 	// running LADO worker (issue #49).
 	LadoRelay controllers.LadoRelayService
+	// LadoLogWatch is the production log watch of each project (issue #87).
+	LadoLogWatch controllers.LadoLogWatchService
 	// ProjectMemos serves the orchestrator's project memo (issue #50). Nil
 	// builds the default over Projects and the config's data dir.
 	ProjectMemos controllers.ProjectMemoService
@@ -231,7 +233,7 @@ func newAPIWithLogger(cfg config.Config, deps APIDeps, log *slog.Logger) *API {
 		fs:            &controllers.FSController{Svc: deps.Directories},
 		shellTerms:    &controllers.ShellTerminalsController{Svc: deps.ShellTerminals},
 		cues:          &controllers.CuesController{Svc: deps.Cues},
-		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Usage: deps.LadoUsage, Watch: deps.LadoWatch, Compact: deps.LadoCompact, Knowledge: deps.LadoKnowledge, Presence: deps.LadoPresence, Relay: deps.LadoRelay},
+		lado:          &controllers.LadoController{Projects: deps.LadoProjects, Connections: deps.LadoConnections, Tasks: deps.LadoTasks, Rules: deps.LadoRules, Queue: deps.LadoQueue, Setup: deps.LadoSetup, Verify: deps.LadoVerify, Chrome: deps.LadoClaudeChrome, Usage: deps.LadoUsage, Watch: deps.LadoWatch, Compact: deps.LadoCompact, Knowledge: deps.LadoKnowledge, Presence: deps.LadoPresence, Relay: deps.LadoRelay, LogWatch: deps.LadoLogWatch},
 		projectMemos:  &controllers.ProjectMemoController{Svc: projectMemoServiceFor(cfg, deps)},
 		conversations: &controllers.ConversationsController{Svc: deps.Conversations, Renders: attachmentstore.New(cfg.DataDir)},
 		settings:      &controllers.SettingsController{Svc: deps.Settings},
