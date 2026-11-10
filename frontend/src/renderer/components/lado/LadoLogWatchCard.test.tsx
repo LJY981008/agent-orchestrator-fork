@@ -230,3 +230,112 @@ test("a refused save names the setting", async () => {
 	// The edit stays for the developer to fix.
 	expect(endpoint).toHaveValue("unix:///var/run/docker.sock");
 });
+
+const back: lado.LadoRepository = { ref: "gitlab:grp/back", name: "back", provider: "gitlab", host: "gitlab.example.test", path: "grp/back" };
+const front: lado.LadoRepository = { ref: "gitlab:grp/front", name: "front", provider: "gitlab", host: "gitlab.example.test", path: "grp/front" };
+
+test("a project with one repository shows no repository choice on its targets", async () => {
+	renderCard();
+
+	const sources = await screen.findAllByTestId("lado-log-watch-source");
+	await within(sources[0]).findByRole("textbox", { name: "Value of container choice 1" });
+	expect(within(sources[0]).queryByRole("combobox", { name: "Repository of container choice 1" })).not.toBeInTheDocument();
+	expect(screen.queryByTestId("lado-log-watch-target-repository-required")).not.toBeInTheDocument();
+});
+
+test("in a workspace, a target picks the repository its issues go to, and Save sends it", async () => {
+	vi.mocked(lado.fetchLadoProjectRepositories).mockResolvedValue([back, front]);
+	renderCard();
+
+	const sources = await screen.findAllByTestId("lado-log-watch-source");
+	const choice = await within(sources[0]).findByRole("combobox", { name: "Repository of container choice 1" });
+	expect(choice).toHaveTextContent("Project default (not set)");
+	expect(within(sources[0]).getByTestId("lado-log-watch-target-repository-required")).toHaveTextContent(
+		"Choose the repository this container choice's issues go to",
+	);
+	await userEvent.click(choice);
+	await userEvent.click(await screen.findByRole("option", { name: "front" }));
+	expect(choice).toHaveTextContent("front");
+	expect(screen.queryByTestId("lado-log-watch-target-repository-required")).not.toBeInTheDocument();
+
+	await userEvent.click(screen.getByTestId("lado-log-watch-save"));
+	await waitFor(() => expect(logWatch.updateLadoLogWatch).toHaveBeenCalledTimes(1));
+	const body = vi.mocked(logWatch.updateLadoLogWatch).mock.calls[0][1];
+	expect(body.sources[0].targets).toEqual([{ id: "tgt-1", kind: "compose_project", value: "grp", repository: "gitlab:grp/front", paused: false }]);
+	expect(body).not.toHaveProperty("repository");
+});
+
+test("a target uses the project's default repository, which its first choice names", async () => {
+	vi.mocked(lado.fetchLadoProjectRepositories).mockResolvedValue([back, front]);
+	vi.mocked(logWatch.fetchLadoLogWatch).mockResolvedValue(settings({ repository: back.ref }));
+	renderCard();
+
+	const sources = await screen.findAllByTestId("lado-log-watch-source");
+	const choice = await within(sources[0]).findByRole("combobox", { name: "Repository of container choice 1" });
+	expect(choice).toHaveTextContent("Project default (back)");
+	expect(screen.queryByTestId("lado-log-watch-target-repository-required")).not.toBeInTheDocument();
+});
+
+test("asks for a repository only where the daemon refuses the save: on and not paused", async () => {
+	vi.mocked(lado.fetchLadoProjectRepositories).mockResolvedValue([back, front]);
+	renderCard();
+
+	const sources = await screen.findAllByTestId("lado-log-watch-source");
+	const required = () => within(sources[0]).queryByTestId("lado-log-watch-target-repository-required");
+	await within(sources[0]).findByRole("combobox", { name: "Repository of container choice 1" });
+	expect(required()).toBeInTheDocument();
+	// Pausing the target.
+	await userEvent.click(within(sources[0]).getByRole("switch", { name: "Pause container choice 1" }));
+	expect(required()).not.toBeInTheDocument();
+	await userEvent.click(within(sources[0]).getByRole("switch", { name: "Pause container choice 1" }));
+	expect(required()).toBeInTheDocument();
+	// Pausing the host.
+	await userEvent.click(within(sources[0]).getByRole("switch", { name: "Pause prod1" }));
+	expect(required()).not.toBeInTheDocument();
+	await userEvent.click(within(sources[0]).getByRole("switch", { name: "Pause prod1" }));
+	expect(required()).toBeInTheDocument();
+	// Turning the watch off.
+	await userEvent.click(screen.getByRole("switch", { name: "Watch production logs" }));
+	expect(required()).not.toBeInTheDocument();
+});
+
+test("CI candidates suggest a file's repository only for the compose project named like its folder", async () => {
+	vi.mocked(lado.fetchLadoProjectRepositories).mockResolvedValue([back, front]);
+	vi.mocked(logWatch.fetchLadoLogWatch).mockResolvedValue(settings({ sources: [] }));
+	vi.mocked(logWatch.importLadoLogCI).mockResolvedValue({
+		files: [
+			{
+				repo: "back",
+				path: ".gitlab-ci.yml",
+				repository: back.ref,
+				hosts: [{ variable: "PROD1_HOST", displayName: "prod1", endpoint: "tcp://192.0.2.10:2376" }],
+				composeProjects: ["back", "front"],
+				notes: [],
+			},
+		],
+	});
+	renderCard();
+
+	await userEvent.click(await screen.findByTestId("lado-log-watch-import-ci"));
+	const dialog = await screen.findByTestId("lado-log-watch-import-dialog");
+	await within(dialog).findByText("tcp://192.0.2.10:2376");
+	await userEvent.click(within(within(dialog).getByTestId("lado-log-watch-import-host")).getByRole("checkbox"));
+	for (const compose of within(dialog).getAllByTestId("lado-log-watch-import-compose")) {
+		await userEvent.click(within(compose).getByRole("checkbox"));
+	}
+	await userEvent.click(within(dialog).getByRole("button", { name: "Add to the card" }));
+
+	await waitFor(() => expect(screen.queryByTestId("lado-log-watch-import-dialog")).not.toBeInTheDocument());
+	const [source] = screen.getAllByTestId("lado-log-watch-source");
+	expect(within(source).getByRole("combobox", { name: "Repository of container choice 1" })).toHaveTextContent("back");
+	expect(within(source).getByRole("combobox", { name: "Repository of container choice 2" })).toHaveTextContent("Project default (not set)");
+	expect(within(source).getAllByTestId("lado-log-watch-target-repository-required")).toHaveLength(1);
+
+	await userEvent.click(screen.getByTestId("lado-log-watch-save"));
+	await waitFor(() => expect(logWatch.updateLadoLogWatch).toHaveBeenCalledTimes(1));
+	const body = vi.mocked(logWatch.updateLadoLogWatch).mock.calls[0][1];
+	expect(body.sources[0].targets).toEqual([
+		{ kind: "compose_project", value: "back", repository: "gitlab:grp/back", paused: false },
+		{ kind: "compose_project", value: "front", paused: false },
+	]);
+});

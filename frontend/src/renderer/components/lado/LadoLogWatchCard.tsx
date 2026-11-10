@@ -5,7 +5,9 @@
 // orchestrator. The card warns that the Engine API grants the whole server,
 // so LADO only reads from it, and marks each host without TLS. Every edit
 // stays in a draft until Save, which replaces the settings in one PUT; the
-// .gitlab-ci.yml import only fills the draft. While the card shows, it reads
+// .gitlab-ci.yml import only fills the draft. In a project with two
+// repositories or more, the hosts' targets and the import pick repositories
+// from the same list as the default repository. While the card shows, it reads
 // the settings every 10 seconds for the hosts' states, which only the
 // daemon's memory holds. The ignored fingerprints can be ignored no more.
 import { FileDown, Plus, ShieldAlert } from "lucide-react";
@@ -207,6 +209,8 @@ function LogWatchForm({ projectId, saved }: { projectId: string; saved: LadoLogW
 					index={index}
 					source={source}
 					saved={source.id ? saved.sources.find((candidate) => candidate.id === source.id) : undefined}
+					watch={draft}
+					repositories={repos}
 					busy={busy}
 					onChange={(next) => changeSource(source.key, next)}
 					onRemove={() => edit({ ...draft, sources: draft.sources.filter((candidate) => candidate.key !== source.key) })}
@@ -272,6 +276,7 @@ function LogWatchForm({ projectId, saved }: { projectId: string; saved: LadoLogW
 				open={importing}
 				existingEndpoints={existingEndpoints}
 				room={room}
+				repositoryRefs={repos.length > 1 ? repos.map((repository) => repository.ref) : []}
 				onOpenChange={setImporting}
 				onAdd={addSources}
 			/>
