@@ -582,6 +582,87 @@ type LadoIntegrationApproval struct {
 	RevokedReason      string
 }
 
+type LadoLogCursor struct {
+	TargetID  string
+	Instance  string
+	Since     time.Time
+	UpdatedAt time.Time
+}
+
+type LadoLogFingerprint struct {
+	ID                  int64
+	ProjectID           string
+	Fingerprint         string
+	Service             string
+	ExceptionKind       string
+	Location            string
+	Count               int64
+	FirstSeenAt         time.Time
+	LastSeenAt          time.Time
+	TaskID              sql.NullString
+	IssueRef            sql.NullString
+	PreviousIssueRef    string
+	IssueCreatedAt      sql.NullTime
+	AutoPlanRequestedAt sql.NullTime
+	AutoPlanHeld        string
+	Ignored             int64
+	IgnoredAt           sql.NullTime
+	CreatedAt           time.Time
+	UpdatedAt           time.Time
+}
+
+type LadoLogInstanceCount struct {
+	FingerprintID int64
+	Instance      string
+	ImageTag      string
+	Count         int64
+	LastSeenAt    time.Time
+}
+
+type LadoLogSource struct {
+	ID             string
+	ProjectID      string
+	Kind           string
+	DisplayName    string
+	Endpoint       string
+	Tls            int64
+	CertKey        string
+	Paused         int64
+	Position       int64
+	DownSince      sql.NullTime
+	DownNotifiedAt sql.NullTime
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type LadoLogTarget struct {
+	ID             string
+	SourceID       string
+	Kind           string
+	Value          string
+	ComposeProject string
+	Service        string
+	Paused         int64
+	Position       int64
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+type LadoLogWatchSetting struct {
+	ProjectID              string
+	Enabled                int64
+	Repository             string
+	IncludeJson            string
+	ExcludeJson            string
+	HourlyIssueCap         int64
+	AutoPlan               int64
+	AutoPlanDailyCap       int64
+	AutoPlanMinCount       int64
+	DisconnectAlertMinutes int64
+	BurstNotifiedAt        sql.NullTime
+	UpdatedAt              time.Time
+}
+
 type LadoNoticeState struct {
 	ID    int64
 	Since time.Time
@@ -959,6 +1040,7 @@ type LadoTask struct {
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 	CancelledAt         sql.NullTime
+	Source              string
 }
 
 type LadoTaskPart struct {

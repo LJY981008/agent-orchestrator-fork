@@ -2,23 +2,23 @@
 INSERT INTO lado_tasks (
     id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at, updated_at, source
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at;
+    created_at, updated_at, cancelled_at, source;
 
 -- name: GetLadoTask :one
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE id = ?;
 
 -- name: ListLadoTasksByProject :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE project_id = ? AND issue_ref IS NOT NULL
 ORDER BY created_at, id;
@@ -26,7 +26,7 @@ ORDER BY created_at, id;
 -- name: ListPendingLadoTasks :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE issue_ref IS NULL
 ORDER BY created_at, id;
@@ -34,7 +34,7 @@ ORDER BY created_at, id;
 -- name: ListLadoTasksToObserve :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
 ORDER BY issue_observed_at, id;
@@ -42,7 +42,7 @@ ORDER BY issue_observed_at, id;
 -- name: ListLiveLadoTasks :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
 ORDER BY project_id, created_at, id;
@@ -64,7 +64,7 @@ SET issue_ref = ?,
 WHERE id = ? AND issue_ref IS NULL
 RETURNING id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at;
+    created_at, updated_at, cancelled_at, source;
 
 -- name: ObserveLadoTaskIssue :execrows
 UPDATE lado_tasks
@@ -84,7 +84,7 @@ SET agent = ?,
 WHERE id = ? AND issue_ref IS NOT NULL
 RETURNING id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at;
+    created_at, updated_at, cancelled_at, source;
 
 -- name: CancelLadoTask :execrows
 UPDATE lado_tasks

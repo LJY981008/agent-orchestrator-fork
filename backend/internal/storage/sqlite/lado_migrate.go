@@ -200,6 +200,30 @@ END`,
 	// change; a new row and a moved read offset publish nothing.
 	ladoAlertCDCTrigger("lado_cdc_alerts_insert", "AFTER INSERT ON lado_alerts", "", "insert"),
 	ladoAlertCDCTrigger("lado_cdc_alerts_update", "AFTER UPDATE ON lado_alerts", "WHEN OLD.seen_at IS NOT NEW.seen_at", "update"),
+	// The log watch publishes a lado_log_watch change in the row's project:
+	// a fingerprint when it is recorded and when what the incidents and the
+	// card read of it changes, the settings when they are saved or the burst
+	// notice is recorded, and a source when its connection state or
+	// certificate copies change (issue #87). A settings save always moves
+	// updated_at, so the sources and targets it writes need no trigger of
+	// their own. Read cursors and per-instance counts publish nothing; the
+	// fingerprint row moves with them.
+	ladoLogWatchCDCTrigger("lado_cdc_log_fingerprints_insert", "AFTER INSERT ON lado_log_fingerprints", "", "NEW.id", "insert"),
+	ladoLogWatchCDCTrigger("lado_cdc_log_fingerprints_update", "AFTER UPDATE ON lado_log_fingerprints",
+		`WHEN OLD.count IS NOT NEW.count OR
+    OLD.last_seen_at IS NOT NEW.last_seen_at OR
+    OLD.task_id IS NOT NEW.task_id OR
+    OLD.issue_ref IS NOT NEW.issue_ref OR
+    OLD.previous_issue_ref IS NOT NEW.previous_issue_ref OR
+    OLD.auto_plan_requested_at IS NOT NEW.auto_plan_requested_at OR
+    OLD.auto_plan_held IS NOT NEW.auto_plan_held OR
+    OLD.ignored IS NOT NEW.ignored`, "NEW.id", "update"),
+	ladoLogWatchCDCTrigger("lado_cdc_log_watch_settings_insert", "AFTER INSERT ON lado_log_watch_settings", "", "NULL", "settings"),
+	ladoLogWatchCDCTrigger("lado_cdc_log_watch_settings_update", "AFTER UPDATE ON lado_log_watch_settings", "", "NULL", "settings"),
+	ladoLogWatchCDCTrigger("lado_cdc_log_sources_update", "AFTER UPDATE ON lado_log_sources",
+		`WHEN OLD.down_since IS NOT NEW.down_since OR
+    OLD.down_notified_at IS NOT NEW.down_notified_at OR
+    OLD.cert_key IS NOT NEW.cert_key`, "NULL", "settings"),
 	`CREATE TRIGGER lado_cdc_session_watch_update
 AFTER UPDATE ON lado_session_watch
 WHEN OLD.limit_state IS NOT NEW.limit_state OR
@@ -214,6 +238,25 @@ BEGIN
     JOIN projects ON projects.id = lado_tasks.project_id
     WHERE lado_tasks.id = NEW.task_id;
 END`,
+}
+
+// ladoLogWatchCDCTrigger publishes a lado_log_watch change with op in the
+// project NEW.project_id names; fingerprint is the fingerprint id expression,
+// NULL for a settings change.
+func ladoLogWatchCDCTrigger(name, event, when, fingerprint, op string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_log_watch', 'projectId', projects.id, 'fingerprintId', ` + fingerprint + `, 'op', '` + op + `'),
+        datetime('now')
+    FROM projects
+    WHERE projects.id = NEW.project_id;
+END`
 }
 
 // ladoAlertCDCTrigger publishes an alert NEW names, with op, on its session,
