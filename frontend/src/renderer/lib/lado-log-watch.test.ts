@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+	ladoLogCISuggestedRepository,
 	ladoLogEndpointPort,
 	ladoLogIncidentShown,
 	ladoLogIncidentsByTask,
 	ladoLogSourceFromCI,
+	ladoLogTargetNeedsRepository,
+	ladoLogTargetRepository,
 	ladoLogWatchDraft,
 	ladoLogWatchInput,
 	ladoLogWatchSameInput,
+	type LadoLogCIFile,
 	type LadoLogFingerprint,
 	type LadoLogWatch,
 } from "./lado-log-watch";
@@ -36,6 +40,7 @@ const saved: LadoLogWatch = {
 			targets: [
 				{ id: "tgt-1", kind: "compose_project", value: "grp", paused: false, status: { instances: 2 } },
 				{ id: "tgt-2", kind: "compose_service", value: "api", composeProject: "grp", service: "billing", paused: true, status: { instances: 1 } },
+				{ id: "tgt-3", kind: "name", value: "web", repository: "gitlab:grp/front", paused: false, status: { instances: 1 } },
 			],
 		},
 	],
@@ -82,6 +87,7 @@ describe("the log watch draft", () => {
 					targets: [
 						{ id: "tgt-1", kind: "compose_project", value: "grp", paused: false },
 						{ id: "tgt-2", kind: "compose_service", value: "api", composeProject: "grp", service: "billing", paused: true },
+						{ id: "tgt-3", kind: "name", value: "web", repository: "gitlab:grp/front", paused: false },
 					],
 				},
 			],
@@ -100,6 +106,42 @@ describe("the log watch draft", () => {
 		expect(input.sources[0].targets[0]).not.toHaveProperty("composeProject");
 		expect(ladoLogWatchSameInput(draft, ladoLogWatchDraft(saved))).toBe(false);
 	});
+
+	it("keeps a target's repository, sends none when it uses the project's, and compares it", () => {
+		const draft = ladoLogWatchDraft(saved);
+		expect(draft.sources[0].targets.map((target) => target.repository)).toEqual(["", "", "gitlab:grp/front"]);
+		draft.sources[0].targets[2].repository = "gitlab:grp/back";
+		expect(ladoLogWatchInput(draft).sources[0].targets[2]).toMatchObject({ repository: "gitlab:grp/back" });
+		expect(ladoLogWatchSameInput(draft, ladoLogWatchDraft(saved))).toBe(false);
+		draft.sources[0].targets[2].repository = "";
+		expect(ladoLogWatchInput(draft).sources[0].targets[2]).not.toHaveProperty("repository");
+	});
+});
+
+describe("a target's repository", () => {
+	const back = "gitlab:grp/back";
+	const target = { repository: "", paused: false };
+	const source = { paused: false };
+
+	it("is its own, else the project's", () => {
+		expect(ladoLogTargetRepository({ repository: back }, { repository: "" })).toBe(back);
+		expect(ladoLogTargetRepository({ repository: back }, { repository: "gitlab:grp/front" })).toBe("gitlab:grp/front");
+		expect(ladoLogTargetRepository({ repository: "" }, { repository: "" })).toBe("");
+	});
+
+	it("is needed as the daemon checks it: two repositories, on, nothing paused, none set", () => {
+		const on = { enabled: true, repository: "" };
+		expect(ladoLogTargetNeedsRepository(on, source, target, 2)).toBe(true);
+		// One repository: the daemon picks it.
+		expect(ladoLogTargetNeedsRepository(on, source, target, 1)).toBe(false);
+		// Off or paused: no issue can come, so the save goes through.
+		expect(ladoLogTargetNeedsRepository({ ...on, enabled: false }, source, target, 2)).toBe(false);
+		expect(ladoLogTargetNeedsRepository(on, { paused: true }, target, 2)).toBe(false);
+		expect(ladoLogTargetNeedsRepository(on, source, { ...target, paused: true }, 2)).toBe(false);
+		// Set on the target or inherited from the project.
+		expect(ladoLogTargetNeedsRepository(on, source, { ...target, repository: back }, 2)).toBe(false);
+		expect(ladoLogTargetNeedsRepository({ ...on, repository: back }, source, target, 2)).toBe(false);
+	});
 });
 
 describe("CI candidates", () => {
@@ -116,6 +158,43 @@ describe("CI candidates", () => {
 		const unresolved = ladoLogSourceFromCI({ displayName: "secret", endpoint: "", unresolved: "$SECRET_HOST" }, []);
 		expect(unresolved.endpoint).toBe("");
 		expect(unresolved.tls).toBe(false);
+	});
+
+	const refs = ["gitlab:grp/back", "gitlab:grp/front"];
+	const ciFile = (fields: Partial<LadoLogCIFile>): LadoLogCIFile => ({
+		repo: "back",
+		path: ".gitlab-ci.yml",
+		repository: "gitlab:grp/back",
+		hosts: [],
+		composeProjects: ["back", "front"],
+		notes: [],
+		...fields,
+	});
+
+	it("suggest the file's repository for the compose project named like its folder only", () => {
+		const file = ciFile({});
+		expect(ladoLogCISuggestedRepository(file, "back", refs)).toBe("gitlab:grp/back");
+		expect(ladoLogCISuggestedRepository(file, "front", refs)).toBe("");
+		// The name must match exactly.
+		expect(ladoLogCISuggestedRepository(file, "Back", refs)).toBe("");
+		const source = ladoLogSourceFromCI({ displayName: "prod1", endpoint: "tcp://192.0.2.10:2376" }, ["back", "front"], file, refs);
+		expect(source.targets.map((target) => [target.value, target.repository])).toEqual([
+			["back", "gitlab:grp/back"],
+			["front", ""],
+		]);
+	});
+
+	it("suggest the file's repository for the one compose project it deploys", () => {
+		const file = ciFile({ repo: "deploy", repository: "gitlab:grp/front", composeProjects: ["shop"] });
+		expect(ladoLogCISuggestedRepository(file, "shop", refs)).toBe("gitlab:grp/front");
+		expect(ladoLogSourceFromCI({ displayName: "prod1", endpoint: "" }, ["shop"], file, refs).targets[0].repository).toBe("gitlab:grp/front");
+	});
+
+	it("suggest nothing for a root file, a repository the project does not offer, or no list", () => {
+		expect(ladoLogCISuggestedRepository(ciFile({ repo: "", repository: undefined, composeProjects: ["grp"] }), "grp", refs)).toBe("");
+		expect(ladoLogCISuggestedRepository(ciFile({ repository: "gitlab:grp/other" }), "back", refs)).toBe("");
+		expect(ladoLogCISuggestedRepository(ciFile({}), "back", [])).toBe("");
+		expect(ladoLogSourceFromCI({ displayName: "prod1", endpoint: "" }, ["back"]).targets[0].repository).toBe("");
 	});
 
 	it("read the endpoint's port", () => {
