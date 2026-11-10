@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 )
 
 // The runner (ADR 0012) keeps one Follower per source of every project whose
@@ -82,6 +83,12 @@ type ServiceProjects interface {
 	LadoProjectSettings(ctx context.Context, project domain.ProjectID) (domain.LadoProjectSettings, error)
 }
 
+// ServiceRepos lists the repositories a project's issues may go to: the
+// ladotask service, the same list the settings screen offers.
+type ServiceRepos interface {
+	Repositories(ctx context.Context, project domain.ProjectID) ([]ladotask.ProjectRepo, error)
+}
+
 // Deps wires a Service.
 type Deps struct {
 	Store ServiceStore
@@ -93,7 +100,10 @@ type Deps struct {
 	// Check checks a source's connection; nil uses CheckDocker.
 	Check    func(ctx context.Context, cfg DockerConfig) (DockerCheck, error)
 	Projects ServiceProjects
-	Notices  IncidentNotices
+	// Repos checks the issue repositories UpdateSettings saves; nil skips
+	// the check.
+	Repos   ServiceRepos
+	Notices IncidentNotices
 	// Clock stamps what the runner records; nil uses time.Now.
 	Clock func() time.Time
 	// NewID gives new source and target ids; nil uses uuid.NewString.
@@ -151,8 +161,12 @@ type serviceSource struct {
 	source   domain.LadoLogSource
 	rules    string
 	status   FollowerStatus
-	// detectors are the Detectors by container id.
-	detectors map[string]*Detector
+	// detectors are the Detectors by container id; detectorInst the
+	// instance each was made for. A Detector's incidents are given that
+	// instance (and so its target) even after the Follower stopped and its
+	// status lost the instance.
+	detectors    map[string]*Detector
+	detectorInst map[string]Instance
 	// lastLine is the time of the newest line by target.
 	lastLine map[string]time.Time
 	// storedDown and notifiedFor are the disconnection the store knows of and
@@ -461,16 +475,17 @@ func serviceRules(settings domain.LadoLogWatchSettings) string {
 func (s *Service) startSource(ctx context.Context, w serviceWanted) {
 	src, err := s.deps.NewSource(w.cfg)
 	run := &serviceSource{
-		id:         w.source.ID,
-		project:    w.settings.ProjectID,
-		sig:        w.sig,
-		settings:   w.settings,
-		source:     w.source,
-		rules:      serviceRules(w.settings),
-		detectors:  map[string]*Detector{},
-		lastLine:   map[string]time.Time{},
-		storedDown: w.source.DownSince,
-		status:     FollowerStatus{State: domain.LadoLogSourceStateConnecting},
+		id:           w.source.ID,
+		project:      w.settings.ProjectID,
+		sig:          w.sig,
+		settings:     w.settings,
+		source:       w.source,
+		rules:        serviceRules(w.settings),
+		detectors:    map[string]*Detector{},
+		detectorInst: map[string]Instance{},
+		lastLine:     map[string]time.Time{},
+		storedDown:   w.source.DownSince,
+		status:       FollowerStatus{State: domain.LadoLogSourceStateConnecting},
 	}
 	if !w.source.DownNotifiedAt.IsZero() {
 		run.notifiedFor = w.source.DownSince
@@ -584,6 +599,7 @@ func (run *serviceSource) update(settings domain.LadoLogWatchSettings, src domai
 	if rules := serviceRules(settings); rules != run.rules {
 		run.rules = rules
 		run.detectors = map[string]*Detector{}
+		run.detectorInst = map[string]Instance{}
 	}
 }
 
@@ -593,7 +609,7 @@ func (run *serviceSource) drain(now time.Time) []serviceOccurrence {
 	defer run.mu.Unlock()
 	var out []serviceOccurrence
 	for id, det := range run.detectors {
-		inst := run.instance(id)
+		inst := run.detectorInstance(id)
 		incs := det.Flush(now)
 		incs = append(incs, det.Flush(now.Add(DetectIdle))...)
 		for _, inc := range incs {
@@ -601,7 +617,17 @@ func (run *serviceSource) drain(now time.Time) []serviceOccurrence {
 		}
 	}
 	run.detectors = map[string]*Detector{}
+	run.detectorInst = map[string]Instance{}
 	return out
+}
+
+// detectorInstance is the instance a container id's Detector was made for,
+// or else the attached instance with that id; the caller holds run.mu.
+func (run *serviceSource) detectorInstance(id string) Instance {
+	if inst, ok := run.detectorInst[id]; ok {
+		return inst
+	}
+	return run.instance(id)
 }
 
 // instance is the attached instance with a container id; the caller holds
@@ -625,9 +651,21 @@ func (run *serviceSource) occurrence(inst Instance, inc Incident, serviceInstanc
 			Instance:         run.source.DisplayName + "/" + inst.Name,
 			Image:            inst.Image,
 			ServiceInstances: serviceInstances,
+			Repository:       run.repository(inst.TargetID),
 			Incident:         inc,
 		},
 	}
+}
+
+// repository is the issue repository of a target: its own, or else the
+// project's. The caller holds run.mu.
+func (run *serviceSource) repository(targetID string) string {
+	for _, t := range run.source.Targets {
+		if string(t.ID) == targetID && t.Repository != "" {
+			return t.Repository
+		}
+	}
+	return run.settings.Repository
 }
 
 // line hands one line of an instance to its Detector and its incidents to
@@ -641,6 +679,7 @@ func (s *Service) line(ctx context.Context, run *serviceSource, inst Instance, s
 	if det == nil {
 		det = NewDetector(inst.Service, Rules{Include: run.settings.Include, Exclude: run.settings.Exclude})
 		run.detectors[inst.ID] = det
+		run.detectorInst[inst.ID] = inst
 	}
 	run.mu.Unlock()
 	incs := det.Line(stream, ts, text)
@@ -728,7 +767,7 @@ func (s *Service) status(ctx context.Context, run *serviceSource, st FollowerSta
 	gone := map[string]Instance{}
 	for id := range run.detectors {
 		if !attached[id] && st.State == domain.LadoLogSourceStateWatching {
-			gone[id] = run.instance(id)
+			gone[id] = run.detectorInstance(id)
 		}
 	}
 	for id, inst := range gone {
@@ -739,6 +778,7 @@ func (s *Service) status(ctx context.Context, run *serviceSource, st FollowerSta
 			out = append(out, run.occurrence(inst, inc, 0))
 		}
 		delete(run.detectors, id)
+		delete(run.detectorInst, id)
 	}
 	run.status = st
 	run.mu.Unlock()
@@ -760,7 +800,7 @@ func (s *Service) flushDetectors(now time.Time) []serviceOccurrence {
 		run.mu.Lock()
 		for id, det := range run.detectors {
 			if incs := det.Flush(now); len(incs) > 0 {
-				all = append(all, found{inst: run.instance(id), incs: incs})
+				all = append(all, found{inst: run.detectorInstance(id), incs: incs})
 			}
 		}
 		run.mu.Unlock()

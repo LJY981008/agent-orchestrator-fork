@@ -26,6 +26,7 @@ var (
 	_ ladologwatch.IncidentTasks      = (*ladotask.Service)(nil)
 	_ ladologwatch.IncidentPlans      = (*ladotask.Service)(nil)
 	_ ladologwatch.IncidentSink       = (*ladologwatch.IncidentHandler)(nil)
+	_ ladologwatch.ServiceRepos       = (*ladotask.Service)(nil)
 )
 
 // wireLadoLogWatch builds the log watch: its incident handler over LADO's
@@ -48,6 +49,7 @@ func wireLadoLogWatch(cfg config.Config, store *sqlite.Store, tasks *ladotask.Se
 		Sink:     handler,
 		Certs:    ladologwatch.NewCertStore(cfg.StateDir),
 		Projects: store,
+		Repos:    tasks,
 		Notices:  store,
 		Log:      log,
 	})

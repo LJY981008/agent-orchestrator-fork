@@ -247,7 +247,13 @@ func (f *incidentFakeTasks) CreateFromLog(_ context.Context, in ladotask.LogCrea
 		return task, apierr.Unavailable("LADO_ISSUE_CREATE_UNCONFIRMED", "unconfirmed")
 	}
 	f.issues++
-	task.IssueRef = domain.IssueID(fmt.Sprintf("github:acme/demo#%d", f.issues+40))
+	// The issue goes to the repository asked for; "" is the project's
+	// single one.
+	repo := in.Repository
+	if repo == "" {
+		repo = "github:acme/demo"
+	}
+	task.IssueRef = domain.IssueID(fmt.Sprintf("%s#%d", repo, f.issues+40))
 	f.store.setTask(task)
 	return task, nil
 }
@@ -844,5 +850,128 @@ func TestIncidentProjectsAreSerializedAndRace(t *testing.T) {
 	}
 	if total != 160 {
 		t.Fatalf("counted %d occurrences, want 160", total)
+	}
+}
+
+// handleIn hands an occurrence of a target whose issues go to repo.
+func (fx *incidentFixture) handleIn(fp, instance, repo string) {
+	o := incidentOccurrence(fp, instance, fx.now)
+	o.Repository = repo
+	fx.h.Handle(context.Background(), "demo", fx.settings, o)
+}
+
+// TestIncidentIssueGoesToTheOccurrencesRepository: the issue goes to the
+// repository the occurrence carries; one without falls back to the
+// project's, and a single repository project still asks for none.
+func TestIncidentIssueGoesToTheOccurrencesRepository(t *testing.T) {
+	fx := newIncidentFixture(t)
+	fx.handleIn("fp-front", "prod1/front-web-1", "github:acme/front")
+	fx.handleIn("fp-single", "prod1/api-1", "")
+	fx.advance(incidentWindow)
+	// An occurrence that carries no repository (the runner fills in the
+	// project's) still goes to the project's.
+	fx.settings.Repository = "github:acme/back"
+	fx.h.Handle(context.Background(), "demo", fx.settings, Occurrence{Instance: "prod1/api-1", Incident: Incident{Fingerprint: "fp-back"}})
+	fx.advance(incidentWindow)
+	repos := []string{}
+	for _, in := range fx.tasks.created() {
+		repos = append(repos, in.Repository)
+	}
+	if want := []string{"github:acme/front", "", "github:acme/back"}; strings.Join(repos, ",") != strings.Join(want, ",") {
+		t.Fatalf("issue repositories = %q, want %q", repos, want)
+	}
+	if f := fx.store.fingerprint(t, "fp-front"); f.IssueRef != "github:acme/front#41" {
+		t.Fatalf("front fingerprint = %+v", f)
+	}
+}
+
+// TestIncidentFingerprintAcrossRepositories: one fingerprint seen under
+// targets of two repositories in one window makes one issue, in the
+// repository of the window's first occurrence. The next window does not
+// keep the last window's repository, and a recurrence in another
+// repository links the closed issue with its repository.
+func TestIncidentFingerprintAcrossRepositories(t *testing.T) {
+	fx := newIncidentFixture(t)
+	fx.handleIn("fp-a", "prod1/front-web-1", "github:acme/front")
+	fx.now = fx.now.Add(10 * time.Second)
+	fx.handleIn("fp-a", "prod1/back-api-1", "github:acme/back")
+	fx.advance(incidentWindow)
+	created := fx.tasks.created()
+	if len(created) != 1 || created[0].Repository != "github:acme/front" {
+		t.Fatalf("issues = %+v, want one in front", created)
+	}
+	if !strings.Contains(created[0].Body, "prod1/back-api-1") || !strings.Contains(created[0].Body, "prod1/front-web-1") {
+		t.Fatalf("the issue does not show both instances:\n%s", created[0].Body)
+	}
+
+	// The open issue only counts: a back occurrence now opens no window
+	// and leaves nothing behind for the next one.
+	fx.handleIn("fp-a", "prod1/back-api-1", "github:acme/back")
+	fx.advance(incidentSaveInterval)
+	task, _, _ := fx.store.LadoTask(context.Background(), "lado-task-1")
+	task.Issue.State = domain.IssueDone
+	fx.store.setTask(task)
+
+	// It recurs under the back target: the new issue goes to back and
+	// links the closed front issue with its repository.
+	fx.handleIn("fp-a", "prod1/back-api-1", "github:acme/back")
+	fx.advance(incidentSaveInterval)
+	fx.advance(incidentWindow)
+	created = fx.tasks.created()
+	if len(created) != 2 || created[1].Repository != "github:acme/back" {
+		t.Fatalf("issues = %+v, want a second one in back", created)
+	}
+	if !strings.Contains(created[1].Body, "- 이전 이슈: acme/front#41 (닫힌 뒤 다시 발생)") {
+		t.Fatalf("the recurrence does not link the front issue:\n%s", created[1].Body)
+	}
+	f := fx.store.fingerprint(t, "fp-a")
+	if f.IssueRef != "github:acme/back#42" || f.PreviousIssueRef != "github:acme/front#41" {
+		t.Fatalf("fingerprint = %+v", f)
+	}
+}
+
+// TestIncidentResetRecentForgetsTheRepository: what a window decided does
+// not leak into the next one.
+func TestIncidentResetRecentForgetsTheRepository(t *testing.T) {
+	st := &incidentState{pending: map[string]*incidentCount{}, recent: map[string]*incidentCount{}}
+	o := incidentOccurrence("fp-a", "prod1/front-web-1", incidentEpoch)
+	o.Repository = "github:acme/front"
+	st.add(o, incidentEpoch)
+	if st.repository != "github:acme/front" {
+		t.Fatalf("repository = %q", st.repository)
+	}
+	o.Repository = "github:acme/back"
+	st.add(o, incidentEpoch)
+	if st.repository != "github:acme/front" {
+		t.Fatalf("a later occurrence changed the window's repository to %q", st.repository)
+	}
+	st.resetRecent()
+	if st.repository != "" || st.issueRepository() != "" {
+		t.Fatalf("repository after resetRecent = %q", st.repository)
+	}
+	st.add(o, incidentEpoch)
+	if st.repository != "github:acme/back" {
+		t.Fatalf("repository of the next window = %q", st.repository)
+	}
+}
+
+func TestIncidentOtherRepo(t *testing.T) {
+	for _, tc := range []struct {
+		previous   domain.IssueID
+		repository string
+		want       string
+	}{
+		{"github:acme/front#41", "", ""},
+		{"github:acme/front#41", "github:acme/front", ""},
+		{"github:acme/front#41", "github:ACME/Front", ""},
+		{"github:acme/front#41", "github:acme/back", "acme/front"},
+		{"gitlab:grp/front#7@gitlab.example.test", "gitlab:grp/back@gitlab.example.test", "grp/front"},
+		{"gitlab:grp/front#7@gitlab.example.test", "gitlab:grp/front", "grp/front"},
+		{"not a ref", "github:acme/back", ""},
+		{"github:acme/front#41", "not a ref", ""},
+	} {
+		if got := incidentOtherRepo(tc.previous, tc.repository); got != tc.want {
+			t.Errorf("incidentOtherRepo(%q, %q) = %q, want %q", tc.previous, tc.repository, got, tc.want)
+		}
 	}
 }

@@ -243,3 +243,21 @@ func TestIssueTextLeavesNoSecret(t *testing.T) {
 		}
 	}
 }
+
+// TestIssueTextPreviousIssueInAnotherRepository: a previous issue in
+// another repository is written with its repository, so the link does not
+// point at an issue of this one.
+func TestIssueTextPreviousIssueInAnotherRepository(t *testing.T) {
+	in := issueTestInput()
+	in.PreviousIssue = 12
+	in.PreviousIssueRepo = "acme/front"
+	_, body := IssueText(in)
+	if !strings.Contains(body, "- 이전 이슈: acme/front#12 (닫힌 뒤 다시 발생)") {
+		t.Fatalf("body does not link acme/front#12:\n%s", body)
+	}
+	in.PreviousIssueRepo = ""
+	_, body = IssueText(in)
+	if !strings.Contains(body, "- 이전 이슈: #12 (닫힌 뒤 다시 발생)") {
+		t.Fatalf("body does not link #12:\n%s", body)
+	}
+}

@@ -40,6 +40,11 @@ type IssueInput struct {
 	Instances []IssueInstance
 	// PreviousIssue is the number of the closed issue this one follows, or 0.
 	PreviousIssue int
+	// PreviousIssueRepo is the repository path ("owner/repo") of the
+	// previous issue when it is in another repository than this one; the
+	// body then writes "owner/repo#N" so the link does not point at an
+	// issue of this repository. Empty when both share a repository.
+	PreviousIssueRepo string
 	// ExtraHosts are hosts to mask besides the ones Redact finds by form:
 	// the project's source endpoint hosts. Image registry hosts are added
 	// from Instances.
@@ -105,7 +110,7 @@ func IssueText(in IssueInput) (title, body string) {
 		issueItem(&b, "지문", fp[:min(12, len(fp))])
 	}
 	if in.PreviousIssue > 0 {
-		issueItem(&b, "이전 이슈", fmt.Sprintf("#%d (닫힌 뒤 다시 발생)", in.PreviousIssue))
+		issueItem(&b, "이전 이슈", fmt.Sprintf("%s#%d (닫힌 뒤 다시 발생)", in.PreviousIssueRepo, in.PreviousIssue))
 	}
 
 	if len(in.Instances) > 0 {
