@@ -4658,7 +4658,7 @@
 	"lado.logWatch.description": "LADO はエージェントなしでこのプロジェクトの本番コンテナのログを追い、新しいエラーを Issue とカードにします。保存を押すまで何も保存されません。",
 	"lado.logWatch.modeOff": "このプロジェクトの LADO モードがオフのため、LADO はどのホストにも接続しません。",
 	"lado.logWatch.enabled": "本番ログを監視",
-	"lado.logWatch.enabledHint": "オフ: LADO はどのホストにも接続しません。",
+	"lado.logWatch.enabledHint": "オフにすると、LADO はどのホストにも接続しません。",
 	"lado.logWatch.repository": "Issue の作成先",
 	"lado.logWatch.repositoryHint": "インシデントの Issue を受け取るトラッカーのリポジトリです。",
 	"lado.logWatch.repositoryDefault": "リポジトリを選択",

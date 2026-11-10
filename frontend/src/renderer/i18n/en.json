@@ -4639,7 +4639,7 @@
 	"lado.logWatch.description": "LADO follows the logs of the project's production containers, without an agent, and turns a new error into an issue and a card. Nothing is saved until you press Save.",
 	"lado.logWatch.modeOff": "The project's LADO mode is off, so LADO does not connect to any host.",
 	"lado.logWatch.enabled": "Watch production logs",
-	"lado.logWatch.enabledHint": "Off: LADO connects to no host.",
+	"lado.logWatch.enabledHint": "When off, LADO connects to no host.",
 	"lado.logWatch.repository": "Issues go to",
 	"lado.logWatch.repositoryHint": "The repository whose tracker gets the incident issues.",
 	"lado.logWatch.repositoryDefault": "Choose a repository",

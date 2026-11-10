@@ -4640,7 +4640,7 @@
 	"lado.logWatch.description": "LADO 无需代理即可跟随此项目生产容器的日志,并把新错误变成 issue 和卡片。按下保存之前不会保存任何内容。",
 	"lado.logWatch.modeOff": "此项目的 LADO 模式已关闭,因此 LADO 不会连接任何主机。",
 	"lado.logWatch.enabled": "监控生产日志",
-	"lado.logWatch.enabledHint": "关闭:LADO 不连接任何主机。",
+	"lado.logWatch.enabledHint": "关闭后，LADO 不连接任何主机。",
 	"lado.logWatch.repository": "issue 提交到",
 	"lado.logWatch.repositoryHint": "接收事件 issue 的跟踪器所在仓库。",
 	"lado.logWatch.repositoryDefault": "选择仓库",

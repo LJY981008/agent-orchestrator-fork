@@ -4658,7 +4658,7 @@
 	"lado.logWatch.description": "LADO liest ohne Agent die Logs der Produktionscontainer des Projekts mit und macht aus einem neuen Fehler ein Issue und eine Karte. Erst Speichern sichert die Änderungen.",
 	"lado.logWatch.modeOff": "Der LADO-Modus des Projekts ist aus, daher verbindet sich LADO mit keinem Host.",
 	"lado.logWatch.enabled": "Produktionslogs überwachen",
-	"lado.logWatch.enabledHint": "Aus: LADO verbindet sich mit keinem Host.",
+	"lado.logWatch.enabledHint": "Wenn aus, verbindet sich LADO mit keinem Host.",
 	"lado.logWatch.repository": "Issues gehen an",
 	"lado.logWatch.repositoryHint": "Das Repository, dessen Tracker die Vorfall-Issues erhält.",
 	"lado.logWatch.repositoryDefault": "Repository wählen",

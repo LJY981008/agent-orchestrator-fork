@@ -4746,7 +4746,7 @@
 	"lado.logWatch.description": "LADO suit les logs des conteneurs de production du projet, sans agent, et fait d'une nouvelle erreur une issue et une carte. Rien n'est enregistré avant Enregistrer.",
 	"lado.logWatch.modeOff": "Le mode LADO du projet est désactivé : LADO ne se connecte à aucun hôte.",
 	"lado.logWatch.enabled": "Surveiller les logs de production",
-	"lado.logWatch.enabledHint": "Désactivé : LADO ne se connecte à aucun hôte.",
+	"lado.logWatch.enabledHint": "Une fois désactivé, LADO ne se connecte à aucun hôte.",
 	"lado.logWatch.repository": "Les issues vont dans",
 	"lado.logWatch.repositoryHint": "Le dépôt dont le tracker reçoit les issues d'incident.",
 	"lado.logWatch.repositoryDefault": "Choisir un dépôt",

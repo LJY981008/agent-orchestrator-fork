@@ -4746,7 +4746,7 @@
 	"lado.logWatch.description": "O LADO acompanha os logs dos contêineres de produção do projeto, sem agente, e transforma um erro novo em issue e cartão. Nada é salvo até você clicar em Salvar.",
 	"lado.logWatch.modeOff": "O modo LADO do projeto está desligado, então o LADO não se conecta a nenhum host.",
 	"lado.logWatch.enabled": "Monitorar logs de produção",
-	"lado.logWatch.enabledHint": "Desligado: o LADO não se conecta a nenhum host.",
+	"lado.logWatch.enabledHint": "Quando desligado, o LADO não se conecta a nenhum host.",
 	"lado.logWatch.repository": "As issues vão para",
 	"lado.logWatch.repositoryHint": "O repositório cujo tracker recebe as issues de incidente.",
 	"lado.logWatch.repositoryDefault": "Escolha um repositório",
