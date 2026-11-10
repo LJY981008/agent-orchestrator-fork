@@ -4362,6 +4362,401 @@ paths:
         a slug the project has is skipped
       tags:
       - lado
+  /api/v1/lado/projects/{projectId}/log-watch:
+    get:
+      operationId: getLadoLogWatch
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogWatchResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a project's production log watch settings, its Docker hosts and
+        their targets, which TLS copies LADO keeps and how the daemon follows each
+        source; the defaults when the project never saved any
+      tags:
+      - lado
+    put:
+      operationId: updateLadoLogWatch
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoLogWatchRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogWatchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace a project's production log watch settings; endpoints are tcp://host:port
+        only, a source or target left out is deleted with its read cursors, and LADO
+        only reads from the Engine API
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/log-watch/check:
+    post:
+      operationId: checkLadoLogWatch
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CheckLadoLogSourceRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogWatchCheckResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Check a saved log source: its Engine and API versions and the running
+        containers each target matches; a failed connection is ok false'
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/log-watch/fingerprints/{fingerprintId}/ignore:
+    post:
+      operationId: setLadoLogFingerprintIgnored
+      parameters:
+      - description: Project the fingerprint belongs to.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project the fingerprint belongs to.
+          type: string
+      - description: Fingerprint id.
+        in: path
+        name: fingerprintId
+        required: true
+        schema:
+          description: Fingerprint id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetLadoLogFingerprintIgnoredRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogFingerprintResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Ignore a log incident fingerprint, so it makes no issue, or stop ignoring
+        it
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/log-watch/import-ci:
+    post:
+      operationId: importLadoLogWatchCI
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogCIImportResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Read the project's .gitlab-ci.yml files for Docker host and compose
+        project candidates; saves nothing
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/log-watch/incidents:
+    get:
+      operationId: listLadoLogWatchIncidents
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogIncidentListResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'List a project''s log incident fingerprints with their counts per
+        instance: every one of an open task and the newest 200 others'
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/log-watch/sources/{sourceId}/tls:
+    delete:
+      operationId: deleteLadoLogWatchTLS
+      parameters:
+      - description: Project the log source belongs to.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project the log source belongs to.
+          type: string
+      - description: Log source id.
+        in: path
+        name: sourceId
+        required: true
+        schema:
+          description: Log source id.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogWatchResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Delete LADO's copies of a log source's TLS material
+      tags:
+      - lado
+    post:
+      operationId: importLadoLogWatchTLS
+      parameters:
+      - description: Project the log source belongs to.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project the log source belongs to.
+          type: string
+      - description: Log source id.
+        in: path
+        name: sourceId
+        required: true
+        schema:
+          description: Log source id.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportLadoLogTLSRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoLogWatchResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Copy a log source's CA and, optionally, client certificate and key
+        under ~/.ao after checking them; encrypted keys are refused and nothing returns
+        their content or paths
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/protection:
     get:
       operationId: getLadoProjectProtection
@@ -17437,6 +17832,13 @@ components:
       required:
       - url
       type: object
+    CheckLadoLogSourceRequest:
+      properties:
+        sourceId:
+          type: string
+      required:
+      - sourceId
+      type: object
     ClaimPRRequest:
       properties:
         allowTakeover:
@@ -20210,6 +20612,22 @@ components:
       required:
       - source
       type: object
+    ImportLadoLogTLSRequest:
+      properties:
+        caPath:
+          description: PEM CA certificate the Engine's server certificate is checked
+            against.
+          type: string
+        certPath:
+          description: PEM client certificate; together with keyPath or not at all.
+          type: string
+        keyPath:
+          description: PEM client key without a passphrase; together with certPath
+            or not at all.
+          type: string
+      required:
+      - caPath
+      type: object
     ImportLadoTasksRequest:
       properties:
         issueRefs:
@@ -22046,6 +22464,418 @@ components:
       - id
       - name
       - path
+      type: object
+    LadoLogCIFileResponse:
+      properties:
+        composeProjects:
+          items:
+            type: string
+          type: array
+        hosts:
+          items:
+            $ref: '#/components/schemas/LadoLogCIHostResponse'
+          type: array
+        notes:
+          items:
+            type: string
+          type: array
+        path:
+          type: string
+        repo:
+          description: The repository folder relative to a workspace project; empty
+            for a single repository project.
+          type: string
+      required:
+      - repo
+      - path
+      - hosts
+      - composeProjects
+      - notes
+      type: object
+    LadoLogCIHostResponse:
+      properties:
+        displayName:
+          type: string
+        endpoint:
+          description: tcp://host:port; empty while unresolved.
+          type: string
+        unresolved:
+          description: The variable reference LADO could not resolve, such as $PROD_HOST;
+            the developer fills it in.
+          type: string
+        variable:
+          description: The *_HOST variable it came from.
+          type: string
+      required:
+      - displayName
+      - endpoint
+      type: object
+    LadoLogCIImportResponse:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/LadoLogCIFileResponse'
+          type: array
+      required:
+      - files
+      type: object
+    LadoLogFingerprintResponse:
+      properties:
+        autoPlanHeld:
+          description: Why LADO did not request a plan.
+          enum:
+          - cap
+          - min_count
+          - "off"
+          - failed
+          type: string
+        autoPlanRequestedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        count:
+          type: integer
+        exceptionKind:
+          type: string
+        fingerprint:
+          type: string
+        firstSeenAt:
+          format: date-time
+          type: string
+        id:
+          format: int64
+          type: integer
+        ignored:
+          type: boolean
+        ignoredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        instances:
+          items:
+            $ref: '#/components/schemas/LadoLogInstanceCountResponse'
+          type: array
+        issueCreatedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        issueRef:
+          type: string
+        lastSeenAt:
+          format: date-time
+          type: string
+        location:
+          type: string
+        previousIssueRef:
+          description: The closed issue a recurrence links to.
+          type: string
+        projectId:
+          type: string
+        service:
+          type: string
+        taskId:
+          description: The task LADO created for it; omitted before it did or after
+            that task was deleted unconfirmed.
+          type: string
+      required:
+      - id
+      - projectId
+      - fingerprint
+      - service
+      - exceptionKind
+      - count
+      - firstSeenAt
+      - lastSeenAt
+      - ignored
+      - instances
+      type: object
+    LadoLogIncidentListResponse:
+      properties:
+        fingerprints:
+          items:
+            $ref: '#/components/schemas/LadoLogFingerprintResponse'
+          type: array
+      required:
+      - fingerprints
+      type: object
+    LadoLogInstanceCountResponse:
+      properties:
+        count:
+          type: integer
+        image:
+          type: string
+        instance:
+          description: <source display name>/<container name>.
+          type: string
+        lastSeenAt:
+          format: date-time
+          type: string
+      required:
+      - instance
+      - count
+      - lastSeenAt
+      type: object
+    LadoLogInstanceResponse:
+      properties:
+        id:
+          description: Container id.
+          type: string
+        image:
+          type: string
+        name:
+          type: string
+        service:
+          description: The service name its fingerprints use.
+          type: string
+        state:
+          type: string
+        targetId:
+          type: string
+      required:
+      - targetId
+      - name
+      - id
+      - image
+      - service
+      type: object
+    LadoLogSourceResponse:
+      properties:
+        displayName:
+          description: The only name of the host that issues and notices show.
+          type: string
+        endpoint:
+          description: tcp://host:port of the Docker Engine API.
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - docker_tcp
+          type: string
+        paused:
+          type: boolean
+        status:
+          $ref: '#/components/schemas/LadoLogSourceStatusResponse'
+        targets:
+          items:
+            $ref: '#/components/schemas/LadoLogTargetResponse'
+          type: array
+        tls:
+          type: boolean
+        tlsStored:
+          $ref: '#/components/schemas/LadoLogTLSStoredResponse'
+      required:
+      - id
+      - kind
+      - displayName
+      - endpoint
+      - tls
+      - paused
+      - tlsStored
+      - status
+      - targets
+      type: object
+    LadoLogSourceStatusResponse:
+      properties:
+        detail:
+          description: What the follower last reported, such as why it does not connect.
+          type: string
+        downSince:
+          description: Since when the source has been disconnected; omitted while
+            it is connected.
+          format: date-time
+          type:
+          - "null"
+          - string
+        insecure:
+          description: 'The source does not use TLS: the Engine API is unauthenticated
+            and the logs cross the network in plain text.'
+          type: boolean
+        state:
+          description: 'off: LADO does not connect (the watch, the project''s LADO
+            mode or the source is off, or TLS lacks its CA); connecting; watching;
+            backoff: it waits to connect again; error.'
+          enum:
+          - "off"
+          - connecting
+          - watching
+          - backoff
+          - error
+          type: string
+      required:
+      - state
+      - insecure
+      type: object
+    LadoLogTLSStoredResponse:
+      properties:
+        ca:
+          description: A CA certificate copy is stored.
+          type: boolean
+        cert:
+          description: A client certificate copy is stored.
+          type: boolean
+        key:
+          description: A client key copy is stored.
+          type: boolean
+      required:
+      - ca
+      - cert
+      - key
+      type: object
+    LadoLogTargetResponse:
+      properties:
+        composeProject:
+          description: The compose project a compose_service target is narrowed to.
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - compose_project
+          - compose_service
+          - name
+          - label
+          type: string
+        paused:
+          type: boolean
+        service:
+          description: The service name the target's fingerprints use instead of the
+            compose labels.
+          type: string
+        status:
+          $ref: '#/components/schemas/LadoLogTargetStatusResponse'
+        value:
+          description: The compose project, compose service, exact container name,
+            or label key or key=value the kind selects by.
+          type: string
+      required:
+      - id
+      - kind
+      - value
+      - paused
+      - status
+      type: object
+    LadoLogTargetStatusResponse:
+      properties:
+        instances:
+          description: How many containers of the target LADO follows.
+          minimum: 0
+          type: integer
+        lastLineAt:
+          description: When the newest line LADO read of the target was written; omitted
+            before one.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - instances
+      type: object
+    LadoLogWatchCheckResponse:
+      properties:
+        apiVersion:
+          type: string
+        detail:
+          type: string
+        engineVersion:
+          type: string
+        insecure:
+          description: The source does not use TLS.
+          type: boolean
+        instances:
+          description: The running containers each target matches.
+          items:
+            $ref: '#/components/schemas/LadoLogInstanceResponse'
+          type: array
+        ok:
+          type: boolean
+      required:
+      - ok
+      - insecure
+      - instances
+      type: object
+    LadoLogWatchResponse:
+      properties:
+        autoPlan:
+          description: Request a plan for a new incident's task.
+          type: boolean
+        autoPlanDailyCap:
+          description: Automatic plan requests in the last 24 hours at most.
+          maximum: 50
+          minimum: 1
+          type: integer
+        autoPlanMinCount:
+          description: How often a fingerprint must be seen before LADO requests its
+            plan.
+          maximum: 10000
+          minimum: 1
+          type: integer
+        burstNotifiedAt:
+          description: When LADO last told of the hourly issue cap; omitted when it
+            never did.
+          format: date-time
+          type:
+          - "null"
+          - string
+        disconnectAlertMinutes:
+          description: How long a source may stay disconnected before LADO tells the
+            orchestrator once.
+          maximum: 1440
+          minimum: 1
+          type: integer
+        enabled:
+          type: boolean
+        exclude:
+          description: RE2 patterns of lines that are never errors.
+          items:
+            type: string
+          type: array
+        hourlyIssueCap:
+          maximum: 50
+          minimum: 1
+          type: integer
+        include:
+          description: RE2 patterns of lines that are errors besides the built-in
+            rules.
+          items:
+            type: string
+          type: array
+        ladoMode:
+          description: The project's LADO mode; the log watch connects only while
+            it is on.
+          type: boolean
+        projectId:
+          type: string
+        repository:
+          description: Canonical id of the repository the issues go to; empty when
+            the project has one repository.
+          type: string
+        sources:
+          items:
+            $ref: '#/components/schemas/LadoLogSourceResponse'
+          type: array
+        updatedAt:
+          description: When the settings were last saved; omitted before they were.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - projectId
+      - ladoMode
+      - enabled
+      - repository
+      - include
+      - exclude
+      - hourlyIssueCap
+      - autoPlan
+      - autoPlanDailyCap
+      - autoPlanMinCount
+      - disconnectAlertMinutes
+      - sources
       type: object
     LadoPartRunRepoResponse:
       properties:
@@ -25313,6 +26143,13 @@ components:
         repository:
           description: Canonical id of the repository that holds the issue, such as
             github:owner/repo.
+          type: string
+        source:
+          description: 'How the task came to be: log for a task the production log
+            watch created from an incident; omitted for a task the developer created
+            or imported.'
+          enum:
+          - log
           type: string
         state:
           description: 'Derived task state. review_required: the plan needs a new
@@ -28792,6 +29629,13 @@ components:
       - scope
       - state
       type: object
+    SetLadoLogFingerprintIgnoredRequest:
+      properties:
+        ignored:
+          type: boolean
+      required:
+      - ignored
+      type: object
     SetLadoSetupBindingRequest:
       properties:
         dryRun:
@@ -30348,6 +31192,106 @@ components:
       - maxConcurrent
       - maxRunMinutes
       - holdOnMemoryTight
+      type: object
+    UpdateLadoLogSourceRequest:
+      properties:
+        displayName:
+          type: string
+        endpoint:
+          description: 'tcp://host:port only: no other scheme, user information, path,
+            query or fragment.'
+          type: string
+        id:
+          description: The source's id; omitted for a new source.
+          type: string
+        kind:
+          description: docker_tcp when omitted.
+          enum:
+          - docker_tcp
+          type: string
+        paused:
+          type: boolean
+        targets:
+          items:
+            $ref: '#/components/schemas/UpdateLadoLogTargetRequest'
+          type: array
+        tls:
+          type: boolean
+      required:
+      - displayName
+      - endpoint
+      - targets
+      type: object
+    UpdateLadoLogTargetRequest:
+      properties:
+        composeProject:
+          type: string
+        id:
+          description: The target's id; omitted for a new target.
+          type: string
+        kind:
+          enum:
+          - compose_project
+          - compose_service
+          - name
+          - label
+          type: string
+        paused:
+          type: boolean
+        service:
+          type: string
+        value:
+          type: string
+      required:
+      - kind
+      - value
+      type: object
+    UpdateLadoLogWatchRequest:
+      properties:
+        autoPlan:
+          type: boolean
+        autoPlanDailyCap:
+          maximum: 50
+          minimum: 1
+          type: integer
+        autoPlanMinCount:
+          maximum: 10000
+          minimum: 1
+          type: integer
+        disconnectAlertMinutes:
+          maximum: 1440
+          minimum: 1
+          type: integer
+        enabled:
+          type: boolean
+        exclude:
+          items:
+            type: string
+          type: array
+        hourlyIssueCap:
+          maximum: 50
+          minimum: 1
+          type: integer
+        include:
+          items:
+            type: string
+          type: array
+        repository:
+          type: string
+        sources:
+          items:
+            $ref: '#/components/schemas/UpdateLadoLogSourceRequest'
+          type: array
+      required:
+      - enabled
+      - include
+      - exclude
+      - hourlyIssueCap
+      - autoPlan
+      - autoPlanDailyCap
+      - autoPlanMinCount
+      - disconnectAlertMinutes
+      - sources
       type: object
     UpdateLadoProjectSettingsRequest:
       properties:

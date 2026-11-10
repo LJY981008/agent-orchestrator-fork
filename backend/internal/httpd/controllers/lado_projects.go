@@ -47,6 +47,8 @@ type LadoController struct {
 	// Relay relays a developer's instruction from an orchestrator to a
 	// running worker and lists a task's relays (issue #49).
 	Relay LadoRelayService
+	// LogWatch is the production log watch of each project (issue #87).
+	LogWatch LadoLogWatchService
 }
 
 const (
@@ -103,6 +105,7 @@ func (c *LadoController) Register(r chi.Router) {
 	c.registerWatch(r)
 	c.registerKnowledge(r)
 	c.registerRelay(r)
+	c.registerLogWatch(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {

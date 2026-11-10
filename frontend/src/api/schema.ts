@@ -1648,6 +1648,110 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/projects/{projectId}/log-watch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project's production log watch settings, its Docker hosts and their targets, which TLS copies LADO keeps and how the daemon follows each source; the defaults when the project never saved any */
+        get: operations["getLadoLogWatch"];
+        /** Replace a project's production log watch settings; endpoints are tcp://host:port only, a source or target left out is deleted with its read cursors, and LADO only reads from the Engine API */
+        put: operations["updateLadoLogWatch"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/log-watch/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check a saved log source: its Engine and API versions and the running containers each target matches; a failed connection is ok false */
+        post: operations["checkLadoLogWatch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/log-watch/fingerprints/{fingerprintId}/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ignore a log incident fingerprint, so it makes no issue, or stop ignoring it */
+        post: operations["setLadoLogFingerprintIgnored"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/log-watch/import-ci": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read the project's .gitlab-ci.yml files for Docker host and compose project candidates; saves nothing */
+        post: operations["importLadoLogWatchCI"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/log-watch/incidents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's log incident fingerprints with their counts per instance: every one of an open task and the newest 200 others */
+        get: operations["listLadoLogWatchIncidents"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/log-watch/sources/{sourceId}/tls": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Copy a log source's CA and, optionally, client certificate and key under ~/.ao after checking them; encrypted keys are refused and nothing returns their content or paths */
+        post: operations["importLadoLogWatchTLS"];
+        /** Delete LADO's copies of a log source's TLS material */
+        delete: operations["deleteLadoLogWatchTLS"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/projects/{projectId}/protection": {
         parameters: {
             query?: never;
@@ -5793,6 +5897,9 @@ export interface components {
             /** @description The repository's SSH URL, such as git@github.com:owner/repo.git. */
             url: string;
         };
+        CheckLadoLogSourceRequest: {
+            sourceId: string;
+        };
         ClaimPRRequest: {
             allowTakeover?: null | boolean;
             pr: string;
@@ -6827,6 +6934,14 @@ export interface components {
             /** @enum {string} */
             source: "claude_memory" | "project";
         };
+        ImportLadoLogTLSRequest: {
+            /** @description PEM CA certificate the Engine's server certificate is checked against. */
+            caPath: string;
+            /** @description PEM client certificate; together with keyPath or not at all. */
+            certPath?: string;
+            /** @description PEM client key without a passphrase; together with certPath or not at all. */
+            keyPath?: string;
+        };
         ImportLadoTasksRequest: {
             /** @description Canonical ids of the issues to import. */
             issueRefs: string[];
@@ -7545,6 +7660,181 @@ export interface components {
             path: string;
             /** @description The workspace repository that has the connection's repository. Empty for a single-repo project. */
             repository?: string;
+        };
+        LadoLogCIFileResponse: {
+            composeProjects: string[];
+            hosts: components["schemas"]["LadoLogCIHostResponse"][];
+            notes: string[];
+            path: string;
+            /** @description The repository folder relative to a workspace project; empty for a single repository project. */
+            repo: string;
+        };
+        LadoLogCIHostResponse: {
+            displayName: string;
+            /** @description tcp://host:port; empty while unresolved. */
+            endpoint: string;
+            /** @description The variable reference LADO could not resolve, such as $PROD_HOST; the developer fills it in. */
+            unresolved?: string;
+            /** @description The *_HOST variable it came from. */
+            variable?: string;
+        };
+        LadoLogCIImportResponse: {
+            files: components["schemas"]["LadoLogCIFileResponse"][];
+        };
+        LadoLogFingerprintResponse: {
+            /**
+             * @description Why LADO did not request a plan.
+             * @enum {string}
+             */
+            autoPlanHeld?: "cap" | "min_count" | "off" | "failed";
+            /** Format: date-time */
+            autoPlanRequestedAt?: null | string;
+            count: number;
+            exceptionKind: string;
+            fingerprint: string;
+            /** Format: date-time */
+            firstSeenAt: string;
+            /** Format: int64 */
+            id: number;
+            ignored: boolean;
+            /** Format: date-time */
+            ignoredAt?: null | string;
+            instances: components["schemas"]["LadoLogInstanceCountResponse"][];
+            /** Format: date-time */
+            issueCreatedAt?: null | string;
+            issueRef?: string;
+            /** Format: date-time */
+            lastSeenAt: string;
+            location?: string;
+            /** @description The closed issue a recurrence links to. */
+            previousIssueRef?: string;
+            projectId: string;
+            service: string;
+            /** @description The task LADO created for it; omitted before it did or after that task was deleted unconfirmed. */
+            taskId?: string;
+        };
+        LadoLogIncidentListResponse: {
+            fingerprints: components["schemas"]["LadoLogFingerprintResponse"][];
+        };
+        LadoLogInstanceCountResponse: {
+            count: number;
+            image?: string;
+            /** @description <source display name>/<container name>. */
+            instance: string;
+            /** Format: date-time */
+            lastSeenAt: string;
+        };
+        LadoLogInstanceResponse: {
+            /** @description Container id. */
+            id: string;
+            image: string;
+            name: string;
+            /** @description The service name its fingerprints use. */
+            service: string;
+            state?: string;
+            targetId: string;
+        };
+        LadoLogSourceResponse: {
+            /** @description The only name of the host that issues and notices show. */
+            displayName: string;
+            /** @description tcp://host:port of the Docker Engine API. */
+            endpoint: string;
+            id: string;
+            /** @enum {string} */
+            kind: "docker_tcp";
+            paused: boolean;
+            status: components["schemas"]["LadoLogSourceStatusResponse"];
+            targets: components["schemas"]["LadoLogTargetResponse"][];
+            tls: boolean;
+            tlsStored: components["schemas"]["LadoLogTLSStoredResponse"];
+        };
+        LadoLogSourceStatusResponse: {
+            /** @description What the follower last reported, such as why it does not connect. */
+            detail?: string;
+            /**
+             * Format: date-time
+             * @description Since when the source has been disconnected; omitted while it is connected.
+             */
+            downSince?: null | string;
+            /** @description The source does not use TLS: the Engine API is unauthenticated and the logs cross the network in plain text. */
+            insecure: boolean;
+            /**
+             * @description off: LADO does not connect (the watch, the project's LADO mode or the source is off, or TLS lacks its CA); connecting; watching; backoff: it waits to connect again; error.
+             * @enum {string}
+             */
+            state: "off" | "connecting" | "watching" | "backoff" | "error";
+        };
+        LadoLogTLSStoredResponse: {
+            /** @description A CA certificate copy is stored. */
+            ca: boolean;
+            /** @description A client certificate copy is stored. */
+            cert: boolean;
+            /** @description A client key copy is stored. */
+            key: boolean;
+        };
+        LadoLogTargetResponse: {
+            /** @description The compose project a compose_service target is narrowed to. */
+            composeProject?: string;
+            id: string;
+            /** @enum {string} */
+            kind: "compose_project" | "compose_service" | "name" | "label";
+            paused: boolean;
+            /** @description The service name the target's fingerprints use instead of the compose labels. */
+            service?: string;
+            status: components["schemas"]["LadoLogTargetStatusResponse"];
+            /** @description The compose project, compose service, exact container name, or label key or key=value the kind selects by. */
+            value: string;
+        };
+        LadoLogTargetStatusResponse: {
+            /** @description How many containers of the target LADO follows. */
+            instances: number;
+            /**
+             * Format: date-time
+             * @description When the newest line LADO read of the target was written; omitted before one.
+             */
+            lastLineAt?: null | string;
+        };
+        LadoLogWatchCheckResponse: {
+            apiVersion?: string;
+            detail?: string;
+            engineVersion?: string;
+            /** @description The source does not use TLS. */
+            insecure: boolean;
+            /** @description The running containers each target matches. */
+            instances: components["schemas"]["LadoLogInstanceResponse"][];
+            ok: boolean;
+        };
+        LadoLogWatchResponse: {
+            /** @description Request a plan for a new incident's task. */
+            autoPlan: boolean;
+            /** @description Automatic plan requests in the last 24 hours at most. */
+            autoPlanDailyCap: number;
+            /** @description How often a fingerprint must be seen before LADO requests its plan. */
+            autoPlanMinCount: number;
+            /**
+             * Format: date-time
+             * @description When LADO last told of the hourly issue cap; omitted when it never did.
+             */
+            burstNotifiedAt?: null | string;
+            /** @description How long a source may stay disconnected before LADO tells the orchestrator once. */
+            disconnectAlertMinutes: number;
+            enabled: boolean;
+            /** @description RE2 patterns of lines that are never errors. */
+            exclude: string[];
+            hourlyIssueCap: number;
+            /** @description RE2 patterns of lines that are errors besides the built-in rules. */
+            include: string[];
+            /** @description The project's LADO mode; the log watch connects only while it is on. */
+            ladoMode: boolean;
+            projectId: string;
+            /** @description Canonical id of the repository the issues go to; empty when the project has one repository. */
+            repository: string;
+            sources: components["schemas"]["LadoLogSourceResponse"][];
+            /**
+             * Format: date-time
+             * @description When the settings were last saved; omitted before they were.
+             */
+            updatedAt?: null | string;
         };
         LadoPartRunRepoResponse: {
             /** @description The repository's base branch the dispatch resolved. */
@@ -8876,6 +9166,11 @@ export interface components {
             queue?: components["schemas"]["LadoTaskQueueResponse"];
             /** @description Canonical id of the repository that holds the issue, such as github:owner/repo. */
             repository: string;
+            /**
+             * @description How the task came to be: log for a task the production log watch created from an incident; omitted for a task the developer created or imported.
+             * @enum {string}
+             */
+            source?: "log";
             /**
              * @description Derived task state. review_required: the plan needs a new approval; blocked: the plan or the setup must change first; queued: the approved plan waits for the dispatcher; dispatching: LADO starts its worker; running: the worker session lives without a PR; validating: LADO verifies the open PR's current head, and stateReason says what it waits for or what fails; integration_pending: the head passed, or needs confirming, and waits for the developer's integration approval; integrating: the head's integration is approved; failed: the worker did not start, timed out or ended without a PR; completed: the PR merged; closed_unmerged: the PR or the issue closed without a merge. approved is no longer sent.
              * @enum {string}
@@ -10238,6 +10533,9 @@ export interface components {
              */
             state: "on" | "off" | "inherit" | "force_on" | "force_off";
         };
+        SetLadoLogFingerprintIgnoredRequest: {
+            ignored: boolean;
+        };
         SetLadoSetupBindingRequest: {
             /** @description Show the change without making it; needs no presence proof. */
             dryRun?: boolean;
@@ -10840,6 +11138,43 @@ export interface components {
             maxWorkers?: null | number;
             minFreeDiskGb?: null | number;
             planReview?: components["schemas"]["LadoPlanReviewSettings"];
+        };
+        UpdateLadoLogSourceRequest: {
+            displayName: string;
+            /** @description tcp://host:port only: no other scheme, user information, path, query or fragment. */
+            endpoint: string;
+            /** @description The source's id; omitted for a new source. */
+            id?: string;
+            /**
+             * @description docker_tcp when omitted.
+             * @enum {string}
+             */
+            kind?: "docker_tcp";
+            paused?: boolean;
+            targets: components["schemas"]["UpdateLadoLogTargetRequest"][];
+            tls?: boolean;
+        };
+        UpdateLadoLogTargetRequest: {
+            composeProject?: string;
+            /** @description The target's id; omitted for a new target. */
+            id?: string;
+            /** @enum {string} */
+            kind: "compose_project" | "compose_service" | "name" | "label";
+            paused?: boolean;
+            service?: string;
+            value: string;
+        };
+        UpdateLadoLogWatchRequest: {
+            autoPlan: boolean;
+            autoPlanDailyCap: number;
+            autoPlanMinCount: number;
+            disconnectAlertMinutes: number;
+            enabled: boolean;
+            exclude: string[];
+            hourlyIssueCap: number;
+            include: string[];
+            repository?: string;
+            sources: components["schemas"]["UpdateLadoLogSourceRequest"][];
         };
         UpdateLadoProjectSettingsRequest: {
             /** @description Replace the check commands, 0 to 10. A change needs a human-presence proof, because the daemon runs them outside any agent sandbox, and checkCommandsBase; an invalid list refuses with LADO_CHECK_COMMANDS_INVALID and its index, field and reason (a command with a control character, such as a line break, or a bidirectional control also with its position and the character as U+XXXX); a list that moved on since checkCommandsBase refuses with 409 LADO_CHECK_COMMANDS_CHANGED and the current checkCommandsSha256. */
@@ -16764,6 +17099,473 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoLogWatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogWatchResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoLogWatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoLogWatchRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogWatchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkLadoLogWatch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckLadoLogSourceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogWatchCheckResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setLadoLogFingerprintIgnored: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project the fingerprint belongs to. */
+                projectId: string;
+                /** @description Fingerprint id. */
+                fingerprintId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetLadoLogFingerprintIgnoredRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogFingerprintResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importLadoLogWatchCI: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogCIImportResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoLogWatchIncidents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogIncidentListResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    importLadoLogWatchTLS: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project the log source belongs to. */
+                projectId: string;
+                /** @description Log source id. */
+                sourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImportLadoLogTLSRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogWatchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    deleteLadoLogWatchTLS: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project the log source belongs to. */
+                projectId: string;
+                /** @description Log source id. */
+                sourceId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoLogWatchResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
