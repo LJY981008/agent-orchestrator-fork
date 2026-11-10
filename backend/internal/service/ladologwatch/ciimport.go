@@ -22,6 +22,15 @@ const (
 	ciMaxExpandGrowth = 4 << 10
 	// ciMaxDepth bounds the walk through nested nodes and aliases.
 	ciMaxDepth = 64
+	// ciMaxVisits bounds the nodes one parse visits. yaml.v3 does not
+	// expand aliases into a yaml.Node, so its alias ratio guard does not
+	// apply here; aliases of aliases ("b: &b [*a, *a, ...]") or nested
+	// "<<: [*m, *m, ...]" merge keys would otherwise make a small file
+	// visit about 10^9 nodes. A real .gitlab-ci.yml stays far below it.
+	ciMaxVisits = 200_000
+	// ciMaxScanBytes bounds the script text one parse searches, for a long
+	// string that aliases repeat.
+	ciMaxScanBytes = 8 << 20
 )
 
 // CICandidates are what a .gitlab-ci.yml suggests for the log watch: Docker
@@ -95,6 +104,22 @@ type ciParse struct {
 	templates []ciTemplate
 	projects  []string
 	notes     []string
+	// visits and scanBytes are what is left of ciMaxVisits and
+	// ciMaxScanBytes; over is set when one ran out and the walk stopped.
+	visits    int
+	scanBytes int
+	over      bool
+}
+
+// visit spends one node of the parse's budget, and says whether the walk may
+// go on.
+func (p *ciParse) visit() bool {
+	if p.visits <= 0 {
+		p.over = true
+		return false
+	}
+	p.visits--
+	return true
 }
 
 // ParseGitLabCI reads a .gitlab-ci.yml for log watch candidates: *_HOST
@@ -109,7 +134,7 @@ func ParseGitLabCI(data []byte) CICandidates {
 	if len(data) > CIMaxBytes {
 		return CICandidates{Notes: []string{"파일이 256KiB 를 넘어 읽지 않았다."}}
 	}
-	p := &ciParse{seenVar: map[string]bool{}}
+	p := &ciParse{seenVar: map[string]bool{}, visits: ciMaxVisits, scanBytes: ciMaxScanBytes}
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 || doc.Content[0].Kind != yaml.MappingNode {
 		if err != nil {
@@ -126,17 +151,17 @@ func ParseGitLabCI(data []byte) CICandidates {
 // each job under its own scope.
 func (p *ciParse) walk(root *yaml.Node) {
 	global := ciScope{}
-	p.addVars(global, ciGet(root, "variables", 0), 0)
-	if ciGet(root, "include", 0) != nil {
+	p.addVars(global, p.get(root, "variables", 0), 0)
+	if p.get(root, "include", 0) != nil {
 		p.notes = append(p.notes, "include: 로 불러오는 파일은 따라가지 않았다. 그 파일의 변수·스크립트는 후보에 없다.")
 	}
 	for _, key := range []string{"default", "before_script", "after_script"} {
-		if n := ciGet(root, key, 0); n != nil {
-			p.scan(n, global, 0)
+		if n := p.get(root, key, 0); n != nil {
+			p.scan(n, global, map[*yaml.Node]bool{}, 0)
 		}
 	}
 
-	for i := 0; i+1 < len(root.Content); i += 2 {
+	for i := 0; i+1 < len(root.Content) && !p.over; i += 2 {
 		name, job := root.Content[i].Value, ciDeref(root.Content[i+1])
 		if ciKeywords[name] || name == "<<" || job == nil || job.Kind != yaml.MappingNode {
 			continue
@@ -146,17 +171,17 @@ func (p *ciParse) walk(root *yaml.Node) {
 			scope[k] = v
 		}
 		p.jobVars(root, job, scope, 0)
-		p.scan(job, scope, 0)
+		p.scan(job, scope, map[*yaml.Node]bool{}, 0)
 	}
 }
 
 // jobVars adds a job's variables to its scope, after those of the jobs it
 // extends.
 func (p *ciParse) jobVars(root, job *yaml.Node, scope ciScope, depth int) {
-	if depth > 5 {
+	if depth > 5 || !p.visit() {
 		return
 	}
-	if ext := ciGet(job, "extends", 0); ext != nil {
+	if ext := p.get(job, "extends", 0); ext != nil {
 		var names []string
 		switch ext.Kind {
 		case yaml.ScalarNode:
@@ -167,28 +192,31 @@ func (p *ciParse) jobVars(root, job *yaml.Node, scope ciScope, depth int) {
 			}
 		}
 		for _, name := range names {
-			if parent := ciGet(root, name, 0); parent != nil && parent.Kind == yaml.MappingNode {
+			if parent := p.get(root, name, 0); parent != nil && parent.Kind == yaml.MappingNode {
 				p.jobVars(root, parent, scope, depth+1)
 			}
 		}
 	}
-	p.addVars(scope, ciGet(job, "variables", 0), 0)
+	p.addVars(scope, p.get(job, "variables", 0), 0)
 }
 
 // addVars reads a variables mapping into a scope, and notes its *_HOST
 // variables, DOCKER_HOST and COMPOSE_PROJECT_NAME.
 func (p *ciParse) addVars(scope ciScope, vars *yaml.Node, depth int) {
 	vars = ciDeref(vars)
-	if vars == nil || vars.Kind != yaml.MappingNode || depth > ciMaxDepth {
+	if vars == nil || vars.Kind != yaml.MappingNode || depth > ciMaxDepth || !p.visit() {
 		return
 	}
 	for i := 0; i+1 < len(vars.Content); i += 2 {
+		if !p.visit() {
+			return
+		}
 		key, val := vars.Content[i].Value, ciDeref(vars.Content[i+1])
 		if key == "<<" {
 			p.addMerge(scope, val, depth)
 			continue
 		}
-		value, ok := ciVarValue(val)
+		value, ok := p.varValue(val)
 		if !ok {
 			continue
 		}
@@ -228,14 +256,21 @@ func (p *ciParse) addMerge(scope ciScope, val *yaml.Node, depth int) {
 }
 
 // scan reads every string under a node: DOCKER_HOST settings and compose
-// project names in scripts.
-func (p *ciParse) scan(n *yaml.Node, scope ciScope, depth int) {
+// project names in scripts. A node seen under the same scope already gave
+// what it has, so an alias to it is not read again.
+func (p *ciParse) scan(n *yaml.Node, scope ciScope, seen map[*yaml.Node]bool, depth int) {
 	n = ciDeref(n)
-	if n == nil || depth > ciMaxDepth {
+	if n == nil || depth > ciMaxDepth || seen[n] || !p.visit() {
 		return
 	}
+	seen[n] = true
 	switch n.Kind {
 	case yaml.ScalarNode:
+		if len(n.Value) > p.scanBytes {
+			p.over = true
+			return
+		}
+		p.scanBytes -= len(n.Value)
 		p.text(n.Value, scope)
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
@@ -244,11 +279,11 @@ func (p *ciParse) scan(n *yaml.Node, scope ciScope, depth int) {
 			if n.Content[i].Value == "variables" {
 				continue
 			}
-			p.scan(n.Content[i+1], scope, depth+1)
+			p.scan(n.Content[i+1], scope, seen, depth+1)
 		}
 	case yaml.SequenceNode, yaml.DocumentNode:
 		for _, c := range n.Content {
-			p.scan(c, scope, depth+1)
+			p.scan(c, scope, seen, depth+1)
 		}
 	}
 }
@@ -286,6 +321,9 @@ func (p *ciParse) raw(data string) {
 // candidates turns what the walk gathered into the answer.
 func (p *ciParse) candidates() CICandidates {
 	out := CICandidates{Notes: p.notes}
+	if p.over {
+		out.Notes = append(out.Notes, "별칭·병합 키가 너무 많이 펼쳐져 파일의 앞부분만 읽었다. 후보가 빠졌을 수 있다.")
+	}
 	seen := map[string]bool{}
 	add := func(h CIHost) {
 		key := h.Endpoint
@@ -368,10 +406,11 @@ func (p *ciParse) candidates() CICandidates {
 	return out
 }
 
-// ciGet finds a key in a mapping, also through "<<" merge keys.
-func ciGet(m *yaml.Node, key string, depth int) *yaml.Node {
+// get finds a key in a mapping, also through "<<" merge keys, on the parse's
+// visit budget.
+func (p *ciParse) get(m *yaml.Node, key string, depth int) *yaml.Node {
 	m = ciDeref(m)
-	if m == nil || m.Kind != yaml.MappingNode || depth > ciMaxDepth {
+	if m == nil || m.Kind != yaml.MappingNode || depth > ciMaxDepth || !p.visit() {
 		return nil
 	}
 	for i := 0; i+1 < len(m.Content); i += 2 {
@@ -392,7 +431,7 @@ func ciGet(m *yaml.Node, key string, depth int) *yaml.Node {
 			sources = merge.Content
 		}
 		for _, src := range sources {
-			if n := ciGet(src, key, depth+1); n != nil {
+			if n := p.get(src, key, depth+1); n != nil {
 				return n
 			}
 		}
@@ -408,8 +447,8 @@ func ciDeref(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-// ciVarValue reads a variable's value: a scalar, or {value: …}.
-func ciVarValue(n *yaml.Node) (string, bool) {
+// varValue reads a variable's value: a scalar, or {value: …}.
+func (p *ciParse) varValue(n *yaml.Node) (string, bool) {
 	if n == nil {
 		return "", false
 	}
@@ -417,7 +456,7 @@ func ciVarValue(n *yaml.Node) (string, bool) {
 	case yaml.ScalarNode:
 		return n.Value, true
 	case yaml.MappingNode:
-		if v := ciGet(n, "value", 0); v != nil && v.Kind == yaml.ScalarNode {
+		if v := p.get(n, "value", 0); v != nil && v.Kind == yaml.ScalarNode {
 			return v.Value, true
 		}
 	}
