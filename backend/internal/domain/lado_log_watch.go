@@ -178,7 +178,10 @@ type LadoLogTarget struct {
 	ComposeProject string
 	// Service overrides the service name the fingerprints use.
 	Service string
-	Paused  bool
+	// Repository is the canonical id of the repository the target's issues
+	// go to. Empty inherits the project's Repository.
+	Repository string
+	Paused     bool
 }
 
 // LadoLogWatchInput is what the developer changes of a project's settings.
@@ -215,7 +218,10 @@ type LadoLogTargetInput struct {
 	Value          string
 	ComposeProject string
 	Service        string
-	Paused         bool
+	// Repository is the target's issue repository; empty inherits the
+	// project's.
+	Repository string
+	Paused     bool
 }
 
 // LadoLogTLSImport names the files a source's TLS material is copied from.
@@ -393,7 +399,11 @@ type LadoLogCIImport struct {
 type LadoLogCIFile struct {
 	// Repo is the repository folder relative to a workspace project, empty
 	// for a single repository project.
-	Repo            string
+	Repo string
+	// Repository is the canonical id of the repository the file belongs to,
+	// empty for a file of the project root or one whose origin LADO cannot
+	// read.
+	Repository      string
 	Path            string
 	Hosts           []LadoLogCIHost
 	ComposeProjects []string
@@ -436,7 +446,7 @@ var (
 // ValidateLadoLogWatchInput checks a settings input before it is saved. It
 // returns a *LadoLogWatchInvalidError naming the first refused value.
 func ValidateLadoLogWatchInput(in LadoLogWatchInput) error {
-	if len(in.Repository) > LadoLogMaxRepositoryLength || ladoLogHasControl(in.Repository) {
+	if !ladoLogValidRepository(in.Repository) {
 		return ladoLogInvalid("repository", "저장소 id 가 올바르지 않습니다")
 	}
 	if err := ladoLogValidatePatterns("include", in.Include); err != nil {
@@ -543,7 +553,17 @@ func ladoLogValidateTarget(field string, t LadoLogTargetInput) error {
 	if t.Service != "" && (len(t.Service) > ladoLogMaxServiceNameLength || !ladoLogServicePattern.MatchString(t.Service)) {
 		return ladoLogInvalid(field+".service", "서비스 이름은 영문·숫자로 시작하고 영문·숫자·_ . / - 만 쓸 수 있습니다")
 	}
+	if !ladoLogValidRepository(t.Repository) {
+		return ladoLogInvalid(field+".repository", "저장소 id 가 올바르지 않습니다")
+	}
 	return nil
+}
+
+// ladoLogValidRepository reports whether a repository id fits the length and
+// has no control character. Whether it is one of the project's repositories
+// is checked where the list is known.
+func ladoLogValidRepository(repo string) bool {
+	return len(repo) <= LadoLogMaxRepositoryLength && !ladoLogHasControl(repo)
 }
 
 func ladoLogValidatePatterns(field string, patterns []string) error {

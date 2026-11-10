@@ -84,7 +84,7 @@ func (f *fakeLadoLogWatch) UpdateSettings(_ context.Context, project domain.Proj
 			if tid == "" {
 				tid = domain.LadoLogTargetID(fmt.Sprintf("%s-t%d", id, j+1))
 			}
-			source.Targets = append(source.Targets, domain.LadoLogTarget{ID: tid, SourceID: id, Kind: t.Kind, Value: t.Value, ComposeProject: t.ComposeProject, Service: t.Service, Paused: t.Paused})
+			source.Targets = append(source.Targets, domain.LadoLogTarget{ID: tid, SourceID: id, Kind: t.Kind, Value: t.Value, ComposeProject: t.ComposeProject, Service: t.Service, Repository: t.Repository, Paused: t.Paused})
 		}
 		s.Sources = append(s.Sources, source)
 	}
@@ -172,7 +172,7 @@ func TestLadoAPI_LogWatchSettings(t *testing.T) {
 	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/lado/projects/mer/log-watch", ladoLogWatchBody(`[
 		{"displayName":"prod1","endpoint":"tcp://192.0.2.10:2375","targets":[{"kind":"compose_project","value":"grp"}]},
 		{"id":"s2","kind":"docker_tcp","displayName":"prod2","endpoint":"tcp://prod2.example.test:2376","tls":true,"paused":true,
-		 "targets":[{"id":"t9","kind":"compose_service","value":"api","composeProject":"grp","service":"grp/api","paused":true},{"kind":"label","value":"app=web"}]}]`))
+		 "targets":[{"id":"t9","kind":"compose_service","value":"api","composeProject":"grp","service":"grp/api","repository":"github:acme/front","paused":true},{"kind":"label","value":"app=web"}]}]`))
 	if status != http.StatusOK {
 		t.Fatalf("PUT = %d %s", status, body)
 	}
@@ -182,13 +182,21 @@ func TestLadoAPI_LogWatchSettings(t *testing.T) {
 		in.Sources[1].ID != "s2" || !in.Sources[1].TLS || !in.Sources[1].Paused || len(in.Sources[1].Targets) != 2 {
 		t.Fatalf("input = %+v", in)
 	}
-	if tgt := in.Sources[1].Targets[0]; tgt.ID != "t9" || tgt.Kind != domain.LadoLogTargetComposeService || tgt.Value != "api" || tgt.ComposeProject != "grp" || tgt.Service != "grp/api" || !tgt.Paused {
+	if tgt := in.Sources[1].Targets[0]; tgt.ID != "t9" || tgt.Kind != domain.LadoLogTargetComposeService || tgt.Value != "api" || tgt.ComposeProject != "grp" || tgt.Service != "grp/api" || tgt.Repository != "github:acme/front" || !tgt.Paused {
 		t.Fatalf("target input = %+v", tgt)
+	}
+	if tgt := in.Sources[1].Targets[1]; tgt.Repository != "" {
+		t.Fatalf("target without a repository = %+v", tgt)
 	}
 	got = decodeLadoJSON[controllers.LadoLogWatchResponse](t, body)
 	if len(got.Sources) != 2 || got.Sources[0].ID != "src-1" || got.Sources[0].Kind != "docker_tcp" || !got.Sources[0].Status.Insecure ||
-		got.Sources[0].Status.State != "off" || got.Sources[1].Status.Insecure || got.Sources[1].Targets[0].ID != "t9" || got.UpdatedAt == nil {
+		got.Sources[0].Status.State != "off" || got.Sources[1].Status.Insecure || got.Sources[1].Targets[0].ID != "t9" || got.UpdatedAt == nil ||
+		got.Sources[1].Targets[0].Repository != "github:acme/front" || got.Sources[1].Targets[1].Repository != "" {
 		t.Fatalf("PUT response = %+v", got)
+	}
+	// A target that inherits the project's repository leaves the key out.
+	if strings.Count(string(body), `"repository":"github:acme/front"`) != 1 || strings.Contains(string(body), `"repository":""`) {
+		t.Fatalf("PUT response repositories = %s", body)
 	}
 
 	// The daemon's status of a source: its state, a detail with a copy's
@@ -258,6 +266,8 @@ func TestLadoAPI_LogWatchRefusesInvalidSettings(t *testing.T) {
 		{"container name", ladoLogWatchBody(source("tcp://192.0.2.10:2375", `[{"kind":"name","value":"/api"}]`)), "sources[0].targets[0].value"},
 		{"label", ladoLogWatchBody(source("tcp://192.0.2.10:2375", `[{"kind":"label","value":"app=$(id)"}]`)), "sources[0].targets[0].value"},
 		{"target kind", ladoLogWatchBody(source("tcp://192.0.2.10:2375", `[{"kind":"pod","value":"api"}]`)), "sources[0].targets[0].kind"},
+		{"target repository with a newline", ladoLogWatchBody(source("tcp://192.0.2.10:2375", `[{"kind":"name","value":"api","repository":"github:acme/front\n"}]`)), "sources[0].targets[0].repository"},
+		{"long target repository", ladoLogWatchBody(source("tcp://192.0.2.10:2375", `[{"kind":"name","value":"api"},{"kind":"name","value":"web","repository":"`+strings.Repeat("r", 513)+`"}]`)), "sources[0].targets[1].repository"},
 		{"regexp", strings.Replace(ladoLogWatchBody(`[]`), `"OutOfMemory"`, `"(unclosed"`, 1), "include[0]"},
 		{"cap", strings.Replace(ladoLogWatchBody(`[]`), `"hourlyIssueCap":5`, `"hourlyIssueCap":0`, 1), "hourlyIssueCap"},
 	} {
@@ -339,12 +349,22 @@ func TestLadoAPI_LogWatchCheckImportIncidents(t *testing.T) {
 		Path:            ".gitlab-ci.yml",
 		Hosts:           []domain.LadoLogCIHost{{Variable: "PROD1_HOST", DisplayName: "prod1", Endpoint: "tcp://192.0.2.10:2375"}, {Variable: "SECRET_HOST", DisplayName: "secret", Unresolved: "$SECRET_HOST"}},
 		ComposeProjects: []string{"grp"},
+	}, {
+		Repo:            "front",
+		Repository:      "github:acme/front",
+		Path:            "front/.gitlab-ci.yml",
+		ComposeProjects: []string{"front"},
 	}}}
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/lado/projects/mer/log-watch/import-ci", "")
 	ci := decodeLadoJSON[controllers.LadoLogCIImportResponse](t, body)
-	if status != http.StatusOK || len(ci.Files) != 1 || len(ci.Files[0].Hosts) != 2 || ci.Files[0].Hosts[1].Unresolved != "$SECRET_HOST" ||
-		len(ci.Files[0].ComposeProjects) != 1 || ci.Files[0].Notes == nil || svc.updates != 0 {
+	if status != http.StatusOK || len(ci.Files) != 2 || len(ci.Files[0].Hosts) != 2 || ci.Files[0].Hosts[1].Unresolved != "$SECRET_HOST" ||
+		len(ci.Files[0].ComposeProjects) != 1 || ci.Files[0].Notes == nil || svc.updates != 0 ||
+		ci.Files[0].Repository != "" || ci.Files[1].Repo != "front" || ci.Files[1].Repository != "github:acme/front" || ci.Files[1].Hosts == nil {
 		t.Fatalf("import-ci = %d %s", status, body)
+	}
+	// A root file's repository is left out of the response.
+	if strings.Count(string(body), `"repository"`) != 1 {
+		t.Fatalf("import-ci repositories = %s", body)
 	}
 	svc.err = apierr.NotFound("LADO_LOG_CI_NOT_FOUND", "no .gitlab-ci.yml")
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/lado/projects/mer/log-watch/import-ci", "")

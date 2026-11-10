@@ -7668,6 +7668,8 @@ export interface components {
             path: string;
             /** @description The repository folder relative to a workspace project; empty for a single repository project. */
             repo: string;
+            /** @description Canonical id of the repository the file belongs to; omitted for a file of the project root or one whose origin LADO cannot read. */
+            repository?: string;
         };
         LadoLogCIHostResponse: {
             displayName: string;
@@ -7781,6 +7783,8 @@ export interface components {
             /** @enum {string} */
             kind: "compose_project" | "compose_service" | "name" | "label";
             paused: boolean;
+            /** @description Canonical id of the repository the target's issues go to; omitted when the target uses the project's default repository. */
+            repository?: string;
             /** @description The service name the target's fingerprints use instead of the compose labels. */
             service?: string;
             status: components["schemas"]["LadoLogTargetStatusResponse"];
@@ -11163,6 +11167,8 @@ export interface components {
             /** @enum {string} */
             kind: "compose_project" | "compose_service" | "name" | "label";
             paused?: boolean;
+            /** @description Repository the target's issues go to; empty uses the project's default repository. */
+            repository?: string;
             service?: string;
             value: string;
         };

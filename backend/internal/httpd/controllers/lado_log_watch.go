@@ -169,6 +169,7 @@ func (c *LadoController) importLogWatchCI(w http.ResponseWriter, r *http.Request
 	for _, f := range found.Files {
 		file := LadoLogCIFileResponse{
 			Repo:            f.Repo,
+			Repository:      f.Repository,
 			Path:            f.Path,
 			Hosts:           make([]LadoLogCIHostResponse, 0, len(f.Hosts)),
 			ComposeProjects: ladoNonNilStrings(f.ComposeProjects),
@@ -257,6 +258,7 @@ func ladoLogWatchInput(req UpdateLadoLogWatchRequest) domain.LadoLogWatchInput {
 				Value:          t.Value,
 				ComposeProject: t.ComposeProject,
 				Service:        t.Service,
+				Repository:     t.Repository,
 				Paused:         t.Paused,
 			})
 		}
@@ -362,6 +364,7 @@ func ladoLogWatchResponse(view domain.LadoLogWatchView) LadoLogWatchResponse {
 				Value:          t.Value,
 				ComposeProject: t.ComposeProject,
 				Service:        t.Service,
+				Repository:     t.Repository,
 				Paused:         t.Paused,
 				Status:         LadoLogTargetStatusResponse{Instances: ts.Instances, LastLineAt: ladoOptionalUTC(ts.LastLineAt)},
 			})

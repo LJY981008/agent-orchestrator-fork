@@ -25,8 +25,8 @@ func validLadoLogWatchInput() domain.LadoLogWatchInput {
 				ID: "src-1", Kind: domain.LadoLogSourceKindDockerTCP, DisplayName: "prod1",
 				Endpoint: "tcp://192.0.2.10:2375",
 				Targets: []domain.LadoLogTargetInput{
-					{ID: "tgt-1", Kind: domain.LadoLogTargetComposeProject, Value: "grp"},
-					{Kind: domain.LadoLogTargetComposeService, Value: "api", ComposeProject: "grp", Service: "grp/api"},
+					{ID: "tgt-1", Kind: domain.LadoLogTargetComposeProject, Value: "grp", Repository: "github:o/back"},
+					{Kind: domain.LadoLogTargetComposeService, Value: "api", ComposeProject: "grp", Service: "grp/api", Repository: strings.Repeat("r", domain.LadoLogMaxRepositoryLength)},
 					{Kind: domain.LadoLogTargetName, Value: "worker_1"},
 					{Kind: domain.LadoLogTargetLabel, Value: "com.example.team=core:a/b"},
 					{Kind: domain.LadoLogTargetLabel, Value: "com.example.watch"},
@@ -138,6 +138,21 @@ func TestValidateLadoLogWatchInputRefusals(t *testing.T) {
 			}
 		}, "sources[0].targets"},
 		{"repository with a newline", func(in *domain.LadoLogWatchInput) { in.Repository = "github:o/r\n" }, "repository"},
+		{"long repository", func(in *domain.LadoLogWatchInput) {
+			in.Repository = strings.Repeat("r", domain.LadoLogMaxRepositoryLength+1)
+		}, "repository"},
+		{"target repository of 513 bytes", func(in *domain.LadoLogWatchInput) {
+			in.Sources[0].Targets[2].Repository = strings.Repeat("r", domain.LadoLogMaxRepositoryLength+1)
+		}, "sources[0].targets[2].repository"},
+		{"target repository with a newline", func(in *domain.LadoLogWatchInput) {
+			in.Sources[0].Targets[3].Repository = "github:o/front\n"
+		}, "sources[0].targets[3].repository"},
+		{"target repository with a NUL", func(in *domain.LadoLogWatchInput) {
+			in.Sources[0].Targets[0].Repository = "github:o/\x00back"
+		}, "sources[0].targets[0].repository"},
+		{"target repository with a tab", func(in *domain.LadoLogWatchInput) {
+			in.Sources[0].Targets[4].Repository = "\tgithub:o/back"
+		}, "sources[0].targets[4].repository"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in := validLadoLogWatchInput()
