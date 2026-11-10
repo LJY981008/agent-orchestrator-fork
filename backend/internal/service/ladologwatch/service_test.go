@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 )
 
 // The runner serves the log watch API with the signature the controller
@@ -1209,5 +1210,361 @@ func TestServiceUnknownProjectIsNotFound(t *testing.T) {
 	}
 	if view, err := fx.svc.Settings(ctx, "demo"); err != nil || len(view.Settings.Sources) != 1 {
 		t.Fatalf("Settings of an archived project = %+v, %v", view, err)
+	}
+}
+
+// serviceFakeRepos is a fake ServiceRepos.
+type serviceFakeRepos struct {
+	repos []ladotask.ProjectRepo
+	err   error
+	calls int
+}
+
+func (r *serviceFakeRepos) Repositories(context.Context, domain.ProjectID) ([]ladotask.ProjectRepo, error) {
+	r.calls++
+	return r.repos, r.err
+}
+
+var (
+	serviceBackRepo  = domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/back"}
+	serviceFrontRepo = domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/front"}
+)
+
+// serviceTwoRepos is a workspace project's two repositories.
+func serviceTwoRepos() *serviceFakeRepos {
+	return &serviceFakeRepos{repos: []ladotask.ProjectRepo{{Name: "back", Repo: serviceBackRepo}, {Name: "front", Repo: serviceFrontRepo}}}
+}
+
+func serviceRepoTarget(value, repo string) domain.LadoLogTargetInput {
+	return domain.LadoLogTargetInput{Kind: domain.LadoLogTargetComposeProject, Value: value, Repository: repo}
+}
+
+// TestServiceUpdateSettingsChecksRepositories: in a project with two
+// repositories, a repository that is not one of them is refused with its
+// field, a followed target whose issues would have no repository is
+// refused, and what is saved is the canonical ref.
+func TestServiceUpdateSettingsChecksRepositories(t *testing.T) {
+	const endpoint = "tcp://192.0.2.1:2375"
+	refused := []struct {
+		name, field string
+		in          domain.LadoLogWatchInput
+	}{
+		{"project repository not in the list", "repository", func() domain.LadoLogWatchInput {
+			in := serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", "")))
+			in.Repository = "github:acme/other"
+			return in
+		}()},
+		{"project repository that does not parse", "repository", func() domain.LadoLogWatchInput {
+			in := serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", "")))
+			in.Repository = "acme/back"
+			return in
+		}()},
+		{"target repository not in the list", "sources[0].targets[1].repository",
+			serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", "github:acme/back"), serviceRepoTarget("front", "gitlab:acme/front")))},
+		{"target repository of a paused target not in the list", "sources[1].targets[0].repository", func() domain.LadoLogWatchInput {
+			paused := serviceSourceInput("tcp://192.0.2.2:2375", serviceRepoTarget("front", "github:acme/other"))
+			paused.Paused = true
+			paused.DisplayName = "prod2"
+			in := serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", "github:acme/back")), paused)
+			in.Enabled = false
+			return in
+		}()},
+		{"followed target without any repository", "sources[0].targets[1].repository",
+			serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", "github:acme/back"), serviceRepoTarget("front", "")))},
+	}
+	for _, tc := range refused {
+		t.Run(tc.name, func(t *testing.T) {
+			fx := newServiceFixture(t)
+			fx.addProject("demo", true)
+			fx.svc.deps.Repos = serviceTwoRepos()
+			_, err := fx.svc.UpdateSettings(context.Background(), "demo", tc.in)
+			ae := serviceAPIError(t, err, codeInvalid)
+			if ae.Kind != apierr.KindInvalid {
+				t.Errorf("kind = %v, want invalid", ae.Kind)
+			}
+			if field, _ := ae.Details["field"].(string); field != tc.field {
+				t.Errorf("field = %q, want %q", field, tc.field)
+			}
+			if fx.store.puts != 0 {
+				t.Errorf("a refused input was saved")
+			}
+		})
+	}
+
+	t.Run("canonical refs are saved, the project default serves targets without one", func(t *testing.T) {
+		fx := newServiceFixture(t)
+		fx.addProject("demo", true)
+		fx.svc.deps.Repos = serviceTwoRepos()
+		in := serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", ""), serviceRepoTarget("front", "github:ACME/Front")))
+		in.Repository = "github:Acme/BACK"
+		view, err := fx.svc.UpdateSettings(context.Background(), "demo", in)
+		if err != nil {
+			t.Fatalf("UpdateSettings: %v", err)
+		}
+		targets := view.Settings.Sources[0].Targets
+		if view.Settings.Repository != "github:acme/back" || targets[0].Repository != "" || targets[1].Repository != "github:acme/front" {
+			t.Fatalf("saved project %q targets %+v", view.Settings.Repository, targets)
+		}
+		if in.Repository != "github:Acme/BACK" || in.Sources[0].Targets[1].Repository != "github:ACME/Front" {
+			t.Fatal("UpdateSettings changed the caller's input")
+		}
+	})
+}
+
+// TestServiceUpdateSettingsRepositoryNotNeededWhenNotFollowed: a target
+// without a repository is saved when the log watch is off or the target or
+// its source is paused; nothing could make an issue for it.
+func TestServiceUpdateSettingsRepositoryNotNeededWhenNotFollowed(t *testing.T) {
+	const endpoint = "tcp://192.0.2.1:2375"
+	empty := serviceRepoTarget("front", "")
+	off := serviceInput(serviceSourceInput(endpoint, empty))
+	off.Enabled = false
+	pausedSource := serviceSourceInput(endpoint, empty)
+	pausedSource.Paused = true
+	pausedTarget := empty
+	pausedTarget.Paused = true
+	for name, in := range map[string]domain.LadoLogWatchInput{
+		"log watch off": off,
+		"source paused": serviceInput(pausedSource),
+		"target paused": serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("back", "github:acme/back"), pausedTarget)),
+		"no sources":    serviceInput(),
+		"project default": func() domain.LadoLogWatchInput {
+			in := serviceInput(serviceSourceInput(endpoint, empty))
+			in.Repository = "github:acme/front"
+			return in
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newServiceFixture(t)
+			fx.addProject("demo", true)
+			fx.svc.deps.Repos = serviceTwoRepos()
+			if _, err := fx.svc.UpdateSettings(context.Background(), "demo", in); err != nil {
+				t.Fatalf("UpdateSettings: %v", err)
+			}
+		})
+	}
+}
+
+// TestServiceUpdateSettingsRepositoryList: a project with one repository
+// saves empty repositories as before; a list that cannot be read for a
+// reason other than an internal error skips the checks; an internal error
+// is LADO_LOG_WATCH_FAILED.
+func TestServiceUpdateSettingsRepositoryList(t *testing.T) {
+	const endpoint = "tcp://192.0.2.1:2375"
+	ctx := context.Background()
+	in := serviceInput(serviceSourceInput(endpoint, serviceRepoTarget("api", "")))
+
+	fx := newServiceFixture(t)
+	fx.addProject("demo", true)
+	repos := &serviceFakeRepos{repos: []ladotask.ProjectRepo{{Name: "demo", Repo: serviceBackRepo}}}
+	fx.svc.deps.Repos = repos
+	view, err := fx.svc.UpdateSettings(ctx, "demo", in)
+	if err != nil {
+		t.Fatalf("UpdateSettings with one repository: %v", err)
+	}
+	if view.Settings.Repository != "" || view.Settings.Sources[0].Targets[0].Repository != "" || repos.calls != 1 {
+		t.Fatalf("saved %+v after %d list reads", view.Settings, repos.calls)
+	}
+	wrong := in
+	wrong.Repository = "github:acme/front"
+	_, err = fx.svc.UpdateSettings(ctx, "demo", wrong)
+	if ae := serviceAPIError(t, err, codeInvalid); ae.Details["field"] != "repository" {
+		t.Fatalf("details = %+v", ae.Details)
+	}
+
+	unchecked := in
+	unchecked.Repository = "github:acme/elsewhere"
+	for name, listErr := range map[string]error{
+		"archived project":     apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project"),
+		"unsupported origin":   apierr.Conflict("LADO_REPOSITORY_UNSUPPORTED", "unsupported", nil),
+		"no repository reader": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newServiceFixture(t)
+			fx.addProject("demo", true)
+			if listErr != nil {
+				fx.svc.deps.Repos = &serviceFakeRepos{err: listErr}
+			}
+			view, err := fx.svc.UpdateSettings(ctx, "demo", unchecked)
+			if err != nil {
+				t.Fatalf("UpdateSettings: %v", err)
+			}
+			if view.Settings.Repository != "github:acme/elsewhere" {
+				t.Fatalf("saved repository %q", view.Settings.Repository)
+			}
+		})
+	}
+
+	for name, listErr := range map[string]error{
+		"internal apierr": apierr.Internal("PROJECT_LOAD_FAILED", "Failed to load project"),
+		"plain error":     errors.New("disk I/O error"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			fx := newServiceFixture(t)
+			fx.addProject("demo", true)
+			fx.svc.deps.Repos = &serviceFakeRepos{err: listErr}
+			_, err := fx.svc.UpdateSettings(ctx, "demo", in)
+			if ae := serviceAPIError(t, err, codeFailed); ae.Kind != apierr.KindInternal {
+				t.Fatalf("kind = %v, want internal", ae.Kind)
+			}
+			if fx.store.puts != 0 {
+				t.Fatal("settings were saved")
+			}
+		})
+	}
+}
+
+// TestServiceOccurrencesCarryTheTargetsRepository: an occurrence carries
+// its target's repository, or the project's when the target names none; a
+// change of a target's repository alone keeps the stream and reaches the
+// next occurrence.
+func TestServiceOccurrencesCarryTheTargetsRepository(t *testing.T) {
+	fx := newServiceFixture(t)
+	fx.svc.reconcileEvery = time.Hour // only Kick reconciles
+	const prod = "tcp://192.0.2.51:2375"
+	fx.addProject("demo", true)
+	front := serviceTarget("t-front", "front")
+	front.Repository = "github:acme/front"
+	settings := serviceSettings("demo", serviceTestSource("prod", prod, front, serviceTarget("t-back", "back")))
+	settings.Repository = "github:acme/back"
+	fx.store.put(settings)
+	f := Instance{ID: strings.Repeat("f", 64), Name: "front-web-1", Service: "front/web", TargetID: "t-front"}
+	b := Instance{ID: strings.Repeat("b", 64), Name: "back-api-1", Service: "back/api", TargetID: "t-back"}
+	fx.source(prod).setInstances(f, b)
+	fx.start(t)
+	serviceWait(t, "both streams", func() bool {
+		return fx.source(prod).openCount(f.ID) == 1 && fx.source(prod).openCount(b.ID) == 1
+	})
+	at := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	serviceSend(t, fx.source(prod), f.ID, at, serviceJavaLines)
+	serviceSend(t, fx.source(prod), b.ID, at, serviceJavaLines)
+	serviceWait(t, "two occurrences", func() bool { return len(fx.sink.occurrences()) == 2 })
+	repos := map[string]string{}
+	for _, o := range fx.sink.occurrences() {
+		repos[o.o.Service] = o.o.Repository
+	}
+	if want := map[string]string{"front/web": "github:acme/front", "back/api": "github:acme/back"}; !reflect.DeepEqual(repos, want) {
+		t.Fatalf("repositories = %v, want %v", repos, want)
+	}
+
+	// Only the front target's repository changes: same connection values,
+	// so the Follower keeps its streams.
+	before := serviceSignature("demo", func() DockerConfig { cfg, _, _ := fx.svc.sourceConfig("demo", settings.Sources[0], false); return cfg }())
+	settings.Sources[0].Targets[0].Repository = "github:acme/back"
+	after := serviceSignature("demo", func() DockerConfig { cfg, _, _ := fx.svc.sourceConfig("demo", settings.Sources[0], false); return cfg }())
+	if before != after {
+		t.Fatal("a repository change changed the connection signature")
+	}
+	fx.store.put(settings)
+	fx.svc.Kick()
+	serviceWait(t, "the new repository", func() bool {
+		for _, run := range fx.svc.runningSources() {
+			run.mu.Lock()
+			repo := run.repository("t-front")
+			run.mu.Unlock()
+			if repo == "github:acme/back" {
+				return true
+			}
+		}
+		return false
+	})
+	serviceSend(t, fx.source(prod), f.ID, at.Add(time.Minute), serviceJavaLines)
+	serviceWait(t, "the third occurrence", func() bool { return len(fx.sink.occurrences()) == 3 })
+	if got := fx.sink.occurrences()[2].o; got.Service != "front/web" || got.Repository != "github:acme/back" {
+		t.Fatalf("occurrence after the change = %+v", got)
+	}
+	if n := fx.madeFor(prod); n != 1 {
+		t.Fatalf("the source was made %d times, want 1", n)
+	}
+	if n := len(fx.source(prod).calls(f.ID)); n != 1 {
+		t.Fatalf("the front stream was opened %d times, want 1", n)
+	}
+}
+
+// TestServiceDrainedOccurrencesKeepTheirTarget: when a settings change
+// restarts a source, what its Detectors still hold is given out after the
+// Follower stopped and its status lost the instances; the occurrence still
+// carries its target's repository and service.
+func TestServiceDrainedOccurrencesKeepTheirTarget(t *testing.T) {
+	fx := newServiceFixture(t)
+	fx.svc.reconcileEvery = time.Hour // only Kick reconciles
+	fx.svc.flushEvery = time.Hour     // only the drain gives the incident out
+	const prod = "tcp://192.0.2.52:2375"
+	fx.addProject("demo", true)
+	front := serviceTarget("t-front", "front")
+	front.Repository = "github:acme/front"
+	settings := serviceSettings("demo", serviceTestSource("prod", prod, front))
+	settings.Repository = "github:acme/back"
+	fx.store.put(settings)
+	f := Instance{ID: strings.Repeat("f", 64), Name: "front-web-1", Image: "front:1", Service: "front/web", TargetID: "t-front"}
+	fx.source(prod).setInstances(f)
+	fx.start(t)
+	serviceWait(t, "the stream", func() bool { return fx.source(prod).openCount(f.ID) == 1 })
+	// The stack trace without the lines that close it: the Detector holds
+	// the incident.
+	serviceSend(t, fx.source(prod), f.ID, time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC), serviceJavaLines[:3])
+	serviceWait(t, "the Detector", func() bool {
+		for _, run := range fx.svc.runningSources() {
+			run.mu.Lock()
+			n := len(run.detectors)
+			run.mu.Unlock()
+			if n == 1 {
+				return true
+			}
+		}
+		return false
+	})
+	if n := len(fx.sink.occurrences()); n != 0 {
+		t.Fatalf("occurrences before the restart = %d", n)
+	}
+
+	// Another target changes the connection values: the source restarts.
+	settings.Sources[0].Targets = append(settings.Sources[0].Targets, serviceTarget("t-other", "other"))
+	settings.Sources[0].Targets[1].SourceID = "prod"
+	fx.store.put(settings)
+	fx.svc.Kick()
+	serviceWait(t, "the drained occurrence", func() bool { return len(fx.sink.occurrences()) == 1 })
+	o := fx.sink.occurrences()[0].o
+	if o.Repository != "github:acme/front" || o.Service != "front/web" || o.Instance != "prod/front-web-1" || o.Image != "front:1" {
+		t.Fatalf("drained occurrence = %+v", o)
+	}
+	if n := fx.madeFor(prod); n != 2 {
+		t.Fatalf("the source was made %d times, want a restart", n)
+	}
+}
+
+// TestServiceImportFromCIRepositories: a workspace child's file carries its
+// repository's canonical ref; the project root's file and a child without a
+// supported origin carry none.
+func TestServiceImportFromCIRepositories(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	workspace := t.TempDir()
+	for _, dir := range []string{"", "back", "front", "local", "odd"} {
+		if err := os.MkdirAll(filepath.Join(workspace, dir), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(workspace, dir, ".gitlab-ci.yml"), []byte(serviceCIExample), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fx.projects.records = []domain.ProjectRecord{{ID: "ws", Path: workspace, Kind: domain.ProjectKindWorkspace}}
+	fx.projects.repos["ws"] = []domain.WorkspaceRepoRecord{
+		{RelativePath: "back", RepoOriginURL: "https://github.com/Acme/Back.git"},
+		{RelativePath: "front", RepoOriginURL: "git@gitlab.example.test:acme/front.git"},
+		{RelativePath: "local"},
+		{RelativePath: "odd", RepoOriginURL: "not a url"},
+	}
+	found, err := fx.svc.ImportFromCI(ctx, "ws")
+	if err != nil {
+		t.Fatalf("ImportFromCI: %v", err)
+	}
+	got := map[string]string{}
+	for _, f := range found.Files {
+		got[f.Repo] = f.Repository
+	}
+	want := map[string]string{"": "", "back": "github:Acme/Back", "front": "gitlab:acme/front@gitlab.example.test", "local": "", "odd": ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("file repositories = %v, want %v", got, want)
 	}
 }

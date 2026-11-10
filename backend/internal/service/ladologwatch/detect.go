@@ -80,7 +80,11 @@ type Occurrence struct {
 	// ServiceInstances is how many instances of the service were attached
 	// when the incident was seen, over every source.
 	ServiceInstances int
-	Incident         Incident
+	// Repository is the canonical id of the repository the occurrence's
+	// issue goes to: its target's, or else the project's; empty when
+	// neither names one.
+	Repository string
+	Incident   Incident
 }
 
 // Detector gathers one log stream's lines into incidents. Give each instance
