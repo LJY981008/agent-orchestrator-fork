@@ -258,6 +258,13 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoLogFingerprintResponse":          "LadoLogFingerprintResponse",
 	"ControllersLadoLogIncidentListResponse":         "LadoLogIncidentListResponse",
 	"ControllersSetLadoLogFingerprintIgnoredRequest": "SetLadoLogFingerprintIgnoredRequest",
+
+	// The account usage limits (issue #92).
+	"ControllersLadoAccountKeyParam":             "LadoAccountKeyParam",
+	"ControllersLadoAccountLimitResponse":        "LadoAccountLimitResponse",
+	"ControllersLadoAccountLimitListResponse":    "LadoAccountLimitListResponse",
+	"ControllersReleaseLadoAccountLimitRequest":  "ReleaseLadoAccountLimitRequest",
+	"ControllersReleaseLadoAccountLimitResponse": "ReleaseLadoAccountLimitResponse",
 }
 
 func ladoOperations() []operation {
@@ -638,7 +645,7 @@ func ladoOperations() []operation {
 			reqBody:    controllers.WriteLadoKnowledgeNoteRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoKnowledgeNoteResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
 		},
-	}, append(ladoSetupOperations(), ladoLogWatchOperations()...)...)
+	}, append(append(ladoSetupOperations(), ladoLogWatchOperations()...), ladoAccountLimitOperations()...)...)
 }
 
 // ladoSetupOperations are the local setup routes (step 7 plan §13). Routes
@@ -802,6 +809,25 @@ func ladoLogWatchOperations() []operation {
 			pathParams: []any{controllers.LadoLogFingerprintIDParam{}},
 			reqBody:    controllers.SetLadoLogFingerprintIgnoredRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoLogFingerprintResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+	}
+}
+
+// ladoAccountLimitOperations are the account usage limit routes (issue #92).
+// No response carries the account's identity.
+func ladoAccountLimitOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/lado/account-limits", id: "listLadoAccountLimits", tag: "lado",
+			summary: "List the account usage limits LADO recorded, held or released; new workers on an account wait while its limit is active",
+			resps:   ladoResps(http.StatusOK, controllers.LadoAccountLimitListResponse{}),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/account-limits/{accountKey}/release", id: "releaseLadoAccountLimit", tag: "lado",
+			summary:    "Release an active account usage limit by hand, such as after logging in to another account; LADO records the reason in the audit log, tells the LADO projects' orchestrators, checks the account_limited waits again and resumes the workers the limit stopped",
+			pathParams: []any{controllers.LadoAccountKeyParam{}},
+			reqBody:    controllers.ReleaseLadoAccountLimitRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.ReleaseLadoAccountLimitResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
 		},
 	}
 }

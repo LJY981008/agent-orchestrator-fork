@@ -1220,6 +1220,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/account-limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the account usage limits LADO recorded, held or released; new workers on an account wait while its limit is active */
+        get: operations["listLadoAccountLimits"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/account-limits/{accountKey}/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Release an active account usage limit by hand, such as after logging in to another account; LADO records the reason in the audit log, tells the LADO projects' orchestrators, checks the account_limited waits again and resumes the workers the limit stopped */
+        post: operations["releaseLadoAccountLimit"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/alerts/{alertId}/seen": {
         parameters: {
             query?: never;
@@ -7060,6 +7094,42 @@ export interface components {
             /** @description Hash of the trimmed text; empty when the file was not read. */
             sha256: string;
         };
+        LadoAccountLimitListResponse: {
+            limits: components["schemas"]["LadoAccountLimitResponse"][];
+        };
+        LadoAccountLimitResponse: {
+            accountId: string;
+            /** @description <provider>:<account id>; device-claude and device-codex are the device's own login. */
+            accountKey: string;
+            /** @description The limit still holds: it was not released and its reset has not come. New workers on the account wait while it holds. */
+            active: boolean;
+            /** Format: date-time */
+            detectedAt: string;
+            /** @description LADO recorded which login hit the limit, so it can tell when the key is logged in to another account. */
+            identityKnown: boolean;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            /**
+             * @description Why LADO released the limit.
+             * @enum {string}
+             */
+            releaseReason?: "reset" | "account_changed" | "manual" | "turn_completed";
+            /**
+             * Format: date-time
+             * @description When LADO released the limit; omitted while it holds.
+             */
+            releasedAt?: null | string;
+            /** @description How many account_limited waits there were when LADO released the limit. */
+            releasedWaiting: number;
+            /** Format: date-time */
+            resetAt: string;
+            /** @description LADO guessed the reset time; the limit message did not say it. */
+            resetGuessed: boolean;
+            /** @description The session LADO saw the limit in. */
+            sessionId?: string;
+            /** Format: date-time */
+            updatedAt: string;
+        };
         LadoAlertListResponse: {
             alerts: components["schemas"]["LadoAlertResponse"][];
         };
@@ -9984,6 +10054,17 @@ export interface components {
             platform?: "ios" | "android";
             /** @description Expo push token, e.g. ExponentPushToken[...]. Optional: omitted when the phone has no push token yet. */
             token?: string;
+        };
+        ReleaseLadoAccountLimitRequest: {
+            /** @description Why the limit no longer holds, such as the developer logging in to another account; 1 to 500 characters, kept in the audit log. */
+            reason: string;
+        };
+        ReleaseLadoAccountLimitResponse: {
+            limit: components["schemas"]["LadoAccountLimitResponse"];
+            /** @description LADO released the limit. */
+            released: boolean;
+            /** @description How many account_limited waits LADO checks again now. */
+            waiting: number;
         };
         ReloadConversationMCPServersResponse: {
             servers: components["schemas"]["ConversationMCPServerPayload"][];
@@ -15431,6 +15512,116 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoAccountLimits: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoAccountLimitListResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    releaseLadoAccountLimit: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The account key, <provider>:<account id> such as claude:device-claude (the ':' may be sent as %3A). */
+                accountKey: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReleaseLadoAccountLimitRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReleaseLadoAccountLimitResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };

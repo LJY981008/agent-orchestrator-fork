@@ -49,6 +49,9 @@ type LadoController struct {
 	Relay LadoRelayService
 	// LogWatch is the production log watch of each project (issue #87).
 	LogWatch LadoLogWatchService
+	// AccountLimits lists the account usage limits LADO holds new workers
+	// for and releases one by hand (issue #92).
+	AccountLimits LadoAccountLimitService
 }
 
 const (
@@ -106,6 +109,7 @@ func (c *LadoController) Register(r chi.Router) {
 	c.registerKnowledge(r)
 	c.registerRelay(r)
 	c.registerLogWatch(r)
+	c.registerAccountLimits(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {
