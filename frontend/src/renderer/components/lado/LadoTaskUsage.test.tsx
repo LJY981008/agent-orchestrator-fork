@@ -15,6 +15,7 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoTaskUsage: vi.fn(),
 	fetchLadoAlerts: vi.fn(),
 	markLadoAlertSeen: vi.fn(),
+	fetchLadoAccountLimits: vi.fn(),
 }));
 
 const DOLLAR = 1_000_000_000;
@@ -196,6 +197,45 @@ describe("LadoTaskUsage", () => {
 		expect(lado.markLadoAlertSeen).toHaveBeenCalledWith(7);
 		await user.click(screen.getByRole("button", { name: "Mark all seen" }));
 		await waitFor(() => expect(lado.markLadoAlertSeen).toHaveBeenCalledWith(8));
+	});
+
+	it("offers to release the account limit on the newest limited alert while a limit holds", async () => {
+		vi.mocked(lado.fetchLadoTaskUsage).mockResolvedValue(usage());
+		vi.mocked(lado.fetchLadoAlerts).mockResolvedValue([
+			alert({ id: 9, kind: "limited", sessionId: "demo-8", value: 1_793_732_400 }),
+			alert({ id: 8, kind: "limit_resumed", sessionId: "demo-8", value: 1 }),
+			alert({ id: 7, kind: "limited", sessionId: "demo-8", value: 1_793_732_400, seenAt: "2026-11-03T10:00:00Z" }),
+		]);
+		vi.mocked(lado.fetchLadoAccountLimits).mockResolvedValue([{
+			accountKey: "claude:device-claude", provider: "claude", accountId: "device-claude", active: true, identityKnown: true,
+			detectedAt: "2026-11-03T10:30:00Z", resetAt: "2026-11-03T19:00:00Z", releasedWaiting: 0, resetGuessed: false, updatedAt: "2026-11-10T14:00:00Z",
+		}]);
+		renderWithClient(<LadoTaskUsage projectId="demo" taskId="lado-task-1" />);
+
+		const rows = await screen.findAllByTestId("lado-usage-alert");
+		expect(await within(rows[0]).findByRole("button", { name: "Release limit (I switched accounts)" })).toBeInTheDocument();
+		expect(within(rows[1]).queryByTestId("lado-account-limit-release")).not.toBeInTheDocument();
+		expect(within(rows[2]).queryByTestId("lado-account-limit-release")).not.toBeInTheDocument();
+	});
+
+	it("shows no limit release on a limited alert once no limit holds", async () => {
+		vi.mocked(lado.fetchLadoTaskUsage).mockResolvedValue(usage());
+		vi.mocked(lado.fetchLadoAlerts).mockResolvedValue([alert({ id: 9, kind: "limited", sessionId: "demo-8", value: 1_793_732_400 })]);
+		vi.mocked(lado.fetchLadoAccountLimits).mockResolvedValue([]);
+		renderWithClient(<LadoTaskUsage projectId="demo" taskId="lado-task-1" />);
+
+		await screen.findByTestId("lado-usage-alert");
+		await waitFor(() => expect(lado.fetchLadoAccountLimits).toHaveBeenCalled());
+		expect(screen.queryByTestId("lado-account-limit-release")).not.toBeInTheDocument();
+	});
+
+	it("reads no account limits without a limited alert", async () => {
+		vi.mocked(lado.fetchLadoTaskUsage).mockResolvedValue(usage());
+		vi.mocked(lado.fetchLadoAlerts).mockResolvedValue([alert({ id: 7 })]);
+		renderWithClient(<LadoTaskUsage projectId="demo" taskId="lado-task-1" />);
+
+		await screen.findByTestId("lado-usage-alert");
+		expect(lado.fetchLadoAccountLimits).not.toHaveBeenCalled();
 	});
 
 	it("reads the usage again every minute while it shows", async () => {

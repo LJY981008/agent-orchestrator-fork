@@ -21,6 +21,7 @@ vi.mock("../../lib/lado", async (original) => ({
 	cancelLadoTask: vi.fn(),
 	fetchLadoTaskView: vi.fn(),
 	fetchLadoTaskParts: vi.fn(),
+	fetchLadoAccountLimits: vi.fn(),
 }));
 
 vi.mock("../../lib/lado-log-watch", async (original) => ({
@@ -784,4 +785,64 @@ test("a log task shows its mark before the incidents are read", async () => {
 	const card = (await screen.findByText("Add login")).closest("[data-testid='lado-task-card']") as HTMLElement;
 	expect(card).toHaveAttribute("data-log-incident", "true");
 	expect(within(card).getByTestId("lado-card-log-incident")).toHaveTextContent("Production error");
+});
+
+/** An active limit on this device's Claude login (issue #92). */
+const activeLimit: lado.LadoAccountLimit = {
+	accountKey: "claude:device-claude",
+	provider: "claude",
+	accountId: "device-claude",
+	active: true,
+	identityKnown: true,
+	detectedAt: "2026-10-19T14:00:00Z",
+	resetAt: "2026-10-19T19:00:00Z",
+	releasedWaiting: 0,
+	resetGuessed: false,
+	updatedAt: "2026-10-19T14:00:00Z",
+};
+
+test("a card that waits on an account limit offers to release it without opening the task", async () => {
+	const user = userEvent.setup();
+	const worker: lado.LadoPlanWorker = { requestId: "req-1", phase: "waiting", waitingReason: "account_limited" };
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, state: "queued", stateReason: "account_limited", queue: entry({ reason: "account_limited" }) },
+		{ ...task, id: "lado-task-2", plan: { requestPending: true, requestedAt: "2026-10-19T09:10:00Z", worker }, issue: { ...task.issue, title: "Plan waits" } },
+		{ ...task, id: "lado-task-3", state: "queued", stateReason: "slot_global", issue: { ...task.issue, title: "Slot waits" } },
+	]);
+	vi.mocked(lado.fetchLadoAccountLimits).mockResolvedValue([activeLimit]);
+	renderLane();
+
+	const queued = within(await screen.findByTestId("lado-queued-lane"));
+	const limited = (await queued.findAllByTestId("lado-task-card")).find((card) => card.getAttribute("data-task-id") === "lado-task-1");
+	if (!limited) throw new Error("no limited card");
+	const release = await within(limited).findByRole("button", { name: "Release limit (I switched accounts)" });
+	const planCard = within(await screen.findByTestId("lado-plan-review-lane")).getByTestId("lado-task-card");
+	expect(await within(planCard).findByTestId("lado-account-limit-release")).toBeInTheDocument();
+	const slotCard = queued.getAllByTestId("lado-task-card").find((card) => card.getAttribute("data-task-id") === "lado-task-3");
+	expect(within(slotCard as HTMLElement).queryByTestId("lado-account-limit-release")).not.toBeInTheDocument();
+
+	await user.click(release);
+	const dialog = await screen.findByTestId("lado-account-limit-dialog");
+	// A click inside the dialog stays there too.
+	await user.click(within(dialog).getByText("Claude · this device's login"));
+	expect(screen.queryByTestId("lado-task-dialog")).not.toBeInTheDocument();
+	expect(lado.fetchLadoTaskView).not.toHaveBeenCalled();
+});
+
+test("a card that waits on an account limit shows no release once no limit holds", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, state: "queued", stateReason: "account_limited", queue: entry({ reason: "account_limited" }) }]);
+	vi.mocked(lado.fetchLadoAccountLimits).mockResolvedValue([{ ...activeLimit, active: false, releaseReason: "account_changed", releasedAt: "2026-10-19T15:00:00Z" }]);
+	renderLane();
+
+	await screen.findByText("Add login");
+	await waitFor(() => expect(lado.fetchLadoAccountLimits).toHaveBeenCalled());
+	expect(screen.queryByTestId("lado-account-limit-release")).not.toBeInTheDocument();
+});
+
+test("cards that wait on no account limit read no limits", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task, { ...task, id: "lado-task-2", state: "queued", stateReason: "slot_global" }]);
+	renderLane();
+
+	expect(await screen.findAllByTestId("lado-task-card")).toHaveLength(2);
+	expect(lado.fetchLadoAccountLimits).not.toHaveBeenCalled();
 });

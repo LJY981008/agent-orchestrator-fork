@@ -5,7 +5,9 @@
 // where the time went; this tab watches the spending, so it reads again every
 // minute while it is open and on the task's watch and alert events. Both name
 // sessions with the same role labels and show the same elapsed time once the
-// task merged; the investigation metrics stay on the Timings tab.
+// task merged; the investigation metrics stay on the Timings tab. The newest
+// limited alert offers to release the account limit while one holds, for a
+// developer who switched accounts (issue #92).
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useLadoAlerts, useLadoTaskUsage, useMarkLadoAlertsSeen } from "../../hooks/useLado";
@@ -15,6 +17,7 @@ import { ladoAlertText, ladoCostText, ladoTokensText } from "../../lib/lado-usag
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import { LadoAccountLimitRelease } from "./LadoAccountLimitRelease";
 import { ladoDurationText, roleKeys } from "./LadoTaskTimings";
 
 const endKeys = {
@@ -111,6 +114,8 @@ function Alerts({ projectId, taskId }: { projectId: string; taskId: string }) {
 	const alerts = useLadoAlerts(projectId, { taskId });
 	const markSeen = useMarkLadoAlertsSeen(projectId);
 	const unseen = (alerts.data ?? []).filter((alert) => !alert.seenAt).map((alert) => alert.id);
+	// The alerts come newest first; one release button is enough.
+	const newestLimited = alerts.data?.find((alert) => alert.kind === "limited")?.id;
 	return (
 		<section className="flex flex-col gap-2" aria-label={t("lado.usage.alerts")}>
 			<div className="flex min-w-0 items-center gap-3">
@@ -143,6 +148,7 @@ function Alerts({ projectId, taskId }: { projectId: string; taskId: string }) {
 							text={ladoAlertText(t, alert, i18n.language)}
 							time={new Date(alert.createdAt).toLocaleString(i18n.language, { dateStyle: "medium", timeStyle: "short" })}
 							busy={markSeen.isPending}
+							limitRelease={alert.id === newestLimited}
 							onSeen={() => markSeen.mutate([alert.id])}
 						/>
 					))}
@@ -158,12 +164,15 @@ function AlertRow({
 	text,
 	time,
 	busy,
+	limitRelease,
 	onSeen,
 }: {
 	alert: LadoAlert;
 	text: string;
 	time: string;
 	busy: boolean;
+	/** Offers to release the account limit, while one holds. */
+	limitRelease: boolean;
 	onSeen: () => void;
 }) {
 	const { t } = useTranslation();
@@ -186,6 +195,7 @@ function AlertRow({
 				<span className="hidden shrink-0 font-mono text-2xs text-passive sm:inline" title={alert.sessionId}>{alert.sessionId}</span>
 			) : null}
 			<span className="shrink-0 tabular-nums text-2xs text-muted-foreground">{time}</span>
+			{limitRelease ? <LadoAccountLimitRelease /> : null}
 			{seen ? null : (
 				<Button
 					type="button"

@@ -948,3 +948,20 @@ describe("LADO merge refusals and GitLab protection", () => {
 		expect(ladoProtectionPartText(ko, "integration_status")).toBe("LADO의 lado/integration 상태 게시");
 	});
 });
+
+describe("LADO account limit errors", () => {
+	it("translates the release refusals in every language", () => {
+		const daemon = "The daemon's English text";
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const code of ["LADO_ACCOUNT_LIMIT_NOT_FOUND", "LADO_ACCOUNT_LIMIT_NOT_ACTIVE"]) {
+				const text = ladoErrorText(t, new LadoApiError(daemon, code));
+				expect(text, `${locale} ${code}`).not.toBe(daemon);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\.|{{|}}/);
+			}
+		}
+		const ko = createFullAppI18n("ko").t;
+		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_ACCOUNT_LIMIT_NOT_FOUND"))).toBe("LADO 에 이 계정의 사용 한도 기록이 없습니다.");
+		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_ACCOUNT_LIMIT_NOT_ACTIVE"))).toBe("이 계정의 사용 한도는 이미 풀렸거나 리셋 시각이 지났습니다.");
+	});
+});

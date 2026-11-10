@@ -78,6 +78,9 @@ export type LadoAlert = components["schemas"]["LadoAlertResponse"];
 export type LadoUnseenAlertCounts = components["schemas"]["LadoUnseenAlertCountsResponse"];
 export type LadoAlertKind = LadoAlert["kind"];
 export type LadoWatchSettings = components["schemas"]["LadoWatchSettingsResponse"];
+/** An account usage limit LADO recorded, held or released (issue #92). */
+export type LadoAccountLimit = components["schemas"]["LadoAccountLimitResponse"];
+export type LadoAccountLimitRelease = components["schemas"]["ReleaseLadoAccountLimitResponse"];
 export type LadoWatchSettingsResolved = components["schemas"]["LadoWatchSettingsResolved"];
 export type LadoWatchSettingsValues = components["schemas"]["LadoWatchSettingsValues"];
 export type LadoQueueItem = components["schemas"]["LadoQueueItemResponse"];
@@ -203,6 +206,8 @@ export const ladoUnseenAlertCountsQueryKey = (projectId: string) => ["lado", "al
 export const ladoAlertsQueryKey = (projectId: string, filter: LadoAlertFilter) =>
 	["lado", "alerts", projectId, filter.taskId ?? "", filter.unseen === true] as const;
 export const ladoWatchSettingsQueryRoot = ["lado", "watch-settings"] as const;
+/** The account usage limits; not a project's, since an account serves every project (issue #92). */
+export const ladoAccountLimitsQueryKey = ["lado", "account-limits"] as const;
 /** The global row's key without a project. */
 export const ladoWatchSettingsQueryKey = (projectId?: string) => ["lado", "watch-settings", projectId ?? ""] as const;
 
@@ -910,5 +915,26 @@ export async function updateLadoWatchSettings(projectId: string | undefined, val
 		? await apiClient.PUT("/api/v1/lado/projects/{projectId}/watch-settings", { params: { path: { projectId } }, body })
 		: await apiClient.PUT("/api/v1/lado/watch-settings", { body });
 	if (error) throw ladoError(error, "Could not save the watch settings");
+	return data;
+}
+
+/** The account usage limits LADO recorded, held or released (issue #92). */
+export async function fetchLadoAccountLimits(): Promise<LadoAccountLimit[]> {
+	const { data, error } = await apiClient.GET("/api/v1/lado/account-limits");
+	if (error) throw ladoError(error, "Could not load the account limits");
+	return data.limits;
+}
+
+/**
+ * Releases an active account limit by hand, such as after logging in to
+ * another account; the daemon keeps the reason in its audit log. The key's
+ * ":" goes as %3A, which the daemon reads back.
+ */
+export async function releaseLadoAccountLimit(accountKey: string, reason: string): Promise<LadoAccountLimitRelease> {
+	const { data, error } = await apiClient.POST("/api/v1/lado/account-limits/{accountKey}/release", {
+		params: { path: { accountKey } },
+		body: { reason },
+	});
+	if (error) throw ladoError(error, "Could not release the account limit");
 	return data;
 }
