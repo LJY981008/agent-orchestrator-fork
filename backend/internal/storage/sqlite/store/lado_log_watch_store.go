@@ -173,7 +173,7 @@ func (s *Store) PutLadoLogWatchSettings(ctx context.Context, settings domain.Lad
 			for j, target := range src.Targets {
 				n, err := q.UpdateLadoLogTarget(ctx, gen.UpdateLadoLogTargetParams{
 					SourceID: string(src.ID), Kind: string(target.Kind), Value: target.Value,
-					ComposeProject: target.ComposeProject, Service: target.Service,
+					ComposeProject: target.ComposeProject, Service: target.Service, Repository: target.Repository,
 					Paused: ladoBool(target.Paused), Position: int64(j), UpdatedAt: at,
 					ID: string(target.ID), ProjectID: project,
 				})
@@ -186,7 +186,8 @@ func (s *Store) PutLadoLogWatchSettings(ctx context.Context, settings domain.Lad
 				err = q.InsertLadoLogTarget(ctx, gen.InsertLadoLogTargetParams{
 					ID: string(target.ID), SourceID: string(src.ID), Kind: string(target.Kind),
 					Value: target.Value, ComposeProject: target.ComposeProject, Service: target.Service,
-					Paused: ladoBool(target.Paused), Position: int64(j), CreatedAt: at, UpdatedAt: at,
+					Repository: target.Repository, Paused: ladoBool(target.Paused), Position: int64(j),
+					CreatedAt: at, UpdatedAt: at,
 				})
 				if isSQLiteUnique(err) {
 					return fmt.Errorf("target %s belongs to another project", target.ID)
@@ -644,6 +645,7 @@ func (s *Store) ladoLogWatchSettingsFromGen(ctx context.Context, q *gen.Queries,
 			Value:          t.Value,
 			ComposeProject: t.ComposeProject,
 			Service:        t.Service,
+			Repository:     t.Repository,
 			Paused:         t.Paused != 0,
 		})
 	}

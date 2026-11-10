@@ -40,7 +40,8 @@ func ladoLogWatchFixture() domain.LadoLogWatchSettings {
 			Endpoint: "tcp://192.0.2.10:2375", CertKey: "key-1",
 			Targets: []domain.LadoLogTarget{
 				{ID: "tgt-1", Kind: domain.LadoLogTargetComposeProject, Value: "grp"},
-				{ID: "tgt-2", Kind: domain.LadoLogTargetComposeService, Value: "api", ComposeProject: "grp", Service: "grp/api", Paused: true},
+				{ID: "tgt-2", Kind: domain.LadoLogTargetComposeService, Value: "api", ComposeProject: "grp", Service: "grp/api",
+					Repository: "github:acme/web", Paused: true},
 			},
 		},
 		{
@@ -81,8 +82,9 @@ func mustReadLadoLogWatch(t *testing.T, s *sqlite.Store, project domain.ProjectI
 	return got
 }
 
-// Settings read back as saved; a later save removes the sources and targets
-// it no longer has, with their cursors, and keeps what the server set.
+// Settings read back as saved, with each target's issue repository; a later
+// save removes the sources and targets it no longer has, with their cursors,
+// changes the repositories of the ones it keeps, and keeps what the server set.
 func TestLadoLogWatchSettingsInTheStore(t *testing.T) {
 	s, _ := openLadoLogWatchStore(t)
 	ctx := context.Background()
@@ -124,7 +126,8 @@ func TestLadoLogWatchSettingsInTheStore(t *testing.T) {
 	}
 
 	// The second save drops src-2 and tgt-2 (which has a cursor), moves
-	// tgt-3 to src-1 and adds src-3; the server's values stay.
+	// tgt-3 to src-1 with a repository of its own, gives tgt-1 one and adds
+	// src-3; the server's values stay.
 	second := ladoLogWatchFixture()
 	second.Enabled = false
 	second.Exclude = []string{"healthcheck"}
@@ -132,8 +135,8 @@ func TestLadoLogWatchSettingsInTheStore(t *testing.T) {
 	second.Sources[0].DisplayName = "prod-1"
 	second.Sources[0].CertKey = "ignored"
 	second.Sources[0].Targets = []domain.LadoLogTarget{
-		{ID: "tgt-3", Kind: domain.LadoLogTargetLabel, Value: "com.example.watch=1"},
-		{ID: "tgt-1", Kind: domain.LadoLogTargetComposeProject, Value: "grp2"},
+		{ID: "tgt-3", Kind: domain.LadoLogTargetLabel, Value: "com.example.watch=1", Repository: "github:acme/web"},
+		{ID: "tgt-1", Kind: domain.LadoLogTargetComposeProject, Value: "grp2", Repository: "gitlab:gitlab.example.test/acme/api"},
 	}
 	second.Sources[1] = domain.LadoLogSource{ID: "src-3", DisplayName: "prod3", Endpoint: "tcp://198.51.100.7:2375", CertKey: "key-3"}
 	removed, err := s.PutLadoLogWatchSettings(ctx, second)
@@ -183,6 +186,22 @@ func TestLadoLogWatchSettingsInTheStore(t *testing.T) {
 	}
 	if got := mustReadLadoLogWatch(t, s, "mer"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("mer's settings changed by another project's save: %+v", got)
+	}
+
+	// A save that empties a target's repository makes it inherit the
+	// project's again.
+	third := second
+	third.UpdatedAt = ladoLogAt.Add(2 * time.Hour)
+	third.Sources = slices.Clone(second.Sources)
+	third.Sources[0].Targets = slices.Clone(second.Sources[0].Targets)
+	third.Sources[0].Targets[0].Repository = ""
+	if _, err := s.PutLadoLogWatchSettings(ctx, third); err != nil {
+		t.Fatalf("third PutLadoLogWatchSettings: %v", err)
+	}
+	got := mustReadLadoLogWatch(t, s, "mer").Sources[0].Targets
+	if len(got) != 2 || got[0].ID != "tgt-3" || got[0].Repository != "" ||
+		got[1].ID != "tgt-1" || got[1].Repository != "gitlab:gitlab.example.test/acme/api" {
+		t.Fatalf("targets after emptying tgt-3's repository = %+v", got)
 	}
 }
 

@@ -646,6 +646,7 @@ type LadoLogTarget struct {
 	Position       int64
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Repository     string
 }
 
 type LadoLogWatchSetting struct {
