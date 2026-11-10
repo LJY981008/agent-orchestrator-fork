@@ -221,7 +221,7 @@ func TestIssueImage(t *testing.T) {
 
 func TestIssueTextLeavesNoSecret(t *testing.T) {
 	in := issueTestInput()
-	in.Incident.ExceptionKind = "glpat-AbCdEf0123456789xyzw"
+	in.Incident.ExceptionKind = "glpat-" + "AbCdEf0123456789xyzw"
 	in.Incident.Location = "docker1.example.test"
 	in.Incident.Lines = []string{
 		"ERROR Authorization: Bearer abcdefghijklmnop12345",

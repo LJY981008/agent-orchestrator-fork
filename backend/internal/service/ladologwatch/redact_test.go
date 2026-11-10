@@ -37,9 +37,9 @@ func TestRedact(t *testing.T) {
 		},
 		{
 			name: "tracker tokens",
-			// The GitHub token is put together here so that the secret
+			// The GitLab and GitHub tokens are put together here so that the secret
 			// scanner does not take the test for a leak.
-			in:     "clone with glpat-AbCdEf0123456789xyzw and " + "ghp_" + strings.Repeat("Ab0", 12),
+			in:     "clone with " + "glpat-" + "AbCdEf0123456789xyzw and " + "ghp_" + strings.Repeat("Ab0", 12),
 			secret: []string{"AbCdEf0123456789xyzw", "ghp_Ab0"},
 			keep:   []string{"clone with"},
 		},
