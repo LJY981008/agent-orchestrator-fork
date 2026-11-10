@@ -25,8 +25,10 @@ import (
 // before the cursor are skipped (the Engine's since includes its own
 // second), and the cursor is saved every followCursorEvery and when a stream
 // ends. An instance with no cursor that was there when the Follower started
-// is read from its tail (tail=0); one that came while it watched is read
-// from its start time, or a newer cursor.
+// is read from its tail (tail=0), and when that stream ends before a line
+// came, from a minute before it opened; one that came while it watched is
+// read from its start time, or a newer cursor. A stream's backoff starts
+// over when it gave lines or stayed open for followHealthyFor.
 //
 // Each source has its own Follower, so one that cannot connect does not hold
 // up the others. The hooks are called one at a time.
@@ -43,6 +45,15 @@ const (
 	// followDiscoverGap is the least time between two Discovers that ended
 	// streams ask for.
 	followDiscoverGap = 2 * time.Second
+	// followHealthyFor is how long a stream must have stayed open for its
+	// end to start the backoff over: a quiet container's stream that a
+	// proxy's idle timeout or a dockerd restart cuts now and then is not a
+	// failing one.
+	followHealthyFor = 30 * time.Second
+	// followClockSlack is how far before the previous open a stream with no
+	// cursor yet is opened again, for a source clock that runs ahead of
+	// LADO's (the Engine reads since on its own clock).
+	followClockSlack = time.Minute
 )
 
 // FollowerHooks are how a Follower reads and saves cursors and hands on
@@ -109,7 +120,11 @@ type Follower struct {
 	cursorEvery   time.Duration
 	backoffMin    time.Duration
 	backoffMax    time.Duration
+	healthyFor    time.Duration
+	clockSlack    time.Duration
 	now           func() time.Time
+	// onWait, when set, is told each wait before a stream opens again.
+	onWait func(time.Duration)
 
 	// hookMu makes the hooks one at a time.
 	hookMu sync.Mutex
@@ -148,6 +163,8 @@ func NewFollower(src LogSource, hooks FollowerHooks) *Follower {
 		cursorEvery:   followCursorEvery,
 		backoffMin:    followBackoffFirst,
 		backoffMax:    followBackoffLast,
+		healthyFor:    followHealthyFor,
+		clockSlack:    followClockSlack,
 		now:           time.Now,
 		cursors:       map[followKey]*followCursor{},
 		status:        FollowerStatus{State: domain.LadoLogSourceStateOff},
@@ -318,6 +335,7 @@ func (f *Follower) followLoop(ctx context.Context, inst Instance, existing bool,
 	from, skip := f.followFrom(key, inst, existing)
 	for {
 		lines := 0
+		opened := f.now()
 		err := f.src.Follow(ctx, inst, from, func(stream string, ts time.Time, text string) {
 			if !skip.IsZero() && !ts.IsZero() && !ts.After(skip) {
 				return
@@ -338,15 +356,24 @@ func (f *Follower) followLoop(ctx context.Context, inst Instance, existing bool,
 		}
 		ended()
 		// A follow that ended reads on from the cursor after a wait, which
-		// starts over when the stream gave lines. Without a cursor yet it
-		// starts where it did before.
+		// starts over when the stream gave lines or stayed open a while.
+		// Without a cursor yet, one that started at its tail reads on from
+		// when it opened (less the clock slack), so the lines written while
+		// it waits are not lost; one that started at its start time starts
+		// there again.
 		if cursor, ok := f.cursor(key); ok {
 			from, skip = FollowFrom{Since: cursor}, cursor
+		} else if from.TailZero {
+			from = FollowFrom{Since: opened.Add(-f.clockSlack)}
 		}
-		if lines > 0 {
+		if lines > 0 || f.now().Sub(opened) >= f.healthyFor {
 			backoff.Reset()
 		}
-		timer := time.NewTimer(backoff.Next())
+		wait := backoff.Next()
+		if f.onWait != nil {
+			f.onWait(wait)
+		}
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

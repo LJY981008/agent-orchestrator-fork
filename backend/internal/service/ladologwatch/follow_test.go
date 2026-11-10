@@ -378,6 +378,102 @@ func TestFollowerReconnectsAfterStreamEnd(t *testing.T) {
 	}
 }
 
+// followTestClock is a clock the test moves.
+type followTestClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *followTestClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *followTestClock) add(d time.Duration) {
+	c.mu.Lock()
+	c.at = c.at.Add(d)
+	c.mu.Unlock()
+}
+
+// TestFollowerQuietStreamEndKeepsTheLinesWrittenMeanwhile: an instance that
+// was there before the watch and has not logged a line has no cursor. When
+// its stream ends, the next one reads from the clock slack before the last
+// open, not from the tail again, so the first error of a quiet service
+// written while the Follower waited is read.
+func TestFollowerQuietStreamEndKeepsTheLinesWrittenMeanwhile(t *testing.T) {
+	api := Instance{ID: dockerTestID("api1"), Name: "grp-api-1", Service: "grp/api", TargetID: "t1", StartedAt: followTestAt(0)}
+	src := newFollowTestSource(api)
+	src.addHistory(api.ID, followTestLine{stream: "stdout", ts: followTestAt(1), text: "before the watch"})
+	rec := newFollowTestRecorder()
+	f := newFollowTestFollower(src, rec.hooks())
+	clock := &followTestClock{at: followTestAt(10)}
+	f.now = clock.now
+	f.clockSlack = 2 * time.Second
+	stop := followTestRun(t, f)
+
+	followTestEventually(t, "the first follow", func() bool { return src.openCount(api.ID) == 1 })
+	// Written while the stream was open but not handed on (as when a
+	// proxy cut it), then the stream ends with no line.
+	src.addHistory(api.ID, followTestLine{stream: "stderr", ts: followTestAt(20), text: "first error"})
+	src.send(t, api.ID, followTestLine{end: true})
+	followTestEventually(t, "the first error", func() bool { return len(rec.texts()) >= 1 })
+	stop()
+
+	if got := rec.texts(); !followTestEqual(got, []string{"first error"}) {
+		t.Fatalf("lines = %q, want only the first error", got)
+	}
+	calls := src.calls(api.ID)
+	if len(calls) < 2 || !calls[0].from.TailZero {
+		t.Fatalf("follows = %+v, want tail=0 then since", calls)
+	}
+	if calls[1].from.TailZero || !calls[1].from.Since.Equal(followTestAt(8)) {
+		t.Fatalf("second follow from = %+v, want since %v (the open less the slack)", calls[1].from, followTestAt(8))
+	}
+}
+
+// TestFollowerBackoffStartsOverAfterALongOpenStream: a stream that ends
+// quickly with no line waits longer each time, and one that stayed open for
+// healthyFor starts the waits over even with no line.
+func TestFollowerBackoffStartsOverAfterALongOpenStream(t *testing.T) {
+	api := Instance{ID: dockerTestID("api1"), Name: "grp-api-1", Service: "grp/api", TargetID: "t1", StartedAt: followTestAt(0)}
+	src := newFollowTestSource(api)
+	rec := newFollowTestRecorder()
+	f := newFollowTestFollower(src, rec.hooks())
+	clock := &followTestClock{at: followTestAt(10)}
+	f.now = clock.now
+	f.healthyFor = time.Minute
+	var mu sync.Mutex
+	var waits []time.Duration
+	f.onWait = func(d time.Duration) {
+		mu.Lock()
+		waits = append(waits, d)
+		mu.Unlock()
+	}
+	got := func() []time.Duration {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Duration(nil), waits...)
+	}
+	stop := followTestRun(t, f)
+
+	src.send(t, api.ID, followTestLine{end: true})
+	src.send(t, api.ID, followTestLine{end: true})
+	followTestEventually(t, "the third follow", func() bool { return len(src.calls(api.ID)) == 3 })
+	clock.add(time.Minute)
+	src.send(t, api.ID, followTestLine{end: true})
+	followTestEventually(t, "three waits", func() bool { return len(got()) == 3 })
+	stop()
+
+	want := []time.Duration{f.backoffMin, 2 * f.backoffMin, f.backoffMin}
+	if w := got(); len(w) != 3 || w[0] != want[0] || w[1] != want[1] || w[2] != want[2] {
+		t.Fatalf("waits = %v, want %v", w, want)
+	}
+	if len(rec.texts()) != 0 {
+		t.Fatalf("lines = %q, want none", rec.texts())
+	}
+}
+
 func TestFollowerSkipsLinesAtOrBeforeTheCursor(t *testing.T) {
 	api := Instance{ID: dockerTestID("api1"), Name: "grp-api-1", TargetID: "t1", StartedAt: followTestAt(0)}
 	src := newFollowTestSource(api)
