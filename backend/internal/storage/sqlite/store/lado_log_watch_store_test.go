@@ -196,8 +196,7 @@ func TestLadoLogFingerprintOccurrencesAndPendingTask(t *testing.T) {
 		Location: "com.example.Api.run", Instance: "prod1/grp-api-1", Image: "app:1.2", Delta: 2,
 		FirstSeen: ladoLogAt, LastSeen: ladoLogAt.Add(time.Second),
 	}
-	f, err := s.AddLadoLogOccurrences(ctx, delta)
-	if err != nil {
+	if _, err := s.AddLadoLogOccurrences(ctx, delta); err != nil {
 		t.Fatalf("AddLadoLogOccurrences: %v", err)
 	}
 	second := delta
@@ -210,7 +209,7 @@ func TestLadoLogFingerprintOccurrencesAndPendingTask(t *testing.T) {
 	// newer image and time.
 	older := delta
 	older.Delta, older.Image, older.FirstSeen, older.LastSeen = 1, "app:1.0", time.Time{}, ladoLogAt
-	f, err = s.AddLadoLogOccurrences(ctx, older)
+	f, err := s.AddLadoLogOccurrences(ctx, older)
 	if err != nil {
 		t.Fatalf("AddLadoLogOccurrences older: %v", err)
 	}
@@ -433,6 +432,9 @@ func TestLadoLogWatchTaskSourceAndChanges(t *testing.T) {
 				op += ":fp"
 			}
 			out = append(out, op)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
 		}
 		return out
 	}

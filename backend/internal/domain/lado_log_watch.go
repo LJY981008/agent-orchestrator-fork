@@ -637,8 +637,10 @@ const (
 )
 
 // LadoLogPlanHeldMinCount is the plan part of a notice for a fingerprint
-// seen fewer than min times.
-func LadoLogPlanHeldMinCount(min int) string { return fmt.Sprintf("보류(%d회 미만)", min) }
+// seen fewer than minCount times.
+func LadoLogPlanHeldMinCount(minCount int) string {
+	return fmt.Sprintf("보류(%d회 미만)", minCount)
+}
 
 // The log watch notice lines (docs/LJY-PRD/TDD.md §5.1). The exception kind
 // and display names come from production logs and settings, so they are
@@ -659,13 +661,13 @@ func LadoNoticeLogIncident(issue int, kind string, count int, plan string) strin
 
 // LadoNoticeLogRecurred is the line for a new issue of a fingerprint whose
 // earlier issue was closed.
-func LadoNoticeLogRecurred(issue, previous int, kind string, plan string) string {
+func LadoNoticeLogRecurred(issue, previous int, kind, plan string) string {
 	return ladoNoticeLine(ladoNoticeLogRecurred, issue, ladoLogNoticeKind(kind), previous, ladoLogNoticeText(plan))
 }
 
 // LadoNoticeLogBurst is the line for a project that reached its hourly issue
 // cap.
-func LadoNoticeLogBurst(cap int) string { return ladoNoticeLine(ladoNoticeLogBurst, cap) }
+func LadoNoticeLogBurst(issueCap int) string { return ladoNoticeLine(ladoNoticeLogBurst, issueCap) }
 
 // LadoNoticeLogSourceDown is the line for a source disconnected for minutes.
 func LadoNoticeLogSourceDown(name string, minutes int) string {

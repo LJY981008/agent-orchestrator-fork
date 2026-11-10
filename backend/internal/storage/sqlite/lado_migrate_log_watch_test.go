@@ -176,6 +176,9 @@ func TestLadoMigrate0017ChangeTriggers(t *testing.T) {
 			}
 			got = append(got, c)
 		}
+		if err := rows.Err(); err != nil {
+			t.Fatal(err)
+		}
 		if !slices.Equal(got, want) {
 			t.Fatalf("%s: changes = %+v, want %+v", statement, got, want)
 		}
