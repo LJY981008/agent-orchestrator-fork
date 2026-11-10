@@ -48,7 +48,7 @@ func (q *Queries) DeletePendingLadoTask(ctx context.Context, id string) (int64, 
 const getLadoTask = `-- name: GetLadoTask :one
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE id = ?
 `
@@ -71,6 +71,7 @@ func (q *Queries) GetLadoTask(ctx context.Context, id string) (LadoTask, error) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CancelledAt,
+		&i.Source,
 	)
 	return i, err
 }
@@ -79,11 +80,11 @@ const insertLadoTask = `-- name: InsertLadoTask :one
 INSERT INTO lado_tasks (
     id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    created_at, updated_at, source
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 `
 
 type InsertLadoTaskParams struct {
@@ -100,6 +101,7 @@ type InsertLadoTaskParams struct {
 	IssueObservedAt     sql.NullTime
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
+	Source              string
 }
 
 func (q *Queries) InsertLadoTask(ctx context.Context, arg InsertLadoTaskParams) (LadoTask, error) {
@@ -117,6 +119,7 @@ func (q *Queries) InsertLadoTask(ctx context.Context, arg InsertLadoTaskParams) 
 		arg.IssueObservedAt,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.Source,
 	)
 	var i LadoTask
 	err := row.Scan(
@@ -134,6 +137,7 @@ func (q *Queries) InsertLadoTask(ctx context.Context, arg InsertLadoTaskParams) 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CancelledAt,
+		&i.Source,
 	)
 	return i, err
 }
@@ -150,7 +154,7 @@ SET issue_ref = ?,
 WHERE id = ? AND issue_ref IS NULL
 RETURNING id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 `
 
 type LinkLadoTaskIssueParams struct {
@@ -191,6 +195,7 @@ func (q *Queries) LinkLadoTaskIssue(ctx context.Context, arg LinkLadoTaskIssuePa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CancelledAt,
+		&i.Source,
 	)
 	return i, err
 }
@@ -198,7 +203,7 @@ func (q *Queries) LinkLadoTaskIssue(ctx context.Context, arg LinkLadoTaskIssuePa
 const listLadoTasksByProject = `-- name: ListLadoTasksByProject :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE project_id = ? AND issue_ref IS NOT NULL
 ORDER BY created_at, id
@@ -228,6 +233,7 @@ func (q *Queries) ListLadoTasksByProject(ctx context.Context, projectID string) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.CancelledAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -245,7 +251,7 @@ func (q *Queries) ListLadoTasksByProject(ctx context.Context, projectID string) 
 const listLadoTasksToObserve = `-- name: ListLadoTasksToObserve :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
 ORDER BY issue_observed_at, id
@@ -275,6 +281,7 @@ func (q *Queries) ListLadoTasksToObserve(ctx context.Context) ([]LadoTask, error
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.CancelledAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -321,7 +328,7 @@ func (q *Queries) ListLiveLadoTaskIssueRefs(ctx context.Context) ([]sql.NullStri
 const listLiveLadoTasks = `-- name: ListLiveLadoTasks :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE issue_ref IS NOT NULL AND cancelled_at IS NULL
 ORDER BY project_id, created_at, id
@@ -351,6 +358,7 @@ func (q *Queries) ListLiveLadoTasks(ctx context.Context) ([]LadoTask, error) {
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.CancelledAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -368,7 +376,7 @@ func (q *Queries) ListLiveLadoTasks(ctx context.Context) ([]LadoTask, error) {
 const listPendingLadoTasks = `-- name: ListPendingLadoTasks :many
 SELECT id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 FROM lado_tasks
 WHERE issue_ref IS NULL
 ORDER BY created_at, id
@@ -398,6 +406,7 @@ func (q *Queries) ListPendingLadoTasks(ctx context.Context) ([]LadoTask, error) 
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.CancelledAt,
+			&i.Source,
 		); err != nil {
 			return nil, err
 		}
@@ -457,7 +466,7 @@ SET agent = ?,
 WHERE id = ? AND issue_ref IS NOT NULL
 RETURNING id, project_id, issue_repo, issue_ref, agent, model,
     issue_title, issue_state, issue_url, issue_snapshot_sha256, issue_observed_at,
-    created_at, updated_at, cancelled_at
+    created_at, updated_at, cancelled_at, source
 `
 
 type SetLadoTaskPreferencesParams struct {
@@ -490,6 +499,7 @@ func (q *Queries) SetLadoTaskPreferences(ctx context.Context, arg SetLadoTaskPre
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.CancelledAt,
+		&i.Source,
 	)
 	return i, err
 }

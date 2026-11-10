@@ -234,6 +234,30 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoRunChecksResponse":             "LadoRunChecksResponse",
 	"ControllersLadoBranchProtectionResponse":      "LadoBranchProtectionResponse",
 	"ControllersLadoProjectProtectionResponse":     "LadoProjectProtectionResponse",
+
+	// The production log watch (issue #87).
+	"ControllersLadoLogSourceIDParam":                "LadoLogSourceIDParam",
+	"ControllersLadoLogFingerprintIDParam":           "LadoLogFingerprintIDParam",
+	"ControllersLadoLogTLSStoredResponse":            "LadoLogTLSStoredResponse",
+	"ControllersLadoLogSourceStatusResponse":         "LadoLogSourceStatusResponse",
+	"ControllersLadoLogTargetStatusResponse":         "LadoLogTargetStatusResponse",
+	"ControllersLadoLogTargetResponse":               "LadoLogTargetResponse",
+	"ControllersLadoLogSourceResponse":               "LadoLogSourceResponse",
+	"ControllersLadoLogWatchResponse":                "LadoLogWatchResponse",
+	"ControllersUpdateLadoLogTargetRequest":          "UpdateLadoLogTargetRequest",
+	"ControllersUpdateLadoLogSourceRequest":          "UpdateLadoLogSourceRequest",
+	"ControllersUpdateLadoLogWatchRequest":           "UpdateLadoLogWatchRequest",
+	"ControllersImportLadoLogTLSRequest":             "ImportLadoLogTLSRequest",
+	"ControllersCheckLadoLogSourceRequest":           "CheckLadoLogSourceRequest",
+	"ControllersLadoLogInstanceResponse":             "LadoLogInstanceResponse",
+	"ControllersLadoLogWatchCheckResponse":           "LadoLogWatchCheckResponse",
+	"ControllersLadoLogCIHostResponse":               "LadoLogCIHostResponse",
+	"ControllersLadoLogCIFileResponse":               "LadoLogCIFileResponse",
+	"ControllersLadoLogCIImportResponse":             "LadoLogCIImportResponse",
+	"ControllersLadoLogInstanceCountResponse":        "LadoLogInstanceCountResponse",
+	"ControllersLadoLogFingerprintResponse":          "LadoLogFingerprintResponse",
+	"ControllersLadoLogIncidentListResponse":         "LadoLogIncidentListResponse",
+	"ControllersSetLadoLogFingerprintIgnoredRequest": "SetLadoLogFingerprintIgnoredRequest",
 }
 
 func ladoOperations() []operation {
@@ -614,7 +638,7 @@ func ladoOperations() []operation {
 			reqBody:    controllers.WriteLadoKnowledgeNoteRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoKnowledgeNoteResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
 		},
-	}, ladoSetupOperations()...)
+	}, append(ladoSetupOperations(), ladoLogWatchOperations()...)...)
 }
 
 // ladoSetupOperations are the local setup routes (step 7 plan §13). Routes
@@ -717,6 +741,67 @@ func ladoSetupOperations() []operation {
 			summary:    "Put back what an adoption removed; needs a human-presence proof from the AO desktop app",
 			pathParams: []any{controllers.LadoSetupAdoptionIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			resps:      ladoResps(http.StatusOK, controllers.LadoSetupRestoreResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
+		},
+	}
+}
+
+// ladoLogWatchOperations are the production log watch routes (issue #87).
+// No response carries TLS material or its paths.
+func ladoLogWatchOperations() []operation {
+	projectID := []any{controllers.LadoProjectIDParam{}}
+	sourceID := []any{controllers.LadoLogSourceIDParam{}}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/log-watch", id: "getLadoLogWatch", tag: "lado",
+			summary:    "Get a project's production log watch settings, its Docker hosts and their targets, which TLS copies LADO keeps and how the daemon follows each source; the defaults when the project never saved any",
+			pathParams: projectID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogWatchResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/projects/{projectId}/log-watch", id: "updateLadoLogWatch", tag: "lado",
+			summary:    "Replace a project's production log watch settings; endpoints are tcp://host:port only, a source or target left out is deleted with its read cursors, and LADO only reads from the Engine API",
+			pathParams: projectID,
+			reqBody:    controllers.UpdateLadoLogWatchRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogWatchResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/projects/{projectId}/log-watch/sources/{sourceId}/tls", id: "importLadoLogWatchTLS", tag: "lado",
+			summary:    "Copy a log source's CA and, optionally, client certificate and key under ~/.ao after checking them; encrypted keys are refused and nothing returns their content or paths",
+			pathParams: sourceID,
+			reqBody:    controllers.ImportLadoLogTLSRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogWatchResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodDelete, path: "/api/v1/lado/projects/{projectId}/log-watch/sources/{sourceId}/tls", id: "deleteLadoLogWatchTLS", tag: "lado",
+			summary:    "Delete LADO's copies of a log source's TLS material",
+			pathParams: sourceID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogWatchResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/projects/{projectId}/log-watch/check", id: "checkLadoLogWatch", tag: "lado",
+			summary:    "Check a saved log source: its Engine and API versions and the running containers each target matches; a failed connection is ok false",
+			pathParams: projectID,
+			reqBody:    controllers.CheckLadoLogSourceRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogWatchCheckResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/projects/{projectId}/log-watch/import-ci", id: "importLadoLogWatchCI", tag: "lado",
+			summary:    "Read the project's .gitlab-ci.yml files for Docker host and compose project candidates; saves nothing",
+			pathParams: projectID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogCIImportResponse{}, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/log-watch/incidents", id: "listLadoLogWatchIncidents", tag: "lado",
+			summary:    "List a project's log incident fingerprints with their counts per instance: every one of an open task and the newest 200 others",
+			pathParams: projectID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogIncidentListResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/projects/{projectId}/log-watch/fingerprints/{fingerprintId}/ignore", id: "setLadoLogFingerprintIgnored", tag: "lado",
+			summary:    "Ignore a log incident fingerprint, so it makes no issue, or stop ignoring it",
+			pathParams: []any{controllers.LadoLogFingerprintIDParam{}},
+			reqBody:    controllers.SetLadoLogFingerprintIgnoredRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoLogFingerprintResponse{}, http.StatusBadRequest, http.StatusNotFound),
 		},
 	}
 }

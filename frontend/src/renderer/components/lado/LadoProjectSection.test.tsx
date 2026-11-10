@@ -27,6 +27,9 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoKnowledge: vi.fn(),
 }));
 
+// The production log watch card (issue #87) has tests of its own.
+vi.mock("./LadoLogWatchCard", () => ({ LadoLogWatchCard: () => <div data-testid="lado-log-watch-card" /> }));
+
 /** The worker watch card below (issue #42), with nothing saved. */
 const watchDefaults = { compactWindow: 200_000, taskCostCents: 100_00, sessionCostCents: 30_00, sessionCompactions: 3, stallMinutes: 120, wakeEnabled: true };
 const watchSettings: lado.LadoWatchSettings = {
@@ -124,6 +127,7 @@ describe("LadoProjectSection", () => {
 		expect(capSelect()).toHaveTextContent("3");
 		expect(rowOf(modeSwitch())).toHaveTextContent("When on, this project's workers start only from plans you approved.");
 		expect(lado.fetchLadoProjectSettings).toHaveBeenCalledWith("demo");
+		expect(screen.getByTestId("lado-log-watch-card")).toBeInTheDocument();
 	});
 
 	it("follows the mode with the project's checks and branch protection", async () => {

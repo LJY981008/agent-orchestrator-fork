@@ -897,6 +897,11 @@ func Run() error {
 	ladoVerify.Start(ctx) // LADO fork: verifies the workers' PRs, which may message them
 	// LADO fork: the worker watch may message workers too (issue #42).
 	ladoWatchDone := startLadoWatch(ctx, lado.watch, ladoWatchInterval, log)
+	// LADO fork: the production log watch (issue #87) may request plans,
+	// which start plan workers; it reads only, and closes its log streams
+	// when ctx ends.
+	ladoLogWatch := wireLadoLogWatch(cfg, store, ladoTasks, log)
+	ladoLogWatchDone := ladoLogWatch.Start(ctx)
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
 	// Push-device registry: persisted phones that receive OS push notifications.
@@ -1046,6 +1051,7 @@ func Run() error {
 		LadoCompact:        lado.watch.launch,
 		LadoKnowledge:      ladoKnowledge,
 		LadoRelay:          lado.relay,
+		LadoLogWatch:       ladoLogWatch,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1247,6 +1253,8 @@ func Run() error {
 	<-ladoQueueDone // LADO fork
 	<-ladoSetupDone // LADO fork
 	<-ladoWatchDone // LADO fork
+	// LADO fork: the log watch has closed every log stream.
+	<-ladoLogWatchDone
 	// LADO fork: the verification loop and the check commands it started.
 	ladoVerify.Wait()
 	// Detach chat controllers before stopping the lifecycle stack. Persistent

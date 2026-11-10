@@ -12,6 +12,9 @@
 // The Timings tab shows how long each stage took; the Usage tab what its
 // sessions spend and the alerts LADO raised (issue #42). The Relays tab lists
 // the developer instructions LADO relayed to the task's workers (issue #49).
+// A task the production log watch created leads its Plan tab with the
+// incident: how often and where LADO saw it, and the action that ignores it
+// (issue #87).
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
@@ -57,6 +60,7 @@ import {
 	ladoTrackedPRs,
 	ladoTrackedPRStatus,
 } from "./lado-task-status";
+import { LadoTaskLogIncident } from "./LadoCardLogIncident";
 import { LadoPartsProgress, LadoPlanParts } from "./LadoParts";
 import { LadoPlanReview } from "./LadoPlanReview";
 import { LadoPlanWorkerStatus } from "./LadoPlanWorkerStatus";
@@ -306,6 +310,7 @@ function TaskViewBody({
 							) : null}
 						</div>
 						<TabsContent value="plan" className="flex flex-none flex-col gap-4">
+							<LadoTaskLogIncident projectId={projectId} task={task} />
 							{view.task.state === "cancelled" ? (
 								<p className="text-control text-settings-muted">{t("lado.view.cancelled")}</p>
 							) : null}

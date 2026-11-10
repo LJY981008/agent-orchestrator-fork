@@ -251,6 +251,7 @@ func ladoTaskResponse(task domain.LadoTask) LadoTaskResponse {
 		ID:          string(task.ID),
 		ProjectID:   string(task.ProjectID),
 		Repository:  domain.LadoRepoRef(task.Repo),
+		Source:      task.Source,
 		State:       string(task.State()),
 		StateReason: task.StateReason(),
 		Issue: LadoTaskIssueResponse{

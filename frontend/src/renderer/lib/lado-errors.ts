@@ -132,6 +132,15 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_RULES_CHANGED: "lado.error.rulesChanged",
 	LADO_RULES_LOAD_FAILED: "lado.error.internal",
 	LADO_RULES_SAVE_FAILED: "lado.error.internal",
+	// The production log watch (issue #87).
+	LADO_LOG_WATCH_INVALID: "lado.error.logWatchInvalid",
+	LADO_LOG_CERT_INVALID: "lado.error.logCertInvalid",
+	LADO_LOG_CERT_KEY_ENCRYPTED: "lado.error.logCertKeyEncrypted",
+	LADO_LOG_SOURCE_NOT_FOUND: "lado.error.logSourceNotFound",
+	LADO_LOG_FINGERPRINT_NOT_FOUND: "lado.error.logFingerprintNotFound",
+	LADO_LOG_CI_NOT_FOUND: "lado.error.logCINotFound",
+	LADO_LOG_CI_UNSUPPORTED: "lado.error.logCIUnsupported",
+	LADO_LOG_WATCH_FAILED: "lado.error.internal",
 	// The queue, its runs and the dispatch settings (step 6).
 	LADO_TASK_ALREADY_QUEUED: "lado.error.taskAlreadyQueued",
 	LADO_TASK_RUNNING: "lado.error.taskRunning",
@@ -375,6 +384,8 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 		paths: paths.join(", "),
 		revision: text("currentRevision"),
 		ownerPath: text("ownerPath"),
+		// The log watch setting the daemon refused (#87).
+		field: text("field"),
 		// The PRs a merge waits for, by number, as their URLs end (#64).
 		waitingFor: (Array.isArray(details?.waitingFor) ? details.waitingFor : [])
 			.filter((url): url is string => typeof url === "string")

@@ -22,6 +22,7 @@ import {
 	type LadoTask,
 } from "./lado";
 import type { LadoAlertEvent } from "./lado-alert-notifications";
+import { ladoLogWatchProjectQueryKey } from "./lado-log-watch";
 import { ladoSetupQueryRoot } from "./lado-setup";
 
 type LadoEventPayload =
@@ -100,6 +101,9 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 	const watchTasks = new Set<string>();
 	const alertProjects = new Set<string>();
 	const newAlerts = new Map<number, LadoAlertEvent>();
+	// The production log watch (issue #87): projects whose settings, sources
+	// or fingerprints changed.
+	const logWatchProjects = new Set<string>();
 	return {
 		note(payload: LadoEventPayload, event?: LadoEventEnvelope): boolean {
 			// A session's limit, stall or compactions changed, or an alert was
@@ -115,6 +119,12 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 						newAlerts.set(payload.alertId, { alertId: payload.alertId, projectId, taskId });
 					}
 				}
+				return true;
+			}
+			// A log watch's settings or a fingerprint changed: the project's log
+			// watch settings and its incidents, which the board's cards count.
+			if (payload?.kind === "lado_log_watch" && typeof payload.projectId === "string" && payload.projectId) {
+				logWatchProjects.add(payload.projectId);
 				return true;
 			}
 			if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
@@ -215,6 +225,8 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 			watchTasks.clear();
 			for (const projectId of alertProjects) invalidate(ladoAlertsProjectQueryKey(projectId));
 			alertProjects.clear();
+			for (const projectId of logWatchProjects) invalidate(ladoLogWatchProjectQueryKey(projectId));
+			logWatchProjects.clear();
 			if (newAlerts.size > 0) {
 				const raised = [...newAlerts.values()];
 				newAlerts.clear();

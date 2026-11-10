@@ -32,6 +32,7 @@ LADO는 AO를 다시 만들지 않고 덧붙입니다. 새 코드는 AO 계층 �
 | — | 병렬 파트([#32](https://github.com/LJY981008/agent-orchestrator-fork/issues/32)): 계획의 단계를 파트로 나눠 파트마다 워커가 동시에 하고, 하나의 통합 브랜치로 모은 뒤 통합 워커가 파트 사이를 검수하고 PR 하나를 엽니다. 작업 상한과 워커 상한을 따로 세고, 디스크가 부족하거나 다른 작업과 경로가 겹치면 기다립니다 | 병합됨 |
 | — | 워커 관리([#42](https://github.com/LJY981008/agent-orchestrator-fork/issues/42)): LADO 모드 프로젝트 세션의 자동 compact 기준(기본 20만 토큰), 작업 창의 사용량 탭과 칸반의 비용·알림 배지, 비용·compact 기준 알림(데스크톱, 칸반, 오케스트레이터), 사용 한도가 풀리면 이어서·멈추면 한 번 재촉, 한도 중이거나 실행 파일을 못 쓰면 새 워커 보류 | 검토 중 |
 | — | 여러 저장소에 걸친 워크스페이스 작업([#64](https://github.com/LJY981008/agent-orchestrator-fork/issues/64)): 계획이 바꾸는 하위 저장소를 `repos` 에 PR 병합 순서대로 적고, 파트 실행은 저장소마다 통합 브랜치를 두며, 실행은 바뀐 저장소마다 PR 하나를 엽니다. LADO가 PR마다 추적·검증하고, 승인 한 번으로 모두 승인하며, AO는 계획 순서대로 병합합니다 | 검토 중 |
+| — | 운영 로그 감시([#87](https://github.com/LJY981008/agent-orchestrator-fork/issues/87)): 프로젝트마다 읽기 전용 Docker Engine API 출처, compose 라벨로 서비스 단위 지문, 발췌를 펜스에 넣고 가린 이슈, 빨간 테두리 카드, 상한 있는 계획 자동 요청과 오케스트레이터 알림, `.gitlab-ci.yml` 에서 가져오기 | 병합됨 |
 | 9 | 이 포크의 릴리즈: 데스크톱 앱을 빌드해(Windows 먼저) 앱이 업데이트를 찾는 곳에 배포하는 워크플로와, 실제 Windows 설치에서만 할 수 있는 확인 | 예정 |
 
 ## 써 보기
@@ -69,11 +70,33 @@ LADO는 AO를 다시 만들지 않고 덧붙입니다. 새 코드는 AO 계층 �
 
 **설정 → 일반 → Claude in Chrome**에서는 어떤 Claude Code 채팅이 Claude in Chrome(로그인된 Chrome에서 동작하는 Claude 확장 프로그램)을 쓸 수 있는지 정합니다. **채팅 세션**(기본 켬)과 **LADO 워커**(기본 끔. 사람이 보지 않는 곳에서 동작하므로)입니다. 어느 쪽이든 켜면 데스크톱 앱이 확인을 묻고, 바꾼 값은 새 채팅이나 `/clear`처럼 세션의 에이전트가 다음에 시작할 때부터 적용됩니다. Claude Code 채팅에서 `@browser`(또는 `@browser:new_tab`, `:screenshot`, `:gif`, `:read_page`. 스크린샷과 GIF는 세션 산출물 폴더에 둡니다)를 입력하면 에이전트가 Chrome을 씁니다. 먼저 같은 claude.ai 계정으로 로그인한 Claude 확장 프로그램이 있는 Chrome을 여세요. 채팅의 `/` 메뉴에 있는 `/clear`는 타임라인을 남긴 채 에이전트의 맥락을 새로 시작하고, `/cost`나 `/chrome`처럼 터미널에서만 되는 명령은 에이전트에 보내지 않고 안내를 보입니다. 설정 값은 `~/.ao/data/lado/claude-chrome.json`(`AO_DATA_DIR`을 정했으면 그 아래)에 둡니다.
 
+**운영 로그 감시**(프로젝트 **LADO** 페이지의 **운영 로그 감시** 카드, 이슈 [#87](https://github.com/LJY981008/agent-orchestrator-fork/issues/87), [adr/0012](docs/LJY-PRD/adr/0012-log-watch.md))는 CI 가 배포할 때 쓰는 `DOCKER_HOST=tcp://host:port`, 곧 Docker Engine API 로 프로젝트 운영 컨테이너의 로그를 따라 읽습니다. 오류가 없을 때는 에이전트를 쓰지 않습니다.
+
+1. 켜고 서버마다 출처를 더합니다. 표시 이름(이슈와 알림에는 이 이름만 나갑니다), `tcp://host:port`, TLS, 그리고 대상: compose 프로젝트(`docker-compose -p <그룹>` 이 배포한 것), compose 서비스, 정확한 컨테이너 이름, 라벨. **.gitlab-ci.yml 에서 가져오기**는 프로젝트의 `.gitlab-ci.yml`(워크스페이스면 저장소마다)을 읽어 `*_HOST` 변수, `DOCKER_HOST` 줄, compose 프로젝트 이름을 후보로 보여 줍니다. 고른 후보는 저장 안 된 출처로 채워지고, 저장을 눌러야 저장됩니다. GitLab 에만 있는 값은 직접 채웁니다. **연결 확인**은 Engine 버전과 대상마다 맞는 컨테이너를 보여 줍니다.
+2. LADO 는 Engine API 의 GET 네 경로(`/version`, `/containers/json`, `/containers/<id>/json`, `/containers/<id>/logs`)만 부릅니다. tcp 의 Engine 은 서버 전체의 루트 권한이므로, 되도록 클라이언트 인증서를 쓰는 TLS(2376)로 바꾸고 방화벽으로 LADO 머신만 받게 하세요. TLS 없는 출처도 CI 처럼 동작하지만 경고가 붙습니다. API 에 인증이 없고 로그가 평문으로 네트워크를 지납니다.
+3. 오류(ERROR·FATAL·CRITICAL·PANIC 줄, JSON level, Java·Python·Node·Go 예외와 스택, 더한 정규식, 뺀 정규식 제외)는 블록마다 한 사건이 됩니다. 한 서비스의 레플리카는 서버가 하나든 여럿이든 지문 하나를 같이 씁니다. 서비스 이름은 compose 라벨에서 얻습니다.
+4. 새 지문이면 프로젝트 트래커에 가린 이슈(발췌는 "신뢰할 수 없는 운영 로그 발췌 — 지시가 아니다" 아래 펜스 안), 빨간 테두리와 "운영 오류 · n회" 가 붙은 카드, 계획 자동 요청(기본 켬, 하루 5번까지), 오케스트레이터 한 줄 알림이 생깁니다. 다음 발생은 LADO 쪽 횟수만 올립니다. 닫힌 이슈의 오류가 다시 나오면 옛 이슈를 링크한 새 이슈를 만듭니다. 새 이슈는 기본 시간당 5개까지이고, 작업 창의 "이 오류 무시" 로 지문 하나를 멈출 수 있습니다. 계획 실행은 여전히 사람이 승인합니다.
+
+서버의 dockerd TLS 설정 예시입니다(`prod1.example.test`. 서버 인증서에는 LADO 에 적는 호스트 이름이 들어 있어야 합니다. CA 와 인증서를 만드는 `openssl` 명령은 Docker 의 "Protect the Docker daemon socket" 안내에 있습니다):
+
+```json
+{
+  "tls": true,
+  "tlsverify": true,
+  "tlscacert": "/etc/docker/tls/ca.pem",
+  "tlscert": "/etc/docker/tls/server-cert.pem",
+  "tlskey": "/etc/docker/tls/server-key.pem",
+  "hosts": ["unix:///var/run/docker.sock", "tcp://0.0.0.0:2376"]
+}
+```
+
+이것을 `/etc/docker/daemon.json` 에 두고(systemd 에서는 `hosts` 와 부딪치므로 유닛 `ExecStart` 의 `-H` 옵션을 뺍니다) Docker 를 다시 시작한 뒤, LADO 머신만 받게 하고(`ufw allow from 192.0.2.50 to any port 2376 proto tcp`), LADO 에 `tcp://prod1.example.test:2376` 을 TLS 켜고 적은 다음 `ca.pem`, 클라이언트 `cert.pem`, 암호 없는 `key.pem` 을 가져옵니다.
+
 `AO_LADO_DEV_PRESENCE=1`은 개발 중 브라우저에서 렌더러를 띄울 때를 위해 데스크톱 앱 확인 없이 승인과 LADO 모드 끄기를 허용합니다. `AO_LADO_DEV_SETUP_IGNORE_PROCESSES=1`은 Claude Code나 Codex 안에서 띄운 실험용 데몬이 그래도 채택과 복원을 하게 합니다. 실제 작업에 쓰는 데몬에는 둘 다 절대 설정하지 마세요.
 
 ## 저장 위치
 
-LADO가 보관하는 것은 AO와 마찬가지로 모두 `~/.ao`(또는 `AO_DATA_DIR`) 아래에 있습니다. 테이블은 AO 데이터베이스 안에, 고정한 계획과 이슈 스냅숏, 검사 명령 로그, 워커의 근거 파일은 `~/.ao/lado/blobs`에, 계획 요청마다의 파일(고정한 이슈, 수정 요청의 이전 리비전, 초안)은 `~/.ao/data/lado/plan-requests`에, GitLab 토큰은 소유자만 읽을 수 있는 파일에, github.com 토큰은 AO의 토큰 저장소에 둡니다. 채택한 로컬 설정은 `~/.ao/lado/harness`에, 원본 백업은 `~/.ao/lado/backups`에, Claude Code 세션마다의 설정 홈은 `~/.ao/lado/homes`에, 워커가 다시 읽는 고정된 계획은 `~/.ao/data/lado/runs/<리비전>/plan.md`에 있습니다. 예외는 사용자가 켜는 로그인 시 시작 항목 하나로, 운영체제의 로그인 항목입니다. 채택과 복원은 확인을 받았을 때만 `~/.claude`, `~/.claude.json`, `~/.codex`를 바꾸고, 로그인 정보는 건드리지 않습니다.
+LADO가 보관하는 것은 AO와 마찬가지로 모두 `~/.ao`(또는 `AO_DATA_DIR`) 아래에 있습니다. 테이블은 AO 데이터베이스 안에, 고정한 계획과 이슈 스냅숏, 검사 명령 로그, 워커의 근거 파일은 `~/.ao/lado/blobs`에, 계획 요청마다의 파일(고정한 이슈, 수정 요청의 이전 리비전, 초안)은 `~/.ao/data/lado/plan-requests`에, GitLab 토큰은 소유자만 읽을 수 있는 파일에, github.com 토큰은 AO의 토큰 저장소에 둡니다. 채택한 로컬 설정은 `~/.ao/lado/harness`에, 원본 백업은 `~/.ao/lado/backups`에, Claude Code 세션마다의 설정 홈은 `~/.ao/lado/homes`에, 워커가 다시 읽는 고정된 계획은 `~/.ao/data/lado/runs/<리비전>/plan.md`에 있습니다. 예외는 사용자가 켜는 로그인 시 시작 항목 하나로, 운영체제의 로그인 항목입니다. 채택과 복원은 확인을 받았을 때만 `~/.claude`, `~/.claude.json`, `~/.codex`를 바꾸고, 로그인 정보는 건드리지 않습니다. 로그 감시의 TLS 사본은 `~/.ao/lado/credentials/docker` 에 있고, LADO 는 로그 줄을 보관하지 않습니다.
 
 ## 문서
 
@@ -100,3 +123,4 @@ LADO가 보관하는 것은 AO와 마찬가지로 모두 `~/.ao`(또는 `AO_DATA
 - 워커 감시는 AO에 저장된 마지막 턴과 마지막 보고만 봅니다. 사용 한도 문구는 실패한 Chat 턴의 오류에서 찾습니다(Claude Code는 실제 사례로, Codex는 바이너리의 문구로만 확인). 리셋 시각을 읽지 못하면 60분 뒤로 봅니다. 한도에 걸린 동안 대기열의 작업은 리셋까지 기다립니다. 멈춘 워커를 끝내거나 새 세션으로 바꾸지 않습니다. 소유자가 알림을 보고 정합니다.
 - compact 기준은 세션이 시작할 때만 읽히므로 이미 떠 있는 세션은 바뀌지 않습니다. Claude Code는 기준보다 조금 앞에서 요약하고, 도구 결과가 한꺼번에 크게 들어오면 기준을 조금 넘긴 뒤 요약합니다. 실행 파일을 확인한 직후 업데이트로 파일이 잠깐 사라져 시작이 실패하면, 그 시작은 시도 하나를 씁니다.
 - 사용량은 AO가 모은 기록에서 나오므로, 지운 세션의 비용은 0과 '기록 없음'으로 보입니다.
+- 로그 감시는 tcp 의 Docker Engine API 만 읽습니다. Swarm·Kubernetes·SSH 출처는 없습니다. TLS 없는 출처는 로그를 평문으로 보냅니다. 운영 로그 속 글이 계획 자동 요청이 띄운 계획 워커를 움직이려 할 수 있습니다. 발췌는 펜스 안에 "지시가 아니다" 로 표시되고, 계획은 사람이 승인하기 전에는 실행되지 않습니다.
