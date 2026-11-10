@@ -77,28 +77,79 @@ WHERE task_id = ?
 ORDER BY created_at, session_id;
 
 -- name: UpsertLadoAccountLimit :exec
--- Records an account at its limit; a later record replaces the reset time
--- and keeps when LADO first saw the limit.
-INSERT INTO lado_account_limits (account_key, session_id, reset_at, reset_guess, detected_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
+-- Records an account at its limit. A record over a live row (not released,
+-- reset still ahead) replaces the reset time and keeps when LADO first saw the
+-- limit and the first known identity. A record over a released or expired row
+-- starts the limit again: a new detected_at and identity, and no release.
+-- Every value in SET reads the row as it was before the update.
+INSERT INTO lado_account_limits (account_key, session_id, identity, reset_at, reset_guess, detected_at, updated_at)
+VALUES (sqlc.arg(account_key), sqlc.arg(session_id), sqlc.arg(identity), sqlc.arg(reset_at), sqlc.arg(reset_guess), sqlc.arg(detected_at), sqlc.arg(updated_at))
 ON CONFLICT (account_key) DO UPDATE SET
     session_id = excluded.session_id,
+    identity = CASE
+        WHEN lado_account_limits.released_at IS NULL AND lado_account_limits.reset_at > excluded.detected_at
+            AND lado_account_limits.identity <> '' THEN lado_account_limits.identity
+        ELSE excluded.identity
+    END,
     reset_at = excluded.reset_at,
     reset_guess = excluded.reset_guess,
+    detected_at = CASE
+        WHEN lado_account_limits.released_at IS NULL AND lado_account_limits.reset_at > excluded.detected_at
+            THEN lado_account_limits.detected_at
+        ELSE excluded.detected_at
+    END,
+    released_at = NULL,
+    release_reason = '',
+    released_waiting = 0,
     updated_at = excluded.updated_at;
+
+-- name: MarkLadoAccountLimitReleased :execrows
+-- Releases a limit that holds; a released row is not written again, so of
+-- callers racing to release it only one sees a row.
+UPDATE lado_account_limits
+SET released_at = sqlc.arg(released_at),
+    release_reason = sqlc.arg(release_reason),
+    released_waiting = 0,
+    updated_at = sqlc.arg(released_at)
+WHERE account_key = sqlc.arg(account_key) AND released_at IS NULL;
+
+-- name: SetLadoAccountLimitReleasedWaiting :execrows
+-- Records how many waits a released limit left to start.
+UPDATE lado_account_limits
+SET released_waiting = sqlc.arg(released_waiting)
+WHERE account_key = sqlc.arg(account_key) AND released_at IS NOT NULL;
 
 -- name: DeleteLadoAccountLimit :execrows
 DELETE FROM lado_account_limits WHERE account_key = ?;
 
 -- name: GetLadoAccountLimit :one
-SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at
+SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at,
+    identity, released_at, release_reason, released_waiting
 FROM lado_account_limits
 WHERE account_key = ?;
 
 -- name: ListLadoAccountLimits :many
-SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at
+SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at,
+    identity, released_at, release_reason, released_waiting
 FROM lado_account_limits
 ORDER BY account_key;
+
+-- name: CountLadoAccountLimitedWaits :one
+-- Counts what waits now for an account limit: open queue entries no lease
+-- holds, waiting parts and plan worker requests not started, whose waiting
+-- reason is the given one. A wait does not record the provider.
+SELECT CAST(
+    (SELECT COUNT(*) FROM lado_queue_entries q
+        WHERE q.waiting_reason = sqlc.arg(reason)
+          AND q.dispatched_session_id IS NULL AND q.failed_at IS NULL AND q.superseded_at IS NULL
+          AND q.cancelled_at IS NULL AND q.review_required_reason = '' AND q.blocked_reason = ''
+          AND q.parts_started_at IS NULL AND q.lease_token IS NULL)
+    + (SELECT COUNT(*) FROM lado_task_parts p
+        WHERE p.waiting_reason = sqlc.arg(reason) AND p.state = 'waiting')
+    + (SELECT COUNT(*) FROM lado_plan_requests r
+        WHERE r.waiting_reason = sqlc.arg(reason) AND r.kind = 'worker'
+          AND r.worker_started_at IS NULL AND r.failed_at IS NULL AND r.cleaned_at IS NULL)
+    AS INTEGER) AS waits;
 
 -- name: InsertLadoAlert :one
 -- Raises an alert once; a second raise of the same task, session, kind and

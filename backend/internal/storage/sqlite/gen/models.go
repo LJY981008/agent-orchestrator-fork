@@ -417,12 +417,16 @@ type Cue struct {
 }
 
 type LadoAccountLimit struct {
-	AccountKey string
-	SessionID  string
-	ResetAt    time.Time
-	ResetGuess int64
-	DetectedAt time.Time
-	UpdatedAt  time.Time
+	AccountKey      string
+	SessionID       string
+	ResetAt         time.Time
+	ResetGuess      int64
+	DetectedAt      time.Time
+	UpdatedAt       time.Time
+	Identity        string
+	ReleasedAt      sql.NullTime
+	ReleaseReason   string
+	ReleasedWaiting int64
 }
 
 type LadoAlert struct {
