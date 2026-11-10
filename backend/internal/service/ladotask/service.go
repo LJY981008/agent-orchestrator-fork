@@ -283,6 +283,37 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (domain.LadoTask, 
 	case utf8.RuneCountInString(body) > maxBodyRunes:
 		return domain.LadoTask{}, apierr.Invalid("LADO_TASK_BODY_TOO_LONG", fmt.Sprintf("Keep the description within %d characters.", maxBodyRunes), map[string]any{"max": maxBodyRunes})
 	}
+	task, err := s.create(ctx, newTask{
+		ProjectID:  in.ProjectID,
+		Repository: in.Repository,
+		Title:      title,
+		Body:       body,
+		Agent:      in.Agent,
+		Model:      in.Model,
+	})
+	if err != nil {
+		return domain.LadoTask{}, err
+	}
+	return task, nil
+}
+
+// newTask is what create makes a task and its issue from. Create and
+// CreateFromLog differ only in where the text comes from and in Source.
+type newTask struct {
+	ProjectID  domain.ProjectID
+	Repository string
+	Title      string
+	Body       string
+	Agent      string
+	Model      string
+	Source     string
+}
+
+// create creates the issue for a new task, then links it to the task, as
+// Create documents. When LADO cannot confirm whether the tracker created the
+// issue, it returns the pending task (without an issue ref) together with the
+// LADO_ISSUE_CREATE_UNCONFIRMED error; on every other error the task is zero.
+func (s *Service) create(ctx context.Context, in newTask) (domain.LadoTask, error) {
 	repos, err := s.ladoRepos(ctx, in.ProjectID)
 	if err != nil {
 		return domain.LadoTask{}, err
@@ -301,6 +332,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (domain.LadoTask, 
 		ID:        s.newTaskID(),
 		ProjectID: in.ProjectID,
 		Repo:      repo,
+		Source:    in.Source,
 		Agent:     strings.TrimSpace(in.Agent),
 		Model:     strings.TrimSpace(in.Model),
 		CreatedAt: now,
@@ -309,7 +341,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (domain.LadoTask, 
 	if err != nil {
 		return domain.LadoTask{}, apierr.Internal("LADO_TASK_CREATE_FAILED", "Failed to save the task")
 	}
-	issue, err := client.CreateIssue(ctx, repo, title, issueBody(body, pending.ID))
+	issue, err := client.CreateIssue(ctx, repo, in.Title, issueBody(in.Body, pending.ID))
 	if err == nil {
 		return s.link(ctx, pending, repo, issue)
 	}
@@ -328,7 +360,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (domain.LadoTask, 
 		return domain.LadoTask{}, apierr.New(apierr.KindUnavailable, "LADO_ISSUE_CREATE_FAILED", fmt.Sprintf("Could not create the issue: %v", err), map[string]any{"reason": err.Error()})
 	default:
 		s.deps.Log.Warn("LADO could not confirm an issue creation; the task waits for the next check", "task", pending.ID, "err", err, "search_err", searchErr)
-		return domain.LadoTask{}, apierr.Unavailable("LADO_ISSUE_CREATE_UNCONFIRMED",
+		return pending, apierr.Unavailable("LADO_ISSUE_CREATE_UNCONFIRMED",
 			"LADO could not confirm whether the issue was created and will check again. If the task does not appear within a few minutes, try again.")
 	}
 }
