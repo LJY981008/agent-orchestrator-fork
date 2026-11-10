@@ -35,6 +35,10 @@ type LadoTask struct {
 	// IssueRef is the canonical issue id. It is empty only while LADO creates
 	// the issue, and such a task is never shown.
 	IssueRef IssueID
+	// Source is how the task came to be: LadoTaskSourceLog for a task the
+	// log watch created from a production incident, empty for one the
+	// developer created or imported.
+	Source string
 	// Agent and Model are the developer's choices for the task's execution.
 	Agent       string
 	Model       string

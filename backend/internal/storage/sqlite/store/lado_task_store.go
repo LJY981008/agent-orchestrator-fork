@@ -36,6 +36,7 @@ func (s *Store) CreateLadoTask(ctx context.Context, task domain.LadoTask) (domai
 		IssueObservedAt:     ladoNullTime(task.Issue.ObservedAt),
 		CreatedAt:           task.CreatedAt.UTC(),
 		UpdatedAt:           task.UpdatedAt.UTC(),
+		Source:              task.Source,
 	})
 	if isSQLiteUnique(err) {
 		return domain.LadoTask{}, domain.ErrLadoIssueHasTask
@@ -278,7 +279,8 @@ func (s *Store) cancelLadoTask(ctx context.Context, id domain.LadoTaskID, at tim
 }
 
 // DeletePendingLadoTask removes a task whose issue was never created. Tasks
-// with an issue are never deleted.
+// with an issue are never deleted. A log watch fingerprint that named the
+// task keeps its counts and loses the task (ON DELETE SET NULL).
 func (s *Store) DeletePendingLadoTask(ctx context.Context, id domain.LadoTaskID) error {
 	if err := s.writeMu.LockContext(ctx); err != nil {
 		return err
@@ -306,6 +308,7 @@ func ladoTaskFromGen(row gen.LadoTask) domain.LadoTask {
 		ProjectID: domain.ProjectID(row.ProjectID),
 		Repo:      repo,
 		IssueRef:  domain.IssueID(row.IssueRef.String),
+		Source:    row.Source,
 		Agent:     row.Agent,
 		Model:     row.Model,
 		Issue: domain.LadoObservedIssue{
