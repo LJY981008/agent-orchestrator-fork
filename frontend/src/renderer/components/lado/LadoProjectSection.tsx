@@ -3,7 +3,8 @@
 // once, then whether a task waits for another task's overlapping run (§5.4),
 // its check commands and whether its base branches are protected, and the
 // worker watch with its overrides of the global defaults (issue #42), and the
-// project's knowledge folder (issue #24).
+// project's knowledge folder (issue #24), and the production log watch
+// (issue #87).
 // The daemon refuses turning the mode on while tracker intake is on; turning
 // it off asks the desktop app to confirm, and a cancelled confirmation leaves
 // it on. The cap saves at once, also while the mode is off.
@@ -16,6 +17,7 @@ import { SettingsOptionMenu } from "../settings/SettingsOptionMenu";
 import { SettingsRow } from "../settings/SettingsRow";
 import { SettingsSection } from "../settings/SettingsSection";
 import { Switch } from "../ui/switch";
+import { LadoLogWatchCard } from "./LadoLogWatchCard";
 import { LadoProjectChecksCard } from "./LadoProjectChecksCard";
 import { LadoProjectKnowledgeCard } from "./LadoProjectKnowledgeCard";
 import { LadoProjectOverlapCard } from "./LadoProjectOverlapCard";
@@ -113,6 +115,7 @@ export function LadoProjectSection({ projectId }: { projectId: string }) {
 			<LadoProjectProtectionCard projectId={projectId} />
 			<LadoWatchSettingsCard projectId={projectId} />
 			<LadoProjectKnowledgeCard projectId={projectId} />
+			<LadoLogWatchCard projectId={projectId} />
 		</div>
 	);
 }

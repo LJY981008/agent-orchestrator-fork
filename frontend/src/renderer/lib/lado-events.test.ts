@@ -14,6 +14,7 @@ import {
 	ladoTaskViewQueryKey,
 } from "./lado";
 import { createLadoEventBatch } from "./lado-events";
+import { ladoLogIncidentsQueryKey, ladoLogWatchQueryKey } from "./lado-log-watch";
 import {
 	ladoSetupAdoptionQueryKey,
 	ladoSetupConflictsQueryKey,
@@ -216,5 +217,47 @@ describe("createLadoEventBatch and the worker watch", () => {
 		const { invalidated, onNewAlerts } = watched([{ kind: "lado_watch", projectId: "demo", taskId: "lado-task-1", sessionId: "demo-3" }]);
 		expect(invalidated).toEqual(["projectUsage", "taskUsage"]);
 		expect(onNewAlerts).not.toHaveBeenCalled();
+	});
+});
+
+// LADO fork: a log watch event (issue #87) refreshes the project's log watch
+// settings and its incidents, which the board's cards count.
+describe("createLadoEventBatch and the log watch", () => {
+	const logViews: Record<string, QueryKey> = {
+		settings: ladoLogWatchQueryKey("demo"),
+		incidents: ladoLogIncidentsQueryKey("demo"),
+		otherIncidents: ladoLogIncidentsQueryKey("other"),
+		tasks: ladoTasksQueryKey("demo"),
+	};
+
+	function invalidatedByLog(payload: Payload, event?: Envelope): string[] {
+		const queryClient = new QueryClient();
+		for (const key of Object.values(logViews)) queryClient.setQueryData(key, []);
+		const batch = createLadoEventBatch(queryClient);
+		expect(batch.note(payload, event)).toBe(true);
+		batch.flush((queryKey) => void queryClient.invalidateQueries({ queryKey }));
+		return Object.entries(logViews)
+			.filter(([, key]) => queryClient.getQueryState(key)?.isInvalidated)
+			.map(([name]) => name)
+			.sort();
+	}
+
+	it("refreshes the project's incidents and settings for a fingerprint change", () => {
+		expect(
+			invalidatedByLog(
+				{ kind: "lado_log_watch", projectId: "demo", fingerprintId: 4, op: "update" } as Payload,
+				{ type: "session_updated", projectId: "demo" },
+			),
+		).toEqual(["incidents", "settings"]);
+	});
+
+	it("refreshes them for a settings change without a fingerprint", () => {
+		expect(invalidatedByLog({ kind: "lado_log_watch", projectId: "demo", op: "settings" })).toEqual(["incidents", "settings"]);
+	});
+
+	it("leaves other projects alone and ignores an event without a project", () => {
+		expect(invalidatedByLog({ kind: "lado_log_watch", projectId: "other", op: "insert" })).toEqual(["otherIncidents"]);
+		const batch = createLadoEventBatch(new QueryClient());
+		expect(batch.note({ kind: "lado_log_watch" })).toBe(false);
 	});
 });

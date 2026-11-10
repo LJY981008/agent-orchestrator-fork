@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
+import * as logWatch from "../../lib/lado-log-watch";
 import { TooltipProvider } from "../ui/tooltip";
 import { LadoTaskDialog } from "./LadoTaskDialog";
 
@@ -24,6 +25,12 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoRules: vi.fn(),
 	approveLadoIntegration: vi.fn(),
 	mergeLadoPR: vi.fn(),
+}));
+
+vi.mock("../../lib/lado-log-watch", async (original) => ({
+	...await original<typeof import("../../lib/lado-log-watch")>(),
+	fetchLadoLogIncidents: vi.fn(),
+	setLadoLogFingerprintIgnored: vi.fn(),
 }));
 
 const task: lado.LadoTask = {
@@ -883,4 +890,53 @@ test("work merged without an integration approval says so and takes no decision"
 	expect(within(run).getByRole("status")).toHaveTextContent("Completed · Merged without an integration approval");
 	expect(run.querySelector("span.rounded-full")).toHaveClass("bg-[var(--color-status-needs-you)]");
 	for (const name of ["Approve integration…", "Merge"]) expect(within(run).queryByRole("button", { name })).not.toBeInTheDocument();
+});
+
+// LADO fork: the incident of a task the production log watch created (issue #87).
+const fingerprint: logWatch.LadoLogFingerprint = {
+	id: 42,
+	projectId: "demo",
+	fingerprint: "f".repeat(64),
+	service: "grp/api",
+	exceptionKind: "java.lang.NullPointerException",
+	location: "com.example.Api.handle",
+	count: 9,
+	firstSeenAt: "2026-11-10T00:00:00Z",
+	lastSeenAt: "2026-11-10T00:05:00Z",
+	ignored: false,
+	instances: [
+		{ instance: "prod1/grp-api-1", image: "grp/api:1.4.2", count: 6, lastSeenAt: "2026-11-10T00:05:00Z" },
+		{ instance: "prod2/grp-api-1", image: "grp/api:1.4.1", count: 3, lastSeenAt: "2026-11-10T00:04:00Z" },
+	],
+	taskId: "lado-task-1",
+};
+
+test("a log task leads with its incident, and the developer can ignore the error", async () => {
+	const logTask: lado.LadoTask = { ...task, source: "log" };
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(view({ task: logTask }));
+	vi.mocked(logWatch.fetchLadoLogIncidents).mockResolvedValueOnce([fingerprint]).mockResolvedValue([{ ...fingerprint, ignored: true }]);
+	vi.mocked(logWatch.setLadoLogFingerprintIgnored).mockResolvedValue({ ...fingerprint, ignored: true });
+	renderDialog();
+
+	const incident = await screen.findByTestId("lado-task-log-incident");
+	expect(within(incident).getByTestId("lado-card-log-incident")).toHaveTextContent("Production error · 9×");
+	expect(within(incident).getByText("grp/api")).toBeInTheDocument();
+	expect(within(incident).getByTestId("lado-log-instances")).toHaveTextContent("2 instances");
+	const rows = within(incident).getAllByTestId("lado-log-instance");
+	expect(rows[0]).toHaveTextContent("prod1/grp-api-1");
+	expect(rows[0]).toHaveTextContent("grp/api:1.4.2");
+	expect(rows[0]).toHaveTextContent("6×");
+
+	await userEvent.click(within(incident).getByRole("button", { name: "Ignore this error" }));
+	expect(logWatch.setLadoLogFingerprintIgnored).toHaveBeenCalledWith("demo", 42, true);
+	expect(await within(incident).findByRole("button", { name: "Stop ignoring" })).toBeInTheDocument();
+});
+
+test("a task the developer created shows no incident and reads none", async () => {
+	vi.mocked(lado.fetchLadoTaskView).mockResolvedValue(view());
+	renderDialog();
+
+	await screen.findByText("The plan is in the comments.");
+	expect(screen.queryByTestId("lado-task-log-incident")).not.toBeInTheDocument();
+	expect(logWatch.fetchLadoLogIncidents).not.toHaveBeenCalled();
 });
