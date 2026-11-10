@@ -1021,6 +1021,7 @@ func TestServiceCheck(t *testing.T) {
 
 	_, err = fx.svc.Check(ctx, "demo", "nope")
 	serviceAPIError(t, err, codeSourceNotFound)
+	fx.addProject("other", false)
 	_, err = fx.svc.Check(ctx, "other", "prod")
 	serviceAPIError(t, err, codeSourceNotFound)
 }
@@ -1146,6 +1147,7 @@ func TestServiceSettingsIncidentsAndIgnore(t *testing.T) {
 	if err != nil || len(fps) != 1 || fps[0].ID != 1 {
 		t.Fatalf("Incidents = %+v, %v", fps, err)
 	}
+	fx.addProject("none", false)
 	if fps, err := fx.svc.Incidents(ctx, "none"); err != nil || fps == nil || len(fps) != 0 {
 		t.Fatalf("Incidents of a project without any = %#v, %v", fps, err)
 	}
@@ -1164,5 +1166,48 @@ func TestServiceSettingsIncidentsAndIgnore(t *testing.T) {
 	serviceAPIError(t, err, codeFingerprintAbsent)
 	if fx.store.fingerprints[2].Ignored {
 		t.Fatal("another project's fingerprint was ignored")
+	}
+}
+
+// TestServiceUnknownProjectIsNotFound: the settings rows have no foreign key
+// to projects, so every method refuses a project AO does not have with
+// PROJECT_NOT_FOUND, and a PUT saves nothing. An archived project still
+// reads and saves its settings.
+func TestServiceUnknownProjectIsNotFound(t *testing.T) {
+	fx := newServiceFixture(t)
+	fx.addProject("demo", true)
+	ctx := context.Background()
+	in := domain.LadoLogWatchInput{Enabled: true, HourlyIssueCap: 5, AutoPlanDailyCap: 5, AutoPlanMinCount: 1, DisconnectAlertMinutes: 10,
+		Sources: []domain.LadoLogSourceInput{{DisplayName: "prod1", Endpoint: "tcp://192.0.2.10:2375",
+			Targets: []domain.LadoLogTargetInput{{Kind: domain.LadoLogTargetComposeProject, Value: "grp"}}}}}
+	const missing = domain.ProjectID("demo-typo")
+	calls := map[string]func() error{
+		"Settings":       func() error { _, err := fx.svc.Settings(ctx, missing); return err },
+		"UpdateSettings": func() error { _, err := fx.svc.UpdateSettings(ctx, missing, in); return err },
+		"ImportTLS": func() error {
+			_, err := fx.svc.ImportTLS(ctx, missing, "s1", domain.LadoLogTLSImport{CAPath: "/nowhere/ca.pem"})
+			return err
+		},
+		"DeleteTLS":    func() error { _, err := fx.svc.DeleteTLS(ctx, missing, "s1"); return err },
+		"Check":        func() error { _, err := fx.svc.Check(ctx, missing, "s1"); return err },
+		"ImportFromCI": func() error { _, err := fx.svc.ImportFromCI(ctx, missing); return err },
+		"Incidents":    func() error { _, err := fx.svc.Incidents(ctx, missing); return err },
+		"SetIgnored":   func() error { _, err := fx.svc.SetIgnored(ctx, missing, 1, true); return err },
+	}
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) { serviceAPIError(t, call(), "PROJECT_NOT_FOUND") })
+	}
+	if fx.store.puts != 0 {
+		t.Fatalf("settings of an unknown project were saved %d times", fx.store.puts)
+	}
+
+	fx.projects.mu.Lock()
+	fx.projects.records[0].ArchivedAt = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	fx.projects.mu.Unlock()
+	if _, err := fx.svc.UpdateSettings(ctx, "demo", in); err != nil {
+		t.Fatalf("UpdateSettings of an archived project: %v", err)
+	}
+	if view, err := fx.svc.Settings(ctx, "demo"); err != nil || len(view.Settings.Sources) != 1 {
+		t.Fatalf("Settings of an archived project = %+v, %v", view, err)
 	}
 }

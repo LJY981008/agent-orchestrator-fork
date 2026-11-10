@@ -41,6 +41,26 @@ func (s *Service) failed(what string, err error) error {
 	return apierr.New(apierr.KindInternal, codeFailed, "로그 감시를 처리하지 못했습니다: "+what, nil)
 }
 
+// project finds a project AO has (archived ones too), or fails with
+// PROJECT_NOT_FOUND: the settings rows have no foreign key to projects, so a
+// mistyped or deleted id would otherwise read the defaults and save settings
+// that belong to no project. Without a project list every id is known.
+func (s *Service) project(ctx context.Context, project domain.ProjectID) (domain.ProjectRecord, error) {
+	if s.deps.Projects == nil {
+		return domain.ProjectRecord{ID: string(project)}, nil
+	}
+	records, err := s.deps.Projects.ListProjects(ctx)
+	if err != nil {
+		return domain.ProjectRecord{}, s.failed("프로젝트 읽기", err)
+	}
+	for _, p := range records {
+		if domain.ProjectID(p.ID) == project {
+			return p, nil
+		}
+	}
+	return domain.ProjectRecord{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
+}
+
 // settings reads a project's settings, or the defaults of one that never
 // saved any.
 func (s *Service) settings(ctx context.Context, project domain.ProjectID) (domain.LadoLogWatchSettings, error) {
@@ -58,6 +78,14 @@ func (s *Service) settings(ctx context.Context, project domain.ProjectID) (domai
 // Settings is a project's log watch settings with what the runner knows of
 // its sources. A project that never saved any gets the defaults.
 func (s *Service) Settings(ctx context.Context, project domain.ProjectID) (domain.LadoLogWatchView, error) {
+	if _, err := s.project(ctx, project); err != nil {
+		return domain.LadoLogWatchView{}, err
+	}
+	return s.settingsView(ctx, project)
+}
+
+// settingsView is Settings of a project known to exist.
+func (s *Service) settingsView(ctx context.Context, project domain.ProjectID) (domain.LadoLogWatchView, error) {
 	settings, err := s.settings(ctx, project)
 	if err != nil {
 		return domain.LadoLogWatchView{}, err
@@ -90,6 +118,9 @@ func (s *Service) view(ctx context.Context, settings domain.LadoLogWatchSettings
 // targets get ids; the TLS copies of sources the settings no longer have are
 // deleted. The runner picks the change up at once.
 func (s *Service) UpdateSettings(ctx context.Context, project domain.ProjectID, in domain.LadoLogWatchInput) (domain.LadoLogWatchView, error) {
+	if _, err := s.project(ctx, project); err != nil {
+		return domain.LadoLogWatchView{}, err
+	}
 	if err := domain.ValidateLadoLogWatchInput(in); err != nil {
 		return domain.LadoLogWatchView{}, serviceInvalid(err)
 	}
@@ -168,7 +199,7 @@ func (s *Service) UpdateSettings(ctx context.Context, project domain.ProjectID, 
 		}
 	}
 	s.Kick()
-	return s.Settings(ctx, project)
+	return s.settingsView(ctx, project)
 }
 
 // serviceInvalid turns a refused input into LADO_LOG_WATCH_INVALID.
@@ -182,6 +213,9 @@ func serviceInvalid(err error) error {
 
 // source finds a saved source of a project.
 func (s *Service) source(ctx context.Context, project domain.ProjectID, id domain.LadoLogSourceID) (domain.LadoLogSource, error) {
+	if _, err := s.project(ctx, project); err != nil {
+		return domain.LadoLogSource{}, err
+	}
 	settings, err := s.settings(ctx, project)
 	if err != nil {
 		return domain.LadoLogSource{}, err
@@ -215,7 +249,7 @@ func (s *Service) ImportTLS(ctx context.Context, project domain.ProjectID, sourc
 		}
 	}
 	s.restartSource(source)
-	return s.Settings(ctx, project)
+	return s.settingsView(ctx, project)
 }
 
 // certError gives a refused TLS file its code. The CertStore's
@@ -242,7 +276,7 @@ func (s *Service) DeleteTLS(ctx context.Context, project domain.ProjectID, sourc
 		}
 	}
 	s.restartSource(source)
-	return s.Settings(ctx, project)
+	return s.settingsView(ctx, project)
 }
 
 // restartSource makes a source's Follower start over with its new TLS
@@ -296,21 +330,11 @@ func (s *Service) ImportFromCI(ctx context.Context, project domain.ProjectID) (d
 	if s.deps.Projects == nil {
 		return domain.LadoLogCIImport{}, apierr.Conflict(codeCIUnsupported, "이 프로젝트의 폴더를 알 수 없습니다", nil)
 	}
-	records, err := s.deps.Projects.ListProjects(ctx)
+	record, err := s.project(ctx, project)
 	if err != nil {
-		return domain.LadoLogCIImport{}, s.failed("프로젝트 읽기", err)
-	}
-	var record domain.ProjectRecord
-	found := false
-	for _, p := range records {
-		if domain.ProjectID(p.ID) == project {
-			record, found = p, true
-			break
-		}
+		return domain.LadoLogCIImport{}, err
 	}
 	switch {
-	case !found:
-		return domain.LadoLogCIImport{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
 	case !record.ArchivedAt.IsZero():
 		return domain.LadoLogCIImport{}, apierr.Conflict(codeCIUnsupported, "보관된 프로젝트입니다", nil)
 	case record.Kind.WithDefault() == domain.ProjectKindScratch:
@@ -396,6 +420,9 @@ func serviceReadCI(path string) (data []byte, note string, ok bool) {
 // Incidents lists a project's fingerprints: every one an open task leads to,
 // and the newest 200 others.
 func (s *Service) Incidents(ctx context.Context, project domain.ProjectID) ([]domain.LadoLogFingerprint, error) {
+	if _, err := s.project(ctx, project); err != nil {
+		return nil, err
+	}
 	fps, err := s.deps.Store.ListLadoLogIncidents(ctx, project, serviceIncidentLimit)
 	if err != nil {
 		return nil, s.failed("사건 읽기", err)
@@ -413,6 +440,9 @@ func (s *Service) Incidents(ctx context.Context, project domain.ProjectID) ([]do
 // SetIgnored puts a fingerprint on the project's ignore list, or takes it
 // off. An ignored fingerprint is only counted: it makes no issue.
 func (s *Service) SetIgnored(ctx context.Context, project domain.ProjectID, id domain.LadoLogFingerprintID, ignored bool) (domain.LadoLogFingerprint, error) {
+	if _, err := s.project(ctx, project); err != nil {
+		return domain.LadoLogFingerprint{}, err
+	}
 	fp, ok, err := s.deps.Store.LadoLogFingerprintByID(ctx, id)
 	if err != nil {
 		return domain.LadoLogFingerprint{}, s.failed("지문 읽기", err)

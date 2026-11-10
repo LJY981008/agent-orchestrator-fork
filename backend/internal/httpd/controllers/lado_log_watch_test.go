@@ -14,6 +14,8 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladologwatch"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 var ladoLogTime = time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
@@ -385,6 +387,47 @@ func TestLadoAPI_LogWatchCheckImportIncidents(t *testing.T) {
 	svc.err = domain.ErrLadoLogFingerprintNotFound
 	body, status, _ = doRequest(t, srv, "POST", "/api/v1/lado/projects/mer/log-watch/fingerprints/8/ignore", `{"ignored":true}`)
 	wantLadoErrorCode(t, body, status, http.StatusNotFound, "LADO_LOG_FINGERPRINT_NOT_FOUND")
+}
+
+// TestLadoAPI_LogWatchUnknownProjectIsNotFound: with the daemon's service and
+// store, every log watch route answers 404 PROJECT_NOT_FOUND for a project
+// AO does not have, as the API spec says, and a PUT leaves no settings
+// behind; the project that exists reads and saves them.
+func TestLadoAPI_LogWatchUnknownProjectIsNotFound(t *testing.T) {
+	ctx := context.Background()
+	store := sqlitetest.MustOpen(t)
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "mer", Path: t.TempDir(), RegisteredAt: ladoLogTime}); err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	svc := ladologwatch.New(ladologwatch.Deps{Store: store, Projects: store, Certs: ladologwatch.NewCertStore(t.TempDir())})
+	srv := newLadoTestServer(t, httpd.APIDeps{LadoLogWatch: svc})
+	put := ladoLogWatchBody(`[{"displayName":"prod1","endpoint":"tcp://192.0.2.10:2375","targets":[{"kind":"compose_project","value":"grp"}]}]`)
+
+	for _, r := range []struct{ method, path, body string }{
+		{"GET", "/log-watch", ""},
+		{"PUT", "/log-watch", put},
+		{"POST", "/log-watch/sources/s1/tls", `{"caPath":"/nowhere/ca.pem"}`},
+		{"DELETE", "/log-watch/sources/s1/tls", ""},
+		{"POST", "/log-watch/check", `{"sourceId":"s1"}`},
+		{"POST", "/log-watch/import-ci", ""},
+		{"GET", "/log-watch/incidents", ""},
+		{"POST", "/log-watch/fingerprints/1/ignore", `{"ignored":true}`},
+	} {
+		body, status, _ := doRequest(t, srv, r.method, "/api/v1/lado/projects/mer-typo"+r.path, r.body)
+		t.Run(r.method+" "+r.path, func(t *testing.T) { wantLadoErrorCode(t, body, status, http.StatusNotFound, "PROJECT_NOT_FOUND") })
+	}
+	if _, ok, err := store.LadoLogWatchSettings(ctx, "mer-typo"); err != nil || ok {
+		t.Fatalf("settings of the unknown project = %v, %v; want none saved", ok, err)
+	}
+
+	body, status, _ := doRequest(t, srv, "PUT", "/api/v1/lado/projects/mer/log-watch", put)
+	if status != http.StatusOK {
+		t.Fatalf("PUT of the project = %d %s", status, body)
+	}
+	body, status, _ = doRequest(t, srv, "GET", "/api/v1/lado/projects/mer/log-watch", "")
+	if view := decodeLadoJSON[controllers.LadoLogWatchResponse](t, body); status != http.StatusOK || !view.Enabled || len(view.Sources) != 1 {
+		t.Fatalf("GET of the project = %d %s", status, body)
+	}
 }
 
 // Without a service every log watch route answers 501, and a task the log
