@@ -119,9 +119,6 @@ UPDATE lado_account_limits
 SET released_waiting = sqlc.arg(released_waiting)
 WHERE account_key = sqlc.arg(account_key) AND released_at IS NOT NULL;
 
--- name: DeleteLadoAccountLimit :execrows
-DELETE FROM lado_account_limits WHERE account_key = ?;
-
 -- name: GetLadoAccountLimit :one
 SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at,
     identity, released_at, release_reason, released_waiting

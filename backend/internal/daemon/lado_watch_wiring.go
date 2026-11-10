@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	reviewcore "github.com/aoagents/agent-orchestrator/backend/internal/review"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/agentaccounts"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoalert"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladolaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
@@ -50,6 +51,10 @@ type ladoCodexCompact interface {
 var (
 	_ ladoWatchSessions = (*sessionmanager.Manager)(nil)
 	_ ladoCodexCompact  = (*codexagent.Plugin)(nil)
+	// The agent accounts service reads which login an account runs on, so a
+	// limit lifts once the developer logs in to another account (issue #92).
+	_ ladowatch.Accounts   = (*agentaccounts.Service)(nil)
+	_ ladowatch.Identities = (*agentaccounts.Service)(nil)
 )
 
 // ladoWatchServices are the worker watch's services.
@@ -87,6 +92,7 @@ func wireLadoWatch(cfg config.Config, store *sqlite.Store, hooks ladoWatchHooks,
 	if accounts != nil {
 		deps.Accounts = accounts
 	}
+	deps.Identities = ladoWatchIdentities(accounts)
 	if sender != nil {
 		deps.Messenger = ladoWakeMessenger{sender: sender}
 	}
@@ -114,6 +120,17 @@ func wireLadoWatch(cfg config.Config, store *sqlite.Store, hooks ladoWatchHooks,
 		}
 	}
 	return ladoWatchServices{launch: launch, usage: usage, watch: watch, alerts: alerts}
+}
+
+// ladoWatchIdentities is the accounts service as the watch's reader of which
+// login an account key runs on (issue #92), or nil when it reads none: then
+// the watch records no login, and a limit lifts only at its reset, when a
+// stopped worker completes a turn, or by hand.
+func ladoWatchIdentities(accounts ladowatch.Accounts) ladowatch.Identities {
+	if identities, ok := accounts.(ladowatch.Identities); ok && accounts != nil {
+		return identities
+	}
+	return nil
 }
 
 // startLadoWatch runs the watch loop every interval until ctx ends: the

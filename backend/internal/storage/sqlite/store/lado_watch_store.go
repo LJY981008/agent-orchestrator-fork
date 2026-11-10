@@ -393,20 +393,6 @@ func (s *Store) CountLadoAccountLimitedWaits(ctx context.Context) (int, error) {
 	return int(n), nil
 }
 
-// ReleaseLadoAccountLimit removes an account's limit. ok is false when it
-// had none.
-func (s *Store) ReleaseLadoAccountLimit(ctx context.Context, key string) (bool, error) {
-	if err := s.writeMu.LockContext(ctx); err != nil {
-		return false, err
-	}
-	defer s.writeMu.Unlock()
-	n, err := s.qw.DeleteLadoAccountLimit(ctx, key)
-	if err != nil {
-		return false, fmt.Errorf("release LADO account limit: %w", err)
-	}
-	return n == 1, nil
-}
-
 // LadoAccountLimit reads an account's limit, released or not. ok is false
 // when it has none; a limit whose reset passed stays, and so does a released
 // one.

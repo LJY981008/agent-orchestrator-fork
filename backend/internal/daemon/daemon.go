@@ -63,6 +63,7 @@ import (
 	fsbrowsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/fsbrowser"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/githubpat"
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladowatch"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
@@ -84,6 +85,10 @@ import (
 const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
+
+// The worker watch lists the account usage limits and releases one by hand
+// for the API (issue #92); a signature that drifts fails the build.
+var _ controllers.LadoAccountLimitService = (*ladowatch.Service)(nil)
 
 // sentryEnvironment maps the daemon's app version to a Sentry environment so a
 // nightly/edge build's issues do not mix with stable release health.
@@ -1052,6 +1057,7 @@ func Run() error {
 		LadoKnowledge:      ladoKnowledge,
 		LadoRelay:          lado.relay,
 		LadoLogWatch:       ladoLogWatch,
+		LadoAccountLimits:  lado.watch.watch,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

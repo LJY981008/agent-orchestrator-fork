@@ -221,3 +221,32 @@ func seedLadoPlanWorkerSession(t *testing.T, store *sqlite.Store) domain.Session
 	}
 	return rec.ID
 }
+
+// onlySessionAccounts tells a session's account but not which login it runs
+// on.
+type onlySessionAccounts struct{}
+
+func (onlySessionAccounts) SessionAccountID(context.Context, domain.SessionID, domain.AgentHarness) (string, error) {
+	return "", nil
+}
+
+// sessionAndLoginAccounts also reads which login an account runs on.
+type sessionAndLoginAccounts struct{ onlySessionAccounts }
+
+func (sessionAndLoginAccounts) AccountFingerprint(context.Context, string) (string, error) {
+	return "sha256:a", nil
+}
+
+// The watch reads which login a limited key runs on only through an accounts
+// service that can tell it (issue #92); without one it records no login.
+func TestLadoWatchIdentitiesComeFromTheAccounts(t *testing.T) {
+	if got := ladoWatchIdentities(nil); got != nil {
+		t.Fatalf("identities without accounts = %v, want nil", got)
+	}
+	if got := ladoWatchIdentities(onlySessionAccounts{}); got != nil {
+		t.Fatalf("identities of accounts that cannot read a login = %v, want nil", got)
+	}
+	if got := ladoWatchIdentities(sessionAndLoginAccounts{}); got == nil {
+		t.Fatal("identities of accounts that read a login = nil")
+	}
+}

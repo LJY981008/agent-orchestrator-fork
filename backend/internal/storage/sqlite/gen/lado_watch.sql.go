@@ -77,18 +77,6 @@ func (q *Queries) CountLadoUnseenAlertsByProject(ctx context.Context, projectID 
 	return items, nil
 }
 
-const deleteLadoAccountLimit = `-- name: DeleteLadoAccountLimit :execrows
-DELETE FROM lado_account_limits WHERE account_key = ?
-`
-
-func (q *Queries) DeleteLadoAccountLimit(ctx context.Context, accountKey string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteLadoAccountLimit, accountKey)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const ensureLadoSessionWatch = `-- name: EnsureLadoSessionWatch :execrows
 INSERT OR IGNORE INTO lado_session_watch (session_id, task_id, created_at, updated_at)
 VALUES (?1, ?2, ?3, ?3)
