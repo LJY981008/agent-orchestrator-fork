@@ -3020,6 +3020,94 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/lado/account-limits:
+    get:
+      operationId: listLadoAccountLimits
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoAccountLimitListResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: List the account usage limits LADO recorded, held or released; new
+        workers on an account wait while its limit is active
+      tags:
+      - lado
+  /api/v1/lado/account-limits/{accountKey}/release:
+    post:
+      operationId: releaseLadoAccountLimit
+      parameters:
+      - description: The account key, <provider>:<account id> such as claude:device-claude
+          (the ':' may be sent as %3A).
+        in: path
+        name: accountKey
+        required: true
+        schema:
+          description: The account key, <provider>:<account id> such as claude:device-claude
+            (the ':' may be sent as %3A).
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReleaseLadoAccountLimitRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseLadoAccountLimitResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Release an active account usage limit by hand, such as after logging
+        in to another account; LADO records the reason in the audit log, tells the
+        LADO projects' orchestrators, checks the account_limited waits again and resumes
+        the workers the limit stopped
+      tags:
+      - lado
   /api/v1/lado/alerts/{alertId}/seen:
     post:
       operationId: markLadoAlertSeen
@@ -20945,6 +21033,82 @@ components:
       - chars
       - readError
       type: object
+    LadoAccountLimitListResponse:
+      properties:
+        limits:
+          items:
+            $ref: '#/components/schemas/LadoAccountLimitResponse'
+          type: array
+      required:
+      - limits
+      type: object
+    LadoAccountLimitResponse:
+      properties:
+        accountId:
+          type: string
+        accountKey:
+          description: <provider>:<account id>; device-claude and device-codex are
+            the device's own login.
+          type: string
+        active:
+          description: 'The limit still holds: it was not released and its reset has
+            not come. New workers on the account wait while it holds.'
+          type: boolean
+        detectedAt:
+          format: date-time
+          type: string
+        identityKnown:
+          description: LADO recorded which login hit the limit, so it can tell when
+            the key is logged in to another account.
+          type: boolean
+        provider:
+          enum:
+          - claude
+          - codex
+          type: string
+        releaseReason:
+          description: Why LADO released the limit.
+          enum:
+          - reset
+          - account_changed
+          - manual
+          - turn_completed
+          type: string
+        releasedAt:
+          description: When LADO released the limit; omitted while it holds.
+          format: date-time
+          type:
+          - "null"
+          - string
+        releasedWaiting:
+          description: How many account_limited waits there were when LADO released
+            the limit.
+          type: integer
+        resetAt:
+          format: date-time
+          type: string
+        resetGuessed:
+          description: LADO guessed the reset time; the limit message did not say
+            it.
+          type: boolean
+        sessionId:
+          description: The session LADO saw the limit in.
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - accountKey
+      - provider
+      - accountId
+      - identityKnown
+      - active
+      - resetAt
+      - resetGuessed
+      - detectedAt
+      - updatedAt
+      - releasedWaiting
+      type: object
     LadoAlertListResponse:
       properties:
         alerts:
@@ -28269,6 +28433,30 @@ components:
           description: 'Expo push token, e.g. ExponentPushToken[...]. Optional: omitted
             when the phone has no push token yet.'
           type: string
+      type: object
+    ReleaseLadoAccountLimitRequest:
+      properties:
+        reason:
+          description: Why the limit no longer holds, such as the developer logging
+            in to another account; 1 to 500 characters, kept in the audit log.
+          type: string
+      required:
+      - reason
+      type: object
+    ReleaseLadoAccountLimitResponse:
+      properties:
+        limit:
+          $ref: '#/components/schemas/LadoAccountLimitResponse'
+        released:
+          description: LADO released the limit.
+          type: boolean
+        waiting:
+          description: How many account_limited waits LADO checks again now.
+          type: integer
+      required:
+      - limit
+      - released
+      - waiting
       type: object
     ReloadConversationMCPServersResponse:
       properties:
