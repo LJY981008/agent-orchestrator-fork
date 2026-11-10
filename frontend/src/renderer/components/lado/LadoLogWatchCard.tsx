@@ -18,7 +18,6 @@ import {
 	useSetLadoLogFingerprintIgnored,
 	useUpdateLadoLogWatch,
 } from "../../hooks/useLado";
-import { LadoApiError } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import {
 	LADO_LOG_MAX_SOURCES,
@@ -137,7 +136,6 @@ function LogWatchForm({ projectId, saved }: { projectId: string; saved: LadoLogW
 	const existingEndpoints = new Set(draft.sources.map((source) => source.endpoint.trim()).filter(Boolean));
 	const room = LADO_LOG_MAX_SOURCES - draft.sources.length;
 	const error = update.error;
-	const invalidField = error instanceof LadoApiError && error.code === "LADO_LOG_WATCH_INVALID";
 
 	return (
 		<>
@@ -262,10 +260,11 @@ function LogWatchForm({ projectId, saved }: { projectId: string; saved: LadoLogW
 					</Button>
 				</div>
 				{error ? (
-					<div role="alert" className="flex flex-col gap-0.5 text-caption leading-4 text-error">
-						<span>{ladoErrorText(t, error)}</span>
-						{invalidField && error.message ? <span className="text-settings-muted">{error.message}</span> : null}
-					</div>
+					// The daemon's message is in Korean only; the translated
+					// line names the setting.
+					<p role="alert" className="text-caption leading-4 text-error">
+						{ladoErrorText(t, error)}
+					</p>
 				) : null}
 			</div>
 			<LadoLogWatchImportDialog

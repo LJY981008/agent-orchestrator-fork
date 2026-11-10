@@ -223,8 +223,10 @@ test("a refused save names the setting", async () => {
 	await userEvent.clear(endpoint);
 	await userEvent.type(endpoint, "unix:///var/run/docker.sock");
 	await userEvent.click(screen.getByTestId("lado-log-watch-save"));
-	const alert = await screen.findByText("A log watch setting is not valid: sources[0].endpoint.");
-	expect(alert.closest("[role='alert']")).toHaveTextContent("tcp 만 받습니다");
+	const alert = await screen.findByRole("alert");
+	// Only the translated line: the daemon's message is in Korean.
+	expect(alert).toHaveTextContent(/^A log watch setting is not valid: sources\[0\]\.endpoint\.$/);
+	expect(screen.queryByText("tcp 만 받습니다")).not.toBeInTheDocument();
 	// The edit stays for the developer to fix.
 	expect(endpoint).toHaveValue("unix:///var/run/docker.sock");
 });
