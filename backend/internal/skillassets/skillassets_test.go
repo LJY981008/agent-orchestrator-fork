@@ -191,6 +191,39 @@ func TestEmbeddedPRGuidanceNamesResolveComments(t *testing.T) {
 	}
 }
 
+// TestEmbeddedLadoGuidanceReleasesAccountLimits: the lado guidance tells an
+// orchestrator to release an account usage limit with ao lado limits release,
+// never in LADO's database, and the catalog and the quick reference link it
+// (#92).
+func TestEmbeddedLadoGuidanceReleasesAccountLimits(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/lado.md")
+	if err != nil {
+		t.Fatalf("read embedded lado guidance: %v", err)
+	}
+	text := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"ao lado limits [--json]",
+		"ao lado limits release <account-key> --reason <text>",
+		"`--reason` is required",
+		"Never edit LADO's database to release a limit.",
+		"ao lado relay --task",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lado guidance missing %q:\n%s", want, body)
+		}
+	}
+
+	for _, path := range []string{"using-ao/SKILL.md", "using-ao/references.md"} {
+		catalog, err := files.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(catalog), "[commands/lado.md](commands/lado.md)") {
+			t.Fatalf("%s does not link commands/lado.md:\n%s", path, catalog)
+		}
+	}
+}
+
 // TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
 // skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
 // second run must clobber cleanly, leaving no stale files. This is the whole

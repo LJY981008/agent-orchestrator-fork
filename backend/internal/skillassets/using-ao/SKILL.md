@@ -20,6 +20,7 @@ trigger: "Using the ao CLI in an AO workspace: creating Cues, spawning workers, 
 | `orchestrator` | List orchestrator sessions | Viewing which sessions are orchestrators | [commands/orchestrator.md](commands/orchestrator.md) |
 | `review` | Start, list, cancel, or submit AO's native reviewer for a worker's PR (default: this session) | Reviewing implementation PRs owned by AO workers. Use a normal review-only worker for someone else's PR | [commands/review.md](commands/review.md) |
 | `send` | Send a message to a running agent session | Correcting or directing a live agent | [commands/send.md](commands/send.md) |
+| `lado` | List or release the account usage limits LADO holds new workers for; relay the developer's instruction to a LADO worker | A LADO project's orchestrator, when the developer logged in to another account or asks a running worker to go on | [commands/lado.md](commands/lado.md) |
 | `report` | Persist a meaningful worker report | Checkpoints, blockers, decisions, outputs, and completion | [commands/report.md](commands/report.md) |
 | `preview` | Start a session-owned app or open an exact URL/file | Running and showing the worker's relevant app, Markdown, HTML, PDF, or image | [commands/preview.md](commands/preview.md) |
 | `render` | Show a self-contained HTML page inline in a chat thread | Answering with a chart, table, diagram, or mockup | [commands/render.md](commands/render.md) |
