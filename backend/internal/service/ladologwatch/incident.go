@@ -140,6 +140,16 @@ type incidentState struct {
 	previous    domain.IssueID
 	retryAfter  time.Time
 	touchedAt   time.Time
+	// unlinked is a task created for the fingerprint that LADO could not
+	// record on its row. It is kept until the link is written, so the
+	// fingerprint gets no second issue meanwhile.
+	unlinked *incidentUnlinked
+}
+
+// incidentUnlinked is a created task not linked to its fingerprint yet.
+type incidentUnlinked struct {
+	task     domain.LadoTask
+	previous domain.IssueID
 }
 
 // incidentCount is what one instance showed of a fingerprint.
@@ -225,7 +235,7 @@ func (h *IncidentHandler) Flush(ctx context.Context, now time.Time) {
 				h.incidentSync(ctx, p, st, now)
 			case len(st.pending) > 0 && now.Sub(st.savedAt) >= incidentSaveInterval:
 				h.incidentSync(ctx, p, st, now)
-			case len(st.pending) == 0 && st.windowUntil.IsZero() && now.Sub(st.touchedAt) >= incidentIdle:
+			case len(st.pending) == 0 && st.windowUntil.IsZero() && st.unlinked == nil && now.Sub(st.touchedAt) >= incidentIdle:
 				delete(p.states, key)
 			}
 		}
@@ -278,6 +288,16 @@ func (st *incidentState) add(o Occurrence, now time.Time) {
 // issue needs.
 func (h *IncidentHandler) incidentSync(ctx context.Context, p *incidentProject, st *incidentState, now time.Time) {
 	if !h.incidentWrite(ctx, st, now) {
+		return
+	}
+	if st.unlinked != nil {
+		// A created task waits for its link: write it before anything is
+		// decided, and create nothing while it waits.
+		u := *st.unlinked
+		if h.incidentLink(ctx, st, u.task, u.previous, now) && u.task.IssueRef != "" {
+			h.incidentCreated(ctx, st, u.task, u.previous, now)
+		}
+		st.resetRecent()
 		return
 	}
 	if st.fp.Ignored {
@@ -463,25 +483,35 @@ func (h *IncidentHandler) incidentCreate(ctx context.Context, p *incidentProject
 	})
 	switch {
 	case err == nil:
-		if linkErr := h.deps.Store.LinkLadoLogFingerprintTask(ctx, st.fp.ID, task.ID, task.IssueRef, st.previous, now); linkErr != nil {
-			h.deps.Log.Error("LADO could not record a log incident's task", "project", settings.ProjectID, "task", task.ID, "err", linkErr)
-			return
+		if h.incidentLink(ctx, st, task, st.previous, now) {
+			h.incidentCreated(ctx, st, task, st.previous, now)
 		}
-		st.fp.TaskID, st.fp.IssueRef, st.fp.PreviousIssueRef = task.ID, task.IssueRef, st.previous
-		st.fp.AutoPlanRequestedAt, st.fp.AutoPlanHeld = time.Time{}, ""
-		h.incidentCreated(ctx, st, task, st.previous, now)
 	case task.ID != "":
 		// Unconfirmed: keep the task id; a later occurrence finds out.
-		if linkErr := h.deps.Store.LinkLadoLogFingerprintTask(ctx, st.fp.ID, task.ID, "", st.previous, now); linkErr != nil {
-			h.deps.Log.Error("LADO could not record a log incident's pending task", "project", settings.ProjectID, "task", task.ID, "err", linkErr)
-			return
-		}
-		st.fp.TaskID, st.fp.IssueRef, st.fp.PreviousIssueRef = task.ID, "", st.previous
-		st.fp.AutoPlanRequestedAt, st.fp.AutoPlanHeld = time.Time{}, ""
+		task.IssueRef = ""
+		h.incidentLink(ctx, st, task, st.previous, now)
 	default:
 		h.deps.Log.Warn("LADO could not create a log incident's issue", "project", settings.ProjectID, "err", err)
 		st.retryAfter = now.Add(incidentRetryDelay)
 	}
+}
+
+// incidentLink records a created task (and its issue, when confirmed) on the
+// fingerprint's row. The task exists already, so the write goes on when the
+// runner's context ends (the daemon stopping right after the tracker
+// answered). When it still fails, the task is kept in memory and linked on
+// the fingerprint's next sync, so no second issue is created for it. It
+// reports whether the link was written.
+func (h *IncidentHandler) incidentLink(ctx context.Context, st *incidentState, task domain.LadoTask, previous domain.IssueID, now time.Time) bool {
+	if err := h.deps.Store.LinkLadoLogFingerprintTask(context.WithoutCancel(ctx), st.fp.ID, task.ID, task.IssueRef, previous, now); err != nil {
+		h.deps.Log.Error("LADO could not record a log incident's task; it tries again on the next occurrence", "project", st.settings.ProjectID, "task", task.ID, "err", err)
+		st.unlinked = &incidentUnlinked{task: task, previous: previous}
+		return false
+	}
+	st.unlinked = nil
+	st.fp.TaskID, st.fp.IssueRef, st.fp.PreviousIssueRef = task.ID, task.IssueRef, previous
+	st.fp.AutoPlanRequestedAt, st.fp.AutoPlanHeld = time.Time{}, ""
+	return true
 }
 
 // incidentIssueInput is what the issue of the window's occurrences says.

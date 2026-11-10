@@ -36,6 +36,8 @@ type incidentFakeStore struct {
 	tasks     map[domain.LadoTaskID]domain.LadoTask
 	burstAt   time.Time
 	occWrites int
+	// linkFails makes that many next links fail.
+	linkFails int
 }
 
 func newIncidentFakeStore() *incidentFakeStore {
@@ -96,9 +98,17 @@ func (s *incidentFakeStore) AddLadoLogOccurrences(_ context.Context, d domain.La
 	return incidentCopy(f), nil
 }
 
-func (s *incidentFakeStore) LinkLadoLogFingerprintTask(_ context.Context, id domain.LadoLogFingerprintID, task domain.LadoTaskID, issueRef, previous domain.IssueID, at time.Time) error {
+func (s *incidentFakeStore) LinkLadoLogFingerprintTask(ctx context.Context, id domain.LadoLogFingerprintID, task domain.LadoTaskID, issueRef, previous domain.IssueID, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// As the sqlite store's write lock does.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if s.linkFails > 0 {
+		s.linkFails--
+		return errors.New("database is locked")
+	}
 	f := s.byID(id)
 	if f == nil {
 		return domain.ErrLadoLogFingerprintNotFound
@@ -214,12 +224,17 @@ type incidentFakeTasks struct {
 	failing error
 	// unconfirmed makes the next creation end unconfirmed.
 	unconfirmed bool
+	// onCreate is called as a creation answers.
+	onCreate func()
 }
 
 func (f *incidentFakeTasks) CreateFromLog(_ context.Context, in ladotask.LogCreateInput) (domain.LadoTask, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.inputs = append(f.inputs, in)
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	if f.failing != nil {
 		return domain.LadoTask{}, f.failing
 	}
@@ -610,6 +625,69 @@ func TestIncidentUnconfirmedCreationLinksTheIssueFoundLater(t *testing.T) {
 	}
 	if texts := fx.notices.texts(); len(texts) != 1 || !strings.Contains(texts[0], "#7 (") || fx.plans.count() != 1 {
 		t.Fatalf("notices = %q, plans = %d; want the issue told and planned once", texts, fx.plans.count())
+	}
+}
+
+// TestIncidentLinkFailureAfterCreationMakesNoSecondIssue: when the issue
+// (or an unconfirmed task) exists but its link to the fingerprint could not
+// be written, the fingerprint's row has no task; the handler keeps the task
+// and links it on the next sync, even after the fingerprint was idle,
+// instead of opening a window for a second issue.
+func TestIncidentLinkFailureAfterCreationMakesNoSecondIssue(t *testing.T) {
+	for _, unconfirmed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("unconfirmed=%v", unconfirmed), func(t *testing.T) {
+			fx := newIncidentFixture(t)
+			fx.tasks.unconfirmed = unconfirmed
+			fx.store.linkFails = 2
+			fx.newIssue("fp-a")
+			if f := fx.store.fingerprint(t, "fp-a"); f.TaskID != "" || len(fx.tasks.created()) != 1 {
+				t.Fatalf("fingerprint = %+v after a failed link", f)
+			}
+			if len(fx.notices.texts()) != 0 || fx.plans.count() != 0 {
+				t.Fatal("a task whose link failed was told or planned")
+			}
+			// The second link fails too; still no new window.
+			fx.handle("fp-a", "prod1/api-1")
+			fx.advance(incidentSaveInterval)
+			fx.advance(incidentWindow)
+			// Idle long enough for the handler to forget a fingerprint.
+			fx.advance(incidentIdle)
+			fx.handle("fp-a", "prod1/api-1")
+			fx.advance(incidentSaveInterval)
+			fx.advance(incidentWindow)
+
+			if n := len(fx.tasks.created()); n != 1 {
+				t.Fatalf("issues = %d, want the first one only", n)
+			}
+			f := fx.store.fingerprint(t, "fp-a")
+			if f.TaskID != "lado-task-1" {
+				t.Fatalf("fingerprint = %+v, want the first task linked", f)
+			}
+			if unconfirmed {
+				if f.IssueRef != "" || len(fx.notices.texts()) != 0 || fx.plans.count() != 0 {
+					t.Fatalf("unconfirmed task: fingerprint %+v, notices %q, plans %d", f, fx.notices.texts(), fx.plans.count())
+				}
+				return
+			}
+			if f.IssueRef != "github:acme/demo#41" || len(fx.notices.texts()) != 1 || fx.plans.count() != 1 {
+				t.Fatalf("fingerprint %+v, notices %q, plans %d; want the issue linked, told and planned once", f, fx.notices.texts(), fx.plans.count())
+			}
+		})
+	}
+}
+
+// TestIncidentLinkAfterCreationOutlivesTheRunnersContext: the daemon stopping
+// right after the tracker answered does not leave the issue unlinked.
+func TestIncidentLinkAfterCreationOutlivesTheRunnersContext(t *testing.T) {
+	fx := newIncidentFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fx.tasks.onCreate = cancel
+	fx.handle("fp-a", "prod1/api-1")
+	fx.now = fx.now.Add(incidentWindow)
+	fx.h.Flush(ctx, fx.now)
+	if f := fx.store.fingerprint(t, "fp-a"); f.TaskID != "lado-task-1" || f.IssueRef != "github:acme/demo#41" {
+		t.Fatalf("fingerprint = %+v, want the issue linked although the context ended", f)
 	}
 }
 
