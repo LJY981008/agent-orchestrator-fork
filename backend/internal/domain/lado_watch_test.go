@@ -121,6 +121,107 @@ func TestLadoAccountLimitActive(t *testing.T) {
 	if !l.Active(reset.Add(-time.Second)) || l.Active(reset) || l.Active(reset.Add(time.Minute)) {
 		t.Fatal("a limit holds until its reset and no longer")
 	}
+	if l.Released() || l.ReleasedEarly() || l.SparesSessionsBefore() {
+		t.Fatal("a live limit reads as released")
+	}
+	// A released limit no longer holds, even before its reset.
+	for _, tc := range []struct {
+		reason       LadoLimitReleaseReason
+		early, spare bool
+	}{
+		{LadoLimitReleaseReset, false, false},
+		{LadoLimitReleaseTurnCompleted, true, false},
+		{LadoLimitReleaseAccountChanged, true, true},
+		{LadoLimitReleaseManual, true, true},
+	} {
+		r := LadoAccountLimit{ResetAt: reset, ReleasedAt: reset.Add(-time.Hour), ReleaseReason: tc.reason}
+		if r.Active(reset.Add(-2*time.Hour)) || !r.Released() {
+			t.Fatalf("%s: a released limit still holds", tc.reason)
+		}
+		if r.ReleasedEarly() != tc.early || r.SparesSessionsBefore() != tc.spare {
+			t.Fatalf("%s: early %v spare %v, want %v %v", tc.reason, r.ReleasedEarly(), r.SparesSessionsBefore(), tc.early, tc.spare)
+		}
+	}
+}
+
+func TestLadoLimitReleaseReasons(t *testing.T) {
+	for _, r := range []LadoLimitReleaseReason{"reset", "account_changed", "manual", "turn_completed"} {
+		if !r.Valid() {
+			t.Fatalf("%q is not valid", r)
+		}
+	}
+	for _, r := range []LadoLimitReleaseReason{LadoLimitReleaseNone, "expired", "Manual"} {
+		if r.Valid() {
+			t.Fatalf("%q is valid", r)
+		}
+	}
+	if errors.Is(ErrLadoAccountLimitNotFound, ErrLadoAccountLimitNotActive) {
+		t.Fatal("the two release errors are the same")
+	}
+}
+
+func TestParseLadoAccountKey(t *testing.T) {
+	for _, tc := range []struct {
+		key      string
+		provider AgentAccountProvider
+		id       string
+		ok       bool
+	}{
+		{"claude:device-claude", AgentAccountProviderClaude, "device-claude", true},
+		{"codex:acct_2.x", AgentAccountProviderCodex, "acct_2.x", true},
+		{"claude:", "", "", false},
+		{"opencode:x", "", "", false},
+		{"Claude:x", "", "", false},
+		{"claude:a/b", "", "", false},
+		{"claude:a:b", "", "", false},
+		{"claude:a b", "", "", false},
+		{"claude:x\n", "", "", false},
+		{"", "", "", false},
+	} {
+		provider, id, ok := ParseLadoAccountKey(tc.key)
+		if provider != tc.provider || id != tc.id || ok != tc.ok {
+			t.Fatalf("ParseLadoAccountKey(%q) = %q %q %v; want %q %q %v", tc.key, provider, id, ok, tc.provider, tc.id, tc.ok)
+		}
+	}
+	// Every key LadoAccountKey makes parses back.
+	for _, h := range []AgentHarness{HarnessClaudeCode, HarnessCodex} {
+		for _, account := range []string{"", "work"} {
+			key, _ := LadoAccountKey(h, account)
+			if _, _, ok := ParseLadoAccountKey(key); !ok {
+				t.Fatalf("%q does not parse", key)
+			}
+		}
+	}
+}
+
+func TestLadoNoticeAccountLines(t *testing.T) {
+	seoul := time.FixedZone("KST", 9*60*60)
+	now := time.Date(2026, 11, 10, 14, 0, 0, 0, seoul)
+	reset := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC) // 19:00 KST
+	for _, tc := range []struct {
+		got, want string
+	}{
+		{LadoNoticeAccountLimited("claude:device-claude", reset, false, now, seoul), "LADO 알림: Claude 계정 한도 — 새 워커 대기, 19:00 리셋"},
+		{LadoNoticeAccountLimited("codex:work", reset, true, now, seoul), "LADO 알림: Codex 계정(work) 한도 — 새 워커 대기, 19:00 리셋 추정"},
+		{LadoNoticeAccountLimited("claude:device-claude", reset.Add(12*time.Hour), false, now, seoul), "LADO 알림: Claude 계정 한도 — 새 워커 대기, 11/11 07:00 리셋"},
+		{LadoNoticeAccountReleased("claude:device-claude", LadoLimitReleaseAccountChanged, 3), "LADO 알림: Claude 계정 한도 해제(계정 바뀜) — 계정 한도 대기 3건 다시 확인"},
+		{LadoNoticeAccountReleased("claude:sub", LadoLimitReleaseManual, 0), "LADO 알림: Claude 계정(sub) 한도 해제(수동 해제) — 계정 한도 대기 0건 다시 확인"},
+		{LadoNoticeAccountReleased("codex:device-codex", LadoLimitReleaseReset, 1), "LADO 알림: Codex 계정 한도 해제(리셋) — 계정 한도 대기 1건 다시 확인"},
+		{LadoNoticeAccountReleased("codex:device-codex", LadoLimitReleaseTurnCompleted, 2), "LADO 알림: Codex 계정 한도 해제(작업 재개 확인) — 계정 한도 대기 2건 다시 확인"},
+		{LadoNoticeAccountReleased("codex:device-codex", "other", 2), "LADO 알림: Codex 계정 한도 해제(알 수 없는 이유) — 계정 한도 대기 2건 다시 확인"},
+	} {
+		if tc.got != tc.want {
+			t.Fatalf("notice = %q, want %q", tc.got, tc.want)
+		}
+	}
+	// A nil zone is time.Local.
+	if got, want := LadoNoticeAccountLimited("claude:device-claude", now, false, now, nil), "LADO 알림: Claude 계정 한도 — 새 워커 대기, "+now.In(time.Local).Format("15:04")+" 리셋"; got != want {
+		t.Fatalf("notice in time.Local = %q, want %q", got, want)
+	}
+	// The lines never carry more than the key.
+	if line := LadoNoticeAccountLimited("claude:"+strings.Repeat("a", 300), reset, false, now, seoul); len([]rune(line)) > LadoNoticeMaxRunes {
+		t.Fatalf("a long account makes a %d-rune line", len([]rune(line)))
+	}
 }
 
 func TestLadoAlertLines(t *testing.T) {

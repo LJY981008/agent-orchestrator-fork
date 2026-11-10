@@ -299,8 +299,12 @@ func ladoSessionWatchFromRow(row gen.LadoSessionWatch) (domain.LadoSessionWatch,
 }
 
 // RecordLadoAccountLimit records an account at its usage limit until
-// l.ResetAt. A later record replaces the reset time and keeps when LADO first
-// saw the limit. A zero DetectedAt or UpdatedAt is now.
+// l.ResetAt. A record over a live limit (not released, reset still ahead)
+// replaces the reset time and keeps when LADO first saw the limit and the
+// identity it first knew: a later record's identity is used only when the
+// live one is empty. A record over a released or expired limit starts it
+// again, with l's identity and detection time and no release. A zero
+// DetectedAt or UpdatedAt is now; l's release fields are ignored.
 func (s *Store) RecordLadoAccountLimit(ctx context.Context, l domain.LadoAccountLimit) error {
 	if l.AccountKey == "" || l.ResetAt.IsZero() {
 		return errors.New("record LADO account limit: an account and a reset time are required")
@@ -319,6 +323,7 @@ func (s *Store) RecordLadoAccountLimit(ctx context.Context, l domain.LadoAccount
 	if err := s.qw.UpsertLadoAccountLimit(ctx, gen.UpsertLadoAccountLimitParams{
 		AccountKey: l.AccountKey,
 		SessionID:  string(l.SessionID),
+		Identity:   l.Identity,
 		ResetAt:    l.ResetAt.UTC(),
 		ResetGuess: ladoBool(l.ResetGuessed),
 		DetectedAt: l.DetectedAt.UTC(),
@@ -327,6 +332,65 @@ func (s *Store) RecordLadoAccountLimit(ctx context.Context, l domain.LadoAccount
 		return fmt.Errorf("record LADO account limit: %w", err)
 	}
 	return nil
+}
+
+// MarkLadoAccountLimitReleased releases an account's limit at at for reason,
+// keeping the row. Only a limit not yet released is written, so of callers
+// racing to release it exactly one gets released true; false also means the
+// account has no limit. A limit whose reset passed but that LADO did not
+// release yet is released.
+func (s *Store) MarkLadoAccountLimitReleased(ctx context.Context, key string, reason domain.LadoLimitReleaseReason, at time.Time) (bool, error) {
+	if key == "" || !reason.Valid() {
+		return false, fmt.Errorf("release LADO account limit: an account and a known reason are required, not %q", reason)
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return false, err
+	}
+	defer s.writeMu.Unlock()
+	n, err := s.qw.MarkLadoAccountLimitReleased(ctx, gen.MarkLadoAccountLimitReleasedParams{
+		ReleasedAt:    ladoNullTime(at),
+		ReleaseReason: string(reason),
+		AccountKey:    key,
+	})
+	if err != nil {
+		return false, fmt.Errorf("release LADO account limit: %w", err)
+	}
+	return n == 1, nil
+}
+
+// SetLadoAccountLimitReleasedWaiting records how many account_limited waits
+// a released limit had when LADO released it. A limit that holds, or none,
+// is not written.
+func (s *Store) SetLadoAccountLimitReleasedWaiting(ctx context.Context, key string, waiting int) error {
+	if waiting < 0 {
+		return fmt.Errorf("record LADO account limit waits: %d is negative", waiting)
+	}
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
+	if _, err := s.qw.SetLadoAccountLimitReleasedWaiting(ctx, gen.SetLadoAccountLimitReleasedWaitingParams{
+		ReleasedWaiting: int64(waiting),
+		AccountKey:      key,
+	}); err != nil {
+		return fmt.Errorf("record LADO account limit waits: %w", err)
+	}
+	return nil
+}
+
+// CountLadoAccountLimitedWaits counts what waits now because an account is
+// at its limit (domain.LadoWaitingAccountLimited): open queue entries no
+// lease holds, waiting parts and plan worker requests not yet started, of
+// every project and provider.
+func (s *Store) CountLadoAccountLimitedWaits(ctx context.Context) (int, error) {
+	n, err := s.qr.CountLadoAccountLimitedWaits(ctx, domain.LadoWaitingAccountLimited)
+	if err != nil {
+		return 0, fmt.Errorf("count LADO account limit waits: %w", err)
+	}
+	return int(n), nil
 }
 
 // ReleaseLadoAccountLimit removes an account's limit. ok is false when it
@@ -343,8 +407,9 @@ func (s *Store) ReleaseLadoAccountLimit(ctx context.Context, key string) (bool, 
 	return n == 1, nil
 }
 
-// LadoAccountLimit reads an account's limit. ok is false when it has none;
-// a limit whose reset passed stays until it is released.
+// LadoAccountLimit reads an account's limit, released or not. ok is false
+// when it has none; a limit whose reset passed stays, and so does a released
+// one.
 func (s *Store) LadoAccountLimit(ctx context.Context, key string) (domain.LadoAccountLimit, bool, error) {
 	row, err := s.qr.GetLadoAccountLimit(ctx, key)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -356,7 +421,8 @@ func (s *Store) LadoAccountLimit(ctx context.Context, key string) (domain.LadoAc
 	return ladoAccountLimitFromRow(row), true, nil
 }
 
-// ListLadoAccountLimits reads every recorded account limit.
+// ListLadoAccountLimits reads every recorded account limit, released ones
+// too, by account key.
 func (s *Store) ListLadoAccountLimits(ctx context.Context) ([]domain.LadoAccountLimit, error) {
 	rows, err := s.qr.ListLadoAccountLimits(ctx)
 	if err != nil {
@@ -377,6 +443,11 @@ func ladoAccountLimitFromRow(row gen.LadoAccountLimit) domain.LadoAccountLimit {
 		ResetGuessed: row.ResetGuess != 0,
 		DetectedAt:   row.DetectedAt.UTC(),
 		UpdatedAt:    row.UpdatedAt.UTC(),
+
+		Identity:        row.Identity,
+		ReleasedAt:      ladoTimeFromNull(row.ReleasedAt),
+		ReleaseReason:   domain.LadoLimitReleaseReason(row.ReleaseReason),
+		ReleasedWaiting: int(row.ReleasedWaiting),
 	}
 }
 

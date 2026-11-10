@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -264,15 +265,192 @@ func TestLadoAccountLimits(t *testing.T) {
 	if all, err := s.ListLadoAccountLimits(ctx); err != nil || len(all) != 2 || all[0].AccountKey != key || all[1].AccountKey != "codex:work" {
 		t.Fatalf("ListLadoAccountLimits = %+v, %v", all, err)
 	}
-	if released, err := s.ReleaseLadoAccountLimit(ctx, key); err != nil || !released {
-		t.Fatalf("release = %v, %v", released, err)
+	if got.Identity != "" || got.Released() || got.ReleaseReason != "" || got.ReleasedWaiting != 0 {
+		t.Fatalf("limit recorded without an identity = %+v", got)
 	}
-	if released, err := s.ReleaseLadoAccountLimit(ctx, key); err != nil || released {
-		t.Fatalf("release again = %v, %v", released, err)
+}
+
+// A live limit keeps the first identity it knew; a released or expired one
+// starts again with the new record's identity and detection time. A release
+// is written once and keeps the row, with the waits it left.
+func TestLadoAccountLimitIdentityAndRelease(t *testing.T) {
+	s := openLadoWatchStore(t)
+	ctx := context.Background()
+	key := "claude:device-claude"
+	read := func(key string) domain.LadoAccountLimit {
+		t.Helper()
+		got, ok, err := s.LadoAccountLimit(ctx, key)
+		if err != nil || !ok {
+			t.Fatalf("limit %s = %v, %v", key, ok, err)
+		}
+		return got
 	}
-	if _, ok, err := s.LadoAccountLimit(ctx, key); err != nil || ok {
-		t.Fatalf("limit after release = %v, %v", ok, err)
+	record := func(l domain.LadoAccountLimit) {
+		t.Helper()
+		if err := s.RecordLadoAccountLimit(ctx, l); err != nil {
+			t.Fatal(err)
+		}
 	}
+	reset := ladoWatchAt.Add(time.Hour)
+	record(domain.LadoAccountLimit{AccountKey: key, SessionID: "mer-1", Identity: "sha256:a", ResetAt: reset, DetectedAt: ladoWatchAt})
+	// Another worker hits the limit after the developer logged in elsewhere:
+	// the live row keeps "a", so the next check sees the change.
+	record(domain.LadoAccountLimit{AccountKey: key, SessionID: "mer-2", Identity: "sha256:b", ResetAt: reset, DetectedAt: ladoWatchAt.Add(time.Minute)})
+	if got := read(key); got.Identity != "sha256:a" || got.SessionID != "mer-2" || !got.DetectedAt.Equal(ladoWatchAt) || !got.Active(ladoWatchAt.Add(2*time.Minute)) {
+		t.Fatalf("live limit recorded again = %+v; want identity a and the first detection", got)
+	}
+	// A live row without an identity takes the first one known.
+	record(domain.LadoAccountLimit{AccountKey: "claude:work", ResetAt: reset, DetectedAt: ladoWatchAt})
+	record(domain.LadoAccountLimit{AccountKey: "claude:work", Identity: "sha256:c", ResetAt: reset, DetectedAt: ladoWatchAt.Add(time.Minute)})
+	if got := read("claude:work"); got.Identity != "sha256:c" || !got.DetectedAt.Equal(ladoWatchAt) {
+		t.Fatalf("live limit without an identity recorded again = %+v; want identity c", got)
+	}
+
+	// A release is written once, also when callers race for it.
+	for _, bad := range []domain.LadoLimitReleaseReason{"", "expired"} {
+		if _, err := s.MarkLadoAccountLimitReleased(ctx, key, bad, ladoWatchAt); err == nil {
+			t.Fatalf("a release for reason %q was accepted", bad)
+		}
+	}
+	if ok, err := s.MarkLadoAccountLimitReleased(ctx, "codex:none", domain.LadoLimitReleaseManual, ladoWatchAt); err != nil || ok {
+		t.Fatalf("release of no limit = %v, %v", ok, err)
+	}
+	// Waits are not written on a limit that holds.
+	if err := s.SetLadoAccountLimitReleasedWaiting(ctx, key, 4); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(key); got.ReleasedWaiting != 0 {
+		t.Fatalf("waits on a live limit = %d, want 0", got.ReleasedWaiting)
+	}
+	released := ladoWatchAt.Add(2 * time.Minute)
+	var wg sync.WaitGroup
+	wins := make(chan bool, 4)
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ok, err := s.MarkLadoAccountLimitReleased(ctx, key, domain.LadoLimitReleaseAccountChanged, released)
+			if err != nil {
+				t.Error(err)
+			}
+			wins <- ok
+		}()
+	}
+	wg.Wait()
+	close(wins)
+	won := 0
+	for ok := range wins {
+		if ok {
+			won++
+		}
+	}
+	if won != 1 {
+		t.Fatalf("%d of 4 racing releases won, want 1", won)
+	}
+	if ok, err := s.MarkLadoAccountLimitReleased(ctx, key, domain.LadoLimitReleaseManual, released.Add(time.Minute)); err != nil || ok {
+		t.Fatalf("second release = %v, %v; want false", ok, err)
+	}
+	if err := s.SetLadoAccountLimitReleasedWaiting(ctx, key, 4); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetLadoAccountLimitReleasedWaiting(ctx, key, -1); err == nil {
+		t.Fatal("negative waits were accepted")
+	}
+	got := read(key)
+	if !got.ReleasedAt.Equal(released) || got.ReleaseReason != domain.LadoLimitReleaseAccountChanged || got.ReleasedWaiting != 4 ||
+		!got.UpdatedAt.Equal(released) || got.Identity != "sha256:a" || got.Active(released) || !got.ReleasedEarly() {
+		t.Fatalf("released limit = %+v", got)
+	}
+	if all, err := s.ListLadoAccountLimits(ctx); err != nil || len(all) != 2 || all[0].AccountKey != "claude:device-claude" || !all[0].Released() || all[1].Released() {
+		t.Fatalf("ListLadoAccountLimits = %+v, %v; want the released row kept", all, err)
+	}
+
+	// Recording the released limit again starts it over.
+	again := released.Add(10 * time.Minute)
+	record(domain.LadoAccountLimit{AccountKey: key, SessionID: "mer-3", Identity: "sha256:b", ResetAt: reset.Add(time.Hour), ResetGuessed: true, DetectedAt: again})
+	got = read(key)
+	if got.Identity != "sha256:b" || !got.DetectedAt.Equal(again) || got.Released() || got.ReleaseReason != "" || got.ReleasedWaiting != 0 ||
+		!got.Active(again) || got.SessionID != "mer-3" || !got.ResetGuessed {
+		t.Fatalf("released limit recorded again = %+v; want a new live limit with identity b", got)
+	}
+
+	// So does recording a limit whose reset passed before LADO released it.
+	record(domain.LadoAccountLimit{AccountKey: "codex:work", Identity: "sha256:x", ResetAt: ladoWatchAt, DetectedAt: ladoWatchAt.Add(-time.Hour)})
+	later := ladoWatchAt.Add(time.Minute)
+	record(domain.LadoAccountLimit{AccountKey: "codex:work", Identity: "sha256:y", ResetAt: reset, DetectedAt: later})
+	if got := read("codex:work"); got.Identity != "sha256:y" || !got.DetectedAt.Equal(later) {
+		t.Fatalf("expired limit recorded again = %+v; want identity y detected at %s", got, later)
+	}
+}
+
+// CountLadoAccountLimitedWaits counts the open queue entries no lease holds,
+// the waiting parts and the plan worker requests not started that wait for an
+// account limit, and nothing else.
+func TestCountLadoAccountLimitedWaits(t *testing.T) {
+	s, raw := openLadoQueueStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	mustLadoMode(t, s, "mer", true)
+	count := func(step string, want int) {
+		t.Helper()
+		if n, err := s.CountLadoAccountLimitedWaits(ctx); err != nil || n != want {
+			t.Fatalf("%s: CountLadoAccountLimitedWaits = %d, %v; want %d", step, n, err, want)
+		}
+	}
+	rawExec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := raw.ExecContext(ctx, query, args...); err != nil {
+			t.Fatalf("%s: %v", query, err)
+		}
+	}
+	count("nothing", 0)
+
+	limited := domain.LadoWaitingAccountLimited
+	parts, held, leased, cancelled := mustQueuedLadoTask(t, s, "1", "mer", ladoQueueAt),
+		mustQueuedLadoTask(t, s, "2", "mer", ladoQueueAt.Add(time.Minute)),
+		mustQueuedLadoTask(t, s, "3", "mer", ladoQueueAt.Add(2*time.Minute)),
+		mustQueuedLadoTask(t, s, "4", "mer", ladoQueueAt.Add(3*time.Minute))
+	now := ladoQueueAt.Add(time.Hour)
+	claimed := mustClaimLadoQueue(t, s, now, 4, ladoTokens("t"), parts, held, leased, cancelled)
+	for _, i := range []int{1, 3} {
+		if ok, err := s.HoldLadoQueueEntryFor(ctx, claimed[i].ID, claimed[i].LeaseToken, limited, "reset", now.Add(time.Minute)); err != nil || !ok {
+			t.Fatalf("hold %s = %v, %v", claimed[i].ID, ok, err)
+		}
+	}
+	// A leased entry is not waiting, whatever its reason; a cancelled one is
+	// not open.
+	rawExec(`UPDATE lado_queue_entries SET waiting_reason = ? WHERE id = ?`, limited, leased)
+	rawExec(`UPDATE lado_queue_entries SET cancelled_at = ? WHERE id = ?`, now, cancelled)
+	count("queue", 1)
+
+	base := strings.Repeat("a", 40)
+	run := domain.LadoPartRun{
+		QueueEntryID: parts, TaskID: "lado-task-1", ProjectID: "mer", PlanRevisionID: "lado-plan-1", RepoDir: "/repo",
+		Branch: "lado/task-1/integration", BaseSHA: base, HeadSHA: base, StartedAt: now,
+	}
+	if err := s.StartLadoPartRun(ctx, claimed[0].LeaseToken, run, []domain.LadoTaskPart{
+		{PartID: "a", Title: "A", Phase: 1, Steps: []int{1}, AffectedPaths: []string{"a/**"}, WaitingReason: limited},
+		{PartID: "b", Title: "B", Position: 1, Phase: 1, Steps: []int{2}, AffectedPaths: []string{"b/**"}, WaitingReason: domain.LadoWaitingPartDependency},
+		{PartID: "c", Title: "C", Position: 2, Phase: 1, Steps: []int{3}, AffectedPaths: []string{"c/**"}, WaitingReason: limited},
+	}, ladoPartsEvent("parts.started")); err != nil {
+		t.Fatal(err)
+	}
+	count("parts started", 3)
+	// A part that is no longer waiting does not count.
+	rawExec(`UPDATE lado_task_parts SET state = 'failed' WHERE part_id = 'c'`)
+	count("parts", 2)
+
+	for _, id := range []string{"req-w1", "req-w2", "req-w3"} {
+		mustLadoWorkerRequest(t, s, id, "lado-task-2", now)
+		if err := s.SetLadoPlanRequestWaiting(ctx, domain.LadoPlanRequestID(id), limited); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.SetLadoPlanRequestWaiting(ctx, "req-w3", domain.LadoPlanWaitingCapacity); err != nil {
+		t.Fatal(err)
+	}
+	rawExec(`UPDATE lado_plan_requests SET failed_at = ? WHERE id = 'req-w2'`, now)
+	count("plan requests", 3)
 }
 
 func TestLadoAlertsAreRaisedOnceAndSeen(t *testing.T) {

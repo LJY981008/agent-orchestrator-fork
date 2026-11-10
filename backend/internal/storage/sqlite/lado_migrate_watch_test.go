@@ -8,7 +8,8 @@ import (
 	"testing"
 )
 
-// ladoWatchTables are the tables 0012 creates, with their columns in order.
+// ladoWatchTables are the tables 0012 creates, with their columns in order
+// on the latest migration.
 var ladoWatchTables = []struct {
 	name    string
 	columns []string
@@ -19,7 +20,11 @@ var ladoWatchTables = []struct {
 		"limit_state", "limit_reset_at", "limit_reset_guess", "limit_seen_at", "resumes", "resumed_at", "limit_stops",
 		"stall_state", "stalled_at", "nudges", "nudged_at", "stalls", "created_at", "updated_at",
 	}},
-	{"lado_account_limits", []string{"account_key", "session_id", "reset_at", "reset_guess", "detected_at", "updated_at"}},
+	// 0018 adds the identity and release columns.
+	{"lado_account_limits", []string{
+		"account_key", "session_id", "reset_at", "reset_guess", "detected_at", "updated_at",
+		"identity", "released_at", "release_reason", "released_waiting",
+	}},
 	{"lado_alerts", []string{"id", "task_id", "session_id", "kind", "level", "value", "threshold", "created_at", "seen_at"}},
 }
 

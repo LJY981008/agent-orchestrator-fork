@@ -9,6 +9,7 @@ package domain
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
 )
 
@@ -273,20 +274,180 @@ type LadoWatchStall struct {
 	Stalls int
 }
 
-// LadoAccountLimit is an account at its usage limit.
+// LadoAccountLimit is an account at its usage limit, or one whose limit LADO
+// released (issue #92): the row stays so LADO knows when and why it let go.
 type LadoAccountLimit struct {
 	// AccountKey is LadoAccountKey's key.
 	AccountKey string
 	// SessionID is the session LADO saw the limit in, empty if none.
-	SessionID    SessionID
+	SessionID SessionID
+	// Identity is the fingerprint of the account the key was logged in to
+	// when LADO recorded the limit ("sha256:<hex>", never the email), empty
+	// when LADO could not tell. A live limit keeps the first one recorded.
+	Identity     string
 	ResetAt      time.Time
 	ResetGuessed bool
 	DetectedAt   time.Time
 	UpdatedAt    time.Time
+	// ReleasedAt is when LADO released the limit, zero while it holds;
+	// ReleaseReason says why and ReleasedWaiting how many account_limited
+	// waits there were then.
+	ReleasedAt      time.Time
+	ReleaseReason   LadoLimitReleaseReason
+	ReleasedWaiting int
 }
 
-// Active reports whether the limit still holds at now.
-func (l LadoAccountLimit) Active(now time.Time) bool { return now.Before(l.ResetAt) }
+// Active reports whether the limit still holds at now: it was not released
+// and its reset has not come.
+func (l LadoAccountLimit) Active(now time.Time) bool {
+	return l.ReleasedAt.IsZero() && now.Before(l.ResetAt)
+}
+
+// Released reports whether LADO released the limit.
+func (l LadoAccountLimit) Released() bool { return !l.ReleasedAt.IsZero() }
+
+// ReleasedEarly reports whether the limit was released before its reset for
+// a reason other than the reset itself, so the workers it stopped need not
+// wait for the reset.
+func (l LadoAccountLimit) ReleasedEarly() bool {
+	return l.Released() && l.ReleaseReason != LadoLimitReleaseReset
+}
+
+// SparesSessionsBefore reports whether a session made before the release no
+// longer limits the account again: the limit was released because the account
+// changed or a person said so, and such a session may still run on the old
+// login (plan decision 8).
+func (l LadoAccountLimit) SparesSessionsBefore() bool {
+	return l.Released() && (l.ReleaseReason == LadoLimitReleaseAccountChanged || l.ReleaseReason == LadoLimitReleaseManual)
+}
+
+// LadoLimitReleaseReason says why LADO released an account's limit.
+type LadoLimitReleaseReason string
+
+// Release reasons.
+const (
+	LadoLimitReleaseNone LadoLimitReleaseReason = ""
+	// LadoLimitReleaseReset: the reset time came.
+	LadoLimitReleaseReset LadoLimitReleaseReason = "reset"
+	// LadoLimitReleaseAccountChanged: the key is logged in to another
+	// account than the one that hit the limit.
+	LadoLimitReleaseAccountChanged LadoLimitReleaseReason = "account_changed"
+	// LadoLimitReleaseManual: a person released it through the API.
+	LadoLimitReleaseManual LadoLimitReleaseReason = "manual"
+	// LadoLimitReleaseTurnCompleted: a worker stopped at the limit completed
+	// its next turn.
+	LadoLimitReleaseTurnCompleted LadoLimitReleaseReason = "turn_completed"
+)
+
+// LadoLimitReleaseReasons lists the release reasons.
+var LadoLimitReleaseReasons = []LadoLimitReleaseReason{
+	LadoLimitReleaseReset, LadoLimitReleaseAccountChanged, LadoLimitReleaseManual, LadoLimitReleaseTurnCompleted,
+}
+
+// Valid reports whether r is a known reason; the empty reason is not one.
+func (r LadoLimitReleaseReason) Valid() bool {
+	for _, known := range LadoLimitReleaseReasons {
+		if r == known {
+			return true
+		}
+	}
+	return false
+}
+
+// Errors of releasing an account limit by hand.
+var (
+	// ErrLadoAccountLimitNotFound: LADO has no limit of the account.
+	ErrLadoAccountLimitNotFound = errors.New("LADO account limit not found")
+	// ErrLadoAccountLimitNotActive: the limit was already released or its
+	// reset passed.
+	ErrLadoAccountLimitNotActive = errors.New("LADO account limit is not active")
+)
+
+// ladoAccountKeyPattern is what ParseLadoAccountKey takes.
+var ladoAccountKeyPattern = regexp.MustCompile(`^(claude|codex):([A-Za-z0-9._-]+)$`)
+
+// ParseLadoAccountKey splits a LadoAccountKey key into its provider and
+// account id. ok is false for anything else, such as an unknown provider, an
+// empty account or characters an account id never has.
+func ParseLadoAccountKey(key string) (AgentAccountProvider, string, bool) {
+	m := ladoAccountKeyPattern.FindStringSubmatch(key)
+	if m == nil {
+		return "", "", false
+	}
+	return AgentAccountProvider(m[1]), m[2], true
+}
+
+// The account limit notice lines, after LadoNoticePrefix (issue #92).
+const (
+	ladoNoticeAccountLimited       = "%s 한도 — 새 워커 대기, %s 리셋"
+	ladoNoticeAccountLimitedGuess  = "%s 한도 — 새 워커 대기, %s 리셋 추정"
+	ladoNoticeAccountReleased      = "%s 한도 해제(%s) — 계정 한도 대기 %d건 다시 확인"
+	ladoNoticeAccountReasonUnknown = "알 수 없는 이유"
+)
+
+// ladoNoticeReleaseReasons are the short reasons a release notice gives.
+var ladoNoticeReleaseReasons = map[LadoLimitReleaseReason]string{
+	LadoLimitReleaseReset:          "리셋",
+	LadoLimitReleaseAccountChanged: "계정 바뀜",
+	LadoLimitReleaseManual:         "수동 해제",
+	LadoLimitReleaseTurnCompleted:  "작업 재개 확인",
+}
+
+// ladoNoticeAccount names the account of key: "Claude 계정" for the device
+// account and "Claude 계정(<id>)" for a named one. A key ParseLadoAccountKey
+// refuses is named as it is.
+func ladoNoticeAccount(key string) string {
+	provider, id, ok := ParseLadoAccountKey(key)
+	if !ok {
+		return "계정(" + key + ")"
+	}
+	name := "Claude"
+	if provider == AgentAccountProviderCodex {
+		name = "Codex"
+	}
+	if id == DeviceAgentAccountID(provider) {
+		return name + " 계정"
+	}
+	return name + " 계정(" + id + ")"
+}
+
+// ladoNoticeClock is at in loc as "15:04", or "1/2 15:04" when it is not on
+// now's day there. A nil loc is time.Local.
+func ladoNoticeClock(at, now time.Time, loc *time.Location) string {
+	if loc == nil {
+		loc = time.Local
+	}
+	at, now = at.In(loc), now.In(loc)
+	ay, am, ad := at.Date()
+	if ny, nm, nd := now.Date(); ay == ny && am == nm && ad == nd {
+		return at.Format("15:04")
+	}
+	return at.Format("1/2 15:04")
+}
+
+// LadoNoticeAccountLimited is the orchestrator line for an account that hit
+// its limit: "LADO 알림: Claude 계정 한도 — 새 워커 대기, 19:00 리셋", with
+// "리셋 추정" when LADO guessed the reset. The time is in loc (nil is
+// time.Local), with the date when it is not on now's day.
+func LadoNoticeAccountLimited(key string, resetAt time.Time, guessed bool, now time.Time, loc *time.Location) string {
+	format := ladoNoticeAccountLimited
+	if guessed {
+		format = ladoNoticeAccountLimitedGuess
+	}
+	return ladoNoticeLine(format, ladoNoticeAccount(key), ladoNoticeClock(resetAt, now, loc))
+}
+
+// LadoNoticeAccountReleased is the orchestrator line for a released limit:
+// "LADO 알림: Claude 계정 한도 해제(계정 바뀜) — 계정 한도 대기 n건 다시
+// 확인". waiting is every account_limited wait, of any provider: a wait does
+// not record which provider's limit holds it.
+func LadoNoticeAccountReleased(key string, reason LadoLimitReleaseReason, waiting int) string {
+	text, ok := ladoNoticeReleaseReasons[reason]
+	if !ok {
+		text = ladoNoticeAccountReasonUnknown
+	}
+	return ladoNoticeLine(ladoNoticeAccountReleased, ladoNoticeAccount(key), text, waiting)
+}
 
 // LadoAlertID identifies an alert.
 type LadoAlertID int64
