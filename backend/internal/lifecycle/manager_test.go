@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -5466,7 +5465,8 @@ func TestEmitTelemetryStampsRequestID(t *testing.T) {
 	}
 }
 
-// Each unresolved comment gets its own dedup slot. Sharing one key per PR made
+// Each unresolved comment gets its own dedup slot, even though the comments of
+// one pass share one message (#89). Sharing one key per PR made
 // every poll re-send whichever comments were not the most recent signature
 // written, and made them share the reviewMaxNudge budget so a PR with more
 // comments than that could never deliver the last of them.
@@ -5491,11 +5491,12 @@ func TestPRObservation_ReviewCommentNudgesDedupPerComment(t *testing.T) {
 	if err := m.ApplyPRObservation(ctx, "mer-1", o); err != nil {
 		t.Fatal(err)
 	}
-	if len(msg.msgs) != len(comments) {
-		t.Fatalf("first poll sent %d nudges, want one per comment (%d)", len(msg.msgs), len(comments))
+	// All comments go in one nudge (#89), but each keeps its own dedup slot.
+	if len(msg.msgs) != 1 {
+		t.Fatalf("first poll sent %d nudges, want one for all %d comments", len(msg.msgs), len(comments))
 	}
 	for _, c := range comments {
-		if !slices.ContainsFunc(msg.msgs, func(m string) bool { return strings.Contains(m, "finding "+c.ID) }) {
+		if !strings.Contains(msg.msgs[0], "finding "+c.ID) {
 			t.Fatalf("comment %s never nudged; the attempt budget is shared", c.ID)
 		}
 	}

@@ -53,7 +53,7 @@ func TestReviewCommentsMessage_NamesResolveCommandWithPRNumber(t *testing.T) {
 func TestReviewCommentsMessage_PlaceholderWithoutPRNumber(t *testing.T) {
 	got := formatReviewCommentsMessage(0, []ports.PRCommentObservation{
 		{ID: "1", ThreadID: "T1", Author: "alice", Body: "fix this"},
-	})
+	}, nil)
 	for _, w := range append([]string{
 		"Thread ID: T1",
 		"`ao pr resolve-comments <PR number> <thread id...>`",
@@ -72,7 +72,7 @@ func TestReviewCommentsMessage_NoCommentsBranchNamesResolveCommand(t *testing.T)
 		{7, "`ao pr resolve-comments 7 <thread id...>`"},
 		{0, "`ao pr resolve-comments <PR number> <thread id...>`"},
 	} {
-		got := formatReviewCommentsMessage(tc.number, nil)
+		got := formatReviewCommentsMessage(tc.number, nil, nil)
 		if !strings.HasPrefix(got, "A reviewer left feedback on your PR.") {
 			t.Fatalf("no-comment message lost its lead:\n%s", got)
 		}

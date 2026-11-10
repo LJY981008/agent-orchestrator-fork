@@ -18,6 +18,20 @@ import (
 
 const reviewMaxNudge = 3
 
+// Limits of one review-comment nudge (#89). Comments past either limit go into
+// the message without their bodies (location, Thread ID and URL only) and are
+// not recorded as sent, so their full text goes on the next observed PR change.
+// The byte limit counts each comment's sanitized numbered entry (location,
+// author, body, URL and Thread ID lines); the first comment always goes in even
+// if it alone is over the limit, because bodies are never cut.
+const (
+	reviewCommentBatchMaxComments = 20
+	reviewCommentBatchMaxBytes    = 24000
+	// reviewCommentOmittedMaxLines caps the body-less lines listing the
+	// comments that did not fit; the rest are counted as "and K more".
+	reviewCommentOmittedMaxLines = 50
+)
+
 type reactionState struct {
 	mu       sync.Mutex
 	seen     map[string]string
@@ -62,6 +76,28 @@ type pendingNudge struct {
 	// merge-conflict nudge (see ApplyPRObservation) — every other nudge type
 	// keeps the ordinary Nudge gate.
 	urgent bool
+	// commentBatch, when set, makes this one nudge carry every review comment
+	// due in this pass (#89); key, sig and msg are then unused and the send goes
+	// through sendReviewCommentBatch, which keeps each comment's own dedup slot.
+	commentBatch *reviewCommentBatch
+}
+
+// reviewCommentBatch is the review comments of one PR observation sent as one
+// message. Each comment keeps its own dedup key, signature and attempt budget,
+// so the persisted reactionPayload format is the same as when every comment was
+// sent on its own.
+type reviewCommentBatch struct {
+	comments    []reviewCommentNudge
+	maxAttempts int
+	// message builds the nudge from the comments whose bodies go in and the
+	// comments that did not fit (nil when all fit).
+	message func(sent, omitted []ports.PRCommentObservation) string
+}
+
+type reviewCommentNudge struct {
+	key     string
+	sig     string
+	comment ports.PRCommentObservation
 }
 
 // ApplyPRObservation reacts to a fetched PR observation after the PR service has
@@ -220,25 +256,45 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 					replies = loadReviewReplyFilter(runs, o.URL, comments)
 				}
 			}
+			// All due comments go in one message (#89): one nudge per comment
+			// filled the worker's chat with the same resolve instructions.
+			var batch []reviewCommentNudge
+			batched := map[string]bool{}
 			for _, comment := range unresolved {
 				if skipReviewComments || !comment.AutoInjectReview || replies.isWorkerReviewReply(comment) {
 					continue
 				}
-				commentSlice := []ports.PRCommentObservation{comment}
-				msg := formatReviewCommentsMessage(o.Number, commentSlice)
-				if ident != "your PR" {
-					msg = strings.Replace(msg, "your PR", ident, 1)
+				// Per comment, like the review loop below: a shared key is a
+				// shared signature slot and a shared attempt budget. Comments
+				// with neither ID nor thread ID share a key; only the first
+				// goes in, as when the first send's record deduped the rest.
+				key := commentNudgeKey(o.URL, comment)
+				if batched[key] {
+					continue
 				}
-				if o.URL != "" {
-					msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
-				}
-				sig := reviewCommentsSignature(commentSlice)
+				batched[key] = true
+				sig := reviewCommentsSignature([]ports.PRCommentObservation{comment})
 				if sig == "" {
 					sig = string(o.Review)
 				}
-				// Per comment, like the review loop below: a shared key is a
-				// shared signature slot and a shared attempt budget.
-				nudges = append(nudges, pendingNudge{key: commentNudgeKey(o.URL, comment), sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
+				batch = append(batch, reviewCommentNudge{key: key, sig: sig, comment: comment})
+			}
+			if len(batch) > 0 {
+				prNumber, prURL := o.Number, o.URL
+				nudges = append(nudges, pendingNudge{commentBatch: &reviewCommentBatch{
+					comments:    batch,
+					maxAttempts: reviewMaxNudge,
+					message: func(sent, omitted []ports.PRCommentObservation) string {
+						msg := formatReviewCommentsMessage(prNumber, sent, omitted)
+						if ident != "your PR" {
+							msg = strings.Replace(msg, "your PR", ident, 1)
+						}
+						if prURL != "" {
+							msg += "\nPR: " + domain.SanitizeControlChars(prURL)
+						}
+						return msg
+					},
+				}})
 			}
 		}
 
@@ -291,7 +347,13 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// other deferred read errors.
 
 	for _, n := range nudges {
-		if _, err := m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent); err != nil {
+		var err error
+		if n.commentBatch != nil {
+			_, err = m.sendReviewCommentBatch(ctx, id, o.URL, *n.commentBatch)
+		} else {
+			_, err = m.sendOnce(ctx, id, o.URL, n.key, n.sig, n.msg, n.maxAttempts, n.urgent)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -889,39 +951,86 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 // exact AO command that closes a thread (#85): workers otherwise look for glab
 // or gh, find no token, and stop with the thread still open, which keeps the PR
 // from being ready to merge. prNumber 0 prints a placeholder instead.
-func formatReviewCommentsMessage(prNumber int, comments []ports.PRCommentObservation) string {
+//
+// omitted lists due comments that did not fit in this message (#89). They are
+// named without their bodies before the resolve instructions, and the worker is
+// told not to wait for them: lifecycle runs only when the PR changes, so their
+// full text may not come until after the worker's next push. nil omitted gives
+// the same message as before.
+func formatReviewCommentsMessage(prNumber int, comments, omitted []ports.PRCommentObservation) string {
 	if len(comments) == 0 {
 		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what AO has provided here.\n\n" + reviewThreadResolveInstructions(prNumber)
 	}
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
 	for i, c := range comments {
-		location := "(general)"
-		if c.File != "" {
-			location = domain.SanitizeControlChars(c.File)
-			if c.Line > 0 {
-				location = fmt.Sprintf("%s:%d", location, c.Line)
-			}
+		msg.WriteString(formatReviewCommentEntry(i+1, c))
+	}
+	msg.WriteString("\nAddress each comment and push fixes. You should not need to re-fetch review data unless you need additional context beyond what is provided here.\n\n")
+	if len(omitted) > 0 {
+		msg.WriteString(formatOmittedReviewComments(omitted))
+		msg.WriteString("\n")
+	}
+	msg.WriteString(reviewThreadResolveInstructions(prNumber))
+	return msg.String()
+}
+
+// formatReviewCommentEntry is one numbered comment of the review-comment nudge.
+// Its length is what reviewCommentBatchMaxBytes counts.
+func formatReviewCommentEntry(n int, c ports.PRCommentObservation) string {
+	var msg strings.Builder
+	location, author := reviewCommentLocationAuthor(c)
+	// Comment bodies are attacker-influenced (anyone who can comment on the
+	// PR) and get pasted into the agent's live pane; strip control/escape
+	// chars before formatting them.
+	body := domain.SanitizeControlChars(c.Body)
+	fmt.Fprintf(&msg, "\n%d. %s (@%s):\n%s", n, location, author, body)
+	if c.URL != "" {
+		fmt.Fprintf(&msg, "\n   %s", domain.SanitizeControlChars(c.URL))
+	}
+	if c.ThreadID != "" {
+		fmt.Fprintf(&msg, "\n   Thread ID: %s", domain.SanitizeControlChars(c.ThreadID))
+	}
+	msg.WriteString("\n")
+	return msg.String()
+}
+
+func reviewCommentLocationAuthor(c ports.PRCommentObservation) (string, string) {
+	location := "(general)"
+	if c.File != "" {
+		location = domain.SanitizeControlChars(c.File)
+		if c.Line > 0 {
+			location = fmt.Sprintf("%s:%d", location, c.Line)
 		}
-		author := domain.SanitizeControlChars(c.Author)
-		if strings.TrimSpace(author) == "" {
-			author = "unknown reviewer"
+	}
+	author := domain.SanitizeControlChars(c.Author)
+	if strings.TrimSpace(author) == "" {
+		author = "unknown reviewer"
+	}
+	return location, author
+}
+
+// formatOmittedReviewComments names the due comments that did not fit, one
+// body-less line each, so the worker can act on them without waiting.
+func formatOmittedReviewComments(omitted []ports.PRCommentObservation) string {
+	var msg strings.Builder
+	fmt.Fprintf(&msg, "%d more unresolved review comment(s) did not fit in this message. Their location, Thread ID and URL are listed below; address them too. "+
+		"Do not wait for AO: it sends their full text only when the PR changes again (for example after your push).\n", len(omitted))
+	for i, c := range omitted {
+		if i == reviewCommentOmittedMaxLines {
+			fmt.Fprintf(&msg, "and %d more on the PR\n", len(omitted)-i)
+			break
 		}
-		// Comment bodies are attacker-influenced (anyone who can comment on the
-		// PR) and get pasted into the agent's live pane; strip control/escape
-		// chars before formatting them.
-		body := domain.SanitizeControlChars(c.Body)
-		fmt.Fprintf(&msg, "\n%d. %s (@%s):\n%s", i+1, location, author, body)
-		if c.URL != "" {
-			fmt.Fprintf(&msg, "\n   %s", domain.SanitizeControlChars(c.URL))
-		}
+		location, author := reviewCommentLocationAuthor(c)
+		fmt.Fprintf(&msg, "- %s (@%s)", location, author)
 		if c.ThreadID != "" {
-			fmt.Fprintf(&msg, "\n   Thread ID: %s", domain.SanitizeControlChars(c.ThreadID))
+			fmt.Fprintf(&msg, " Thread ID: %s", domain.SanitizeControlChars(c.ThreadID))
+		}
+		if c.URL != "" {
+			fmt.Fprintf(&msg, " %s", domain.SanitizeControlChars(c.URL))
 		}
 		msg.WriteString("\n")
 	}
-	msg.WriteString("\nAddress each comment and push fixes. You should not need to re-fetch review data unless you need additional context beyond what is provided here.\n\n")
-	msg.WriteString(reviewThreadResolveInstructions(prNumber))
 	return msg.String()
 }
 
@@ -1045,6 +1154,97 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 		}
 	}
 	return sendOnceAccounted, nil
+}
+
+// sendReviewCommentBatch sends the due comments of b as one nudge (#89). It
+// follows sendOnce's order — lock, load the persisted dedup state, skip what is
+// deduped or out of budget, guard, record only on Sent, persist once — but per
+// comment: a comment already sent with the same signature, or whose attempts
+// reached b.maxAttempts, stays out of the message. The message is built here,
+// under the lock, because only the dedup state says which comments are due.
+//
+// Comments past reviewCommentBatchMaxComments or reviewCommentBatchMaxBytes are
+// named without their bodies and are not recorded, so their full text goes on
+// the next observed PR change.
+func (m *Manager) sendReviewCommentBatch(ctx context.Context, id domain.SessionID, prURL string, b reviewCommentBatch) (sendOnceOutcome, error) {
+	if m.guard == nil {
+		return sendOnceAccounted, nil
+	}
+	m.react.mu.Lock()
+	defer m.react.mu.Unlock()
+
+	if prURL != "" && !m.react.loaded[prURL] {
+		if err := m.loadPRSignaturesLocked(ctx, prURL); err != nil {
+			return sendOnceAccounted, err
+		}
+		m.react.loaded[prURL] = true
+	}
+
+	due := make([]reviewCommentNudge, 0, len(b.comments))
+	for _, c := range b.comments {
+		if m.react.seen[c.key] == c.sig {
+			continue
+		}
+		if b.maxAttempts > 0 && m.react.attempts[c.key] >= b.maxAttempts {
+			continue
+		}
+		due = append(due, c)
+	}
+	if len(due) == 0 {
+		return sendOnceAccounted, nil
+	}
+	fit := reviewCommentBatchFit(due)
+	sent := make([]ports.PRCommentObservation, 0, fit)
+	for _, c := range due[:fit] {
+		sent = append(sent, c.comment)
+	}
+	var omitted []ports.PRCommentObservation
+	for _, c := range due[fit:] {
+		omitted = append(omitted, c.comment)
+	}
+	msg := b.message(sent, omitted)
+
+	// Same guard semantics as sendOnce: a suppressed paste records nothing so
+	// the whole batch re-fires once the session is workable again.
+	outcome, err := m.guard.Nudge(ctx, id, msg)
+	if err != nil {
+		if outcome != sessionguard.Sent {
+			return sendOnceSuppressed, err
+		}
+		return sendOnceAccounted, err
+	}
+	if outcome != sessionguard.Sent {
+		return sendOnceSuppressed, nil
+	}
+	// Send → in-memory mutation → durable persist, as in sendOnce. Only the
+	// comments whose bodies went in are recorded.
+	for _, c := range due[:fit] {
+		m.react.seen[c.key] = c.sig
+		m.react.attempts[c.key]++
+	}
+	if prURL != "" {
+		if err := m.persistPRSignaturesLocked(ctx, prURL); err != nil {
+			return sendOnceAccounted, err
+		}
+	}
+	return sendOnceAccounted, nil
+}
+
+// reviewCommentBatchFit reports how many leading comments of due go into one
+// message with their bodies. The first always does.
+func reviewCommentBatchFit(due []reviewCommentNudge) int {
+	total := 0
+	for i, c := range due {
+		if i >= reviewCommentBatchMaxComments {
+			return i
+		}
+		size := len(formatReviewCommentEntry(i+1, c.comment))
+		if i > 0 && total+size > reviewCommentBatchMaxBytes {
+			return i
+		}
+		total += size
+	}
+	return len(due)
 }
 
 // loadPRSignaturesLocked merges any previously persisted reaction-dedup state
