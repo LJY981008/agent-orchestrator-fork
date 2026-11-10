@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
+import * as logWatch from "../../lib/lado-log-watch";
 import { TooltipProvider } from "../ui/tooltip";
 import { LadoLanes } from "./LadoLanes";
 
@@ -20,6 +21,11 @@ vi.mock("../../lib/lado", async (original) => ({
 	cancelLadoTask: vi.fn(),
 	fetchLadoTaskView: vi.fn(),
 	fetchLadoTaskParts: vi.fn(),
+}));
+
+vi.mock("../../lib/lado-log-watch", async (original) => ({
+	...await original<typeof import("../../lib/lado-log-watch")>(),
+	fetchLadoLogIncidents: vi.fn(),
 }));
 
 const demo: lado.LadoRepository = { ref: "github:acme/demo", name: "demo", provider: "github", host: "github.com", path: "acme/demo" };
@@ -703,4 +709,78 @@ test("a card not running parts does not read the parts", async () => {
 	await screen.findByText("Next");
 	await screen.findByRole("button", { name: "Open plan worker" });
 	expect(lado.fetchLadoTaskParts).not.toHaveBeenCalled();
+});
+
+// LADO fork: a task the production log watch created (issue #87).
+function incident(taskId: string, count: number): logWatch.LadoLogFingerprint {
+	return {
+		id: count,
+		projectId: "demo",
+		fingerprint: `fp-${taskId}`,
+		service: "grp/api",
+		exceptionKind: "java.lang.NullPointerException",
+		count,
+		firstSeenAt: "2026-11-10T00:00:00Z",
+		lastSeenAt: "2026-11-10T00:01:00Z",
+		ignored: false,
+		instances: [],
+		taskId,
+	};
+}
+
+test("an open log task has a red edge and says how often the error came", async () => {
+	vi.mocked(logWatch.fetchLadoLogIncidents).mockResolvedValue([incident("lado-task-log", 7)]);
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-log", source: "log", issue: { ...task.issue, title: "NullPointerException in api" } },
+		task,
+	]);
+	renderLane();
+
+	const lane = await screen.findByTestId("lado-plan-lane");
+	const card = (await within(lane).findByText("NullPointerException in api")).closest("[data-testid='lado-task-card']") as HTMLElement;
+	expect(card).toHaveAttribute("data-log-incident", "true");
+	expect(card).toHaveClass("border-[var(--color-status-exited)]");
+	expect(await within(card).findByTestId("lado-card-log-incident")).toHaveTextContent("Production error · 7×");
+	expect(logWatch.fetchLadoLogIncidents).toHaveBeenCalledWith("demo");
+
+	const plain = within(lane).getByText("Add login").closest("[data-testid='lado-task-card']") as HTMLElement;
+	expect(plain).not.toHaveAttribute("data-log-incident");
+	expect(plain).toHaveClass("border-border");
+	expect(within(plain).queryByTestId("lado-card-log-incident")).not.toBeInTheDocument();
+});
+
+test("a log task loses its mark once it closed, or its issue did", async () => {
+	vi.mocked(logWatch.fetchLadoLogIncidents).mockResolvedValue([]);
+	const cases: [string, lado.LadoTask["state"], lado.LadoTask["issue"]["state"]][] = [
+		["closed unmerged", "closed_unmerged", "done"],
+		["issue closed", "draft", "done"],
+		["issue not planned", "planned", "cancelled"],
+	];
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue(cases.map(([name, state, issueState], index) => ({
+		...task,
+		id: `lado-task-${index}`,
+		source: "log" as const,
+		state,
+		issue: { ...task.issue, number: 20 + index, title: name, state: issueState },
+	})));
+	renderLane();
+
+	await screen.findByText("closed unmerged");
+	for (const [name] of cases) {
+		const card = screen.getByText(name).closest("[data-testid='lado-task-card']") as HTMLElement;
+		expect(card, name).not.toHaveAttribute("data-log-incident");
+		expect(within(card).queryByTestId("lado-card-log-incident"), name).not.toBeInTheDocument();
+	}
+	// No card shows an incident, so the board does not read them.
+	expect(logWatch.fetchLadoLogIncidents).not.toHaveBeenCalled();
+});
+
+test("a log task shows its mark before the incidents are read", async () => {
+	vi.mocked(logWatch.fetchLadoLogIncidents).mockReturnValue(new Promise(() => undefined));
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, source: "log" }]);
+	renderLane();
+
+	const card = (await screen.findByText("Add login")).closest("[data-testid='lado-task-card']") as HTMLElement;
+	expect(card).toHaveAttribute("data-log-incident", "true");
+	expect(within(card).getByTestId("lado-card-log-incident")).toHaveTextContent("Production error");
 });

@@ -1,7 +1,8 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
 // approvals, rules, runs, their verification and integration, branch
 // protection, project knowledge, the dispatch settings, and the worker watch:
-// usage, alerts and their settings. Rule changes
+// usage, alerts and their settings, and the production log watch (issue #87).
+// Rule changes
 // that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -83,6 +84,20 @@ import {
 	type LadoProjectOverlapInput,
 	type LadoWatchSettingsValues,
 } from "../lib/lado";
+import {
+	checkLadoLogSource,
+	deleteLadoLogTLS,
+	fetchLadoLogIncidents,
+	fetchLadoLogWatch,
+	importLadoLogCI,
+	importLadoLogTLS,
+	ladoLogIncidentsQueryKey,
+	ladoLogWatchQueryKey,
+	setLadoLogFingerprintIgnored,
+	updateLadoLogWatch,
+	type LadoLogTLSImport,
+	type LadoLogWatchInput,
+} from "../lib/lado-log-watch";
 import { sessionScmSummaryQueryKey } from "./useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
@@ -667,6 +682,81 @@ export function useUpdateLadoWatchSettings(projectId?: string) {
 			queryClient.setQueryData(ladoWatchSettingsQueryKey(projectId), settings);
 			void queryClient.invalidateQueries({ queryKey: ladoEffectiveQueryRoot });
 		},
+		retry: false,
+	});
+}
+
+/**
+ * A project's log watch. The open settings card passes a refresh interval:
+ * the sources' states live in the daemon's memory, so no event moves them.
+ */
+export function useLadoLogWatch(projectId: string, options: { enabled?: boolean; refetchInterval?: number } = {}) {
+	return useQuery({
+		queryKey: ladoLogWatchQueryKey(projectId),
+		queryFn: () => fetchLadoLogWatch(projectId),
+		enabled: (options.enabled ?? true) && Boolean(projectId),
+		refetchInterval: options.refetchInterval,
+		retry: false,
+	});
+}
+
+/** Saves the project's whole log watch; the card shows what the daemon kept. */
+export function useUpdateLadoLogWatch(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (input: LadoLogWatchInput) => updateLadoLogWatch(projectId, input),
+		onSuccess: (watch) => queryClient.setQueryData(ladoLogWatchQueryKey(projectId), watch),
+		retry: false,
+	});
+}
+
+/** Copies a saved source's TLS files under ~/.ao. */
+export function useImportLadoLogTLS(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ sourceId, input }: { sourceId: string; input: LadoLogTLSImport }) => importLadoLogTLS(projectId, sourceId, input),
+		onSuccess: (watch) => queryClient.setQueryData(ladoLogWatchQueryKey(projectId), watch),
+		retry: false,
+	});
+}
+
+/** Deletes LADO's copies of a source's TLS files. */
+export function useDeleteLadoLogTLS(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (sourceId: string) => deleteLadoLogTLS(projectId, sourceId),
+		onSuccess: (watch) => queryClient.setQueryData(ladoLogWatchQueryKey(projectId), watch),
+		retry: false,
+	});
+}
+
+/** Checks a saved source: its Engine version and the containers each target matches. */
+export function useCheckLadoLogSource(projectId: string) {
+	return useMutation({ mutationFn: (sourceId: string) => checkLadoLogSource(projectId, sourceId), retry: false });
+}
+
+/** Reads candidates from the project's .gitlab-ci.yml; it saves nothing. */
+export function useImportLadoLogCI(projectId: string) {
+	return useMutation({ mutationFn: () => importLadoLogCI(projectId), retry: false });
+}
+
+/** The project's log incidents; the log watch events refresh them. */
+export function useLadoLogIncidents(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoLogIncidentsQueryKey(projectId),
+		queryFn: () => fetchLadoLogIncidents(projectId),
+		enabled: enabled && Boolean(projectId),
+		retry: false,
+	});
+}
+
+/** Ignores a fingerprint or stops ignoring it; the incidents read again. */
+export function useSetLadoLogFingerprintIgnored(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ fingerprintId, ignored }: { fingerprintId: number; ignored: boolean }) =>
+			setLadoLogFingerprintIgnored(projectId, fingerprintId, ignored),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: ladoLogIncidentsQueryKey(projectId) }),
 		retry: false,
 	});
 }

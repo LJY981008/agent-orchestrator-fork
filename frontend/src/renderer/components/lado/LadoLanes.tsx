@@ -10,7 +10,9 @@
 // session card: it stands for an issue that has no session yet. DESIGN.md's
 // decisions log records the lanes, the card and the task view. A card also
 // shows the task's estimated cost and its unseen alerts (issue #42), and a
-// click on a LADO alert's notification opens its task here.
+// click on a LADO alert's notification opens its task here. A task the
+// production log watch created has a red edge and "Production error · n×"
+// while it is open (issue #87).
 import { Ban } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -19,11 +21,13 @@ import { formatTimeCompact } from "../../lib/format-time";
 import { ladoIssueLabel, type LadoRepository, type LadoTask } from "../../lib/lado";
 import { subscribeLadoTaskOpenRequests, takeLadoTaskOpenRequest } from "../../lib/lado-alert-notifications";
 import { ladoErrorText } from "../../lib/lado-errors";
+import { ladoLogIncidentShown, type LadoLogFingerprint } from "../../lib/lado-log-watch";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ladoOpenPlanWorker, ladoPlanComing, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoCardLogIncident, useLadoBoardLogIncidents } from "./LadoCardLogIncident";
 import { LadoCardWatch, type LadoTaskWatch, useLadoBoardWatch } from "./LadoCardWatch";
 import { LadoPartWorkerCardLink } from "./LadoPartWorkerLink";
 import { LadoPlanWorkerCardLink } from "./LadoPlanWorkerStatus";
@@ -49,11 +53,14 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 		return subscribeLadoTaskOpenRequests(take);
 	}, [projectId]);
 	const all = (tasks.data ?? []).filter(inLanes);
+	// The incidents are read only while a card shows one.
+	const incidentOf = useLadoBoardLogIncidents(projectId, all.some(ladoLogIncidentShown));
 	const queued = orderQueue(all.filter(isQueued));
 	const reviewing = orderPlanReview(all.filter(inPlanReview));
 	const planned = orderTasks(all.filter((task) => !isQueued(task) && !inPlanReview(task)));
 	const cardProps = {
 		repositories: repositories.data ?? [],
+		incidentOf,
 		onCancel: setCancelling,
 		onOpen: (task: LadoTask, tab: LadoTaskTab = "plan") => setOpened({ taskId: task.id, tab }),
 	};
@@ -240,12 +247,15 @@ function LadoTaskCard({
 	task,
 	watch,
 	repositories,
+	incidentOf,
 	onCancel,
 	onOpen,
 }: {
 	task: LadoTask;
 	watch: LadoTaskWatch;
 	repositories: readonly LadoRepository[];
+	/** The log watch's fingerprint of a task it created, once the incidents are read. */
+	incidentOf: (taskId: string) => LadoLogFingerprint | undefined;
 	onCancel: (task: LadoTask) => void;
 	onOpen: (task: LadoTask, tab?: LadoTaskTab) => void;
 }) {
@@ -255,12 +265,18 @@ function LadoTaskCard({
 	const worker = ladoOpenPlanWorker(task);
 	const parts = runningParts(task);
 	const issueLabel = ladoIssueLabel(task.issue.number, task.repository, repositories);
+	// A production incident's one status treatment: the failure token on the card's edge.
+	const incident = ladoLogIncidentShown(task);
 	return (
 		<div
 			role="listitem"
-			className="group relative w-full cursor-pointer rounded-lg border border-border bg-surface text-left"
+			className={cn(
+				"group relative w-full cursor-pointer rounded-lg border bg-surface text-left",
+				incident ? "border-[var(--color-status-exited)]" : "border-border",
+			)}
 			data-testid="lado-task-card"
 			data-task-id={task.id}
+			data-log-incident={incident ? "true" : undefined}
 			onClick={(event) => {
 				// The issue link, the session link and the cancel action are controls of their own.
 				if ((event.target as HTMLElement).closest("a,button")) return;
@@ -303,6 +319,7 @@ function LadoTaskCard({
 					>
 						{issueLabel}
 					</ProductExternalLink>
+					{incident ? <LadoCardLogIncident count={incidentOf(task.id)?.count} /> : null}
 					<LadoCardWatch watch={watch} className="ml-auto" onOpenAlerts={() => onOpen(task, "usage")} />
 				</div>
 			</div>
