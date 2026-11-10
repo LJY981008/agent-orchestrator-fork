@@ -51,12 +51,13 @@ func applyPR1(t *testing.T, m *Manager) {
 	}
 }
 
-// assertNudged checks that exactly the wanted bodies were injected, one nudge
-// each, and that none of the unwanted bodies were.
-func assertNudged(t *testing.T, msgs []string, want []string, notWant []string) {
+// assertNudged checks that wantMsgs nudges were sent, that every wanted body is
+// in them and that none of the unwanted bodies are. The review comments of one
+// observation share one nudge (#89), so the count is of messages, not bodies.
+func assertNudged(t *testing.T, msgs []string, wantMsgs int, want []string, notWant []string) {
 	t.Helper()
-	if len(msgs) != len(want) {
-		t.Fatalf("got %d nudges, want %d: %q", len(msgs), len(want), msgs)
+	if len(msgs) != wantMsgs {
+		t.Fatalf("got %d nudges, want %d: %q", len(msgs), wantMsgs, msgs)
 	}
 	all := strings.Join(msgs, "\n---\n")
 	for _, body := range want {
@@ -78,7 +79,7 @@ func TestReviewReplyFilter_WorkerReplyNotInjected(t *testing.T) {
 		reviewComment("c2", "R2", "W", "fixed in abc123"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding"}, []string{"fixed in abc123"})
+	assertNudged(t, msg.msgs, 1, []string{"review finding"}, []string{"fixed in abc123"})
 }
 
 func TestReviewReplyFilter_NewRunCommentInSameThreadInjected(t *testing.T) {
@@ -89,7 +90,7 @@ func TestReviewReplyFilter_NewRunCommentInSameThreadInjected(t *testing.T) {
 		reviewComment("c3", "R3", "W", "still broken here"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding", "still broken here"}, []string{"fixed in abc123"})
+	assertNudged(t, msg.msgs, 1, []string{"review finding", "still broken here"}, []string{"fixed in abc123"})
 }
 
 func TestReviewReplyFilter_OtherAccountsAndBotsInjected(t *testing.T) {
@@ -102,7 +103,7 @@ func TestReviewReplyFilter_OtherAccountsAndBotsInjected(t *testing.T) {
 		bot,
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding", "human finding", "bot finding"}, nil)
+	assertNudged(t, msg.msgs, 1, []string{"review finding", "human finding", "bot finding"}, nil)
 }
 
 func TestReviewReplyFilter_NoRunsInjectsEverything(t *testing.T) {
@@ -111,7 +112,7 @@ func TestReviewReplyFilter_NoRunsInjectsEverything(t *testing.T) {
 		reviewComment("c2", "R2", "W", "fixed in abc123"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"fixed in abc123"}, nil)
+	assertNudged(t, msg.msgs, 1, []string{"fixed in abc123"}, nil)
 }
 
 func TestReviewReplyFilter_EmptyReviewIDInjected(t *testing.T) {
@@ -121,7 +122,7 @@ func TestReviewReplyFilter_EmptyReviewIDInjected(t *testing.T) {
 		reviewComment("n1", "", "W", "note without review"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding", "note without review"}, nil)
+	assertNudged(t, msg.msgs, 1, []string{"review finding", "note without review"}, nil)
 }
 
 func TestReviewReplyFilter_AuthorNormalized(t *testing.T) {
@@ -131,7 +132,7 @@ func TestReviewReplyFilter_AuthorNormalized(t *testing.T) {
 		reviewComment("c2", "R2", " @w ", "fixed in abc123"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding"}, []string{"fixed in abc123"})
+	assertNudged(t, msg.msgs, 1, []string{"review finding"}, []string{"fixed in abc123"})
 }
 
 func TestReviewReplyFilter_ClaimedPROriginalAuthorInjected(t *testing.T) {
@@ -143,7 +144,7 @@ func TestReviewReplyFilter_ClaimedPROriginalAuthorInjected(t *testing.T) {
 		reviewComment("c2", "R2", "W", "fixed in abc123"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding", "author note"}, []string{"fixed in abc123"})
+	assertNudged(t, msg.msgs, 1, []string{"review finding", "author note"}, []string{"fixed in abc123"})
 }
 
 func TestReviewReplyFilter_RunListErrorSkipsReviewCommentsOnly(t *testing.T) {
@@ -159,7 +160,7 @@ func TestReviewReplyFilter_RunListErrorSkipsReviewCommentsOnly(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "db down") {
 		t.Fatalf("want run list error, got %v", err)
 	}
-	assertNudged(t, msg.msgs, []string{"CI is failing"}, []string{"review finding"})
+	assertNudged(t, msg.msgs, 1, []string{"CI is failing"}, []string{"review finding"})
 }
 
 func TestReviewReplyFilter_StoreWithoutListerInjectsEverything(t *testing.T) {
@@ -170,7 +171,7 @@ func TestReviewReplyFilter_StoreWithoutListerInjectsEverything(t *testing.T) {
 		reviewComment("c2", "R2", "W", "fixed in abc123"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding", "fixed in abc123"}, nil)
+	assertNudged(t, msg.msgs, 1, []string{"review finding", "fixed in abc123"}, nil)
 }
 
 func TestReviewReplyFilter_FinishedRunWithoutIDOnThisPRDisablesFilter(t *testing.T) {
@@ -182,13 +183,13 @@ func TestReviewReplyFilter_FinishedRunWithoutIDOnThisPRDisablesFilter(t *testing
 	m, st, msg := newReviewRunManager(completeRun("pr1", "R1"), completeRun("pr1", ""))
 	st.comments["pr1"] = comments
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding", "unrecorded run finding"}, nil)
+	assertNudged(t, msg.msgs, 1, []string{"review finding", "unrecorded run finding"}, nil)
 
 	// The same kind of run on another PR does not switch this PR's filter off.
 	m, st, msg = newReviewRunManager(completeRun("pr1", "R1"), completeRun("pr2", ""))
 	st.comments["pr1"] = comments
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding"}, []string{"unrecorded run finding"})
+	assertNudged(t, msg.msgs, 1, []string{"review finding"}, []string{"unrecorded run finding"})
 }
 
 func TestReviewReplyFilter_RunningRunCommentInjectedOnceIDRecorded(t *testing.T) {
@@ -199,13 +200,13 @@ func TestReviewReplyFilter_RunningRunCommentInjectedOnceIDRecorded(t *testing.T)
 		reviewComment("c9", "R9", "W", "second pass finding"),
 	}
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"review finding"}, []string{"second pass finding"})
+	assertNudged(t, msg.msgs, 1, []string{"review finding"}, []string{"second pass finding"})
 
 	// The pass submits and records its review id; the next poll injects it.
 	st.runs[1] = completeRun("pr1", "R9")
 	msg.msgs = nil
 	applyPR1(t, m)
-	assertNudged(t, msg.msgs, []string{"second pass finding"}, []string{"review finding"})
+	assertNudged(t, msg.msgs, 1, []string{"second pass finding"}, []string{"review finding"})
 }
 
 func TestReviewReplyFilter_RunsReadOnlyWhenCommentsWouldBeInjected(t *testing.T) {
@@ -223,5 +224,5 @@ func TestReviewReplyFilter_RunsReadOnlyWhenCommentsWouldBeInjected(t *testing.T)
 	if st.runsCalls != 0 {
 		t.Fatalf("review runs read %d times, want 0", st.runsCalls)
 	}
-	assertNudged(t, msg.msgs, nil, nil)
+	assertNudged(t, msg.msgs, 0, nil, nil)
 }
