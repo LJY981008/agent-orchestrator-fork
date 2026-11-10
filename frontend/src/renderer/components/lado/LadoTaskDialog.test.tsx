@@ -25,6 +25,8 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoRules: vi.fn(),
 	approveLadoIntegration: vi.fn(),
 	mergeLadoPR: vi.fn(),
+	fetchLadoTaskParts: vi.fn(),
+	fetchLadoAccountLimits: vi.fn(),
 }));
 
 vi.mock("../../lib/lado-log-watch", async (original) => ({
@@ -940,4 +942,35 @@ test("a task the developer created shows no incident and reads none", async () =
 	await screen.findByText("The plan is in the comments.");
 	expect(screen.queryByTestId("lado-task-log-incident")).not.toBeInTheDocument();
 	expect(logWatch.fetchLadoLogIncidents).not.toHaveBeenCalled();
+});
+
+test("a task whose part waits on an account limit offers to release it", async () => {
+	const user = userEvent.setup();
+	mockApproved(approvedTask({ state: "running", parts: { total: 2, merged: 0 } }));
+	vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({
+		branch: "lado/c14c6be2/integration",
+		parts: [
+			{ id: "api", title: "API", phase: 1, steps: [1], affectedPaths: ["api/**"], dependsOn: [], state: "running", attempts: 1, sessionId: "demo-8", mergeAttempts: 0, updatedAt: "2026-10-20T10:10:00Z" },
+			{ id: "web", title: "Page", phase: 1, steps: [2], affectedPaths: ["web/**"], dependsOn: [], state: "waiting", waitingReason: "account_limited", waitingDetail: "2026-10-20T19:00:00Z", attempts: 0, mergeAttempts: 0, updatedAt: "2026-10-20T10:10:00Z" },
+		],
+	});
+	vi.mocked(lado.fetchLadoAccountLimits).mockResolvedValue([{
+		accountKey: "claude:device-claude", provider: "claude", accountId: "device-claude", active: true, identityKnown: true,
+		detectedAt: "2026-10-20T14:00:00Z", resetAt: "2026-10-20T19:00:00Z", releasedWaiting: 0, resetGuessed: false, updatedAt: "2026-11-10T14:00:00Z",
+	}]);
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	await user.click(await within(dialog).findByRole("button", { name: "Release limit (I switched accounts)" }));
+	expect(await screen.findByTestId("lado-account-limit-dialog")).toBeInTheDocument();
+});
+
+test("a queued task that waits for a slot offers no limit release", async () => {
+	mockApproved(approvedTask({ stateReason: "slot_global", queue: { state: "waiting", attempts: 0, enqueuedAt, reason: "slot_global" } }));
+	renderDialog();
+	const dialog = await screen.findByTestId("lado-task-dialog");
+
+	await within(dialog).findByTestId("lado-queue-status");
+	expect(within(dialog).queryByTestId("lado-account-limit-release")).not.toBeInTheDocument();
+	expect(lado.fetchLadoAccountLimits).not.toHaveBeenCalled();
 });
