@@ -53,9 +53,7 @@ func (s *Service) recordLimit(ctx context.Context, w *worker, msg limitMessage, 
 	}
 	w.watch.LadoWatchLimit = next
 	if key, ok := s.accountKey(ctx, *w); ok {
-		if err := s.deps.Store.RecordLadoAccountLimit(ctx, domain.LadoAccountLimit{
-			AccountKey: key, SessionID: w.session.ID, ResetAt: msg.ResetAt, ResetGuessed: msg.Guessed, DetectedAt: now, UpdatedAt: now,
-		}); err != nil {
+		if err := s.recordAccountLimit(ctx, key, w.session, msg, now); err != nil {
 			return err
 		}
 	}
@@ -83,7 +81,7 @@ func (s *Service) limitLifted(ctx context.Context, w *worker, now time.Time) err
 		return nil
 	}
 	if key, ok := s.accountKey(ctx, *w); ok {
-		if _, err := s.deps.Store.ReleaseLadoAccountLimit(ctx, key); err != nil {
+		if _, _, err := s.release(ctx, key, domain.LadoLimitReleaseTurnCompleted, actorLado, "", now); err != nil {
 			return err
 		}
 	}
@@ -91,20 +89,32 @@ func (s *Service) limitLifted(ctx context.Context, w *worker, now time.Time) err
 }
 
 // resumeIfDue sends the limit resume message to a worker whose limit reset
-// LadoWakeResumeDelay ago: once a stop, at most LadoWakeMaxResumes times a
-// session, only while it rests and has not asked the owner, and only where
-// the project lets LADO wake its workers. A worker busy at the reset is
+// LadoWakeResumeDelay ago, or whose account's limit LADO released before the
+// reset after the worker stopped (releasedEarly), in any project: once a
+// stop, at most LadoWakeMaxResumes times a session, only while it rests and
+// has not asked the owner, and only where the project lets LADO wake its
+// workers. A worker busy at the reset is
 // resumed on a later tick; one whose newest turn the owner stopped is not.
 func (s *Service) resumeIfDue(ctx context.Context, w *worker, now time.Time) error {
 	lim := w.watch.LadoWatchLimit
+	if lim.LimitState != domain.LadoLimitLimited {
+		return nil
+	}
 	switch {
-	case lim.LimitState != domain.LadoLimitLimited,
-		now.Before(lim.LimitResetAt.Add(domain.LadoWakeResumeDelay)),
-		lim.Resumes >= domain.LadoWakeMaxResumes,
+	case lim.Resumes >= domain.LadoWakeMaxResumes,
 		!lim.ResumedAt.IsZero() && !lim.ResumedAt.Before(lim.LimitSeenAt),
 		!w.settings.WakeEnabled, s.deps.Messenger == nil,
 		w.answering(), !w.resting(), w.ownerStopped():
 		return nil
+	}
+	payload := map[string]any{"resetAt": lim.LimitResetAt}
+	if now.Before(lim.LimitResetAt.Add(domain.LadoWakeResumeDelay)) {
+		// Before the reset only a release after the stop resumes the worker.
+		releasedAt, ok := s.releasedEarly(ctx, *w)
+		if !ok || now.Before(releasedAt) {
+			return nil
+		}
+		payload["releasedAt"] = releasedAt
 	}
 	next := lim
 	next.Resumes, next.ResumedAt = lim.Resumes+1, now
@@ -113,9 +123,8 @@ func (s *Service) resumeIfDue(ctx context.Context, w *worker, now time.Time) err
 	if _, err := s.deps.Store.SetLadoSessionWatchLimit(ctx, w.session.ID, next, now); err != nil {
 		return err
 	}
-	if err := s.send(ctx, *w, "limit_resume", domain.LadoWakeLimitResumeText, now, map[string]any{
-		"resume": next.Resumes, "resetAt": lim.LimitResetAt,
-	}); err != nil {
+	payload["resume"] = next.Resumes
+	if err := s.send(ctx, *w, "limit_resume", domain.LadoWakeLimitResumeText, now, payload); err != nil {
 		if _, undoErr := s.deps.Store.SetLadoSessionWatchLimit(context.WithoutCancel(ctx), w.session.ID, lim, now); undoErr != nil {
 			s.deps.Log.Warn("LADO could not give back a resume that did not go", "session", w.session.ID, "err", undoErr)
 		}
