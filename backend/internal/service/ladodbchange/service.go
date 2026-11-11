@@ -151,6 +151,8 @@ type Service struct {
 	secretsMu sync.Mutex
 	// kick wakes the loop.
 	kick chan struct{}
+	// job is the state of the loop that applies and merges (job.go).
+	job jobState
 }
 
 // New returns a Service.
