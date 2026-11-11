@@ -45,4 +45,6 @@ Natural-language-to-command mappings for common AO tasks.
 | Inspect, cancel, or rerun a review | `ao review ls [session-id]`, `ao review cancel [session-id]`, or `ao review trigger [session-id] --rerun` |
 | Switch a running session's agent | `ao session switch-agent <id> <target-harness>` |
 | Configure a project's default branch or model | `ao project set-config <id> --default-branch <branch> --model <model>` |
+| See the account usage limits LADO holds new workers for | `ao lado limits`; read [commands/lado.md](commands/lado.md) |
+| Release an account usage limit after logging in to another account | `ao lado limits release <account-key> --reason "<why>"` (never edit LADO's database) |
 | Import projects from a legacy AO install | `ao import --dry-run` (preview), then `ao import -y` |

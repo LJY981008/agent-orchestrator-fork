@@ -176,8 +176,24 @@ func TestLimitLiftsWhenALaterTurnCompletes(t *testing.T) {
 	if w.LimitState != domain.LadoLimitNone || w.Resumes != 1 {
 		t.Fatalf("limit watch = %+v", w.LadoWatchLimit)
 	}
-	if _, ok := f.store.limits[key]; ok {
-		t.Fatalf("the account's limit was kept after a completed turn")
+	// The reset released the account's limit before that turn.
+	if l, ok := f.store.limit(key); !ok || l.ReleaseReason != domain.LadoLimitReleaseReset {
+		t.Fatalf("account limit = %+v", l)
+	}
+
+	// A turn that completes before the reset releases the account's limit.
+	f2 := newFixture(t)
+	f2.limitAt(t0, sessionLimit)
+	f2.tick(t0.Add(time.Minute))
+	back := t0.Add(30 * time.Minute)
+	f2.endTurn(domain.TurnStateCompleted, "", back)
+	f2.rest(back)
+	f2.tick(back.Add(time.Minute))
+	if l, ok := f2.store.limit(key); !ok || l.ReleaseReason != domain.LadoLimitReleaseTurnCompleted || l.Active(back.Add(time.Minute)) {
+		t.Fatalf("the account's limit was not released after a completed turn: %+v", l)
+	}
+	if _, ok, _ := f2.svc.LaunchAccountLimit(context.Background(), domain.HarnessClaudeCode, back.Add(time.Minute)); ok {
+		t.Fatal("new workers are still held after the completed turn")
 	}
 }
 
@@ -357,11 +373,16 @@ func TestTickReleasesLimitsPastTheirReset(t *testing.T) {
 	f.store.limits["a"] = domain.LadoAccountLimit{AccountKey: "a", ResetAt: t0}
 	f.store.limits["b"] = domain.LadoAccountLimit{AccountKey: "b", ResetAt: t0.Add(time.Hour)}
 	f.tick(t0)
-	if _, ok := f.store.limits["a"]; ok {
-		t.Fatalf("kept a limit past its reset")
+	if l, _ := f.store.limit("a"); l.ReleaseReason != domain.LadoLimitReleaseReset || !l.ReleasedAt.Equal(t0) {
+		t.Fatalf("kept a limit past its reset: %+v", l)
 	}
-	if _, ok := f.store.limits["b"]; !ok {
-		t.Fatalf("released a limit before its reset")
+	if l, _ := f.store.limit("b"); l.Released() {
+		t.Fatalf("released a limit before its reset: %+v", l)
+	}
+	// A released limit is not released or counted again.
+	f.tick(t0.Add(time.Minute))
+	if f.store.auditCount("lado.limit_released") != 1 || f.store.waitCounts != 1 {
+		t.Fatalf("released again: audits %+v, counted %d times", f.store.audits, f.store.waitCounts)
 	}
 }
 

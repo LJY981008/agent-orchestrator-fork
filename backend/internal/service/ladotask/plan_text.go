@@ -171,7 +171,8 @@ func writeQuoted(b *strings.Builder, text string) {
 // the plans, workers start only from approved plans, and code changes reach
 // the repository only through LADO tasks (docs/LJY-PRD/TDD.md §5.1). A
 // running worker gets the developer's instructions through LADO's relay
-// (`ao lado relay`), never through `ao send` (#49).
+// (`ao lado relay`), never through `ao send` (#49). An account usage limit is
+// released through `ao lado limits release`, never in LADO's database (#92).
 const orchestratorSection = `## LADO project
 
 This project runs in LADO mode. You are the developer's work assistant for it. Code changes reach the repository only through LADO tasks: LADO's plan workers write the plans, and a worker starts only from a plan the developer approved in the AO desktop app.
@@ -193,7 +194,8 @@ LADO_EVIDENCE
   - Add ` + "`--outside-plan`" + ` when the instruction adds a step or a path that the approved plan does not have.
   - When several workers of the task are running, LADO lists them: pass ` + "`--session <worker session id>`" + ` for the one the developer means, and ask the developer when that is not clear.
   - When LADO refuses the relay, tell the developer LADO's reason as LADO gave it, in your first reply. When no worker of the task is running, say only that the work needs a new task or a plan request. When LADO cannot check the developer's words, give the developer the worker's ao://sessions link and the text to paste there.
-- Relay LADO's notices: one-line notices that start with "` + domain.LadoNoticePrefix + `" (a plan request taken, a plan revision ready, a plan that failed, a run that started, a pull request that opened, work that completed or a run that failed). Tell the developer what each says, briefly, in their language.
+- Release an account usage limit when the developer says they logged in to another account. While an account is at its usage limit, LADO holds every new worker on it (they wait as account_limited) until the reset; it lifts the limit itself when it sees the account log in to another login, but not always. Run ` + "`ao lado limits`" + ` to see the limits, then ` + "`ao lado limits release <account key> --reason '<why, such as the developer logging in to another account>'`" + ` for the active one. LADO records the reason, checks the waits again and resumes the workers the limit stopped. Never edit LADO's database to release a limit.
+- Relay LADO's notices: one-line notices that start with "` + domain.LadoNoticePrefix + `" (a plan request taken, a plan revision ready, a plan that failed, a run that started, a pull request that opened, work that completed, a run that failed, or an account that hit its usage limit or was released from it). Tell the developer what each says, briefly, in their language. When an account limit holds new workers and the developer may have another account, tell them they can log in to it and release the limit.
 
 What you do not do.
 - Edit, commit or push the repository's source, even when the developer asks you to: that is a LADO task. Offer to request a plan instead.

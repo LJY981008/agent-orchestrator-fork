@@ -12,7 +12,8 @@
 // shows the task's estimated cost and its unseen alerts (issue #42), and a
 // click on a LADO alert's notification opens its task here. A task the
 // production log watch created has a red edge and "Production error · n×"
-// while it is open (issue #87).
+// while it is open (issue #87). A card that waits on an account usage limit
+// offers to release it, for a developer who switched accounts (issue #92).
 import { Ban } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -27,6 +28,7 @@ import { ConfirmDialog } from "../ConfirmDialog";
 import { ProductExternalLink } from "../ProductExternalLink";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { ladoOpenPlanWorker, ladoPlanComing, ladoTaskReason, ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
+import { LadoAccountLimitRelease, ladoTaskAccountLimited } from "./LadoAccountLimitRelease";
 import { LadoCardLogIncident, useLadoBoardLogIncidents } from "./LadoCardLogIncident";
 import { LadoCardWatch, type LadoTaskWatch, useLadoBoardWatch } from "./LadoCardWatch";
 import { LadoPartWorkerCardLink } from "./LadoPartWorkerLink";
@@ -346,6 +348,8 @@ function LadoTaskCard({
 						{reason}
 					</p>
 				) : null}
+				{/* Its label lines up with the reason above. */}
+				{ladoTaskAccountLimited(task) ? <LadoAccountLimitRelease className="mt-1 ml-1.5" /> : null}
 			</div>
 		</div>
 	);

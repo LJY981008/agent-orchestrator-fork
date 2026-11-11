@@ -158,6 +158,9 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_ALERT_LIMIT_INVALID: "lado.error.internal",
 	LADO_ALERTS_LOAD_FAILED: "lado.error.internal",
 	LADO_ALERT_SEEN_FAILED: "lado.error.internal",
+	// The account usage limits a developer releases by hand (issue #92).
+	LADO_ACCOUNT_LIMIT_NOT_FOUND: "lado.error.accountLimitNotFound",
+	LADO_ACCOUNT_LIMIT_NOT_ACTIVE: "lado.error.accountLimitNotActive",
 	LADO_USAGE_PROJECT_REQUIRED: "lado.error.internal",
 	LADO_USAGE_LOAD_FAILED: "lado.error.internal",
 	// The desktop app's main process, before it reaches the daemon.

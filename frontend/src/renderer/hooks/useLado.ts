@@ -13,6 +13,7 @@ import {
 	claimLadoKnowledge,
 	createLadoTask,
 	deleteLadoRule,
+	fetchLadoAccountLimits,
 	fetchLadoAlerts,
 	fetchLadoUnseenAlertCounts,
 	fetchLadoCheckLog,
@@ -38,6 +39,7 @@ import {
 	importLadoTasks,
 	invalidateLadoRuleQueries,
 	LadoApiError,
+	ladoAccountLimitsQueryKey,
 	ladoAlertsProjectQueryKey,
 	ladoAlertsQueryKey,
 	ladoUnseenAlertCountsQueryKey,
@@ -62,10 +64,12 @@ import {
 	ladoTaskRelaysQueryKey,
 	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
+	ladoTasksQueryRoot,
 	ladoTaskViewQueryRoot,
 	ladoWatchSettingsQueryKey,
 	ladoWatchSettingsQueryRoot,
 	markLadoAlertSeen,
+	releaseLadoAccountLimit,
 	mergeLadoPR,
 	repostLadoIntegrationStatus,
 	requestLadoPlan,
@@ -655,6 +659,44 @@ export function useMarkLadoAlertsSeen(projectId: string) {
 			for (const alertId of alertIds) await markLadoAlertSeen(alertId);
 		},
 		onSettled: () => queryClient.invalidateQueries({ queryKey: ladoAlertsProjectQueryKey(projectId) }),
+		retry: false,
+	});
+}
+
+/** How often the account limits read again while something waits on one (issue #92). */
+export const LADO_ACCOUNT_LIMITS_REFRESH_MS = 30_000;
+
+/**
+ * The account usage limits LADO recorded. Only a view showing something that
+ * waits on a limit reads them, every 30 seconds while it does, since LADO
+ * releases a limit at its reset or when the account changed.
+ */
+export function useLadoAccountLimits(enabled = true) {
+	return useQuery({
+		queryKey: ladoAccountLimitsQueryKey,
+		queryFn: fetchLadoAccountLimits,
+		enabled,
+		refetchInterval: enabled ? LADO_ACCOUNT_LIMITS_REFRESH_MS : false,
+		retry: false,
+	});
+}
+
+/**
+ * Releases an active account limit by hand. The limits and the tasks read
+ * again: the waits on it start on the dispatcher's next pass.
+ */
+export function useReleaseLadoAccountLimit() {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ accountKey, reason }: { accountKey: string; reason: string }) => releaseLadoAccountLimit(accountKey, reason),
+		onSettled: () => {
+			// A 404 or 409 means the limits changed under the view, so they read again then too.
+			void queryClient.invalidateQueries({ queryKey: ladoAccountLimitsQueryKey });
+		},
+		onSuccess: () => {
+			void queryClient.invalidateQueries({ queryKey: ladoTasksQueryRoot });
+			void queryClient.invalidateQueries({ queryKey: ladoTaskViewQueryRoot });
+		},
 		retry: false,
 	});
 }

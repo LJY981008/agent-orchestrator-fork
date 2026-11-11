@@ -14,13 +14,14 @@
 // the developer instructions LADO relayed to the task's workers (issue #49).
 // A task the production log watch created leads its Plan tab with the
 // incident: how often and where LADO saw it, and the action that ignores it
-// (issue #87).
+// (issue #87). A task or part that waits on an account usage limit offers to
+// release it, for a developer who switched accounts (issue #92).
 import { useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { X } from "lucide-react";
 import { Fragment, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useApproveLadoPlan, useLadoPlan, useLadoTasks, useLadoTaskView, useRequestLadoPlan } from "../../hooks/useLado";
+import { useApproveLadoPlan, useLadoPlan, useLadoTaskParts, useLadoTasks, useLadoTaskView, useRequestLadoPlan } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
 import {
 	fetchLadoEffective,
@@ -60,6 +61,7 @@ import {
 	ladoTrackedPRs,
 	ladoTrackedPRStatus,
 } from "./lado-task-status";
+import { LadoAccountLimitRelease, ladoTaskAccountLimited } from "./LadoAccountLimitRelease";
 import { LadoTaskLogIncident } from "./LadoCardLogIncident";
 import { LadoPartsProgress, LadoPlanParts } from "./LadoParts";
 import { LadoPlanReview } from "./LadoPlanReview";
@@ -188,6 +190,9 @@ function TaskViewBody({
 	const workerShown = ladoOpenPlanWorker(task) ?? (worker?.phase === "failed" ? worker : undefined);
 	const pending = task.plan.requestPending || ladoOpenPlanWorker(task) !== undefined;
 	const shown = plan.data;
+	// The parts progress reads the same parts; a part can wait on an account limit too.
+	const parts = useLadoTaskParts(taskId, Boolean(task.parts));
+	const accountLimited = open && ladoTaskAccountLimited(task, parts.data?.parts);
 	// An approved plan is approved again when the rules or the issue changed
 	// since, or when its run failed. When the rules it was approved with block
 	// the run, approving again would sign the same rules; fixing the problems
@@ -334,6 +339,11 @@ function TaskViewBody({
 							) : null}
 							{shown && !shown.latest ? (
 								<p className="text-caption leading-4 text-settings-muted">{t("lado.error.planSuperseded")}</p>
+							) : null}
+							{accountLimited ? (
+								<div className="flex">
+									<LadoAccountLimitRelease className="-ml-2" />
+								</div>
 							) : null}
 							{task.parts ? <LadoPartsProgress task={task} onClose={onClose} /> : null}
 							{!latest ? (

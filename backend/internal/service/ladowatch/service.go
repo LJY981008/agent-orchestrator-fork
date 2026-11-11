@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -42,7 +43,13 @@ type Store interface {
 	SetLadoSessionWatchStall(ctx context.Context, session domain.SessionID, st domain.LadoWatchStall, at time.Time) (bool, error)
 
 	RecordLadoAccountLimit(ctx context.Context, l domain.LadoAccountLimit) error
-	ReleaseLadoAccountLimit(ctx context.Context, key string) (bool, error)
+	// MarkLadoAccountLimitReleased releases a limit not yet released; of
+	// callers racing to release it only one gets true.
+	MarkLadoAccountLimitReleased(ctx context.Context, key string, reason domain.LadoLimitReleaseReason, at time.Time) (bool, error)
+	SetLadoAccountLimitReleasedWaiting(ctx context.Context, key string, waiting int) error
+	// CountLadoAccountLimitedWaits counts what waits now on an account's
+	// limit, of every project and provider.
+	CountLadoAccountLimitedWaits(ctx context.Context) (int, error)
 	LadoAccountLimit(ctx context.Context, key string) (domain.LadoAccountLimit, bool, error)
 	ListLadoAccountLimits(ctx context.Context) ([]domain.LadoAccountLimit, error)
 	// GetAgentAccountDefault is the account a provider's new sessions start
@@ -51,6 +58,11 @@ type Store interface {
 
 	AddLadoAlert(ctx context.Context, a domain.LadoAlert) (domain.LadoAlertID, bool, error)
 	AppendLadoAuditEvent(ctx context.Context, ev domain.LadoAuditEvent) (domain.LadoAuditEvent, error)
+
+	// ListLadoModeProjectIDs and AddLadoOrchestratorNotice tell every LADO
+	// mode project's orchestrator when an account's limit holds and lifts.
+	ListLadoModeProjectIDs(ctx context.Context) ([]domain.ProjectID, error)
+	AddLadoOrchestratorNotice(ctx context.Context, n domain.LadoOrchestratorNotice) (bool, error)
 }
 
 // Sessions reads AO's sessions: their agent, activity and whether they ended.
@@ -73,6 +85,13 @@ type Accounts interface {
 	SessionAccountID(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (string, error)
 }
 
+// Identities reads the fingerprint of the login an account runs on
+// (*agentaccounts.Service): "sha256:<hex>", or "" when LADO cannot tell the
+// login from another.
+type Identities interface {
+	AccountFingerprint(ctx context.Context, accountID string) (string, error)
+}
+
 // Messenger delivers a message from the daemon to a worker session.
 type Messenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
@@ -92,6 +111,10 @@ type Deps struct {
 	// Accounts tells a session's account; nil takes every session to run on
 	// the computer's own login.
 	Accounts Accounts
+	// Identities reads which login an account key runs on, so a limit
+	// recorded on one login lifts once the key runs on another; nil records
+	// and checks no login.
+	Identities Identities
 	// Messenger sends the wake messages; nil sends none, and the watch only
 	// records and alerts.
 	Messenger Messenger
@@ -108,6 +131,10 @@ type Deps struct {
 // Service watches the running workers.
 type Service struct {
 	deps Deps
+
+	mu sync.Mutex
+	// checks is the last read of each limited key's login.
+	checks map[string]*identityCheck
 }
 
 // New returns a Service.
@@ -121,11 +148,11 @@ func New(deps Deps) *Service {
 	if deps.Log == nil {
 		deps.Log = slog.Default()
 	}
-	return &Service{deps: deps}
+	return &Service{deps: deps, checks: map[string]*identityCheck{}}
 }
 
 // Tick counts the compactions, releases the account limits whose reset
-// passed, then watches each running worker: its usage limit first and its
+// passed or whose key now runs on another login, then watches each running worker: its usage limit first and its
 // stall after (plan decision 6: a worker at its limit is not stalled). A
 // session that cannot be read is logged and left for the next tick; the
 // error is the context's or the reads every session needs.
@@ -140,7 +167,7 @@ func (s *Service) Tick(ctx context.Context) error {
 	}
 	now := s.deps.Clock().UTC()
 	var problems []error
-	if err := s.releaseExpired(ctx, now); err != nil {
+	if err := s.releaseLimits(ctx, now); err != nil {
 		problems = append(problems, err)
 	}
 	execs, err := s.deps.Store.LiveLadoExecutions(ctx)
@@ -168,30 +195,13 @@ type tickPass struct {
 	tasks    map[domain.LadoTaskID]domain.LadoTask
 }
 
-// releaseExpired removes the account limits whose reset passed.
-func (s *Service) releaseExpired(ctx context.Context, now time.Time) error {
-	limits, err := s.deps.Store.ListLadoAccountLimits(ctx)
-	if err != nil {
-		return fmt.Errorf("list the LADO account limits: %w", err)
-	}
-	for _, l := range limits {
-		if l.Active(now) {
-			continue
-		}
-		if _, err := s.deps.Store.ReleaseLadoAccountLimit(ctx, l.AccountKey); err != nil {
-			return fmt.Errorf("release the LADO account limit %s: %w", l.AccountKey, err)
-		}
-		s.deps.Log.Info("LADO released an account's usage limit at its reset", "account", l.AccountKey, "reset", l.ResetAt)
-	}
-	return nil
-}
-
 // LaunchAccountLimit returns the usage limit of the account a new session of
 // harness would start on, when one holds at now: the provider's default
 // account, or the computer's own login without one. ok is false for a
-// harness without accounts and for an account without a limit. The
-// dispatcher and the plan workers hold new workers while it holds (plan step
-// 15).
+// harness without accounts and for an account without a limit. A limit
+// whose key now runs on another login than the one it was recorded with is
+// released here (accountChanged). The dispatcher and the plan workers hold new
+// workers while it holds (plan step 15).
 func (s *Service) LaunchAccountLimit(ctx context.Context, harness domain.AgentHarness, now time.Time) (domain.LadoAccountLimit, bool, error) {
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok {
@@ -211,6 +221,9 @@ func (s *Service) LaunchAccountLimit(ctx context.Context, harness domain.AgentHa
 	l, ok, err := s.deps.Store.LadoAccountLimit(ctx, key)
 	if err != nil || !ok || !l.Active(now) {
 		return domain.LadoAccountLimit{}, false, err
+	}
+	if s.accountChanged(ctx, l, now) {
+		return domain.LadoAccountLimit{}, false, nil
 	}
 	return l, true, nil
 }

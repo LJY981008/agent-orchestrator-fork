@@ -13,6 +13,31 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const countLadoAccountLimitedWaits = `-- name: CountLadoAccountLimitedWaits :one
+SELECT CAST(
+    (SELECT COUNT(*) FROM lado_queue_entries q
+        WHERE q.waiting_reason = ?1
+          AND q.dispatched_session_id IS NULL AND q.failed_at IS NULL AND q.superseded_at IS NULL
+          AND q.cancelled_at IS NULL AND q.review_required_reason = '' AND q.blocked_reason = ''
+          AND q.parts_started_at IS NULL AND q.lease_token IS NULL)
+    + (SELECT COUNT(*) FROM lado_task_parts p
+        WHERE p.waiting_reason = ?1 AND p.state = 'waiting')
+    + (SELECT COUNT(*) FROM lado_plan_requests r
+        WHERE r.waiting_reason = ?1 AND r.kind = 'worker'
+          AND r.worker_started_at IS NULL AND r.failed_at IS NULL AND r.cleaned_at IS NULL)
+    AS INTEGER) AS waits
+`
+
+// Counts what waits now for an account limit: open queue entries no lease
+// holds, waiting parts and plan worker requests not started, whose waiting
+// reason is the given one. A wait does not record the provider.
+func (q *Queries) CountLadoAccountLimitedWaits(ctx context.Context, reason string) (int64, error) {
+	row := q.db.QueryRowContext(ctx, countLadoAccountLimitedWaits, reason)
+	var waits int64
+	err := row.Scan(&waits)
+	return waits, err
+}
+
 const countLadoUnseenAlertsByProject = `-- name: CountLadoUnseenAlertsByProject :many
 SELECT a.task_id, CAST(COUNT(*) AS INTEGER) AS unseen
 FROM lado_alerts a
@@ -52,18 +77,6 @@ func (q *Queries) CountLadoUnseenAlertsByProject(ctx context.Context, projectID 
 	return items, nil
 }
 
-const deleteLadoAccountLimit = `-- name: DeleteLadoAccountLimit :execrows
-DELETE FROM lado_account_limits WHERE account_key = ?
-`
-
-func (q *Queries) DeleteLadoAccountLimit(ctx context.Context, accountKey string) (int64, error) {
-	result, err := q.db.ExecContext(ctx, deleteLadoAccountLimit, accountKey)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const ensureLadoSessionWatch = `-- name: EnsureLadoSessionWatch :execrows
 INSERT OR IGNORE INTO lado_session_watch (session_id, task_id, created_at, updated_at)
 VALUES (?1, ?2, ?3, ?3)
@@ -85,7 +98,8 @@ func (q *Queries) EnsureLadoSessionWatch(ctx context.Context, arg EnsureLadoSess
 }
 
 const getLadoAccountLimit = `-- name: GetLadoAccountLimit :one
-SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at
+SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at,
+    identity, released_at, release_reason, released_waiting
 FROM lado_account_limits
 WHERE account_key = ?
 `
@@ -100,6 +114,10 @@ func (q *Queries) GetLadoAccountLimit(ctx context.Context, accountKey string) (L
 		&i.ResetGuess,
 		&i.DetectedAt,
 		&i.UpdatedAt,
+		&i.Identity,
+		&i.ReleasedAt,
+		&i.ReleaseReason,
+		&i.ReleasedWaiting,
 	)
 	return i, err
 }
@@ -278,7 +296,8 @@ func (q *Queries) InsertLadoAlert(ctx context.Context, arg InsertLadoAlertParams
 }
 
 const listLadoAccountLimits = `-- name: ListLadoAccountLimits :many
-SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at
+SELECT account_key, session_id, reset_at, reset_guess, detected_at, updated_at,
+    identity, released_at, release_reason, released_waiting
 FROM lado_account_limits
 ORDER BY account_key
 `
@@ -299,6 +318,10 @@ func (q *Queries) ListLadoAccountLimits(ctx context.Context) ([]LadoAccountLimit
 			&i.ResetGuess,
 			&i.DetectedAt,
 			&i.UpdatedAt,
+			&i.Identity,
+			&i.ReleasedAt,
+			&i.ReleaseReason,
+			&i.ReleasedWaiting,
 		); err != nil {
 			return nil, err
 		}
@@ -634,6 +657,31 @@ func (q *Queries) ListLadoSessionWatchByTask(ctx context.Context, taskID string)
 	return items, nil
 }
 
+const markLadoAccountLimitReleased = `-- name: MarkLadoAccountLimitReleased :execrows
+UPDATE lado_account_limits
+SET released_at = ?1,
+    release_reason = ?2,
+    released_waiting = 0,
+    updated_at = ?1
+WHERE account_key = ?3 AND released_at IS NULL
+`
+
+type MarkLadoAccountLimitReleasedParams struct {
+	ReleasedAt    sql.NullTime
+	ReleaseReason string
+	AccountKey    string
+}
+
+// Releases a limit that holds; a released row is not written again, so of
+// callers racing to release it only one sees a row.
+func (q *Queries) MarkLadoAccountLimitReleased(ctx context.Context, arg MarkLadoAccountLimitReleasedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markLadoAccountLimitReleased, arg.ReleasedAt, arg.ReleaseReason, arg.AccountKey)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const markLadoAlertSeen = `-- name: MarkLadoAlertSeen :execrows
 UPDATE lado_alerts
 SET seen_at = ?1
@@ -647,6 +695,26 @@ type MarkLadoAlertSeenParams struct {
 
 func (q *Queries) MarkLadoAlertSeen(ctx context.Context, arg MarkLadoAlertSeenParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markLadoAlertSeen, arg.SeenAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setLadoAccountLimitReleasedWaiting = `-- name: SetLadoAccountLimitReleasedWaiting :execrows
+UPDATE lado_account_limits
+SET released_waiting = ?1
+WHERE account_key = ?2 AND released_at IS NOT NULL
+`
+
+type SetLadoAccountLimitReleasedWaitingParams struct {
+	ReleasedWaiting int64
+	AccountKey      string
+}
+
+// Records how many waits a released limit left to start.
+func (q *Queries) SetLadoAccountLimitReleasedWaiting(ctx context.Context, arg SetLadoAccountLimitReleasedWaitingParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setLadoAccountLimitReleasedWaiting, arg.ReleasedWaiting, arg.AccountKey)
 	if err != nil {
 		return 0, err
 	}
@@ -768,30 +836,48 @@ func (q *Queries) UpdateLadoSessionWatchStall(ctx context.Context, arg UpdateLad
 }
 
 const upsertLadoAccountLimit = `-- name: UpsertLadoAccountLimit :exec
-INSERT INTO lado_account_limits (account_key, session_id, reset_at, reset_guess, detected_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
+INSERT INTO lado_account_limits (account_key, session_id, identity, reset_at, reset_guess, detected_at, updated_at)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 ON CONFLICT (account_key) DO UPDATE SET
     session_id = excluded.session_id,
+    identity = CASE
+        WHEN lado_account_limits.released_at IS NULL AND lado_account_limits.reset_at > excluded.detected_at
+            AND lado_account_limits.identity <> '' THEN lado_account_limits.identity
+        ELSE excluded.identity
+    END,
     reset_at = excluded.reset_at,
     reset_guess = excluded.reset_guess,
+    detected_at = CASE
+        WHEN lado_account_limits.released_at IS NULL AND lado_account_limits.reset_at > excluded.detected_at
+            THEN lado_account_limits.detected_at
+        ELSE excluded.detected_at
+    END,
+    released_at = NULL,
+    release_reason = '',
+    released_waiting = 0,
     updated_at = excluded.updated_at
 `
 
 type UpsertLadoAccountLimitParams struct {
 	AccountKey string
 	SessionID  string
+	Identity   string
 	ResetAt    time.Time
 	ResetGuess int64
 	DetectedAt time.Time
 	UpdatedAt  time.Time
 }
 
-// Records an account at its limit; a later record replaces the reset time
-// and keeps when LADO first saw the limit.
+// Records an account at its limit. A record over a live row (not released,
+// reset still ahead) replaces the reset time and keeps when LADO first saw the
+// limit and the first known identity. A record over a released or expired row
+// starts the limit again: a new detected_at and identity, and no release.
+// Every value in SET reads the row as it was before the update.
 func (q *Queries) UpsertLadoAccountLimit(ctx context.Context, arg UpsertLadoAccountLimitParams) error {
 	_, err := q.db.ExecContext(ctx, upsertLadoAccountLimit,
 		arg.AccountKey,
 		arg.SessionID,
+		arg.Identity,
 		arg.ResetAt,
 		arg.ResetGuess,
 		arg.DetectedAt,

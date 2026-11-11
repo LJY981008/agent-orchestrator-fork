@@ -103,3 +103,20 @@ func TestOrchestratorRelayExampleSurvivesTheShell(t *testing.T) {
 		t.Fatalf("evidence on stdin = %q, want %q", stdin, evidence+"\n")
 	}
 }
+
+// LADO fork: a LADO project's orchestrator releases an account usage limit
+// through `ao lado limits release`, never in LADO's database, and passes on
+// the account limit notices (#92).
+func TestOrchestratorSectionReleasesAccountLimitsThroughTheCLI(t *testing.T) {
+	for _, want := range []string{
+		"Release an account usage limit when the developer says they logged in to another account.",
+		"`ao lado limits`",
+		"ao lado limits release <account key> --reason '<why, such as the developer logging in to another account>'",
+		"Never edit LADO's database to release a limit.",
+		"an account that hit its usage limit or was released from it",
+	} {
+		if !strings.Contains(orchestratorSection, want) {
+			t.Fatalf("LADO orchestrator section lacks %q:\n%s", want, orchestratorSection)
+		}
+	}
+}
