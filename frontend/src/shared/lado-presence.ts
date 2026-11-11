@@ -3,7 +3,9 @@
 // renderer names the plan revision, the rule and mode or protected paths, the
 // project and its mode or check commands, the setup entries to adopt, the
 // adoption to restore, the setup change, the run whose integration to
-// approve, or the Claude in Chrome setting, and nothing else.
+// approve, the Claude in Chrome setting, or a repository's production
+// database change settings and a pull request's SQL to apply (#97), and
+// nothing else.
 // Main reads the subject from the daemon, asks the human in a native dialog,
 // and signs the request itself, so the renderer never holds the key.
 import type { components } from "../api/schema";
@@ -17,6 +19,8 @@ export const LADO_PRESENCE_CHANGE_SETUP_CHANNEL = "lado:presence:changeSetup";
 export const LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL = "lado:presence:approveIntegration";
 export const LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL = "lado:presence:changeProjectChecks";
 export const LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL = "lado:presence:changeClaudeChrome";
+export const LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL = "lado:presence:changeDbChanges";
+export const LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL = "lado:presence:applyDbChanges";
 
 export type LadoPresenceApproveRequest = { revisionId: string };
 
@@ -147,5 +151,50 @@ export type LadoPresenceClaudeChromeSettings = components["schemas"]["LadoClaude
 
 export type LadoPresenceClaudeChromeResult =
 	| { status: "changed"; settings: LadoPresenceClaudeChromeSettings }
+	| { status: "cancelled" }
+	| LadoPresenceFailure;
+
+/**
+ * One repository's production database change settings as they should be
+ * (#97, docs/LJY-PRD/adr/0013-db-changes-with-integration-approval.md): the
+ * command runs outside any agent sandbox with the secrets against the
+ * production database, so every change needs the human. Main reads the
+ * settings from the daemon, names only what changes, never shows a secret's
+ * value, and signs the change against the settings it read. secrets.set holds
+ * new values by name and secrets.remove the names whose stored values go.
+ */
+export type LadoPresenceDbChangesRequest = {
+	projectId: string;
+	repo: string;
+	enabled: boolean;
+	paths: string[];
+	command: string;
+	timeoutMinutes: number;
+	secretNames: string[];
+	secrets?: { set?: Record<string, string>; remove?: string[] };
+};
+
+export type LadoPresenceDbChangeSettings = components["schemas"]["LadoDBChangeSettingsResponse"];
+
+export type LadoPresenceDbChangesResult =
+	| { status: "changed"; settings: LadoPresenceDbChangeSettings }
+	| { status: "cancelled" }
+	| LadoPresenceFailure;
+
+export type LadoPresenceDbChangePhase = components["schemas"]["LadoDBChangeFileRefBody"]["phase"];
+
+/**
+ * A pull request's SQL of one phase to apply by hand: a retry after a failed
+ * or held pre-merge run, the pre-merge SQL of a pull request merged outside
+ * LADO, or the after-deploy SQL. Main reads the run's database changes from
+ * the daemon, names the head and each file with whether it runs, and signs
+ * the files it read.
+ */
+export type LadoPresenceApplyDbChangesRequest = { sessionId: string; prUrl: string; phase: LadoPresenceDbChangePhase };
+
+export type LadoPresenceDbChangeRun = components["schemas"]["LadoDBChangeRunResponse"];
+
+export type LadoPresenceApplyDbChangesResult =
+	| { status: "queued"; run: LadoPresenceDbChangeRun }
 	| { status: "cancelled" }
 	| LadoPresenceFailure;
