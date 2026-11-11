@@ -3733,6 +3733,182 @@ paths:
         PR
       tags:
       - lado
+  /api/v1/lado/executions/{sessionId}/db-changes:
+    get:
+      operationId: getLadoExecutionDBChanges
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDBChangeExecutionResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get an execution''s production database changes per PR: each SQL file
+        with its phase and how far it got, the applied files the head changes, and
+        the runs'
+      tags:
+      - lado
+  /api/v1/lado/executions/{sessionId}/db-changes/apply:
+    post:
+      operationId: applyLadoDBChanges
+      parameters:
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ApplyLadoDBChangesRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDBChangeRunResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Apply a PR head''s SQL files of one phase with a human-presence proof:
+        after-deploy SQL after the deploy, pre-merge SQL of a PR merged outside LADO,
+        or a retry of a run that stopped; files applied already are skipped'
+      tags:
+      - lado
+  /api/v1/lado/executions/{sessionId}/db-changes/file:
+    get:
+      operationId: getLadoDBChangeFile
+      parameters:
+      - description: The execution's PR the file belongs to.
+        in: query
+        name: prUrl
+        required: true
+        schema:
+          description: The execution's PR the file belongs to.
+          type: string
+      - description: The file's blob, as the execution's database changes list it;
+          LADO serves no other blob.
+        in: query
+        name: blobSha
+        required: true
+        schema:
+          description: The file's blob, as the execution's database changes list it;
+            LADO serves no other blob.
+          type: string
+      - description: AO session id of the worker.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: AO session id of the worker.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDBChangeFileContentResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a SQL file's content at a blob the execution's database changes
+        list, at most 256 KiB
+      tags:
+      - lado
   /api/v1/lado/executions/{sessionId}/integration-approve:
     post:
       operationId: approveLadoIntegration
@@ -3807,9 +3983,11 @@ paths:
               schema:
                 $ref: '#/components/schemas/APIError'
           description: Service Unavailable
-      summary: Approve the integration of the heads of an execution's open PRs together
+      summary: 'Approve the integration of the heads of an execution''s open PRs together
         with one human-presence proof, or preview it with dryRun; LADO then posts
-        each lado/integration status and never merges
+        each lado/integration status and never merges, except a task whose approved
+        heads have pre-merge production database SQL: LADO applies the SQL first,
+        then posts the status and merges through AO''s merge path (ADR 0013)'
       tags:
       - lado
   /api/v1/lado/executions/{sessionId}/integration-status:
@@ -4257,6 +4435,161 @@ paths:
           description: Not Implemented
       summary: Count each of a project's tasks' alerts nobody marked seen, over all
         of them, for the board's badges
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/db-changes:
+    get:
+      operationId: listLadoProjectDBChanges
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDBChangeSummaryListResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'List a project''s PRs whose production database SQL still needs something,
+        for the board''s badges: waiting, applying, failed, blocked before applying,
+        merged outside LADO unapplied, or after-deploy SQL left'
+      tags:
+      - lado
+  /api/v1/lado/projects/{projectId}/db-changes/settings:
+    get:
+      operationId: getLadoDBChangeSettings
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDBChangeSettingsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get a project's production database change settings, one entry per
+        repository (each child repository of a workspace), with the names of the secrets
+        LADO stores and never their values
+      tags:
+      - lado
+    put:
+      operationId: updateLadoDBChangeSettings
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      - description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the
+          AO desktop app over the method, path and body.
+        in: header
+        name: X-LADO-Presence
+        schema:
+          description: Human-presence proof v1.<nonce>.<expires>.<mac>, signed by
+            the AO desktop app over the method, path and body.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoDBChangeSettingsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoDBChangeSettingsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "403":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Forbidden
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace one repository's production database change settings with a
+        human-presence proof; turning them on or changing the paths records the default
+        branch's matching SQL files as applied, and secret values go to a file under
+        ~/.ao only
       tags:
       - lado
   /api/v1/lado/projects/{projectId}/issues:
@@ -17162,6 +17495,31 @@ components:
       - cpuPercent
       - cpuMeasured
       type: object
+    ApplyLadoDBChangesRequest:
+      properties:
+        files:
+          description: The files the developer confirmed, all of the phase; others
+            than the run's refuse the request.
+          items:
+            $ref: '#/components/schemas/LadoDBChangeFileRefBody'
+          type: array
+        headSha:
+          minLength: 40
+          type: string
+        phase:
+          enum:
+          - pre_merge
+          - after_deploy
+          type: string
+        prUrl:
+          minLength: 1
+          type: string
+      required:
+      - prUrl
+      - headSha
+      - phase
+      - files
+      type: object
     ApproveLadoIntegrationPR:
       properties:
         acknowledge:
@@ -21467,6 +21825,362 @@ components:
       required:
       - host
       - provider
+      type: object
+    LadoDBChangeExecutionResponse:
+      properties:
+        prs:
+          items:
+            $ref: '#/components/schemas/LadoDBChangePRResponse'
+          type: array
+        sessionId:
+          type: string
+        taskId:
+          type: string
+      required:
+      - sessionId
+      - taskId
+      - prs
+      type: object
+    LadoDBChangeFileContentResponse:
+      properties:
+        blobSha:
+          type: string
+        content:
+          type: string
+        path:
+          type: string
+        truncated:
+          description: LADO cut the content at 256 KiB.
+          type: boolean
+      required:
+      - path
+      - blobSha
+      - content
+      - truncated
+      type: object
+    LadoDBChangeFileRefBody:
+      properties:
+        blobSha:
+          minLength: 40
+          type: string
+        path:
+          minLength: 1
+          type: string
+        phase:
+          description: 'after_deploy: the file''s first line that is not blank is
+            ''-- lado:after-deploy'', so LADO applies it only by the developer''s
+            button after the merge.'
+          enum:
+          - pre_merge
+          - after_deploy
+          type: string
+      required:
+      - path
+      - blobSha
+      - phase
+      type: object
+    LadoDBChangeFileResponse:
+      properties:
+        appliedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        attempts:
+          type: integer
+        blobSha:
+          type: string
+        lastMessage:
+          description: The last application's one-line message, without secrets.
+          type: string
+        outputSha256:
+          description: The hash of the last application's redacted output.
+          type: string
+        path:
+          type: string
+        phase:
+          enum:
+          - pre_merge
+          - after_deploy
+          type: string
+        status:
+          description: 'interrupted: the daemon stopped while the command ran, so
+            whether the SQL took effect is unknown; LADO treats the file as not applied.'
+          enum:
+          - pending
+          - applying
+          - applied
+          - failed
+          - interrupted
+          type: string
+      required:
+      - path
+      - blobSha
+      - phase
+      - status
+      - attempts
+      type: object
+    LadoDBChangeModifiedResponse:
+      properties:
+        appliedBlobSha:
+          description: The blob LADO applied or recorded as the baseline.
+          type: string
+        deleted:
+          type: boolean
+        headBlobSha:
+          description: The head's blob; empty when deleted.
+          type: string
+        path:
+          type: string
+      required:
+      - path
+      - appliedBlobSha
+      - headBlobSha
+      - deleted
+      type: object
+    LadoDBChangePRResponse:
+      properties:
+        files:
+          items:
+            $ref: '#/components/schemas/LadoDBChangeFileResponse'
+          type: array
+        headSha:
+          type: string
+        modified:
+          items:
+            $ref: '#/components/schemas/LadoDBChangeModifiedResponse'
+          type: array
+        prUrl:
+          type: string
+        repo:
+          type: string
+        runs:
+          items:
+            $ref: '#/components/schemas/LadoDBChangeRunResponse'
+          type: array
+      required:
+      - prUrl
+      - headSha
+      - repo
+      - files
+      - modified
+      - runs
+      type: object
+    LadoDBChangeRepoSettingsResponse:
+      properties:
+        baselineCommit:
+          description: The default branch's commit whose matching files LADO recorded
+            as already applied when the settings were turned on or their paths changed.
+          type: string
+        command:
+          description: The line the shell runs for each file, with {file} for its
+            path.
+          type: string
+        enabled:
+          type: boolean
+        enabledAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        name:
+          description: The repository's display name.
+          type: string
+        paths:
+          description: Globs of the SQL files, relative to the repository's root.
+          items:
+            type: string
+          type: array
+        repo:
+          description: The child repository's folder in a workspace project; empty
+            in a single-repository project.
+          type: string
+        secretNames:
+          description: The environment variables the command gets from the repository's
+            secrets file.
+          items:
+            type: string
+          type: array
+        sha256:
+          description: The hash of the repository's saved settings, which a change
+            sends as base; empty for a repository that never saved any.
+          type: string
+        storedSecretNames:
+          description: The secret names whose values LADO stores; the values never
+            leave the daemon.
+          items:
+            type: string
+          type: array
+        timeoutMinutes:
+          description: The command's time limit for one file; 0 is the default of
+            10 minutes.
+          type: integer
+        updatedAt:
+          description: Omitted for a repository that never saved settings.
+          format: date-time
+          type:
+          - "null"
+          - string
+      required:
+      - repo
+      - name
+      - enabled
+      - paths
+      - command
+      - timeoutMinutes
+      - secretNames
+      - storedSecretNames
+      - sha256
+      type: object
+    LadoDBChangeRunResponse:
+      properties:
+        approvalId:
+          type: string
+        attempts:
+          type: integer
+        createdAt:
+          format: date-time
+          type: string
+        error:
+          description: The last stop's reason, one line without secrets, such as the
+            merge blockers a preflight found.
+          type: string
+        headSha:
+          type: string
+        id:
+          type: string
+        kind:
+          enum:
+          - pre_merge
+          - after_deploy
+          type: string
+        prUrl:
+          type: string
+        repo:
+          type: string
+        sessionId:
+          type: string
+        state:
+          description: awaiting_human waits for the developer's button; failed and
+            merge_failed wait for a retry.
+          enum:
+          - awaiting_human
+          - queued
+          - applying
+          - failed
+          - applied
+          - merging
+          - merge_failed
+          - done
+          type: string
+        taskId:
+          type: string
+        trigger:
+          description: 'approval: the integration approval; merged_unapplied: the
+            PR merged outside LADO with pre-merge SQL not applied; after_merge: after-deploy
+            SQL waits after the merge.'
+          enum:
+          - approval
+          - merged_unapplied
+          - after_merge
+          type: string
+        updatedAt:
+          format: date-time
+          type: string
+      required:
+      - id
+      - repo
+      - sessionId
+      - taskId
+      - prUrl
+      - headSha
+      - kind
+      - trigger
+      - state
+      - attempts
+      - createdAt
+      - updatedAt
+      type: object
+    LadoDBChangeSecretsRequest:
+      properties:
+        remove:
+          description: Secret names whose stored values are deleted.
+          items:
+            type: string
+          type: array
+        set:
+          additionalProperties:
+            type: string
+          description: Values to store by secret name; each name must be one of secretNames.
+            The values are written to a file under ~/.ao only and never returned.
+          type: object
+      type: object
+    LadoDBChangeSettingsResponse:
+      properties:
+        projectId:
+          type: string
+        repositories:
+          items:
+            $ref: '#/components/schemas/LadoDBChangeRepoSettingsResponse'
+          type: array
+        sha256:
+          description: The hash of every repository's settings, in order.
+          type: string
+      required:
+      - projectId
+      - repositories
+      - sha256
+      type: object
+    LadoDBChangeSummaryListResponse:
+      properties:
+        summaries:
+          items:
+            $ref: '#/components/schemas/LadoDBChangeSummaryResponse'
+          type: array
+      required:
+      - summaries
+      type: object
+    LadoDBChangeSummaryResponse:
+      properties:
+        failed:
+          description: How many of the PR's files failed their last application.
+          type: integer
+        message:
+          description: The last stop's reason, one line without secrets.
+          type: string
+        pending:
+          description: How many of the PR's files are not applied yet.
+          type: integer
+        prUrl:
+          type: string
+        repo:
+          type: string
+        sessionId:
+          type: string
+        state:
+          description: 'apply_waiting: approved SQL waits for LADO''s loop; preflight_blocked:
+            LADO did not apply the SQL since the PR could not merge; merged_unapplied:
+            the PR merged outside LADO with pre-merge SQL not applied; after_deploy_pending:
+            after-deploy SQL waits for the developer.'
+          enum:
+          - apply_waiting
+          - applying
+          - apply_failed
+          - preflight_blocked
+          - merge_failed
+          - after_deploy_pending
+          - merged_unapplied
+          type: string
+        taskId:
+          type: string
+      required:
+      - taskId
+      - sessionId
+      - prUrl
+      - repo
+      - state
+      - pending
+      - failed
       type: object
     LadoDispatchSettingsResponse:
       properties:
@@ -26412,6 +27126,7 @@ components:
           - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
+          - db_change_secrets_missing
           - status_not_posted
           - merged_without_approval
           - base_overlap
@@ -26854,6 +27569,7 @@ components:
           - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
+          - db_change_secrets_missing
           type: string
         sha256:
           description: The record's hash, which an integration approval signs as verificationSha256.
@@ -27017,6 +27733,14 @@ components:
           description: 'evidence: the pinned version of lado/evidence.md; omitted
             without one.'
           type: integer
+        files:
+          description: 'db_changes: the SQL files the head adds or changes that the
+            settings'' paths match, in byte order of their paths, each with its blob
+            and phase. The approval signs these blobs; whether a file is applied by
+            now is in the execution''s database changes, outside the record.'
+          items:
+            $ref: '#/components/schemas/LadoDBChangeFileRefBody'
+          type: array
         harness:
           description: 'review: the reviewer harness.'
           type: string
@@ -27031,6 +27755,12 @@ components:
             lacks the api scope, or LADO''s last post failed).'
           items:
             type: string
+          type: array
+        modified:
+          description: 'db_changes: for db_change_applied_modified, the applied files
+            the head changes or deletes; LADO never runs them again.'
+          items:
+            $ref: '#/components/schemas/LadoDBChangeModifiedResponse'
           type: array
         moved:
           description: 'base_branch: local moves of the base branch since the run
@@ -27060,6 +27790,9 @@ components:
           description: 'base_branch: how many files changed on the remote base branch
             overlap the head or the plan.'
           type: integer
+        planned:
+          description: 'db_changes: the plan''s change_kinds names db_schema.'
+          type: boolean
         prRepo:
           description: 'base_branch: for pr_repo_not_in_workspace, the PR''s repository,
             as provider:[host/]owner/name.'
@@ -27083,7 +27816,9 @@ components:
           description: 'base_branch: the base branch''s remote.'
           type: string
         repo:
-          description: 'protection: the repository, as owner/name.'
+          description: 'protection: the repository, as owner/name. db_changes: the
+            child repository''s folder in a workspace project; omitted in a single-repository
+            project.'
           type: string
         required:
           description: 'required_checks: the check names the base branch''s rules
@@ -27132,7 +27867,12 @@ components:
             the PR is open in a repository that is none of the workspace''s child
             repositories, so LADO cannot verify it; base_not_default: the PR''s repository
             is not the issue''s and the PR''s target or the dispatch''s base branch
-            is not that repository''s default branch.'
+            is not that repository''s default branch; no_db_changes: the head adds
+            or changes no SQL file the database change settings name; db_change_secrets_missing:
+            a secret the settings name has no stored value, so no SQL could run; db_change_applied_modified:
+            the head changes or deletes a SQL file LADO applied, which LADO never
+            runs again (details.modified lists them); db_change_unplanned: the head
+            has SQL files and the plan''s change_kinds lacks db_schema.'
           enum:
           - not_required
           - verifying
@@ -27168,10 +27908,16 @@ components:
           - review_pending
           - changes_requested
           - review_inconclusive
+          - no_db_changes
+          - db_change_secrets_missing
+          - db_change_applied_modified
+          - db_change_unplanned
           type: string
         details:
           $ref: '#/components/schemas/LadoVerifyItemDetailsResponse'
         kind:
+          description: 'db_changes is optional: only a head in a repository whose
+            production database change settings are on has it, after evidence.'
           enum:
           - required_checks
           - commands
@@ -27181,6 +27927,7 @@ components:
           - protection
           - review
           - evidence
+          - db_changes
           type: string
         outcome:
           description: info never decides; evidence is always info.
@@ -31347,6 +32094,49 @@ components:
       required:
       - chatSessions
       - ladoWorkers
+      type: object
+    UpdateLadoDBChangeSettingsRequest:
+      properties:
+        base:
+          description: The repository's sha256 from the settings the change started
+            from; empty for a repository that never saved any. Other settings refuse
+            the change with LADO_DB_CHANGE_SETTINGS_CHANGED.
+          type: string
+        command:
+          description: One line of at most 2000 characters with {file}.
+          type: string
+        enabled:
+          type: boolean
+        paths:
+          description: 1 to 10 globs relative to the repository, none absolute or
+            with a '..' segment.
+          items:
+            type: string
+          type: array
+        repo:
+          description: The child repository's folder in a workspace project; empty
+            in a single-repository project.
+          type: string
+        secretNames:
+          description: At most 10 environment variable names of ^[A-Z_][A-Z0-9_]{0,63}$;
+            names LADO withholds or sets for every command, such as PATH or GIT_SSH_COMMAND,
+            are refused.
+          items:
+            type: string
+          type: array
+        secrets:
+          $ref: '#/components/schemas/LadoDBChangeSecretsRequest'
+        timeoutMinutes:
+          description: 1 to 120; 0 or omitted is the default of 10.
+          maximum: 120
+          minimum: 0
+          type: integer
+      required:
+      - repo
+      - enabled
+      - paths
+      - command
+      - secretNames
       type: object
     UpdateLadoDispatchSettingsRequest:
       properties:

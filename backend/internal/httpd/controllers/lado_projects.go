@@ -52,6 +52,9 @@ type LadoController struct {
 	// AccountLimits lists the account usage limits LADO holds new workers
 	// for and releases one by hand (issue #92).
 	AccountLimits LadoAccountLimitService
+	// DBChanges ties the production database SQL of a PR to its
+	// integration approval (#97).
+	DBChanges LadoDBChangeService
 }
 
 const (
@@ -110,6 +113,7 @@ func (c *LadoController) Register(r chi.Router) {
 	c.registerRelay(r)
 	c.registerLogWatch(r)
 	c.registerAccountLimits(r)
+	c.registerDBChanges(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {
