@@ -245,8 +245,13 @@ type PromptSource struct {
 	References interface {
 		ProjectReferences(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoProjectReference, error)
 	}
-	// Log records a knowledge index or a reference list LADO could not read;
-	// nil uses slog.Default.
+	// DBChanges reads the project's production database change settings
+	// (#97); nil adds no database changes section.
+	DBChanges interface {
+		LadoDBChangeSettings(ctx context.Context, projectID domain.ProjectID) ([]domain.LadoDBChangeSettings, error)
+	}
+	// Log records a knowledge index, a reference list or database change
+	// settings LADO could not read; nil uses slog.Default.
 	Log *slog.Logger
 }
 
@@ -345,8 +350,8 @@ func (p PromptSource) CodexSection(ctx context.Context, projectID domain.Project
 }
 
 // Section is the text of Standing: CodexSection, then OrchestratorSection
-// for an orchestrator or WorkerSection for a worker, then KnowledgeSection,
-// then ReferencesSection.
+// for an orchestrator or WorkerSection for a worker, then DBChangeSection,
+// then KnowledgeSection, then ReferencesSection.
 func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, projectID domain.ProjectID, sessionID domain.SessionID, harness domain.AgentHarness) (string, error) {
 	standing, err := p.Standing(ctx, kind, projectID, sessionID, harness)
 	return standing.Text, err
@@ -355,7 +360,8 @@ func (p PromptSource) Section(ctx context.Context, kind domain.SessionKind, proj
 // Standing is the session manager's LADO section of a session's standing
 // instructions (sessionmanager.LadoPromptSection). Its text is CodexSection,
 // then OrchestratorSection for an orchestrator or WorkerSection for a
-// worker, then KnowledgeSection, then ReferencesSection (#29). It replaces
+// worker, then DBChangeSection (#97), then KnowledgeSection, then
+// ReferencesSection (#29). It replaces
 // AO's orchestrator role only for an orchestrator that gets LADO's
 // orchestrator section, that is in a project in LADO mode; the other
 // sections never decide that.
@@ -378,9 +384,10 @@ func (p PromptSource) Standing(ctx context.Context, kind domain.SessionKind, pro
 		return domain.LadoStandingSection{}, err
 	}
 	var parts []string
+	dbChanges := p.DBChangeSection(ctx, kind, projectID, sessionID)
 	knowledge := p.KnowledgeSection(ctx, kind, projectID, sessionID)
 	references := p.ReferencesSection(ctx, kind, projectID, sessionID, harness)
-	for _, part := range []string{codex, section, knowledge, references} {
+	for _, part := range []string{codex, section, dbChanges, knowledge, references} {
 		if part != "" {
 			parts = append(parts, part)
 		}

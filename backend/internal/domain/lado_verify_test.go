@@ -399,3 +399,115 @@ func TestLadoBaseBranchDetailsCrossRepoFieldsKeepOldHashes(t *testing.T) {
 		t.Fatal("the #59 codes changed; the renderer and the API name them")
 	}
 }
+
+// The db_changes item (#97) is optional: the eight items every record has
+// stay the same, a record without it keeps its hash, and with it the item
+// comes last in the format below.
+func TestLadoVerifyDBChangesItem(t *testing.T) {
+	if got := domain.LadoVerifyKinds(); len(got) != 8 || slices.Contains(got, domain.LadoVerifyDBChanges) {
+		t.Fatalf("LadoVerifyKinds = %v, want the 8 kinds without db_changes", got)
+	}
+	v := fixedLadoVerification(t, fixedLadoVerifyDetails())
+	const wantSHA = "13c8fd899ec18cbd14d62756d40f53903f73fa31b95f1112bb01e905b76f12d3"
+	if got := ladoVerifySHA(t, v); got != wantSHA {
+		t.Fatalf("SHA256 of the fixed record = %s, want %s", got, wantSHA)
+	}
+	if _, ok, err := v.DBChanges(); ok || err != nil {
+		t.Fatalf("DBChanges of a record without the item = %v, %v", ok, err)
+	}
+
+	empty, err := domain.NewLadoVerifyItem(domain.LadoVerifyDBChanges, domain.LadoVerifyPass, domain.LadoCodeNoDBChanges, domain.LadoDBChangesDetails{Repo: "back", Planned: true})
+	if err != nil || string(empty.Details) != `{"repo":"back","files":[],"modified":[],"planned":true}` {
+		t.Fatalf("empty db_changes = %s (%v)", empty.Details, err)
+	}
+
+	details := domain.LadoDBChangesDetails{
+		Repo: "back",
+		Files: []domain.LadoDBChangeFileRef{
+			{Path: "db/002_add.sql", BlobSHA: strings.Repeat("1", 40), Phase: domain.LadoDBChangePreMerge},
+			{Path: "db/003_drop.sql", BlobSHA: strings.Repeat("2", 40), Phase: domain.LadoDBChangeAfterDeploy},
+		},
+		Modified: []domain.LadoDBChangeModified{{Path: "db/001_init.sql", AppliedBlobSHA: strings.Repeat("3", 40), Deleted: true}},
+	}
+	item, err := domain.NewLadoVerifyItem(domain.LadoVerifyDBChanges, domain.LadoVerifyConfirm, domain.LadoCodeDBChangeAppliedModified, details)
+	if err != nil {
+		t.Fatalf("NewLadoVerifyItem(db_changes): %v", err)
+	}
+	withItem := v
+	withItem.Items = append(slices.Clone(v.Items), item)
+	content, err := withItem.Content()
+	if err != nil {
+		t.Fatalf("Content: %v", err)
+	}
+	wantItem := `{"kind":"db_changes","outcome":"confirm","code":"db_change_applied_modified","details":{"repo":"back",` +
+		`"files":[{"path":"db/002_add.sql","blobSha":"1111111111111111111111111111111111111111","phase":"pre_merge"},{"path":"db/003_drop.sql","blobSha":"2222222222222222222222222222222222222222","phase":"after_deploy"}],` +
+		`"modified":[{"path":"db/001_init.sql","appliedBlobSha":"3333333333333333333333333333333333333333","headBlobSha":"","deleted":true}],"planned":false}}]}`
+	if !strings.HasSuffix(string(content), wantItem) {
+		t.Fatalf("Content =\n%s\nwant it to end with\n%s", content, wantItem)
+	}
+	if ladoVerifySHA(t, withItem) == wantSHA {
+		t.Fatal("the db_changes item left the hash as it was")
+	}
+	// A blob is part of what an approval signs.
+	changed := details
+	changed.Files = slices.Clone(details.Files)
+	changed.Files[0].BlobSHA = strings.Repeat("4", 40)
+	other, err := domain.NewLadoVerifyItem(domain.LadoVerifyDBChanges, domain.LadoVerifyConfirm, domain.LadoCodeDBChangeAppliedModified, changed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withOther := v
+	withOther.Items = append(slices.Clone(v.Items), other)
+	if ladoVerifySHA(t, withOther) == ladoVerifySHA(t, withItem) {
+		t.Fatal("another blob kept the record's hash")
+	}
+
+	got, ok, err := withItem.DBChanges()
+	if err != nil || !ok || !reflect.DeepEqual(got, details) {
+		t.Fatalf("DBChanges = %+v, %v, %v; want %+v", got, ok, err, details)
+	}
+	if pre := got.PreMerge(); len(pre) != 1 || pre[0].Path != "db/002_add.sql" {
+		t.Fatalf("PreMerge = %+v", pre)
+	}
+	if after := got.AfterDeploy(); len(after) != 1 || after[0].Path != "db/003_drop.sql" {
+		t.Fatalf("AfterDeploy = %+v", after)
+	}
+	if outcome, reason := withItem.Overall(); outcome != domain.LadoVerifyFail || reason != domain.LadoCodeCommandsFailed {
+		t.Fatalf("Overall = %s, %s", outcome, reason)
+	}
+	if codes := withItem.ConfirmCodes(); !slices.Contains(codes, domain.LadoCodeDBChangeAppliedModified) {
+		t.Fatalf("ConfirmCodes = %v", codes)
+	}
+
+	// A missing secret fails the record with its code as the reason.
+	missing, err := domain.NewLadoVerifyItem(domain.LadoVerifyDBChanges, domain.LadoVerifyFail, domain.LadoCodeDBChangeSecretsMissing, details)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome, reason := (domain.LadoVerification{Items: []domain.LadoVerifyItem{missing}}).Overall(); outcome != domain.LadoVerifyFail || reason != domain.LadoCodeDBChangeSecretsMissing {
+		t.Fatalf("Overall = %s, %s", outcome, reason)
+	}
+	// Details of another kind, and db_changes details for another kind, are
+	// refused.
+	if _, err := domain.NewLadoVerifyItem(domain.LadoVerifyDBChanges, domain.LadoVerifyPass, "", domain.LadoPathsDetails{}); err == nil {
+		t.Fatal("db_changes took paths details")
+	}
+	if _, err := domain.NewLadoVerifyItem(domain.LadoVerifyPaths, domain.LadoVerifyPass, "", details); err == nil {
+		t.Fatal("paths took db_changes details")
+	}
+	// A broken item reads as an error.
+	broken := domain.LadoVerification{Items: []domain.LadoVerifyItem{{Kind: domain.LadoVerifyDBChanges, Outcome: domain.LadoVerifyPass, Details: []byte(`{"files":7}`)}}}
+	if _, _, err := broken.DBChanges(); err == nil {
+		t.Fatal("DBChanges read broken details")
+	}
+	for code, want := range map[string]string{
+		domain.LadoCodeNoDBChanges:             "no_db_changes",
+		domain.LadoCodeDBChangeSecretsMissing:  "db_change_secrets_missing",
+		domain.LadoCodeDBChangeAppliedModified: "db_change_applied_modified",
+		domain.LadoCodeDBChangeUnplanned:       "db_change_unplanned",
+	} {
+		if code != want {
+			t.Fatalf("code %q changed from %q; the renderer and the API name it", code, want)
+		}
+	}
+}
