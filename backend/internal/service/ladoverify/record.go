@@ -1,8 +1,9 @@
 package ladoverify
 
 // The record of one head (decisions b and c of the step 8 plan): the eight
-// items in their fixed order, computed from what LADO and AO know about the
-// head, with what the record waits for started on the way. The record is
+// items in their fixed order, then the optional db_changes item (#97),
+// computed from what LADO and AO know about the head, with what the record
+// waits for started on the way. The record is
 // evidence about that head, like a check run; a new head gets its own.
 
 import (
@@ -514,6 +515,11 @@ func (s *Service) evaluate(ctx context.Context, in headInputs, opts verifyOption
 			s.deps.Log.Warn("LADO could not compute a verification item; it waits", "session", in.exec.SessionID, "head", in.head, "item", step.kind, "err", err)
 			item = verifyingItem(step.kind)
 		}
+		ev.items = append(ev.items, item)
+	}
+	// #97: the optional db_changes item follows, only in a repository whose
+	// database change settings are on.
+	if item, ok := s.dbChangesItem(ctx, in, branch); ok {
 		ev.items = append(ev.items, item)
 	}
 	return ev
