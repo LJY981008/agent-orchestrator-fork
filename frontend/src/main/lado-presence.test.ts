@@ -4,19 +4,25 @@ import { describe, expect, it, vi } from "vitest";
 import type { components } from "../api/schema";
 import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
+	LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL,
 	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL,
+	LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL,
 	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
 	LADO_PRESENCE_RESTORE_SETUP_CHANNEL,
 	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoPresenceAdoptSetupResult,
+	type LadoPresenceApplyDbChangesResult,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
 	type LadoPresenceChecksResult,
 	type LadoPresenceClaudeChromeResult,
+	type LadoPresenceDbChangeRun,
+	type LadoPresenceDbChangeSettings,
+	type LadoPresenceDbChangesResult,
 	type LadoPresenceIntegration,
 	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeResult,
@@ -447,6 +453,79 @@ function pathsRule(globs: string[], overrides: Partial<LadoPresenceRule> = {}): 
 	});
 }
 
+// LADO fork: production database changes tied to the integration approval (#97).
+type DbRepoSettings = components["schemas"]["LadoDBChangeRepoSettingsResponse"];
+type DbPR = components["schemas"]["LadoDBChangePRResponse"];
+type DbFile = components["schemas"]["LadoDBChangeFileResponse"];
+const DB_SETTINGS_SHA = "d".repeat(64);
+const BLOB_A = "a1".repeat(20);
+const BLOB_B = "b2".repeat(20);
+const BLOB_C = "c3".repeat(20);
+
+function dbRepo(overrides: Partial<DbRepoSettings> = {}): DbRepoSettings {
+	return {
+		repo: "",
+		name: "demo",
+		enabled: true,
+		paths: ["scripts/migrations/*.sql"],
+		command: 'psql "$LADO_DB_DSN" -v ON_ERROR_STOP=1 -f {file}',
+		timeoutMinutes: 0,
+		secretNames: ["LADO_DB_DSN"],
+		storedSecretNames: ["LADO_DB_DSN"],
+		baselineCommit: "f".repeat(40),
+		enabledAt: "2026-11-01T00:00:00Z",
+		updatedAt: "2026-11-01T00:00:00Z",
+		sha256: DB_SETTINGS_SHA,
+		...overrides,
+	};
+}
+
+function dbSettingsResponse(repositories: DbRepoSettings[] = [dbRepo()]): LadoPresenceDbChangeSettings {
+	return { projectId: "demo", repositories, sha256: "e".repeat(64) };
+}
+
+function dbFile(path: string, blobSha: string, overrides: Partial<DbFile> = {}): DbFile {
+	return { path, blobSha, phase: "pre_merge", status: "pending", attempts: 0, ...overrides };
+}
+
+function dbRun(overrides: Partial<LadoPresenceDbChangeRun> = {}): LadoPresenceDbChangeRun {
+	return {
+		id: "lado-db-run-1",
+		repo: "",
+		sessionId: "demo-7",
+		taskId: "lado-task-1",
+		prUrl: PR_URL,
+		headSha: HEAD,
+		kind: "pre_merge",
+		trigger: "approval",
+		state: "failed",
+		attempts: 1,
+		createdAt: "2026-11-02T00:00:00Z",
+		updatedAt: "2026-11-02T00:00:00Z",
+		...overrides,
+	};
+}
+
+function dbPR(overrides: Partial<DbPR> = {}): DbPR {
+	return {
+		prUrl: PR_URL,
+		headSha: HEAD,
+		repo: "",
+		files: [
+			dbFile("scripts/migrations/001_users.sql", BLOB_A, { status: "applied", attempts: 1, appliedAt: "2026-11-02T00:00:00Z" }),
+			dbFile("scripts/migrations/002_orders.sql", BLOB_B, { status: "failed", attempts: 1, lastMessage: "exit 3" }),
+			dbFile("scripts/migrations/003_drop.sql", BLOB_C, { phase: "after_deploy" }),
+		],
+		modified: [],
+		runs: [dbRun()],
+		...overrides,
+	};
+}
+
+function dbExecution(prs: DbPR[] = [dbPR()]): components["schemas"]["LadoDBChangeExecutionResponse"] {
+	return { sessionId: "demo-7", taskId: "lado-task-1", prs };
+}
+
 type Route = () => Response | Promise<Response>;
 type Routes = {
 	plan?: Route;
@@ -469,6 +548,11 @@ type Routes = {
 	integration?: Route;
 	chrome?: Route;
 	chromePut?: Route;
+	dbSettings?: Route;
+	dbSettingsPut?: Route;
+	dbChanges?: Route;
+	dbFile?: (url: URL) => Response | Promise<Response>;
+	dbApply?: Route;
 };
 
 function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
@@ -480,6 +564,17 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	const fetch = vi.fn(async (url: string, init: RequestInit) => {
 		calls.push({ url, init });
 		const { pathname } = new URL(url);
+		if (pathname.endsWith("/db-changes/settings")) {
+			if (init.method === "GET") return routes.dbSettings ? routes.dbSettings() : json(200, dbSettingsResponse());
+			return routes.dbSettingsPut ? routes.dbSettingsPut() : json(200, dbSettingsResponse([dbRepo({ sha256: "0".repeat(64) })]));
+		}
+		if (pathname.endsWith("/db-changes/file")) {
+			if (routes.dbFile) return routes.dbFile(new URL(url));
+			const blobSha = new URL(url).searchParams.get("blobSha") ?? "";
+			return json(200, { path: "x.sql", blobSha, content: `-- ${blobSha.slice(0, 4)}\n\nALTER TABLE users\n  ADD COLUMN age int;\nSELECT 1;\n`, truncated: false });
+		}
+		if (pathname.endsWith("/db-changes/apply")) return routes.dbApply ? routes.dbApply() : json(200, dbRun({ state: "queued" }));
+		if (pathname.endsWith("/db-changes")) return routes.dbChanges ? routes.dbChanges() : json(200, dbExecution());
 		if (pathname === "/api/v1/lado/claude-chrome") {
 			if (init.method === "GET") return routes.chrome ? routes.chrome() : json(200, { chatSessions: true, ladoWorkers: false });
 			return routes.chromePut ? routes.chromePut() : json(200, JSON.parse(String(init.body)));
@@ -551,6 +646,8 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 	const integrationHandler = handlers.get(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL);
 	const checksHandler = handlers.get(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL);
 	const chromeHandler = handlers.get(LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL);
+	const dbChangesHandler = handlers.get(LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL);
+	const dbApplyHandler = handlers.get(LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL);
 	if (
 		!approveHandler ||
 		!changeRuleHandler ||
@@ -560,7 +657,9 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 		!changeSetupHandler ||
 		!integrationHandler ||
 		!checksHandler ||
-		!chromeHandler
+		!chromeHandler ||
+		!dbChangesHandler ||
+		!dbApplyHandler
 	) {
 		throw new Error("a presence channel is not registered");
 	}
@@ -583,6 +682,10 @@ function setup(overrides: Partial<LadoPresenceDeps> = {}, routes: Routes = {}) {
 			checksHandler({ sender }, input) as Promise<LadoPresenceChecksResult>,
 		changeChrome: (input: unknown, sender: unknown = shell) =>
 			chromeHandler({ sender }, input) as Promise<LadoPresenceClaudeChromeResult>,
+		changeDbChanges: (input: unknown, sender: unknown = shell) =>
+			dbChangesHandler({ sender }, input) as Promise<LadoPresenceDbChangesResult>,
+		applyDbChanges: (input: unknown, sender: unknown = shell) =>
+			dbApplyHandler({ sender }, input) as Promise<LadoPresenceApplyDbChangesResult>,
 		calls,
 		dialog,
 		fetch,
@@ -2229,6 +2332,46 @@ describe("approving a task's pull requests together", () => {
 		);
 	});
 
+	it("says LADO applies the pre-merge SQL and merges them in order when a head has it (#97)", async () => {
+		const dbItem: VerifyItem = {
+			kind: "db_changes",
+			outcome: "pass",
+			details: { repo: "back", files: [{ path: "db/001.sql", blobSha: BLOB_A, phase: "pre_merge" }], modified: [], planned: true },
+		};
+		const backAnswer = answer(BACK_URL, BACK_HEAD, BACK_SHA);
+		backAnswer.verification.items = [...confirmItems, dbItem];
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{
+				execution: () => json(200, execution()),
+				integrationPreview: () => answers([answer(FRONT_URL, FRONT_HEAD, FRONT_SHA), backAnswer]),
+				integration: () =>
+					json(200, {
+						...integrationApproved,
+						prs: [
+							answer(BACK_URL, BACK_HEAD, BACK_SHA, { approval: approval(BACK_HEAD, BACK_SHA) }),
+							answer(FRONT_URL, FRONT_HEAD, FRONT_SHA, { approval: approval(FRONT_HEAD, FRONT_SHA) }),
+						],
+					}),
+			},
+		);
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({ status: "approved" });
+		const en = trayCatalogs.en;
+		const blocks = dialogOptions(dialog).detail?.split("\n\n") ?? [];
+		expect(blocks[1]).toContain("SQL before merge: db/001.sql\n    -- a1a1\n    ALTER TABLE users\n    ADD COLUMN age int;");
+		expect(blocks[3]).toBe(`${en["lado.presence.integration.nextDbChangesMany"]} ${en["lado.presence.integration.nextUnprotectedMany"]}`);
+		expect(blocks[3]).not.toContain("never merges");
+		// The excerpt is read by the blob the approval signs.
+		const file = new URL(calls[2]!.url);
+		expect([calls[2]!.init.method, file.pathname, file.searchParams.get("prUrl"), file.searchParams.get("blobSha")]).toEqual([
+			"GET",
+			`${executionPath}/db-changes/file`,
+			BACK_URL,
+			BLOB_A,
+		]);
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET", "POST", "GET", "POST"]);
+	});
+
 	it("does not ask while one PR's head waits or fails", async () => {
 		const waiting: VerifyItem[] = [
 			{ kind: "required_checks", outcome: "wait", code: "checks_pending", details: { required: ["ci"], rulesetRead: true, checks: [] } },
@@ -2644,5 +2787,511 @@ describe("turning Claude in Chrome on", () => {
 			code: "LADO_PRESENCE_REPLAYED",
 			message: "This confirmation was already used. Confirm again in the AO desktop app.",
 		});
+	});
+});
+
+// LADO fork: the SQL files an integration approval signs (#97, ADR 0013).
+describe("approving an integration with database changes", () => {
+	const executionPath = "/api/v1/lado/executions/demo-7";
+	const preMerge = { path: "scripts/migrations/002_orders.sql", blobSha: BLOB_B, phase: "pre_merge" as const };
+	const afterDeploy = { path: "scripts/migrations/003_drop.sql", blobSha: BLOB_C, phase: "after_deploy" as const };
+	const passed: VerifyItem = { kind: "required_checks", outcome: "pass", details: { required: ["ci"], rulesetRead: true, checks: [] } };
+	const protectedBranch: VerifyItem = {
+		kind: "protection",
+		outcome: "pass",
+		details: { provider: "github", repo: "acme/demo", branch: "main", missing: [] },
+	};
+
+	it("names each SQL file with its phase and first lines, and says LADO applies it and merges", async () => {
+		const items: VerifyItem[] = [
+			passed,
+			protectedBranch,
+			{
+				kind: "db_changes",
+				outcome: "confirm",
+				code: "db_change_unplanned",
+				details: { files: [preMerge, afterDeploy], modified: [], planned: false },
+			},
+		];
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{ integrationPreview: () => json(200, integrationPreview({ items, confirm: ["db_change_unplanned"] })) },
+		);
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({ status: "approved" });
+		const en = trayCatalogs.en;
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				"Task: Fix the flaky login test",
+				"Head: 1234567890ab",
+				"Passed: 2 of 3 verification items",
+				"SQL before merge: scripts/migrations/002_orders.sql",
+				"    -- b2b2",
+				"    ALTER TABLE users",
+				"    ADD COLUMN age int;",
+				"SQL after deploy: scripts/migrations/003_drop.sql",
+				"    -- c3c3",
+				"    ALTER TABLE users",
+				"    ADD COLUMN age int;",
+				"Adds SQL files, but the plan's change kinds do not name db_schema.",
+				"",
+				`${en["lado.presence.integration.nextDbChanges"]} ${en["lado.presence.integration.nextAfterDeploy"]}`,
+			].join("\n"),
+		);
+		expect(dialogOptions(dialog).detail).not.toContain("never merges");
+		expect(calls.map(({ url, init }) => [init.method, new URL(url).pathname, new URL(url).searchParams.get("blobSha")])).toEqual([
+			["GET", executionPath, null],
+			["POST", `${executionPath}/integration-approve`, null],
+			["GET", `${executionPath}/db-changes/file`, BLOB_B],
+			["GET", `${executionPath}/db-changes/file`, BLOB_C],
+			["POST", `${executionPath}/integration-approve`, null],
+		]);
+		expectSigned(
+			calls[4]!,
+			"POST",
+			JSON.stringify({ prUrl: PR_URL, headSha: HEAD, verificationSha256: VERIFY_SHA, acknowledge: ["db_change_unplanned"] }),
+		);
+	});
+
+	it("names an applied file the head changes, keeps the status line without pre-merge SQL, and a file it cannot read", async () => {
+		const items: VerifyItem[] = [
+			passed,
+			protectedBranch,
+			{
+				kind: "db_changes",
+				outcome: "confirm",
+				code: "db_change_applied_modified",
+				details: {
+					files: [afterDeploy],
+					modified: [{ path: "scripts/migrations/001_users.sql", appliedBlobSha: BLOB_A, headBlobSha: "", deleted: true }],
+					planned: true,
+				},
+			},
+		];
+		const { approveIntegration, dialog } = setup(
+			{},
+			{
+				integrationPreview: () => json(200, integrationPreview({ items, confirm: ["db_change_applied_modified"] })),
+				dbFile: () => json(404, { error: "not_found", code: "LADO_DB_CHANGE_NOT_FOUND", message: "No such file." }),
+			},
+		);
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({ status: "approved" });
+		const en = trayCatalogs.en;
+		expect(dialogOptions(dialog).detail?.split("\n").slice(3)).toEqual([
+			"SQL after deploy: scripts/migrations/003_drop.sql",
+			"Changes or deletes SQL files LADO applied already (1); LADO never runs them again: scripts/migrations/001_users.sql",
+			"",
+			`${en["lado.presence.integration.nextStatus"]} ${en["lado.presence.integration.nextAfterDeploy"]}`,
+		]);
+	});
+
+	it("does not ask while a secret the settings name has no value", async () => {
+		const items: VerifyItem[] = [
+			passed,
+			{ kind: "db_changes", outcome: "fail", code: "db_change_secrets_missing", details: { files: [preMerge], modified: [], planned: true } },
+		];
+		const { approveIntegration, calls, dialog } = setup(
+			{},
+			{ integrationPreview: () => json(200, integrationPreview({ outcome: "fail", items, confirm: [] })) },
+		);
+		await expect(approveIntegration({ sessionId: "demo-7" })).resolves.toMatchObject({
+			status: "error",
+			code: "LADO_INTEGRATION_NOT_READY",
+			details: { reasons: ["db_change_secrets_missing"] },
+		});
+		expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET", "POST"]);
+	});
+
+	it("words the SQL lines from main's catalog in every language", async () => {
+		const items: VerifyItem[] = [
+			passed,
+			{ kind: "db_changes", outcome: "pass", details: { files: [preMerge], modified: [], planned: true } },
+		];
+		for (const locale of ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"] as const) {
+			const { approveIntegration, dialog } = setup(
+				{ locale: () => locale },
+				{ integrationPreview: () => json(200, integrationPreview({ items, confirm: [] })) },
+			);
+			await approveIntegration({ sessionId: "demo-7" });
+			const catalog = trayCatalogs[locale];
+			const detail = dialogOptions(dialog).detail ?? "";
+			expect(detail, locale).toContain(catalog["lado.presence.integration.dbFilePreMerge"].replace("{{path}}", preMerge.path));
+			expect(detail, locale).toContain(catalog["lado.presence.integration.nextDbChanges"]);
+			expect(detail, locale).not.toContain(catalog["lado.presence.integration.nextStatus"]);
+		}
+	});
+});
+
+// LADO fork: a repository's production database change settings run a
+// command with secrets against the production database (#97), so only the
+// human may change them.
+describe("changing the database change settings", () => {
+	const settingsPath = "/api/v1/lado/projects/demo/db-changes/settings";
+	const SECRET = "s3cret-PASS-value";
+	const command = 'psql "$LADO_DB_DSN" -v ON_ERROR_STOP=1 --single-transaction -f {file}';
+	const change = {
+		projectId: "demo",
+		repo: "",
+		enabled: true,
+		paths: ["scripts/migrations/*.sql", "db/*.sql"],
+		command: `  ${command} `,
+		timeoutMinutes: 15,
+		secretNames: ["LADO_DB_DSN", "LADO_DB_PASSWORD"],
+		secrets: { set: { LADO_DB_PASSWORD: SECRET } },
+	};
+
+	it("reads the settings, names only what changes without a secret's value, then signs the change against them", async () => {
+		const { changeDbChanges, calls, dialog, window } = setup();
+		// The renderer cannot add fields or name the base.
+		const result = await changeDbChanges({ ...change, base: "0".repeat(64), extra: "ignored" });
+
+		expect(result).toEqual({ status: "changed", settings: dbSettingsResponse([dbRepo({ sha256: "0".repeat(64) })]) });
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({
+				type: "question",
+				message: "Change the production database settings of demo?",
+				buttons: ["Cancel", "Change"],
+				defaultId: 0,
+				cancelId: 0,
+			}),
+		);
+		const en = trayCatalogs.en;
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				"SQL paths: scripts/migrations/*.sql → scripts/migrations/*.sql, db/*.sql",
+				`Command: psql "$LADO_DB_DSN" -v ON_ERROR_STOP=1 -f {file}\n→ ${command}`,
+				"Time limit per file: 10 → 15 min",
+				"Secret names added: LADO_DB_PASSWORD",
+				"New values stored for: LADO_DB_PASSWORD (values are not shown)",
+				en["lado.presence.dbChanges.baseline"],
+				"",
+				en["lado.presence.dbChanges.detail"].replace("{{id}}", "demo"),
+			].join("\n"),
+		);
+		expect(JSON.stringify(dialogOptions(dialog))).not.toContain(SECRET);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${settingsPath}`],
+			["PUT", `${BASE}${settingsPath}`],
+		]);
+		expectSigned(
+			calls[1]!,
+			"PUT",
+			JSON.stringify({
+				repo: "",
+				enabled: true,
+				paths: change.paths,
+				command,
+				timeoutMinutes: 15,
+				secretNames: change.secretNames,
+				secrets: { set: { LADO_DB_PASSWORD: SECRET } },
+				base: DB_SETTINGS_SHA,
+			}),
+		);
+	});
+
+	it("names turning a workspace repository on, with the files it records as applied", async () => {
+		const back = dbRepo({
+			repo: "back",
+			name: "back",
+			enabled: false,
+			paths: [],
+			command: "",
+			secretNames: [],
+			storedSecretNames: [],
+			sha256: "",
+			baselineCommit: undefined,
+			enabledAt: undefined,
+			updatedAt: undefined,
+		});
+		const { changeDbChanges, calls, dialog } = setup({}, { dbSettings: () => json(200, dbSettingsResponse([dbRepo(), back])) });
+		await changeDbChanges({ ...change, repo: "back", paths: ["sql/*.sql"], timeoutMinutes: 0, secretNames: ["LADO_DB_DSN"], secrets: undefined });
+		const en = trayCatalogs.en;
+		expect(dialogOptions(dialog).message).toBe("Change the production database settings of back?");
+		expect(dialogOptions(dialog).detail?.split("\n\n")[0]).toBe(
+			[
+				en["lado.presence.dbChanges.turnOn"],
+				"SQL paths: — → sql/*.sql",
+				`Command: —\n→ ${command}`,
+				"Secret names added: LADO_DB_DSN",
+				en["lado.presence.dbChanges.baseline"],
+			].join("\n"),
+		);
+		// A repository that never saved settings has no base.
+		expect(JSON.parse(String(calls[1]!.init.body))).toMatchObject({ repo: "back", base: "" });
+		expect(JSON.parse(String(calls[1]!.init.body))).not.toHaveProperty("secrets");
+	});
+
+	it("names turning off and deleting stored values", async () => {
+		const current = dbRepo();
+		const { changeDbChanges, calls, dialog } = setup();
+		await changeDbChanges({ ...current, projectId: "demo", enabled: false, secrets: { remove: ["LADO_DB_DSN"] } });
+		const en = trayCatalogs.en;
+		expect(dialogOptions(dialog).detail?.split("\n\n")[0]).toBe(
+			[en["lado.presence.dbChanges.turnOff"], "Stored values deleted for: LADO_DB_DSN"].join("\n"),
+		);
+		expect(JSON.parse(String(calls[1]!.init.body))).toMatchObject({ enabled: false, secrets: { remove: ["LADO_DB_DSN"] } });
+	});
+
+	it("returns the settings without asking when nothing changes", async () => {
+		const current = dbRepo();
+		const { changeDbChanges, calls, dialog } = setup();
+		await expect(changeDbChanges({ ...current, projectId: "demo", secrets: { remove: ["OTHER_NAME"] } })).resolves.toEqual({
+			status: "changed",
+			settings: dbSettingsResponse(),
+		});
+		expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+
+	it("sends nothing when the human cancels", async () => {
+		const { changeDbChanges, calls, dialog } = setup();
+		dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(changeDbChanges(change)).resolves.toEqual({ status: "cancelled" });
+		expect(calls.map(({ init }) => init.method)).toEqual(["GET"]);
+	});
+
+	it("refuses an untrusted sender and settings the daemon would refuse, without asking", async () => {
+		const untrusted = setup();
+		await expect(untrusted.changeDbChanges(change, { id: 99 })).resolves.toMatchObject({ code: "LADO_PRESENCE_UNTRUSTED_SENDER" });
+		expect(untrusted.fetch).not.toHaveBeenCalled();
+
+		const invalid: [unknown, string][] = [
+			[{ ...change, projectId: "../demo" }, "LADO_PROJECT_ID_INVALID"],
+			[null, "LADO_PROJECT_ID_INVALID"],
+			[{ ...change, enabled: "yes" }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, command: "psql -f {file}\nrm -rf /" }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, command: "psql -f {file} ‮" }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, paths: Array.from({ length: 11 }, (_, i) => `db/${i}.sql`) }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, paths: ["db/*.sql\nTurn off"] }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, timeoutMinutes: 121 }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, secretNames: ["lado_db_dsn"] }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, secrets: { set: { OTHER_NAME: "x" } } }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, secrets: { set: { LADO_DB_PASSWORD: "line\nbreak" } } }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, secrets: { set: { LADO_DB_PASSWORD: 7 } } }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...change, secrets: { set: { LADO_DB_PASSWORD: "x" }, remove: ["LADO_DB_PASSWORD"] } }, "LADO_DB_CHANGE_INVALID"],
+		];
+		for (const [input, code] of invalid) {
+			const { changeDbChanges, dialog, fetch } = setup();
+			await expect(changeDbChanges(input), JSON.stringify(input)).resolves.toMatchObject({ status: "error", code });
+			expect(fetch, JSON.stringify(input)).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+
+	it("does not ask about a repository the project does not list or settings it cannot read", async () => {
+		const cases: [string, unknown, Routes, string][] = [
+			["another repository", { ...change, repo: "other" }, {}, "LADO_DB_CHANGE_INVALID"],
+			["unreadable settings", change, { dbSettings: () => json(200, { projectId: "demo", repositories: [{ repo: "" }], sha256: "" }) }, UNREADABLE],
+			["another project", change, { dbSettings: () => json(200, { ...dbSettingsResponse(), projectId: "other" }) }, UNREADABLE],
+		];
+		for (const [name, input, routes, code] of cases) {
+			const { changeDbChanges, calls, dialog } = setup({}, routes);
+			await expect(changeDbChanges(input), name).resolves.toMatchObject({ status: "error", code });
+			expect(dialog.showMessageBox, name).not.toHaveBeenCalled();
+			expect(calls.map(({ init }) => init.method), name).toEqual(["GET"]);
+		}
+	});
+
+	it("returns the daemon's refusal of the change", async () => {
+		const refusal = {
+			error: "conflict",
+			code: "LADO_DB_CHANGE_BASELINE_FAILED",
+			message: "LADO could not read the default branch to record its SQL files as applied, so the settings were not saved: fetch failed",
+			details: { repo: "", reason: "fetch failed" },
+		};
+		const { changeDbChanges } = setup({}, { dbSettingsPut: () => json(409, refusal) });
+		await expect(changeDbChanges(change)).resolves.toEqual({
+			status: "error",
+			code: refusal.code,
+			message: refusal.message,
+			details: refusal.details,
+		});
+	});
+
+	it("words the change from main's catalog in every language", async () => {
+		for (const locale of ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"] as const) {
+			const { changeDbChanges, dialog } = setup({ locale: () => locale });
+			await changeDbChanges({ ...dbRepo(), projectId: "demo", enabled: false });
+			const catalog = trayCatalogs[locale];
+			expect(dialogOptions(dialog), locale).toMatchObject({
+				message: catalog["lado.presence.dbChanges.title"].replace("{{repo}}", "demo"),
+				buttons: [catalog["lado.presence.cancel"], catalog["lado.presence.change"]],
+				detail: [catalog["lado.presence.dbChanges.turnOff"], catalog["lado.presence.dbChanges.detail"].replace("{{id}}", "demo")].join("\n\n"),
+			});
+		}
+	});
+});
+
+// LADO fork: applying a pull request's SQL by hand runs it against the
+// production database (#97), so only the human may start it.
+describe("applying database changes", () => {
+	const changesPath = "/api/v1/lado/executions/demo-7/db-changes";
+	const request = { sessionId: "demo-7", prUrl: PR_URL, phase: "pre_merge" };
+
+	it("reads the run's database changes, names each file with whether it runs, then signs the files it read", async () => {
+		const { applyDbChanges, calls, dialog, window } = setup();
+		// The renderer cannot name the head or the files.
+		const result = await applyDbChanges({ ...request, headSha: "0".repeat(40), files: [] });
+
+		expect(result).toEqual({ status: "queued", run: dbRun({ state: "queued" }) });
+		expect(dialog.showMessageBox).toHaveBeenCalledWith(
+			window,
+			expect.objectContaining({
+				type: "question",
+				message: "Apply this pull request's SQL again and merge it?",
+				buttons: ["Cancel", "Apply"],
+				defaultId: 0,
+				cancelId: 0,
+			}),
+		);
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				`Pull request: ${PR_URL}`,
+				"Head: 1234567890ab",
+				"",
+				"Applied already, skipped: scripts/migrations/001_users.sql",
+				"Failed before, runs again: scripts/migrations/002_orders.sql",
+				"",
+				trayCatalogs.en["lado.presence.dbApply.nextApproval"],
+			].join("\n"),
+		);
+		expect(calls.map(({ url, init }) => [init.method, url])).toEqual([
+			["GET", `${BASE}${changesPath}`],
+			["POST", `${BASE}${changesPath}/apply`],
+		]);
+		expectSigned(
+			calls[1]!,
+			"POST",
+			JSON.stringify({
+				prUrl: PR_URL,
+				headSha: HEAD,
+				phase: "pre_merge",
+				files: [
+					{ path: "scripts/migrations/001_users.sql", blobSha: BLOB_A, phase: "pre_merge" },
+					{ path: "scripts/migrations/002_orders.sql", blobSha: BLOB_B, phase: "pre_merge" },
+				],
+			}),
+		);
+	});
+
+	it("names after-deploy SQL with its repository and says LADO cannot tell the deploy", async () => {
+		const pr = dbPR({ repo: "back", runs: [dbRun({ kind: "after_deploy", trigger: "after_merge", state: "awaiting_human" })] });
+		const { applyDbChanges, calls, dialog } = setup({}, { dbChanges: () => json(200, dbExecution([pr])) });
+		await applyDbChanges({ ...request, phase: "after_deploy" });
+		expect(dialogOptions(dialog).message).toBe("Apply the after-deploy SQL?");
+		expect(dialogOptions(dialog).detail).toBe(
+			[
+				`Pull request: ${PR_URL}`,
+				"Repository: back",
+				"Head: 1234567890ab",
+				"",
+				"Runs: scripts/migrations/003_drop.sql",
+				"",
+				trayCatalogs.en["lado.presence.dbApply.nextAfterDeploy"],
+			].join("\n"),
+		);
+		expect(JSON.parse(String(calls[1]!.init.body)).files).toEqual([
+			{ path: "scripts/migrations/003_drop.sql", blobSha: BLOB_C, phase: "after_deploy" },
+		]);
+	});
+
+	it("warns about an interrupted file of a pull request merged outside LADO", async () => {
+		const pr = dbPR({
+			runs: [],
+			files: [dbFile("scripts/migrations/001_users.sql", BLOB_A, { status: "interrupted", attempts: 1 })],
+		});
+		const { applyDbChanges, dialog } = setup({}, { dbChanges: () => json(200, dbExecution([pr])) });
+		await applyDbChanges(request);
+		const en = trayCatalogs.en;
+		expect(dialogOptions(dialog).message).toBe(en["lado.presence.dbApply.titleMerged"]);
+		expect(dialogOptions(dialog).detail?.split("\n\n").slice(1)).toEqual([
+			"Interrupted, runs again: scripts/migrations/001_users.sql",
+			en["lado.presence.dbApply.nextMerged"],
+			en["lado.presence.dbApply.interruptedWarning"],
+		]);
+	});
+
+	it("says LADO only merges again when every file is applied and the merge failed", async () => {
+		const pr = dbPR({
+			files: [dbFile("scripts/migrations/001_users.sql", BLOB_A, { status: "applied", attempts: 1 })],
+			runs: [dbRun({ state: "merge_failed" })],
+		});
+		const { applyDbChanges, dialog } = setup({}, { dbChanges: () => json(200, dbExecution([pr])) });
+		await expect(applyDbChanges(request)).resolves.toMatchObject({ status: "queued" });
+		expect(dialogOptions(dialog).detail?.split("\n\n").at(-1)).toBe(trayCatalogs.en["lado.presence.dbApply.nextMergeOnly"]);
+	});
+
+	it("does not ask about SQL LADO applies now, applied already or does not know", async () => {
+		const cases: [string, unknown, DbPR[], string][] = [
+			["a queued run", request, [dbPR({ runs: [dbRun({ state: "queued" })] })], "LADO_DB_CHANGE_RUN_STATE"],
+			["a done run", request, [dbPR({ runs: [dbRun({ state: "done" })] })], "LADO_DB_CHANGE_RUN_STATE"],
+			[
+				"a file being applied",
+				request,
+				[dbPR({ files: [dbFile("scripts/migrations/002_orders.sql", BLOB_B, { status: "applying" })] })],
+				"LADO_DB_CHANGE_RUN_STATE",
+			],
+			[
+				"after-deploy SQL applied already",
+				{ ...request, phase: "after_deploy" },
+				[dbPR({ runs: [], files: [dbFile("scripts/migrations/003_drop.sql", BLOB_C, { phase: "after_deploy", status: "applied" })] })],
+				"LADO_DB_CHANGE_RUN_STATE",
+			],
+			["another pull request", { ...request, prUrl: "https://github.com/acme/demo/pull/8" }, [dbPR()], "LADO_DB_CHANGE_NOT_FOUND"],
+			["no file of the phase", request, [dbPR({ files: [dbFile("a.sql", BLOB_C, { phase: "after_deploy" })] })], "LADO_DB_CHANGE_NOT_FOUND"],
+			["no head", request, [dbPR({ headSha: "" })], "LADO_DB_CHANGE_NOT_FOUND"],
+		];
+		for (const [name, input, prs, code] of cases) {
+			const { applyDbChanges, calls, dialog } = setup({}, { dbChanges: () => json(200, dbExecution(prs)) });
+			await expect(applyDbChanges(input), name).resolves.toMatchObject({ status: "error", code });
+			expect(dialog.showMessageBox, name).not.toHaveBeenCalled();
+			expect(calls.map(({ init }) => init.method), name).toEqual(["GET"]);
+		}
+		const unreadable = setup({}, { dbChanges: () => json(200, { sessionId: "demo-7", prs: [{ prUrl: PR_URL }] }) });
+		await expect(unreadable.applyDbChanges(request)).resolves.toMatchObject({ code: UNREADABLE });
+		expect(unreadable.dialog.showMessageBox).not.toHaveBeenCalled();
+	});
+
+	it("refuses an untrusted sender and a request without its pull request or phase", async () => {
+		const untrusted = setup();
+		await expect(untrusted.applyDbChanges(request, { id: 99 })).resolves.toMatchObject({ code: "LADO_PRESENCE_UNTRUSTED_SENDER" });
+		expect(untrusted.fetch).not.toHaveBeenCalled();
+		const invalid: [unknown, string][] = [
+			[{ ...request, sessionId: "../demo" }, "LADO_SESSION_ID_INVALID"],
+			[{ ...request, prUrl: "" }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...request, prUrl: `${PR_URL}\nApply` }, "LADO_DB_CHANGE_INVALID"],
+			[{ ...request, phase: "later" }, "LADO_DB_CHANGE_INVALID"],
+		];
+		for (const [input, code] of invalid) {
+			const { applyDbChanges, fetch, dialog } = setup();
+			await expect(applyDbChanges(input), JSON.stringify(input)).resolves.toMatchObject({ status: "error", code });
+			expect(fetch).not.toHaveBeenCalled();
+			expect(dialog.showMessageBox).not.toHaveBeenCalled();
+		}
+	});
+
+	it("sends nothing when the human cancels, and returns the daemon's refusal", async () => {
+		const cancelled = setup();
+		cancelled.dialog.showMessageBox.mockResolvedValueOnce({ response: 0, checkboxChecked: false });
+		await expect(cancelled.applyDbChanges(request)).resolves.toEqual({ status: "cancelled" });
+		expect(cancelled.calls.map(({ init }) => init.method)).toEqual(["GET"]);
+
+		const refusal = { error: "conflict", code: "LADO_DB_CHANGE_RUN_STATE", message: "The database change run is not in a state the request may change." };
+		const refused = setup({}, { dbApply: () => json(409, refusal) });
+		await expect(refused.applyDbChanges(request)).resolves.toEqual({ status: "error", code: refusal.code, message: refusal.message });
+	});
+
+	it("words the confirmation from main's catalog in every language", async () => {
+		for (const locale of ["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"] as const) {
+			const { applyDbChanges, dialog } = setup({ locale: () => locale });
+			await applyDbChanges(request);
+			const catalog = trayCatalogs[locale];
+			expect(dialogOptions(dialog), locale).toMatchObject({
+				message: catalog["lado.presence.dbApply.titleApproval"],
+				buttons: [catalog["lado.presence.cancel"], catalog["lado.presence.dbApply.apply"]],
+			});
+			expect(dialogOptions(dialog).detail, locale).toContain(catalog["lado.presence.dbApply.nextApproval"]);
+		}
 	});
 });
