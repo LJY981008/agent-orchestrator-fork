@@ -22700,6 +22700,7 @@ components:
           - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
+          - db_change_secrets_missing
           - status_not_posted
           - merged_without_approval
           - base_overlap
@@ -22936,6 +22937,7 @@ components:
           - pr_repo_not_in_workspace
           - review_pending
           - changes_requested
+          - db_change_secrets_missing
           - status_not_posted
           - merged_without_approval
           - base_overlap

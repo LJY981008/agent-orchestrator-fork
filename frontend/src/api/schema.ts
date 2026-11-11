@@ -7730,7 +7730,7 @@ export interface components {
              * @description Why the run is in its state, as the task's stateReason says it; reported_pr_untracked while the worker reported a pull request its session does not track.
              * @enum {string}
              */
-            stateReason?: "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
+            stateReason?: "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "db_change_secrets_missing" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
             task: components["schemas"]["LadoExecutionTaskResponse"];
             /**
              * Format: date-time
@@ -7820,7 +7820,7 @@ export interface components {
              * @description Why the PR is in its state, as the task's stateReason says it.
              * @enum {string}
              */
-            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
+            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "db_change_secrets_missing" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
             /** @description The branch the PR merges into. */
             targetBranch?: string;
             title?: string;
