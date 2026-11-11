@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
+import * as dbChanges from "../../lib/lado-db-changes";
 import { subscribeLadoTaskOpenRequests, takeLadoTaskOpenRequest } from "../../lib/lado-alert-notifications";
 import type { WorkspaceSession } from "../../types/workspace";
 import { BoardSessionCardAdapter } from "../SessionsBoardAdapters";
@@ -15,6 +16,12 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoTasks: vi.fn(),
 	fetchLadoProjectUsage: vi.fn(),
 	fetchLadoUnseenAlertCounts: vi.fn(),
+}));
+
+// The project's production SQL that waits or failed (issue #97).
+vi.mock("../../lib/lado-db-changes", async (original) => ({
+	...await original<typeof import("../../lib/lado-db-changes")>(),
+	fetchLadoProjectDBChanges: vi.fn(),
 }));
 
 // The card's PR facts come from the daemon; these cards have none.
@@ -74,6 +81,7 @@ beforeEach(() => {
 	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([task, { ...task, id: "lado-task-2", state: "queued", execution: undefined }]);
 	vi.mocked(lado.fetchLadoProjectUsage).mockResolvedValue({ projectId: "demo", tasks: [] });
 	vi.mocked(lado.fetchLadoUnseenAlertCounts).mockResolvedValue({ tasks: [] });
+	vi.mocked(dbChanges.fetchLadoProjectDBChanges).mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -184,4 +192,15 @@ test("the run's alerts badge opens its task on the Usage tab", async () => {
 	unsubscribe();
 	expect(requests).toEqual([{ projectId: "demo", taskId: "lado-task-1", tab: "usage" }]);
 	expect(opened).not.toHaveBeenCalled();
+});
+
+test("a run whose production SQL waits says so on its card's LADO line (issue #97)", async () => {
+	vi.mocked(dbChanges.fetchLadoProjectDBChanges).mockResolvedValue([
+		{ taskId: "lado-task-1", sessionId: "demo-7", prUrl: "https://github.com/acme/demo/pull/45", repo: "", state: "merged_unapplied", pending: 2, failed: 0 },
+	]);
+	renderWith(<LadoSessionLine session={session("demo-7")} />);
+
+	const line = await screen.findByTestId("lado-session-line");
+	expect(await within(line).findByTestId("lado-card-db-change")).toHaveTextContent("SQL not applied");
+	expect(dbChanges.fetchLadoProjectDBChanges).toHaveBeenCalledWith("demo");
 });

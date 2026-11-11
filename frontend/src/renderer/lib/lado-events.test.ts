@@ -13,6 +13,12 @@ import {
 	ladoTaskUsageQueryKey,
 	ladoTaskViewQueryKey,
 } from "./lado";
+import {
+	ladoDBChangeExecutionQueryKey,
+	ladoDBChangeFileQueryKey,
+	ladoDBChangeSettingsQueryKey,
+	ladoDBChangeSummariesQueryKey,
+} from "./lado-db-changes";
 import { createLadoEventBatch } from "./lado-events";
 import { ladoLogIncidentsQueryKey, ladoLogWatchQueryKey } from "./lado-log-watch";
 import {
@@ -259,5 +265,52 @@ describe("createLadoEventBatch and the log watch", () => {
 		expect(invalidatedByLog({ kind: "lado_log_watch", projectId: "other", op: "insert" })).toEqual(["otherIncidents"]);
 		const batch = createLadoEventBatch(new QueryClient());
 		expect(batch.note({ kind: "lado_log_watch" })).toBe(false);
+	});
+});
+
+// LADO fork: a database change event (issue #97) refreshes the project's
+// settings and the board's summary, and the run's SQL files when it names one.
+describe("createLadoEventBatch and database changes", () => {
+	const dbViews: Record<string, QueryKey> = {
+		settings: ladoDBChangeSettingsQueryKey("demo"),
+		summaries: ladoDBChangeSummariesQueryKey("demo"),
+		otherSummaries: ladoDBChangeSummariesQueryKey("other"),
+		execution: ladoDBChangeExecutionQueryKey("demo-3"),
+		file: ladoDBChangeFileQueryKey("demo-3", "https://github.com/o/r/pull/1", "abc"),
+		otherExecution: ladoDBChangeExecutionQueryKey("demo-4"),
+		tasks: ladoTasksQueryKey("demo"),
+	};
+
+	function invalidatedByDB(payload: Payload): string[] {
+		const queryClient = new QueryClient();
+		for (const key of Object.values(dbViews)) queryClient.setQueryData(key, []);
+		const batch = createLadoEventBatch(queryClient);
+		expect(batch.note(payload, { type: "session_updated", projectId: "demo" })).toBe(true);
+		batch.flush((queryKey) => void queryClient.invalidateQueries({ queryKey }));
+		return Object.entries(dbViews)
+			.filter(([, key]) => queryClient.getQueryState(key)?.isInvalidated)
+			.map(([name]) => name)
+			.sort();
+	}
+
+	it("refreshes the settings and the summary for a settings change", () => {
+		expect(invalidatedByDB({ kind: "lado_db_change", projectId: "demo", sessionId: null, op: "settings" } as Payload)).toEqual([
+			"settings",
+			"summaries",
+		]);
+	});
+
+	it("refreshes the run's SQL files too for a run or an application", () => {
+		expect(invalidatedByDB({ kind: "lado_db_change", projectId: "demo", sessionId: "demo-3", op: "run" } as Payload)).toEqual([
+			"execution",
+			"file",
+			"settings",
+			"summaries",
+		]);
+	});
+
+	it("ignores an event without a project", () => {
+		const batch = createLadoEventBatch(new QueryClient());
+		expect(batch.note({ kind: "lado_db_change", sessionId: "demo-3" } as Payload)).toBe(false);
 	});
 });

@@ -1,7 +1,8 @@
 // LADO fork: query hooks for LADO's project settings, issue-backed tasks, plans,
 // approvals, rules, runs, their verification and integration, branch
 // protection, project knowledge, the dispatch settings, and the worker watch:
-// usage, alerts and their settings, and the production log watch (issue #87).
+// usage, alerts and their settings, the production log watch (issue #87), and
+// production database changes (issue #97).
 // Rule changes
 // that can reach approved tasks go through useLadoRuleChange (lib/lado-rules.ts).
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -102,6 +103,21 @@ import {
 	type LadoLogTLSImport,
 	type LadoLogWatchInput,
 } from "../lib/lado-log-watch";
+import {
+	applyLadoDBChanges,
+	fetchLadoDBChangeFile,
+	fetchLadoDBChangeSettings,
+	fetchLadoExecutionDBChanges,
+	fetchLadoProjectDBChanges,
+	ladoDBChangeExecutionQueryKey,
+	ladoDBChangeFileQueryKey,
+	ladoDBChangeSettingsQueryKey,
+	ladoDBChangeSummariesQueryKey,
+	updateLadoDBChangeSettings,
+	type LadoDBChangePR,
+	type LadoDBChangePhase,
+	type LadoDBChangeSettingsInput,
+} from "../lib/lado-db-changes";
 import { sessionScmSummaryQueryKey } from "./useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
@@ -799,6 +815,88 @@ export function useSetLadoLogFingerprintIgnored(projectId: string) {
 		mutationFn: ({ fingerprintId, ignored }: { fingerprintId: number; ignored: boolean }) =>
 			setLadoLogFingerprintIgnored(projectId, fingerprintId, ignored),
 		onSettled: () => queryClient.invalidateQueries({ queryKey: ladoLogIncidentsQueryKey(projectId) }),
+		retry: false,
+	});
+}
+
+/** Every repository's production database change settings. */
+export function useLadoDBChangeSettings(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoDBChangeSettingsQueryKey(projectId),
+		queryFn: () => fetchLadoDBChangeSettings(projectId),
+		enabled: enabled && Boolean(projectId),
+		retry: false,
+	});
+}
+
+/**
+ * Saves one repository's settings, which the desktop app confirms. Resolves
+ * to null when the developer cancelled; the card then keeps the edits.
+ */
+export function useUpdateLadoDBChangeSettings(projectId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (input: LadoDBChangeSettingsInput) => updateLadoDBChangeSettings(projectId, input),
+		onSuccess: (settings) => {
+			if (settings) queryClient.setQueryData(ladoDBChangeSettingsQueryKey(projectId), settings);
+		},
+		// The settings moved on since the card read them: read them again, so
+		// the card shows what LADO holds now.
+		onError: (error) => {
+			if (error instanceof LadoApiError && error.code === "LADO_DB_CHANGE_SETTINGS_CHANGED") {
+				void queryClient.invalidateQueries({ queryKey: ladoDBChangeSettingsQueryKey(projectId) });
+			}
+		},
+		retry: false,
+	});
+}
+
+/** The project's pull requests whose SQL waits or failed; read only for a project in LADO mode. */
+export function useLadoProjectDBChanges(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoDBChangeSummariesQueryKey(projectId),
+		queryFn: () => fetchLadoProjectDBChanges(projectId),
+		enabled: enabled && Boolean(projectId),
+		staleTime: 30_000,
+		retry: false,
+	});
+}
+
+/** A run's SQL files with their state; database change events refresh them. */
+export function useLadoExecutionDBChanges(sessionId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoDBChangeExecutionQueryKey(sessionId),
+		queryFn: () => fetchLadoExecutionDBChanges(sessionId),
+		enabled: enabled && Boolean(sessionId),
+		retry: false,
+	});
+}
+
+/** One SQL file's approved content; a blob never changes, so it is read once. */
+export function useLadoDBChangeFile(sessionId: string, prUrl: string, blobSha: string, enabled: boolean) {
+	return useQuery({
+		queryKey: ladoDBChangeFileQueryKey(sessionId, prUrl, blobSha),
+		queryFn: () => fetchLadoDBChangeFile(sessionId, prUrl, blobSha),
+		enabled: enabled && Boolean(sessionId && prUrl && blobSha),
+		staleTime: Number.POSITIVE_INFINITY,
+		retry: false,
+	});
+}
+
+/**
+ * Applies a pull request's SQL of one phase, which the desktop app confirms.
+ * Resolves to null when the developer cancelled. The run's SQL files and the
+ * project's summary read again either way.
+ */
+export function useApplyLadoDBChanges(projectId: string, sessionId: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({ pr, phase }: { pr: Pick<LadoDBChangePR, "prUrl" | "headSha" | "files">; phase: LadoDBChangePhase }) =>
+			applyLadoDBChanges(sessionId, pr, phase),
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: ladoDBChangeExecutionQueryKey(sessionId) });
+			void queryClient.invalidateQueries({ queryKey: ladoDBChangeSummariesQueryKey(projectId) });
+		},
 		retry: false,
 	});
 }

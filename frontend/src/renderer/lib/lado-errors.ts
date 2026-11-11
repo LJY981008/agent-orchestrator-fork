@@ -141,6 +141,14 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_LOG_CI_NOT_FOUND: "lado.error.logCINotFound",
 	LADO_LOG_CI_UNSUPPORTED: "lado.error.logCIUnsupported",
 	LADO_LOG_WATCH_FAILED: "lado.error.internal",
+	// Production database changes (issue #97); the settings card names each
+	// problem of LADO_DB_CHANGE_INVALID itself.
+	LADO_DB_CHANGE_INVALID: "lado.error.dbChangeInvalid",
+	LADO_DB_CHANGE_SETTINGS_CHANGED: "lado.error.dbChangeSettingsChanged",
+	LADO_DB_CHANGE_BASELINE_FAILED: "lado.error.dbChangeBaselineFailed",
+	LADO_DB_CHANGE_RUN_STATE: "lado.error.dbChangeRunState",
+	LADO_DB_CHANGE_PENDING: "lado.error.dbChangePending",
+	LADO_DB_CHANGE_NOT_FOUND: "lado.error.dbChangeNotFound",
 	// The queue, its runs and the dispatch settings (step 6).
 	LADO_TASK_ALREADY_QUEUED: "lado.error.taskAlreadyQueued",
 	LADO_TASK_RUNNING: "lado.error.taskRunning",
@@ -613,6 +621,8 @@ const reasonKeys: Record<LadoTaskStateReason | LadoQueueReason, LadoReasonKey> =
 	pr_repo_not_in_workspace: "lado.reason.pr_repo_not_in_workspace",
 	review_pending: "lado.reason.review_pending",
 	changes_requested: "lado.reason.changes_requested",
+	// A secret the database change settings name has no stored value (#97).
+	db_change_secrets_missing: "lado.reason.db_change_secrets_missing",
 	status_not_posted: "lado.reason.status_not_posted",
 	merged_without_approval: "lado.reason.merged_without_approval",
 	// An open PR that conflicts, or whose base moved under its head with a
