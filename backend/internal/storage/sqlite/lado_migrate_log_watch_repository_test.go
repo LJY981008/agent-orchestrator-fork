@@ -40,8 +40,11 @@ func TestLadoMigrate0018ExistingTargetsReadEmptyRepository(t *testing.T) {
 		t.Fatalf("down to 0017: %v", err)
 	}
 	insertLadoLogWatchFixture(t, db)
-	if _, err := provider.Up(ctx); err != nil {
+	if _, err := provider.UpTo(ctx, 18); err != nil {
 		t.Fatalf("up to 0018: %v", err)
+	}
+	if got := appliedVersion(t, db, ladoVersionTable); got != 18 {
+		t.Fatalf("%s after up to 0018 = %d, want 18", ladoVersionTable, got)
 	}
 	if got := ladoLogTargetRepository(t, db, "tgt"); got != "" {
 		t.Fatalf("existing target repository = %q, want ''", got)
@@ -58,7 +61,8 @@ func TestLadoMigrate0018ExistingTargetsReadEmptyRepository(t *testing.T) {
 }
 
 // The down migration drops only lado_log_targets.repository: 0017's tables,
-// their rows and the log watch change triggers stay.
+// their rows and the log watch change triggers stay. Going down to 0017 also
+// undoes the migrations above 0018 (0019 and later).
 func TestLadoMigrate0018DownKeeps0017(t *testing.T) {
 	ctx := context.Background()
 	db := openLadoDatabase(t, 1)
