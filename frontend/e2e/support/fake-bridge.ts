@@ -394,6 +394,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 						approveIntegration: async () => null,
 						changeProjectChecks: async () => null,
 						changeClaudeChrome: async () => null,
+						changeDbChanges: async () => null,
+						applyDbChanges: async () => null,
 					},
 				},
 			} satisfies AoBridge;
@@ -1275,6 +1277,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 						approveIntegration: async () => null,
 						changeProjectChecks: async () => null,
 						changeClaudeChrome: async () => null,
+						changeDbChanges: async () => null,
+						applyDbChanges: async () => null,
 					},
 				},
 			} satisfies AoBridge;
