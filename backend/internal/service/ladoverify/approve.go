@@ -12,7 +12,10 @@ package ladoverify
 // answers the record, without a proof and without recording an approval.
 // Once an approval is recorded, its lado/integration status goes to GitHub,
 // where a ruleset that requires the status turns it into the permission to
-// merge. LADO never merges.
+// merge. LADO never merges, except a task whose approved records hold
+// pre-merge database SQL (#97, ADR 0013): the database change service, told
+// of each approval, applies the SQL, posts the status and merges through
+// AO's merge path.
 
 import (
 	"context"
@@ -191,6 +194,7 @@ func (s *Service) ApproveIntegration(ctx context.Context, in ApproveInput) (Appr
 	if err := s.recordApprovals(ctx, exec, pending, execs, results, proof, inputs); err != nil {
 		return ApproveResult{}, err
 	}
+	s.dbChangesApproved(ctx, exec, results)
 	s.Kick()
 	return approveResult(results), nil
 }
@@ -569,6 +573,25 @@ func (s *Service) recordApprovals(ctx context.Context, exec domain.LadoExecution
 		results[p.index].Approval = &approval
 	}
 	return nil
+}
+
+// dbChangesApproved tells the database change service, if any, of the
+// approvals of the execution's heads, in merge order: those recorded now
+// and those approved already. What fails, the service logs (#97).
+func (s *Service) dbChangesApproved(ctx context.Context, exec domain.LadoExecution, results []ApprovePRResult) {
+	db := s.dbChangesService()
+	if db == nil {
+		return
+	}
+	approvals := make([]domain.LadoIntegrationApproval, 0, len(results))
+	for _, result := range results {
+		if result.Approval != nil {
+			approvals = append(approvals, *result.Approval)
+		}
+	}
+	if len(approvals) > 0 {
+		db.IntegrationApproved(ctx, exec, approvals)
+	}
 }
 
 // notReadyReasons returns the codes of the items that wait or fail, in the

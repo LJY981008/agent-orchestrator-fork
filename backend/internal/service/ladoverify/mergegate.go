@@ -43,27 +43,58 @@ var _ ports.LadoMergeGate = (*Service)(nil)
 // together. An approved PR of an execution whose plan orders its
 // repositories merges only once the PRs of the repositories before its own
 // merged; until then the gate refuses with LADO_INTEGRATION_MERGE_ORDER.
+//
+// #97: last, an approved head whose record still has pre-merge SQL LADO did
+// not apply refuses with LADO_DB_CHANGE_PENDING, naming the files: LADO
+// applies them and then merges the PR itself.
 func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error {
 	head := strings.ToLower(strings.TrimSpace(headSHA))
+	approval, ok, err := s.authorizeApproved(ctx, pr, head)
+	if err != nil || !ok {
+		return err
+	}
+	return s.dbChangesApplied(ctx, pr, head, approval)
+}
+
+// PreflightMerge asks the merge gate what AuthorizeMerge asks except the
+// database changes (#97): the approval of pr at headSHA into its target,
+// that the approval still holds for the remote target (#53), and the merge
+// order of the execution's PRs (#64). The database change service asks it
+// before it applies any SQL, so SQL never runs for a PR that could not merge
+// for these reasons. It refuses as AuthorizeMerge does.
+func (s *Service) PreflightMerge(ctx context.Context, pr domain.PullRequest, headSHA string) error {
+	head := strings.ToLower(strings.TrimSpace(headSHA))
+	_, _, err := s.authorizeApproved(ctx, pr, head)
+	return err
+}
+
+// authorizeApproved is AuthorizeMerge without the database changes: it
+// returns the approval pr merges with at head, which is lower case, false
+// for a PR that is not LADO's and merges as before.
+func (s *Service) authorizeApproved(ctx context.Context, pr domain.PullRequest, head string) (domain.LadoIntegrationApproval, bool, error) {
+	none := domain.LadoIntegrationApproval{}
 	isLado, approvals, err := s.ladoPRApprovals(ctx, pr, head)
 	if err != nil {
-		return s.mergeGateFailed(pr, head, err)
+		return none, false, s.mergeGateFailed(pr, head, err)
 	}
 	if !isLado {
 		inLado, err := s.inLadoProject(ctx, pr.SessionID)
 		switch {
 		case err != nil:
-			return s.mergeGateFailed(pr, head, err)
+			return none, false, s.mergeGateFailed(pr, head, err)
 		case inLado:
-			return approvalRequired(pr, head)
+			return none, false, approvalRequired(pr, head)
 		}
-		return nil
+		return none, false, nil
 	}
 	if approval, ok := domain.LadoApprovalFor(approvals, pr.TargetBranch); ok {
 		if err := s.approvedBaseHolds(ctx, pr, head, approval); err != nil {
-			return err
+			return none, false, err
 		}
-		return s.mergeOrderHolds(ctx, pr, head, approval)
+		if err := s.mergeOrderHolds(ctx, pr, head, approval); err != nil {
+			return none, false, err
+		}
+		return approval, true, nil
 	}
 	// A revoked approval does not count; one into this target says why,
 	// unless LADO withdrew it for a sibling PR's base: that one is approved
@@ -74,11 +105,33 @@ func (s *Service) AuthorizeMerge(ctx context.Context, pr domain.PullRequest, hea
 	approvals = slices.DeleteFunc(approvals, domain.LadoIntegrationApproval.Revoked)
 	switch {
 	case revoked:
-		return integrationRevoked()
+		return none, false, integrationRevoked()
 	case len(approvals) > 0:
-		return targetChanged(pr, head, approvals[len(approvals)-1].TargetBranch)
+		return none, false, targetChanged(pr, head, approvals[len(approvals)-1].TargetBranch)
 	}
-	return approvalRequired(pr, head)
+	return none, false, approvalRequired(pr, head)
+}
+
+// dbChangesApplied refuses the merge of an approved head while pre-merge
+// SQL of its stored record is not applied (#97). Without the database
+// change service, or for a record without a db_changes item, it lets the
+// merge go on. A read that fails refuses the merge.
+func (s *Service) dbChangesApplied(ctx context.Context, pr domain.PullRequest, head string, approval domain.LadoIntegrationApproval) error {
+	pending, err := s.dbChangesPending(ctx, approval, head)
+	if err != nil {
+		return s.mergeGateFailed(pr, head, err)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	return dbChangePending(cmp.Or(approval.PRURL, pr.URL), head, pending)
+}
+
+// dbChangePending refuses a head whose pre-merge SQL LADO did not apply yet.
+func dbChangePending(prURL, head string, files []domain.LadoDBChangeFileRef) error {
+	return apierr.Conflict("LADO_DB_CHANGE_PENDING",
+		"This pull request adds production database SQL that LADO has not applied yet. LADO applies it after the integration approval and then merges the pull request.",
+		map[string]any{"prUrl": prURL, "headSha": head, "files": files})
 }
 
 // ladoPRApprovals reports whether pr is LADO's, its session an execution or

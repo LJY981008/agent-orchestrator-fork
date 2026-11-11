@@ -20,8 +20,15 @@ import (
 // verification, and audits execution.merged_without_approval when the merged
 // head had no integration approval and the execution was dispatched under
 // integration approval. The store settles a PR in one state once, so the
-// event is appended once.
+// event is appended once. A merged PR goes to the database change service
+// first (dbChangesSettled, #97); its error leaves the PR unsettled.
 func (s *Service) settle(ctx context.Context, exec domain.LadoExecution) error {
+	// #97: the database change service sees a merged PR first, as one
+	// merged outside LADO with its pre-merge SQL not applied; until it can,
+	// the PR stays unsettled and the next pass tells it again.
+	if err := s.dbChangesSettled(ctx, exec); err != nil {
+		return fmt.Errorf("tell the database changes of the merged pull request: %w", err)
+	}
 	now := s.now()
 	state := domain.PRStateClosed
 	if exec.PR.Merged {
