@@ -523,35 +523,6 @@ func (s *Service) headDetails(ctx context.Context, session domain.SessionID, prU
 	return details, ok, nil
 }
 
-// pendingOf returns the files of details in phase without an applied or
-// baseline row, in their order.
-func (s *Service) pendingOf(ctx context.Context, project domain.ProjectID, details domain.LadoDBChangesDetails, phase domain.LadoDBChangePhase) ([]domain.LadoDBChangeFileRef, error) {
-	var files []domain.LadoDBChangeFileRef
-	for _, file := range details.Files {
-		if file.Phase == phase {
-			files = append(files, file)
-		}
-	}
-	if len(files) == 0 {
-		return nil, nil
-	}
-	paths := make([]string, len(files))
-	for i, file := range files {
-		paths[i] = file.Path
-	}
-	applied, err := s.deps.Store.LadoDBChangeAppliedPaths(ctx, project, details.Repo, paths)
-	if err != nil {
-		return nil, fmt.Errorf("read the applied SQL files: %w", err)
-	}
-	var pending []domain.LadoDBChangeFileRef
-	for _, file := range files {
-		if _, ok := applied[file.Path]; !ok {
-			pending = append(pending, file)
-		}
-	}
-	return pending, nil
-}
-
 // IntegrationApproved queues a pre-merge run for each approved head whose
 // record has pre-merge files not applied yet, and wakes the loop. What
 // fails, it logs: the developer can apply from the app.

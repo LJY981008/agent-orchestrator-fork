@@ -133,12 +133,26 @@ func (s *Service) detect(ctx context.Context, settings domain.LadoDBChangeSettin
 // must apply before the head merges. It returns none while the
 // repository's settings are off.
 func (s *Service) PendingPreMerge(ctx context.Context, project domain.ProjectID, details domain.LadoDBChangesDetails) ([]domain.LadoDBChangeFileRef, error) {
-	files := details.PreMerge()
-	if len(files) == 0 {
+	if len(details.PreMerge()) == 0 {
 		return nil, nil
 	}
 	if _, on, err := s.Enabled(ctx, project, details.Repo); err != nil || !on {
 		return nil, err
+	}
+	return s.pendingOf(ctx, project, details, domain.LadoDBChangePreMerge)
+}
+
+// pendingOf returns the files of details in phase without an applied or
+// baseline row, in their order, whatever the settings say.
+func (s *Service) pendingOf(ctx context.Context, project domain.ProjectID, details domain.LadoDBChangesDetails, phase domain.LadoDBChangePhase) ([]domain.LadoDBChangeFileRef, error) {
+	var files []domain.LadoDBChangeFileRef
+	for _, file := range details.Files {
+		if file.Phase == phase {
+			files = append(files, file)
+		}
+	}
+	if len(files) == 0 {
+		return nil, nil
 	}
 	paths := make([]string, len(files))
 	for i, file := range files {
