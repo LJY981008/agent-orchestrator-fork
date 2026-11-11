@@ -133,7 +133,11 @@ type incidentState struct {
 	// instances of the service seen attached meanwhile.
 	sample           Occurrence
 	serviceInstances int
-	savedAt          time.Time
+	// repository is the issue repository of the sample: the first
+	// occurrence of the window decides where its issue goes, when one
+	// fingerprint shows up under targets of two repositories.
+	repository string
+	savedAt    time.Time
 	// windowUntil is when the window for a new issue ends, zero without one;
 	// previous is the closed issue the new one follows.
 	windowUntil time.Time
@@ -279,6 +283,7 @@ func (st *incidentState) add(o Occurrence, now time.Time) {
 	}
 	if st.sample.Incident.Fingerprint == "" {
 		st.sample = o
+		st.repository = o.Repository
 	}
 	st.serviceInstances = max(st.serviceInstances, o.ServiceInstances)
 	st.touchedAt = now
@@ -451,7 +456,17 @@ func (st *incidentState) closeWindow() {
 func (st *incidentState) resetRecent() {
 	st.recent = map[string]*incidentCount{}
 	st.sample = Occurrence{}
+	st.repository = ""
 	st.serviceInstances = 0
+}
+
+// issueRepository is the repository the window's issue goes to: the
+// sample's, or the project's when the window has no sample.
+func (st *incidentState) issueRepository() string {
+	if st.repository != "" {
+		return st.repository
+	}
+	return st.settings.Repository
 }
 
 // incidentCreate ends a window: it creates the issue and the task within the
@@ -477,7 +492,7 @@ func (h *IncidentHandler) incidentCreate(ctx context.Context, p *incidentProject
 	title, body := IssueText(h.incidentIssueInput(st))
 	task, err := h.deps.Tasks.CreateFromLog(ctx, ladotask.LogCreateInput{
 		ProjectID:  settings.ProjectID,
-		Repository: settings.Repository,
+		Repository: st.issueRepository(),
 		Title:      title,
 		Body:       body,
 	})
@@ -540,6 +555,7 @@ func (h *IncidentHandler) incidentIssueInput(st *incidentState) IssueInput {
 	}
 	if st.previous != "" {
 		in.PreviousIssue = incidentIssueNumber(st.previous)
+		in.PreviousIssueRepo = incidentOtherRepo(st.previous, st.issueRepository())
 	}
 	for _, source := range st.settings.Sources {
 		if host, _, err := domain.ParseLadoLogEndpoint(source.Endpoint); err == nil && host != "" {
@@ -661,6 +677,30 @@ func (h *IncidentHandler) incidentNotice(ctx context.Context, n domain.LadoOrche
 		return false
 	}
 	return true
+}
+
+// incidentOtherRepo is the repository path ("owner/repo") of the previous
+// issue when the new issue goes to another repository, so its body can link
+// the previous one across repositories; empty when they share one, when the
+// new issue's repository is the project's single one (""), or when either
+// ref does not read.
+func incidentOtherRepo(previous domain.IssueID, repository string) string {
+	if repository == "" {
+		return ""
+	}
+	repo, err := domain.ParseLadoRepoRef(repository)
+	if err != nil {
+		return ""
+	}
+	id, err := domain.ParseLadoIssueRef(previous)
+	if err != nil {
+		return ""
+	}
+	prev := domain.LadoIssueRepo(id)
+	if domain.LadoSameRepo(prev, repo) {
+		return ""
+	}
+	return prev.Native
 }
 
 // incidentIssueNumber is the number of an issue ref, 0 when it has none.

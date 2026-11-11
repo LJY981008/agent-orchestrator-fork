@@ -64,7 +64,9 @@ func TestLadoMigrate0017CreatesLogWatchTables(t *testing.T) {
 			"auto_plan", "auto_plan_daily_cap", "auto_plan_min_count", "disconnect_alert_minutes", "burst_notified_at", "updated_at"},
 		"lado_log_sources": {"id", "project_id", "kind", "display_name", "endpoint", "tls", "cert_key", "paused", "position",
 			"down_since", "down_notified_at", "created_at", "updated_at"},
-		"lado_log_targets": {"id", "source_id", "kind", "value", "compose_project", "service", "paused", "position", "created_at", "updated_at"},
+		// 0018 adds repository to lado_log_targets (issue #91).
+		"lado_log_targets": {"id", "source_id", "kind", "value", "compose_project", "service", "paused", "position", "created_at", "updated_at",
+			"repository"},
 		"lado_log_cursors": {"target_id", "instance", "since", "updated_at"},
 		"lado_log_fingerprints": {"id", "project_id", "fingerprint", "service", "exception_kind", "location", "count",
 			"first_seen_at", "last_seen_at", "task_id", "issue_ref", "previous_issue_ref", "issue_created_at",

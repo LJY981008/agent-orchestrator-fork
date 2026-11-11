@@ -3,7 +3,8 @@
 // in a workspace, and offers the Docker hosts and the compose projects they
 // deploy to. The developer picks some; Add only fills the card's draft with
 // unsaved sources, one compose project target per project picked in that
-// file. Nothing reaches the daemon's settings before the card's Save.
+// file, with the repository the file suggests when the guess is sure (see
+// ladoLogCISuggestedRepository). Nothing reaches the daemon's settings before the card's Save.
 import { X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,6 +37,7 @@ export function LadoLogWatchImportDialog({
 	open,
 	existingEndpoints,
 	room,
+	repositoryRefs,
 	onOpenChange,
 	onAdd,
 }: {
@@ -45,6 +47,8 @@ export function LadoLogWatchImportDialog({
 	existingEndpoints: ReadonlySet<string>;
 	/** How many sources the draft can take still. */
 	room: number;
+	/** The repositories a target may pick; none in a project with one repository, where nothing is suggested. */
+	repositoryRefs: readonly string[];
 	onOpenChange: (open: boolean) => void;
 	onAdd: (sources: LadoLogSourceDraft[]) => void;
 }) {
@@ -75,7 +79,7 @@ export function LadoLogWatchImportDialog({
 		for (const file of files) {
 			const picked = file.composeProjects.filter((project) => projects.has(composeKey(file, project)));
 			for (const host of file.hosts) {
-				if (hosts.has(ladoLogCIHostKey(file, host))) sources.push(ladoLogSourceFromCI(host, picked));
+				if (hosts.has(ladoLogCIHostKey(file, host))) sources.push(ladoLogSourceFromCI(host, picked, file, repositoryRefs));
 			}
 		}
 		onAdd(sources.slice(0, room));

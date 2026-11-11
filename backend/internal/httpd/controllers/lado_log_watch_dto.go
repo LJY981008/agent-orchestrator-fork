@@ -48,6 +48,7 @@ type LadoLogTargetResponse struct {
 	Value          string                      `json:"value" description:"The compose project, compose service, exact container name, or label key or key=value the kind selects by."`
 	ComposeProject string                      `json:"composeProject,omitempty" description:"The compose project a compose_service target is narrowed to."`
 	Service        string                      `json:"service,omitempty" description:"The service name the target's fingerprints use instead of the compose labels."`
+	Repository     string                      `json:"repository,omitempty" description:"Canonical id of the repository the target's issues go to; omitted when the target uses the project's default repository."`
 	Paused         bool                        `json:"paused"`
 	Status         LadoLogTargetStatusResponse `json:"status"`
 }
@@ -91,6 +92,7 @@ type UpdateLadoLogTargetRequest struct {
 	Value          string `json:"value"`
 	ComposeProject string `json:"composeProject,omitempty"`
 	Service        string `json:"service,omitempty"`
+	Repository     string `json:"repository,omitempty" description:"Repository the target's issues go to; empty uses the project's default repository."`
 	Paused         bool   `json:"paused,omitempty"`
 }
 
@@ -166,6 +168,7 @@ type LadoLogCIHostResponse struct {
 // LadoLogCIFileResponse is the candidates of one .gitlab-ci.yml file.
 type LadoLogCIFileResponse struct {
 	Repo            string                  `json:"repo" description:"The repository folder relative to a workspace project; empty for a single repository project."`
+	Repository      string                  `json:"repository,omitempty" description:"Canonical id of the repository the file belongs to; omitted for a file of the project root or one whose origin LADO cannot read."`
 	Path            string                  `json:"path"`
 	Hosts           []LadoLogCIHostResponse `json:"hosts"`
 	ComposeProjects []string                `json:"composeProjects"`

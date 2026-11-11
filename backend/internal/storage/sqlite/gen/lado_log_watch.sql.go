@@ -211,7 +211,8 @@ const getLadoLogWatchSettings = `-- name: GetLadoLogWatchSettings :one
 SELECT project_id, enabled, repository, include_json, exclude_json, hourly_issue_cap, auto_plan, auto_plan_daily_cap, auto_plan_min_count, disconnect_alert_minutes, burst_notified_at, updated_at FROM lado_log_watch_settings WHERE project_id = ?
 `
 
-// LADO fork: production log watch (issue #87, migrations_lado/0017).
+// LADO fork: production log watch (issue #87, migrations_lado/0017; target
+// repository: issue #91, migrations_lado/0018).
 func (q *Queries) GetLadoLogWatchSettings(ctx context.Context, projectID string) (LadoLogWatchSetting, error) {
 	row := q.db.QueryRowContext(ctx, getLadoLogWatchSettings, projectID)
 	var i LadoLogWatchSetting
@@ -310,8 +311,8 @@ func (q *Queries) InsertLadoLogSource(ctx context.Context, arg InsertLadoLogSour
 
 const insertLadoLogTarget = `-- name: InsertLadoLogTarget :exec
 INSERT INTO lado_log_targets (
-    id, source_id, kind, value, compose_project, service, paused, position, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    id, source_id, kind, value, compose_project, service, repository, paused, position, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertLadoLogTargetParams struct {
@@ -321,6 +322,7 @@ type InsertLadoLogTargetParams struct {
 	Value          string
 	ComposeProject string
 	Service        string
+	Repository     string
 	Paused         int64
 	Position       int64
 	CreatedAt      time.Time
@@ -335,6 +337,7 @@ func (q *Queries) InsertLadoLogTarget(ctx context.Context, arg InsertLadoLogTarg
 		arg.Value,
 		arg.ComposeProject,
 		arg.Service,
+		arg.Repository,
 		arg.Paused,
 		arg.Position,
 		arg.CreatedAt,
@@ -610,7 +613,7 @@ func (q *Queries) ListLadoLogSourcesByProject(ctx context.Context, projectID str
 }
 
 const listLadoLogTargetsByProject = `-- name: ListLadoLogTargetsByProject :many
-SELECT id, source_id, kind, value, compose_project, service, paused, position, created_at, updated_at FROM lado_log_targets
+SELECT id, source_id, kind, value, compose_project, service, paused, position, created_at, updated_at, repository FROM lado_log_targets
 WHERE source_id IN (SELECT lado_log_sources.id FROM lado_log_sources WHERE lado_log_sources.project_id = ?)
 ORDER BY source_id, position, id
 `
@@ -635,6 +638,7 @@ func (q *Queries) ListLadoLogTargetsByProject(ctx context.Context, projectID str
 			&i.Position,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Repository,
 		); err != nil {
 			return nil, err
 		}
@@ -876,6 +880,7 @@ SET source_id = ?,
     value = ?,
     compose_project = ?,
     service = ?,
+    repository = ?,
     paused = ?,
     position = ?,
     updated_at = ?
@@ -890,6 +895,7 @@ type UpdateLadoLogTargetParams struct {
 	Value          string
 	ComposeProject string
 	Service        string
+	Repository     string
 	Paused         int64
 	Position       int64
 	UpdatedAt      time.Time
@@ -905,6 +911,7 @@ func (q *Queries) UpdateLadoLogTarget(ctx context.Context, arg UpdateLadoLogTarg
 		arg.Value,
 		arg.ComposeProject,
 		arg.Service,
+		arg.Repository,
 		arg.Paused,
 		arg.Position,
 		arg.UpdatedAt,

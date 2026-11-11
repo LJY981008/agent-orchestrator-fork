@@ -170,3 +170,77 @@ func TestWireLadoLogWatchFollowsOnlyWhatIsTurnedOnAndClosesOnShutdown(t *testing
 		}
 	}
 }
+
+// TestWireLadoLogWatchChecksTargetRepositoriesAgainstTheWorkspace: the
+// wired log watch checks a target's issue repository against the
+// workspace's repositories (ladotask through the real store), saves it in
+// its canonical form, reads it back from the store, and refuses a followed
+// target without one and a repository outside the workspace (#91).
+func TestWireLadoLogWatchChecksTargetRepositoriesAgainstTheWorkspace(t *testing.T) {
+	ctx := context.Background()
+	useLadoStoredTokens(t, nil)
+	cfg := config.Config{DataDir: t.TempDir(), StateDir: t.TempDir()}
+	store := sqlitetest.MustOpen(t)
+	at := time.Now().UTC().Truncate(time.Second)
+	if err := store.UpsertWorkspaceProject(ctx, domain.ProjectRecord{ID: "mer", Path: t.TempDir(), Kind: domain.ProjectKindWorkspace, RegisteredAt: at}, []domain.WorkspaceRepoRecord{
+		{ProjectID: "mer", Name: "back", RelativePath: "back", RepoOriginURL: "https://github.com/acme/back.git", DefaultBranch: "main"},
+		{ProjectID: "mer", Name: "front", RelativePath: "front", RepoOriginURL: "https://github.com/acme/front.git", DefaultBranch: "main"},
+	}); err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	log := slog.New(slog.DiscardHandler)
+	work := wireLadoWork(ctx, cfg, store, &recordingProjectCloner{}, ladoWorkDeps{}, log)
+	watch := wireLadoLogWatch(cfg, store, work.tasks, log)
+	api := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{LadoLogWatch: watch}, httpd.ControlDeps{}))
+	t.Cleanup(api.Close)
+
+	call := func(method, body string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, method, api.URL+"/api/v1/lado/projects/mer/log-watch", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("%s log-watch: %v", method, err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(raw)
+	}
+	put := func(targets string) (int, string) {
+		return call(http.MethodPut, `{"enabled":true,"include":[],"exclude":[],"hourlyIssueCap":5,"autoPlan":false,"autoPlanDailyCap":5,"autoPlanMinCount":1,"disconnectAlertMinutes":10,
+			"sources":[{"displayName":"prod1","endpoint":"tcp://192.0.2.10:2375","targets":`+targets+`}]}`)
+	}
+
+	for _, tc := range []struct{ name, targets string }{
+		{"no repository anywhere", `[{"kind":"compose_project","value":"back"}]`},
+		{"a repository outside the workspace", `[{"kind":"compose_project","value":"back","repository":"github:acme/other"}]`},
+	} {
+		status, body := put(tc.targets)
+		if status != http.StatusBadRequest || !strings.Contains(body, "LADO_LOG_WATCH_INVALID") || !strings.Contains(body, "sources[0].targets[0].repository") {
+			t.Fatalf("%s: PUT = %d %s", tc.name, status, body)
+		}
+	}
+
+	status, body := put(`[{"kind":"compose_project","value":"back","repository":"github:ACME/Back"},{"kind":"compose_project","value":"front","repository":"github:acme/front"}]`)
+	if status != http.StatusOK {
+		t.Fatalf("PUT = %d %s", status, body)
+	}
+	status, body = call(http.MethodGet, "")
+	var view struct {
+		Sources []struct {
+			Targets []struct {
+				Value      string `json:"value"`
+				Repository string `json:"repository"`
+			} `json:"targets"`
+		} `json:"sources"`
+	}
+	if err := json.Unmarshal([]byte(body), &view); status != http.StatusOK || err != nil || len(view.Sources) != 1 || len(view.Sources[0].Targets) != 2 {
+		t.Fatalf("GET = %d %s (%v)", status, body, err)
+	}
+	if got := view.Sources[0].Targets; got[0].Repository != "github:acme/back" || got[1].Repository != "github:acme/front" {
+		t.Fatalf("saved targets = %+v", got)
+	}
+}

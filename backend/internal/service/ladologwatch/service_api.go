@@ -124,6 +124,10 @@ func (s *Service) UpdateSettings(ctx context.Context, project domain.ProjectID, 
 	if err := domain.ValidateLadoLogWatchInput(in); err != nil {
 		return domain.LadoLogWatchView{}, serviceInvalid(err)
 	}
+	in, err := s.checkRepositories(ctx, project, in)
+	if err != nil {
+		return domain.LadoLogWatchView{}, err
+	}
 	current, err := s.settings(ctx, project)
 	if err != nil {
 		return domain.LadoLogWatchView{}, err
@@ -181,6 +185,7 @@ func (s *Service) UpdateSettings(ctx context.Context, project domain.ProjectID, 
 			src.Targets = append(src.Targets, domain.LadoLogTarget{
 				ID: id, SourceID: src.ID, Kind: tIn.Kind, Value: tIn.Value,
 				ComposeProject: tIn.ComposeProject, Service: tIn.Service, Paused: tIn.Paused,
+				Repository: tIn.Repository,
 			})
 		}
 		next.Sources = append(next.Sources, src)
@@ -200,6 +205,76 @@ func (s *Service) UpdateSettings(ctx context.Context, project domain.ProjectID, 
 	}
 	s.Kick()
 	return s.settingsView(ctx, project)
+}
+
+// checkRepositories checks the issue repositories of a settings input
+// against the project's repositories (the list the settings screen offers)
+// and returns the input with each value in its canonical form:
+//
+//   - A value that is not one of the project's repositories is refused.
+//   - In a project with two or more repositories, a followed target (the
+//     log watch on, its source and itself not paused) whose issues would
+//     have no repository, its own nor the project's, is refused: the issue
+//     could not be created. Turning the log watch off or pausing is never
+//     refused.
+//
+// Both checks are skipped when the list cannot be read for a reason other
+// than an internal error (an archived project, an origin LADO does not
+// support): creating the issue checks the repository again.
+func (s *Service) checkRepositories(ctx context.Context, project domain.ProjectID, in domain.LadoLogWatchInput) (domain.LadoLogWatchInput, error) {
+	if s.deps.Repos == nil {
+		return in, nil
+	}
+	repos, err := s.deps.Repos.Repositories(ctx, project)
+	if err != nil {
+		var ae *apierr.Error
+		if errors.As(err, &ae) && ae.Kind != apierr.KindInternal {
+			return in, nil
+		}
+		return in, s.failed("저장소 목록 읽기", err)
+	}
+	canonical := func(field, ref string) (string, error) {
+		if ref == "" {
+			return "", nil
+		}
+		if want, err := domain.ParseLadoRepoRef(ref); err == nil {
+			for _, repo := range repos {
+				if domain.LadoSameRepo(repo.Repo, want) {
+					return domain.LadoRepoRef(repo.Repo), nil
+				}
+			}
+		}
+		return "", apierr.Invalid(codeInvalid, "이 프로젝트의 저장소가 아닙니다", map[string]any{"field": field})
+	}
+	out := in
+	if out.Repository, err = canonical("repository", in.Repository); err != nil {
+		return in, err
+	}
+	out.Sources = make([]domain.LadoLogSourceInput, len(in.Sources))
+	for i, src := range in.Sources {
+		out.Sources[i] = src
+		out.Sources[i].Targets = make([]domain.LadoLogTargetInput, len(src.Targets))
+		for j, t := range src.Targets {
+			field := fmt.Sprintf("sources[%d].targets[%d].repository", i, j)
+			if t.Repository, err = canonical(field, t.Repository); err != nil {
+				return in, err
+			}
+			if serviceRepositoryRequired(len(repos), in.Enabled, src.Paused, t.Paused, t.Repository, out.Repository) {
+				return in, apierr.Invalid(codeInvalid, "이슈를 올릴 저장소를 고르세요", map[string]any{"field": field})
+			}
+			out.Sources[i].Targets[j] = t
+		}
+	}
+	return out, nil
+}
+
+// serviceRepositoryRequired reports whether a target must name its issue
+// repository: the project has two or more repositories (an empty one would
+// be refused when the issue is created), the target is followed, and
+// neither it nor the project names one. The settings screen shows its
+// notice on the same condition.
+func serviceRepositoryRequired(repos int, enabled, sourcePaused, targetPaused bool, target, project string) bool {
+	return repos >= 2 && enabled && !sourcePaused && !targetPaused && target == "" && project == ""
 }
 
 // serviceInvalid turns a refused input into LADO_LOG_WATCH_INVALID.
@@ -345,7 +420,9 @@ func (s *Service) ImportFromCI(ctx context.Context, project domain.ProjectID) (d
 	if info, err := os.Stat(record.Path); err != nil || !info.IsDir() {
 		return domain.LadoLogCIImport{}, apierr.Conflict(codeCIUnsupported, "프로젝트 폴더가 없습니다", nil)
 	}
-	type folder struct{ repo, dir string }
+	// repository is the canonical id of the folder's repository: a
+	// workspace child's origin, "" for the project root.
+	type folder struct{ repo, dir, repository string }
 	folders := []folder{{repo: "", dir: record.Path}}
 	if record.Kind.WithDefault() == domain.ProjectKindWorkspace {
 		repos, err := s.deps.Projects.ListWorkspaceRepos(ctx, record.ID)
@@ -358,7 +435,9 @@ func (s *Service) ImportFromCI(ctx context.Context, project domain.ProjectID) (d
 			if rel == "" || rel == "." || !filepath.IsLocal(rel) {
 				continue
 			}
-			folders = append(folders, folder{repo: repo.RelativePath, dir: filepath.Join(record.Path, rel)})
+			folders = append(folders, folder{
+				repo: repo.RelativePath, dir: filepath.Join(record.Path, rel), repository: serviceOriginRef(repo.RepoOriginURL),
+			})
 		}
 	}
 	out := domain.LadoLogCIImport{Files: []domain.LadoLogCIFile{}}
@@ -367,7 +446,7 @@ func (s *Service) ImportFromCI(ctx context.Context, project domain.ProjectID) (d
 		if !ok {
 			continue
 		}
-		file := domain.LadoLogCIFile{Repo: f.repo, Path: serviceCIFile, Hosts: []domain.LadoLogCIHost{}, ComposeProjects: []string{}, Notes: []string{}}
+		file := domain.LadoLogCIFile{Repo: f.repo, Repository: f.repository, Path: serviceCIFile, Hosts: []domain.LadoLogCIHost{}, ComposeProjects: []string{}, Notes: []string{}}
 		if note != "" {
 			file.Notes = append(file.Notes, note)
 		} else {
@@ -386,6 +465,19 @@ func (s *Service) ImportFromCI(ctx context.Context, project domain.ProjectID) (d
 		return domain.LadoLogCIImport{}, apierr.NotFound(codeCINotFound, "프로젝트 폴더에 .gitlab-ci.yml 이 없습니다")
 	}
 	return out, nil
+}
+
+// serviceOriginRef is the canonical repository id of an origin, or "" when
+// there is none or LADO does not support its host.
+func serviceOriginRef(origin string) string {
+	if origin == "" {
+		return ""
+	}
+	repo, err := domain.LadoTrackerRepoFromOrigin(origin)
+	if err != nil {
+		return ""
+	}
+	return domain.LadoRepoRef(repo)
 }
 
 // serviceReadCI reads a .gitlab-ci.yml without following a symbolic link.

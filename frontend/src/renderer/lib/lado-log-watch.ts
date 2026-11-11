@@ -119,6 +119,8 @@ export type LadoLogTargetDraft = {
 	value: string;
 	composeProject: string;
 	service: string;
+	/** The repository its issues go to; empty uses the project's. */
+	repository: string;
 	paused: boolean;
 };
 
@@ -179,6 +181,7 @@ export function ladoLogWatchDraft(saved: LadoLogWatch): LadoLogWatchDraft {
 				value: target.value,
 				composeProject: target.composeProject ?? "",
 				service: target.service ?? "",
+				repository: target.repository ?? "",
 				paused: target.paused,
 			})),
 		})),
@@ -220,6 +223,7 @@ export function ladoLogWatchInput(draft: LadoLogWatchDraft): LadoLogWatchInput {
 					value: target.value.trim(),
 					...(composeProject ? { composeProject } : {}),
 					...(service ? { service } : {}),
+					...(target.repository ? { repository: target.repository } : {}),
 					paused: target.paused,
 				};
 			}),
@@ -238,12 +242,39 @@ export function ladoLogEndpointPort(endpoint: string): number | undefined {
 	return match ? Number(match[1]) : undefined;
 }
 
+/** A new, empty target. */
+export function ladoLogNewTarget(): LadoLogTargetDraft {
+	return { key: ladoLogNewKey(), kind: "compose_project", value: "", composeProject: "", service: "", repository: "", paused: false };
+}
+
+/**
+ * The repository a CI file suggests for a compose project it deploys, or ""
+ * when the guess is not sure. The file's repository must be one the project
+ * offers, and either the file deploys only that compose project or the
+ * compose project is named exactly like the file's repository folder. So a
+ * back repository whose file deploys back and front fills back only, and
+ * front stays for the developer to choose.
+ */
+export function ladoLogCISuggestedRepository(file: LadoLogCIFile, composeProject: string, refs: readonly string[]): string {
+	const repository = file.repository ?? "";
+	if (repository === "" || !refs.includes(repository)) return "";
+	const only = file.composeProjects.length === 1 && file.composeProjects[0] === composeProject;
+	const folder = file.repo.split("/").filter(Boolean).pop() ?? "";
+	return only || (folder !== "" && composeProject === folder) ? repository : "";
+}
+
 /**
  * A new, unsaved source from a CI candidate: its endpoint (empty while the
  * developer has to fill it in), its display name, TLS for the TLS port 2376,
- * and a compose project target for each compose project picked.
+ * and a compose project target for each compose project picked, with the
+ * repository the file suggests for it among the project's repositories.
  */
-export function ladoLogSourceFromCI(host: LadoLogCIHost, composeProjects: readonly string[]): LadoLogSourceDraft {
+export function ladoLogSourceFromCI(
+	host: LadoLogCIHost,
+	composeProjects: readonly string[],
+	file?: LadoLogCIFile,
+	refs: readonly string[] = [],
+): LadoLogSourceDraft {
 	return {
 		key: ladoLogNewKey(),
 		displayName: host.displayName,
@@ -251,14 +282,31 @@ export function ladoLogSourceFromCI(host: LadoLogCIHost, composeProjects: readon
 		tls: ladoLogEndpointPort(host.endpoint) === 2376,
 		paused: false,
 		targets: composeProjects.map((value) => ({
-			key: ladoLogNewKey(),
-			kind: "compose_project" as const,
+			...ladoLogNewTarget(),
 			value,
-			composeProject: "",
-			service: "",
-			paused: false,
+			repository: file ? ladoLogCISuggestedRepository(file, value, refs) : "",
 		})),
 	};
+}
+
+/** The repository a target's issues go to: its own, else the project's; "" when neither is set. */
+export function ladoLogTargetRepository(draft: Pick<LadoLogWatchDraft, "repository">, target: Pick<LadoLogTargetDraft, "repository">): string {
+	return target.repository || draft.repository;
+}
+
+/**
+ * Whether a target needs a repository it lacks, as the daemon checks on
+ * save: the project has two repositories or more, the watch is on, neither
+ * the source nor the target is paused, and neither the target nor the
+ * project names a repository. Turning the watch off or pausing saves anyway.
+ */
+export function ladoLogTargetNeedsRepository(
+	draft: Pick<LadoLogWatchDraft, "enabled" | "repository">,
+	source: Pick<LadoLogSourceDraft, "paused">,
+	target: Pick<LadoLogTargetDraft, "paused" | "repository">,
+	repositoryCount: number,
+): boolean {
+	return repositoryCount >= 2 && draft.enabled && !source.paused && !target.paused && ladoLogTargetRepository(draft, target) === "";
 }
 
 /** A CI candidate's identity in the import list: its file, then its endpoint or what LADO could not resolve. */

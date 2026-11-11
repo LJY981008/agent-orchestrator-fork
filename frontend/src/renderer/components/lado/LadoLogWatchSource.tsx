@@ -2,22 +2,28 @@
 // name, its Engine API endpoint, TLS and pause, the containers LADO follows on
 // it, and, once saved, how the daemon follows it, its TLS copies and a check.
 // A host without TLS shows that its API is unauthenticated and its logs cross
-// the network in plain text. The edits stay in the card's draft until Save.
+// the network in plain text. In a project with two repositories or more,
+// each target picks the repository its issues go to, the project's default
+// unless it names one, and says when it needs one the project does not set.
+// The edits stay in the card's draft until Save.
 import { Plus, ShieldAlert, Trash2 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCheckLadoLogSource, useDeleteLadoLogTLS, useImportLadoLogTLS } from "../../hooks/useLado";
 import { formatTimeCompact } from "../../lib/format-time";
+import type { LadoRepository } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import {
 	LADO_LOG_MAX_TARGETS,
-	ladoLogNewKey,
+	ladoLogNewTarget,
 	ladoLogTargetKinds,
+	ladoLogTargetNeedsRepository,
 	type LadoLogSource,
 	type LadoLogSourceDraft,
 	type LadoLogSourceState,
 	type LadoLogTargetDraft,
 	type LadoLogTargetKind,
+	type LadoLogWatchDraft,
 } from "../../lib/lado-log-watch";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
@@ -56,11 +62,16 @@ const valuePlaceholderKeys = {
 	label: "lado.logWatch.valueLabelPlaceholder",
 } as const satisfies Record<LadoLogTargetKind, string>;
 
+// The select's value for "the project's default", since an item cannot be "".
+const projectDefaultValue = "__project__";
+
 export function LadoLogWatchSource({
 	projectId,
 	index,
 	source,
 	saved,
+	watch,
+	repositories,
 	busy,
 	onChange,
 	onRemove,
@@ -70,6 +81,10 @@ export function LadoLogWatchSource({
 	source: LadoLogSourceDraft;
 	/** The saved source with the same id: its state, its TLS copies; none before it is saved. */
 	saved?: LadoLogSource;
+	/** The draft's switch and default repository, which decide whether a target needs a repository. */
+	watch: Pick<LadoLogWatchDraft, "enabled" | "repository">;
+	/** The project's repositories; a target picks one only when there are two or more. */
+	repositories: readonly LadoRepository[];
 	busy: boolean;
 	onChange: (next: LadoLogSourceDraft) => void;
 	onRemove: () => void;
@@ -80,14 +95,13 @@ export function LadoLogWatchSource({
 	const patch = (fields: Partial<LadoLogSourceDraft>) => onChange({ ...source, ...fields });
 	const patchTarget = (key: string, fields: Partial<LadoLogTargetDraft>) =>
 		patch({ targets: source.targets.map((target) => (target.key === key ? { ...target, ...fields } : target)) });
-	const addTarget = () =>
-		patch({
-			targets: [
-				...source.targets,
-				{ key: ladoLogNewKey(), kind: "compose_project", value: "", composeProject: "", service: "", paused: false },
-			],
-		});
+	const addTarget = () => patch({ targets: [...source.targets, ladoLogNewTarget()] });
 	const status = saved?.status;
+	const pickRepository = repositories.length > 1;
+	const repositoryName = (ref: string) => repositories.find((repository) => repository.ref === ref)?.name ?? ref;
+	const projectDefault = watch.repository
+		? t("lado.logWatch.targetRepositoryDefault", { name: repositoryName(watch.repository) })
+		: t("lado.logWatch.targetRepositoryDefaultUnset");
 
 	return (
 		<div className="settings-content-row flex flex-col gap-2.5" data-testid="lado-log-watch-source">
@@ -258,6 +272,44 @@ export function LadoLogWatchSource({
 									<Trash2 className="size-3.5" aria-hidden="true" />
 								</Button>
 							</div>
+							{pickRepository ? (
+								<div className="flex min-w-0 items-center gap-2 pl-1">
+									<span className="shrink-0 text-caption leading-4 text-settings-muted">{t("lado.logWatch.repository")}</span>
+									<Select
+										value={target.repository || projectDefaultValue}
+										disabled={busy}
+										onValueChange={(value) => patchTarget(target.key, { repository: value === projectDefaultValue ? "" : value })}
+									>
+										<SelectTrigger
+											size="sm"
+											className="w-56 max-w-full min-w-0 px-2.5 text-xs"
+											aria-label={t("lado.logWatch.targetRepository", { number: targetNumber })}
+										>
+											<SelectValue />
+										</SelectTrigger>
+										<SelectContent>
+											<SelectItem value={projectDefaultValue}>{projectDefault}</SelectItem>
+											{/* A saved value the project no longer lists still shows as itself. */}
+											{target.repository && !repositories.some((repository) => repository.ref === target.repository) ? (
+												<SelectItem value={target.repository}>{target.repository}</SelectItem>
+											) : null}
+											{repositories.map((repository) => (
+												<SelectItem key={repository.ref} value={repository.ref}>
+													{repository.name}
+												</SelectItem>
+											))}
+										</SelectContent>
+									</Select>
+								</div>
+							) : null}
+							{ladoLogTargetNeedsRepository(watch, source, target, repositories.length) ? (
+								<p
+									className="pl-1 text-caption leading-4 text-[var(--color-status-needs-you)]"
+									data-testid="lado-log-watch-target-repository-required"
+								>
+									{t("lado.logWatch.targetRepositoryRequired")}
+								</p>
+							) : null}
 							{targetStatus ? (
 								<p className="pl-1 text-caption leading-4 text-settings-muted" data-testid="lado-log-watch-target-state">
 									{t("lado.logWatch.targetInstances", { count: targetStatus.instances })}

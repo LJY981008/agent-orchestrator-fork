@@ -1,4 +1,5 @@
--- LADO fork: production log watch (issue #87, migrations_lado/0017).
+-- LADO fork: production log watch (issue #87, migrations_lado/0017; target
+-- repository: issue #91, migrations_lado/0018).
 
 -- name: GetLadoLogWatchSettings :one
 SELECT * FROM lado_log_watch_settings WHERE project_id = ?;
@@ -67,8 +68,8 @@ ORDER BY source_id, position, id;
 
 -- name: InsertLadoLogTarget :exec
 INSERT INTO lado_log_targets (
-    id, source_id, kind, value, compose_project, service, paused, position, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+    id, source_id, kind, value, compose_project, service, repository, paused, position, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateLadoLogTarget :execrows
 -- A target may move to another source of the same project.
@@ -78,6 +79,7 @@ SET source_id = ?,
     value = ?,
     compose_project = ?,
     service = ?,
+    repository = ?,
     paused = ?,
     position = ?,
     updated_at = ?

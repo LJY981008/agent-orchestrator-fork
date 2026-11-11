@@ -22485,6 +22485,10 @@ components:
           description: The repository folder relative to a workspace project; empty
             for a single repository project.
           type: string
+        repository:
+          description: Canonical id of the repository the file belongs to; omitted
+            for a file of the project root or one whose origin LADO cannot read.
+          type: string
       required:
       - repo
       - path
@@ -22747,6 +22751,10 @@ components:
           type: string
         paused:
           type: boolean
+        repository:
+          description: Canonical id of the repository the target's issues go to; omitted
+            when the target uses the project's default repository.
+          type: string
         service:
           description: The service name the target's fingerprints use instead of the
             compose labels.
@@ -31244,6 +31252,10 @@ components:
           type: string
         paused:
           type: boolean
+        repository:
+          description: Repository the target's issues go to; empty uses the project's
+            default repository.
+          type: string
         service:
           type: string
         value:
