@@ -51,7 +51,7 @@ func wireLado(store *sqlite.Store, sessions ladoSessionTarget, chat ladoGateTarg
 	gate.SetPlanWorkers(store)
 	sessions.SetWorkGate(gate)
 	chat.SetWorkGate(gate)
-	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Knowledge: knowledge, Log: log}.Standing)
+	sessions.SetLadoPrompt(ladotask.PromptSource{Settings: store, Sessions: store, Policies: store, Rules: store, Knowledge: knowledge, DBChanges: store, Log: log}.Standing)
 	return ladoproject.New(ladoproject.Deps{Store: store, Projects: store})
 }
 
@@ -72,6 +72,9 @@ type ladoWork struct {
 	// relay relays a developer's instruction from an orchestrator to a
 	// running worker (issue #49).
 	relay *ladorelay.Service
+	// blobs is LADO's blob store, which the database change service keeps
+	// its commands' redacted outputs in (issue #97).
+	blobs *ladoblob.Store
 }
 
 // wireLadoWork builds LADO's repository connections, the local setup it
@@ -165,7 +168,7 @@ func wireLadoWork(ctx context.Context, cfg config.Config, store *sqlite.Store, p
 	verify := wireLadoVerify(store, blobs, clients, work, log)
 	chrome := wireLadoClaudeChrome(cfg, store, work.setup.sessions, log)
 	relay := wireLadoRelay(store, blobs, work.sender, log)
-	return ladoWork{connections: connections, clients: clients, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch, relay: relay}
+	return ladoWork{connections: connections, clients: clients, tasks: tasks, rules: rules, queue: queue, setup: setup, verify: verify, chrome: chrome, watch: watch, relay: relay, blobs: blobs}
 }
 
 // ladoQueueSender is how the dispatcher tells a running resolve worker about

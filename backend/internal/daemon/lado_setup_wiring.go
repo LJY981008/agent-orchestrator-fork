@@ -132,7 +132,7 @@ func wireLadoSetup(cfg config.Config, store *sqlite.Store, blobs *ladoblob.Store
 		// This replaces wireLado's source, so it keeps the plan worker roles'
 		// rules. The setup also lists the project's skills and agents (#29).
 		deps.sessions.SetLadoPrompt(ladotask.PromptSource{
-			Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup, Knowledge: deps.knowledge, References: setup, Log: log,
+			Settings: store, Sessions: store, Policies: store, Rules: store, Setup: setup, Knowledge: deps.knowledge, References: setup, DBChanges: store, Log: log,
 		}.Standing)
 		reviewers := deps.reviewers
 		if reviewers == nil {
