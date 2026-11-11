@@ -480,6 +480,63 @@ type LadoConflictAcceptance struct {
 	RevokedAt     sql.NullTime
 }
 
+type LadoDbChangeApplication struct {
+	ID                 string
+	ProjectID          string
+	Repo               string
+	Path               string
+	BlobSha            string
+	Phase              string
+	Result             string
+	RunID              string
+	ExecutionSessionID string
+	TaskID             string
+	PRURL              string
+	HeadSha            string
+	ExitCode           sql.NullInt64
+	OutputSha256       string
+	Message            string
+	Actor              string
+	StartedAt          time.Time
+	FinishedAt         sql.NullTime
+}
+
+type LadoDbChangeRun struct {
+	ID                 string
+	ProjectID          string
+	Repo               string
+	ExecutionSessionID string
+	TaskID             string
+	PRURL              string
+	HeadSha            string
+	Kind               string
+	RunTrigger         string
+	State              string
+	ApprovalID         string
+	Attempts           int64
+	Error              string
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
+}
+
+type LadoDbChangeSetting struct {
+	ProjectID       string
+	Repo            string
+	Enabled         int64
+	PathsJson       string
+	Command         string
+	TimeoutMinutes  int64
+	SecretNamesJson string
+	BaselineCommit  string
+	EnabledAt       sql.NullTime
+	UpdatedAt       time.Time
+}
+
+type LadoDbChangeStatusHold struct {
+	ApprovalID string
+	HeldAt     time.Time
+}
+
 type LadoDispatchSetting struct {
 	ID                     int64
 	MaxConcurrent          int64

@@ -243,12 +243,17 @@ WHERE lado_integration_approvals.id = sqlc.arg(id);
 
 -- name: ListLadoIntegrationStatusRetries :many
 -- Approvals whose commit status is still to post, with attempts left, oldest
--- first.
+-- first. An approval whose status waits for its pre-merge SQL (issue #97) is
+-- left out until LADO releases it.
 SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_sha256, acknowledged_json, proof_nonce,
     actor, approved_at, status_state, status_attempts, status_posted_at, status_error,
     approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE status_state IN ('pending', 'failed') AND status_attempts < sqlc.arg(max_attempts)
+  AND NOT EXISTS (
+    SELECT 1 FROM lado_db_change_status_holds
+    WHERE lado_db_change_status_holds.approval_id = lado_integration_approvals.id
+  )
 ORDER BY approved_at, id
 LIMIT sqlc.arg(max_approvals);
 
