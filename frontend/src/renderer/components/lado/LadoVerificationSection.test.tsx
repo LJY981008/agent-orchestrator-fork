@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { appCatalogs } from "../../i18n/all-messages";
 import * as lado from "../../lib/lado";
+import * as dbChanges from "../../lib/lado-db-changes";
 import { LadoVerificationSection } from "./LadoVerificationSection";
 
 vi.mock("../../lib/lado", async (original) => ({
@@ -13,6 +14,14 @@ vi.mock("../../lib/lado", async (original) => ({
 	approveLadoIntegration: vi.fn(),
 	mergeLadoPR: vi.fn(),
 	repostLadoIntegrationStatus: vi.fn(),
+}));
+
+// The run's production SQL (issue #97).
+vi.mock("../../lib/lado-db-changes", async (original) => ({
+	...await original<typeof import("../../lib/lado-db-changes")>(),
+	fetchLadoExecutionDBChanges: vi.fn(),
+	fetchLadoDBChangeFile: vi.fn(),
+	applyLadoDBChanges: vi.fn(),
 }));
 
 const HEAD = "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b";
@@ -901,4 +910,169 @@ test("counts each tracked PR's unresolved review threads under that PR", () => {
 	const prs = screen.getAllByTestId("lado-verify-pr");
 	expect(within(prs[0]!).queryByTestId("lado-verify-review-threads")).not.toBeInTheDocument();
 	expect(within(prs[1]!).getByTestId("lado-verify-review-threads")).toHaveTextContent("1 unresolved review thread");
+});
+
+// LADO fork: the production SQL a head adds (issue #97). The db_changes item
+// follows evidence only in a repository whose settings are on; the panel
+// under the items shows the run's SQL files from the daemon, never the
+// record, and its buttons ask the desktop app to apply a phase.
+const dbItem = (fields: Partial<Item> = {}): Item => ({
+	kind: "db_changes",
+	outcome: "pass",
+	details: {
+		files: [
+			{ path: "scripts/migrations/001_add.sql", blobSha: "b1", phase: "pre_merge" },
+			{ path: "scripts/migrations/002_drop.sql", blobSha: "b2", phase: "after_deploy" },
+		],
+		planned: true,
+	},
+	...fields,
+});
+
+function dbRun(fields: Partial<dbChanges.LadoDBChangeRun>): dbChanges.LadoDBChangeRun {
+	return {
+		id: "run-1",
+		kind: "pre_merge",
+		trigger: "approval",
+		state: "failed",
+		attempts: 1,
+		createdAt: "2026-11-10T00:00:00Z",
+		updatedAt: "2026-11-10T00:00:00Z",
+		headSha: HEAD,
+		prUrl: PR_URL,
+		repo: "",
+		sessionId: "demo-7",
+		taskId: "lado-task-1",
+		...fields,
+	};
+}
+
+function dbView(fields: Partial<dbChanges.LadoDBChangePR> = {}): dbChanges.LadoDBChangeExecution {
+	return {
+		sessionId: "demo-7",
+		taskId: "lado-task-1",
+		prs: [
+			{
+				prUrl: PR_URL,
+				headSha: HEAD,
+				repo: "",
+				files: [
+					{ path: "scripts/migrations/001_add.sql", blobSha: "b1", phase: "pre_merge", status: "failed", attempts: 1, lastMessage: "ERROR: relation exists [REDACTED]" },
+					{ path: "scripts/migrations/002_drop.sql", blobSha: "b2", phase: "after_deploy", status: "pending", attempts: 0 },
+				],
+				modified: [],
+				runs: [dbRun({ error: "psql exited 3" })],
+				...fields,
+			},
+		],
+	};
+}
+
+const withDB = (item: Item = dbItem()) => execution({ verification: verification({ items: [...items(), item] }) });
+
+test("names the db_changes item after evidence, counts its files and shows the run's SQL with a retry", async () => {
+	vi.mocked(dbChanges.fetchLadoExecutionDBChanges).mockResolvedValue(dbView());
+	vi.mocked(dbChanges.applyLadoDBChanges).mockResolvedValue(dbRun({ state: "queued" }));
+	renderSection(withDB());
+
+	expect(rows().map((candidate) => candidate.dataset.kind).slice(-2)).toEqual(["evidence", "db_changes"]);
+	expect(row("db_changes")).toHaveTextContent("Database changes");
+	expect(row("db_changes")).toHaveTextContent("2 SQL files, 1 after deploy");
+
+	const panel = await screen.findByTestId("lado-db-change-pr");
+	expect(dbChanges.fetchLadoExecutionDBChanges).toHaveBeenCalledWith("demo-7");
+	const files = within(panel).getAllByTestId("lado-db-change-file");
+	expect(files.map((file) => [file.dataset.status, file.dataset.phase])).toEqual([
+		["failed", "pre_merge"],
+		["pending", "after_deploy"],
+	]);
+	expect(files[0]).toHaveTextContent("scripts/migrations/001_add.sql · before merge · failed");
+	expect(within(files[0]).getByTestId("lado-db-change-message")).toHaveTextContent("ERROR: relation exists [REDACTED]");
+	expect(within(panel).getByTestId("lado-db-change-run")).toHaveTextContent("Applying the SQL failed; LADO did not merge");
+	expect(within(panel).getByTestId("lado-db-change-run-error")).toHaveTextContent("psql exited 3");
+
+	fireEvent.click(within(panel).getByRole("button", { name: "Try again" }));
+	await waitFor(() => expect(dbChanges.applyLadoDBChanges).toHaveBeenCalledTimes(1));
+	expect(vi.mocked(dbChanges.applyLadoDBChanges).mock.calls[0]?.[0]).toBe("demo-7");
+	expect(vi.mocked(dbChanges.applyLadoDBChanges).mock.calls[0]?.[1]).toMatchObject({ prUrl: PR_URL, headSha: HEAD });
+	expect(vi.mocked(dbChanges.applyLadoDBChanges).mock.calls[0]?.[2]).toBe("pre_merge");
+});
+
+test("offers the after-deploy SQL and the SQL a merge outside LADO left, and names what the plan and head say", async () => {
+	vi.mocked(dbChanges.fetchLadoExecutionDBChanges).mockResolvedValue(
+		dbView({
+			files: [
+				{ path: "scripts/migrations/001_add.sql", blobSha: "b1", phase: "pre_merge", status: "pending", attempts: 0 },
+				{ path: "scripts/migrations/002_drop.sql", blobSha: "b2", phase: "after_deploy", status: "interrupted", attempts: 1 },
+			],
+			modified: [{ path: "scripts/migrations/000_init.sql", appliedBlobSha: "z0", headBlobSha: "", deleted: true }],
+			runs: [
+				dbRun({ id: "r-1", trigger: "merged_unapplied", state: "awaiting_human" }),
+				dbRun({ id: "r-2", kind: "after_deploy", trigger: "after_merge", state: "awaiting_human" }),
+			],
+		}),
+	);
+	vi.mocked(dbChanges.applyLadoDBChanges).mockResolvedValue(null);
+	renderSection(withDB(dbItem({ outcome: "confirm", code: "db_change_unplanned", details: { ...dbItem().details, planned: false } })));
+
+	expect(row("db_changes")).toHaveTextContent("2 SQL files, but the plan lists no database change");
+	const panel = await screen.findByTestId("lado-db-change-pr");
+	expect(within(panel).getByTestId("lado-db-change-unplanned")).toHaveTextContent("The plan does not list a database change (db_schema).");
+	expect(within(panel).getByTestId("lado-db-change-modified")).toHaveTextContent("000_init.sql · deleted");
+	expect(within(panel).getAllByTestId("lado-db-change-run").map((entry) => entry.textContent)).toEqual([
+		"Merged outside LADO without its SQL: apply it now",
+		"After-deploy SQL waits: apply it once the code is deployed",
+	]);
+	expect(panel).toHaveTextContent("Check the database before you apply it again.");
+
+	fireEvent.click(within(panel).getByRole("button", { name: "Apply after-deploy SQL" }));
+	await waitFor(() => expect(dbChanges.applyLadoDBChanges).toHaveBeenCalledTimes(1));
+	expect(vi.mocked(dbChanges.applyLadoDBChanges).mock.calls[0]?.[2]).toBe("after_deploy");
+	fireEvent.click(within(panel).getByRole("button", { name: "Apply now (merged outside LADO)" }));
+	await waitFor(() => expect(dbChanges.applyLadoDBChanges).toHaveBeenCalledTimes(2));
+	expect(vi.mocked(dbChanges.applyLadoDBChanges).mock.calls[1]?.[2]).toBe("pre_merge");
+});
+
+test("shows a SQL file's approved content on request, and a run that LADO holds without a button", async () => {
+	vi.mocked(dbChanges.fetchLadoExecutionDBChanges).mockResolvedValue(dbView({ runs: [dbRun({ state: "queued" })] }));
+	vi.mocked(dbChanges.fetchLadoDBChangeFile).mockResolvedValue({ path: "scripts/migrations/001_add.sql", blobSha: "b1", content: "ALTER TABLE users ADD COLUMN age int;", truncated: true });
+	renderSection(withDB());
+
+	const panel = await screen.findByTestId("lado-db-change-pr");
+	expect(within(panel).queryByRole("button", { name: "Try again" })).toBeNull();
+	fireEvent.click(within(panel).getByRole("button", { name: "Show scripts/migrations/001_add.sql" }));
+	expect(await within(panel).findByTestId("lado-db-change-content")).toHaveTextContent("ALTER TABLE users ADD COLUMN age int;");
+	expect(dbChanges.fetchLadoDBChangeFile).toHaveBeenCalledWith("demo-7", PR_URL, "b1");
+	expect(panel).toHaveTextContent("Showing the first 256 KiB.");
+});
+
+test("words the db_changes codes, and never reads the database changes of a head without SQL", async () => {
+	renderSection(withDB(dbItem({ outcome: "fail", code: "db_change_secrets_missing" })));
+	expect(row("db_changes")).toHaveTextContent("A secret has no stored value, so LADO cannot apply the SQL");
+	cleanup();
+
+	renderSection(withDB(dbItem({ outcome: "confirm", code: "db_change_applied_modified", details: { files: [], modified: [{ path: "a.sql", appliedBlobSha: "x", headBlobSha: "y", deleted: false }] } })));
+	expect(row("db_changes")).toHaveTextContent("Changes 1 applied SQL file: confirm before you approve");
+	cleanup();
+	vi.mocked(dbChanges.fetchLadoExecutionDBChanges).mockClear();
+
+	renderSection(withDB(dbItem({ code: "no_db_changes", details: {} })));
+	expect(row("db_changes")).toHaveTextContent("No SQL files");
+	expect(screen.queryByTestId("lado-db-change-panel")).toBeNull();
+	cleanup();
+
+	renderSection();
+	expect(rows()).toHaveLength(8);
+	expect(screen.queryByTestId("lado-db-change-panel")).toBeNull();
+	expect(dbChanges.fetchLadoExecutionDBChanges).not.toHaveBeenCalled();
+});
+
+test("every locale names the db_changes item and its codes", () => {
+	for (const [locale, catalog] of Object.entries(appCatalogs)) {
+		const messages = catalog as Record<string, string>;
+		for (const key of ["lado.verify.item.dbChanges", "lado.verify.db.none", "lado.verify.db.secretsMissing", "lado.reason.db_change_secrets_missing"]) {
+			expect(messages[key], `${locale} ${key}`).toBeTruthy();
+		}
+	}
+	expect((appCatalogs.ko as Record<string, string>)["lado.verify.item.dbChanges"]).toBe("DB 변경");
 });

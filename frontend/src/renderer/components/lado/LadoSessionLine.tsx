@@ -1,7 +1,8 @@
 // LADO fork: the LADO line on a run's board card: the plan revision and the
 // rules hash its worker runs under (docs/LJY-PRD/HARNESS.md §12), then where
 // LADO's verification and integration of its PR stand, and at its end the
-// task's estimated cost and unseen alerts (issue #42). It reads the
+// task's estimated cost and unseen alerts (issue #42), and where the run's
+// production SQL stands while it waits or failed (issue #97). It reads the
 // project's tasks the board already loads, so a project out of LADO mode and
 // a session LADO did not start show nothing.
 import type { TFunction } from "i18next";
@@ -14,6 +15,7 @@ import { cn } from "../../lib/utils";
 import { isOrchestratorSession, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
 import { ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoCardWatch, useLadoBoardWatch } from "./LadoCardWatch";
+import { LadoDBChangeBadge, useLadoBoardDBChanges } from "./LadoDBChangeBadge";
 
 // A product name, the same in every language.
 const LADO = "LADO";
@@ -53,6 +55,7 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 	const tasks = useLadoTasks(projectId ?? "", ladoMode);
 	const task = ladoMode && tasks.data ? ladoTaskForSession(tasks.data, session.id) : undefined;
 	const watchOf = useLadoBoardWatch(projectId ?? "", ladoMode && task !== undefined);
+	const dbChanges = useLadoBoardDBChanges(projectId ?? "", ladoMode && task !== undefined);
 	const execution = task?.execution;
 	if (!task || !execution) return null;
 	// The task list omits the revision once a newer one is pinned, and the
@@ -87,6 +90,7 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 					</>
 				) : null}
 			</span>
+			<LadoDBChangeBadge summary={dbChanges.ofSession(session.id)} className="shrink-0" />
 			{/* A running task has no lane card: the board's LADO lanes take the open request and show its Usage tab. */}
 			<LadoCardWatch
 				watch={watchOf(task.id)}

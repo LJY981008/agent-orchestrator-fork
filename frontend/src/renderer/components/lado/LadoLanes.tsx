@@ -14,6 +14,9 @@
 // production log watch created has a red edge and "Production error · n×"
 // while it is open (issue #87). A card that waits on an account usage limit
 // offers to release it, for a developer who switched accounts (issue #92).
+// A task whose production SQL waits or failed shows where it stands; a pull
+// request merged outside LADO without its SQL gives the card a red edge, and
+// after-deploy SQL that waits an amber one (issue #97).
 import { Ban } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -22,6 +25,7 @@ import { formatTimeCompact } from "../../lib/format-time";
 import { ladoIssueLabel, type LadoRepository, type LadoTask } from "../../lib/lado";
 import { subscribeLadoTaskOpenRequests, takeLadoTaskOpenRequest } from "../../lib/lado-alert-notifications";
 import { ladoErrorText } from "../../lib/lado-errors";
+import type { LadoDBChangeSummary } from "../../lib/lado-db-changes";
 import { ladoLogIncidentShown, type LadoLogFingerprint } from "../../lib/lado-log-watch";
 import { cn } from "../../lib/utils";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -31,6 +35,7 @@ import { ladoOpenPlanWorker, ladoPlanComing, ladoTaskReason, ladoTaskStatus, lad
 import { LadoAccountLimitRelease, ladoTaskAccountLimited } from "./LadoAccountLimitRelease";
 import { LadoCardLogIncident, useLadoBoardLogIncidents } from "./LadoCardLogIncident";
 import { LadoCardWatch, type LadoTaskWatch, useLadoBoardWatch } from "./LadoCardWatch";
+import { LadoDBChangeBadge, ladoDBChangeBorderClass, useLadoBoardDBChanges } from "./LadoDBChangeBadge";
 import { LadoPartWorkerCardLink } from "./LadoPartWorkerLink";
 import { LadoPlanWorkerCardLink } from "./LadoPlanWorkerStatus";
 import { LadoTaskDialog, type LadoTaskTab } from "./LadoTaskDialog";
@@ -57,12 +62,15 @@ export function LadoLanes({ projectId }: { projectId: string }) {
 	const all = (tasks.data ?? []).filter(inLanes);
 	// The incidents are read only while a card shows one.
 	const incidentOf = useLadoBoardLogIncidents(projectId, all.some(ladoLogIncidentShown));
+	// The lanes show only for a project in LADO mode, so its summaries are read here.
+	const dbChanges = useLadoBoardDBChanges(projectId, true);
 	const queued = orderQueue(all.filter(isQueued));
 	const reviewing = orderPlanReview(all.filter(inPlanReview));
 	const planned = orderTasks(all.filter((task) => !isQueued(task) && !inPlanReview(task)));
 	const cardProps = {
 		repositories: repositories.data ?? [],
 		incidentOf,
+		dbChangeOf: dbChanges.ofTask,
 		onCancel: setCancelling,
 		onOpen: (task: LadoTask, tab: LadoTaskTab = "plan") => setOpened({ taskId: task.id, tab }),
 	};
@@ -250,6 +258,7 @@ function LadoTaskCard({
 	watch,
 	repositories,
 	incidentOf,
+	dbChangeOf,
 	onCancel,
 	onOpen,
 }: {
@@ -258,6 +267,8 @@ function LadoTaskCard({
 	repositories: readonly LadoRepository[];
 	/** The log watch's fingerprint of a task it created, once the incidents are read. */
 	incidentOf: (taskId: string) => LadoLogFingerprint | undefined;
+	/** The task's most urgent production SQL that waits or failed, once the summaries are read. */
+	dbChangeOf: (taskId: string) => LadoDBChangeSummary | undefined;
 	onCancel: (task: LadoTask) => void;
 	onOpen: (task: LadoTask, tab?: LadoTaskTab) => void;
 }) {
@@ -269,16 +280,19 @@ function LadoTaskCard({
 	const issueLabel = ladoIssueLabel(task.issue.number, task.repository, repositories);
 	// A production incident's one status treatment: the failure token on the card's edge.
 	const incident = ladoLogIncidentShown(task);
+	const dbChange = dbChangeOf(task.id);
+	const dbBorder = ladoDBChangeBorderClass(dbChange);
 	return (
 		<div
 			role="listitem"
 			className={cn(
 				"group relative w-full cursor-pointer rounded-lg border bg-surface text-left",
-				incident ? "border-[var(--color-status-exited)]" : "border-border",
+				incident ? "border-[var(--color-status-exited)]" : (dbBorder ?? "border-border"),
 			)}
 			data-testid="lado-task-card"
 			data-task-id={task.id}
 			data-log-incident={incident ? "true" : undefined}
+			data-db-change={dbChange?.state}
 			onClick={(event) => {
 				// The issue link, the session link and the cancel action are controls of their own.
 				if ((event.target as HTMLElement).closest("a,button")) return;
@@ -322,6 +336,7 @@ function LadoTaskCard({
 						{issueLabel}
 					</ProductExternalLink>
 					{incident ? <LadoCardLogIncident count={incidentOf(task.id)?.count} /> : null}
+					<LadoDBChangeBadge summary={dbChange} />
 					<LadoCardWatch watch={watch} className="ml-auto" onOpenAlerts={() => onOpen(task, "usage")} />
 				</div>
 			</div>

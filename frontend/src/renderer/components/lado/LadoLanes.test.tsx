@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import * as lado from "../../lib/lado";
+import * as dbChanges from "../../lib/lado-db-changes";
 import * as logWatch from "../../lib/lado-log-watch";
 import { TooltipProvider } from "../ui/tooltip";
 import { LadoLanes } from "./LadoLanes";
@@ -27,6 +28,12 @@ vi.mock("../../lib/lado", async (original) => ({
 vi.mock("../../lib/lado-log-watch", async (original) => ({
 	...await original<typeof import("../../lib/lado-log-watch")>(),
 	fetchLadoLogIncidents: vi.fn(),
+}));
+
+// The project's production SQL that waits or failed (issue #97).
+vi.mock("../../lib/lado-db-changes", async (original) => ({
+	...await original<typeof import("../../lib/lado-db-changes")>(),
+	fetchLadoProjectDBChanges: vi.fn(),
 }));
 
 const demo: lado.LadoRepository = { ref: "github:acme/demo", name: "demo", provider: "github", host: "github.com", path: "acme/demo" };
@@ -68,6 +75,7 @@ beforeEach(() => {
 	vi.resetAllMocks();
 	vi.mocked(lado.fetchLadoProjectRepositories).mockResolvedValue([demo]);
 	vi.mocked(lado.fetchLadoTaskParts).mockResolvedValue({ parts: [] });
+	vi.mocked(dbChanges.fetchLadoProjectDBChanges).mockResolvedValue([]);
 });
 
 afterEach(cleanup);
@@ -845,4 +853,57 @@ test("cards that wait on no account limit read no limits", async () => {
 
 	expect(await screen.findAllByTestId("lado-task-card")).toHaveLength(2);
 	expect(lado.fetchLadoAccountLimits).not.toHaveBeenCalled();
+});
+
+// LADO fork: a task whose production SQL waits or failed (issue #97). A merge
+// outside LADO that left its SQL gives the card a red edge, after-deploy SQL
+// an amber one, and the other states only the badge.
+function dbSummary(taskId: string, state: dbChanges.LadoDBChangeBoardState, fields: Partial<dbChanges.LadoDBChangeSummary> = {}): dbChanges.LadoDBChangeSummary {
+	return { taskId, sessionId: `${taskId}-session`, prUrl: `https://github.com/acme/demo/pull/${taskId}`, repo: "", state, pending: 1, failed: 0, ...fields };
+}
+
+test("a task's production SQL marks its card: red for SQL a merge left out, amber after deploy, a badge otherwise", async () => {
+	vi.mocked(dbChanges.fetchLadoProjectDBChanges).mockResolvedValue([
+		dbSummary("lado-task-merged", "after_deploy_pending"),
+		dbSummary("lado-task-merged", "merged_unapplied", { message: "merged without SQL" }),
+		dbSummary("lado-task-after", "after_deploy_pending"),
+		dbSummary("lado-task-failed", "apply_failed"),
+	]);
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([
+		{ ...task, id: "lado-task-merged", issue: { ...task.issue, number: 31, title: "Merged outside" } },
+		{ ...task, id: "lado-task-after", issue: { ...task.issue, number: 32, title: "After deploy" } },
+		{ ...task, id: "lado-task-failed", issue: { ...task.issue, number: 33, title: "Failed SQL" } },
+		task,
+	]);
+	renderLane();
+
+	const cardOf = async (title: string) => (await screen.findByText(title)).closest("[data-testid='lado-task-card']") as HTMLElement;
+	const merged = await cardOf("Merged outside");
+	await waitFor(() => expect(merged).toHaveAttribute("data-db-change", "merged_unapplied"));
+	expect(merged).toHaveClass("border-[var(--color-status-exited)]");
+	const badge = within(merged).getByTestId("lado-card-db-change");
+	expect(badge).toHaveTextContent("SQL not applied");
+	expect(badge).toHaveAttribute("title", "merged without SQL");
+
+	const after = await cardOf("After deploy");
+	expect(after).toHaveClass("border-[var(--color-status-in-review)]");
+	expect(within(after).getByTestId("lado-card-db-change")).toHaveTextContent("After-deploy SQL left");
+
+	const failed = await cardOf("Failed SQL");
+	expect(failed).toHaveClass("border-border");
+	expect(within(failed).getByTestId("lado-card-db-change")).toHaveTextContent("SQL failed");
+
+	const plain = await cardOf("Add login");
+	expect(plain).not.toHaveAttribute("data-db-change");
+	expect(within(plain).queryByTestId("lado-card-db-change")).not.toBeInTheDocument();
+	expect(dbChanges.fetchLadoProjectDBChanges).toHaveBeenCalledWith("demo");
+});
+
+test("every locale words the board's database change states", async () => {
+	const { appCatalogs } = await import("../../i18n/all-messages");
+	const states: dbChanges.LadoDBChangeBoardState[] = ["apply_waiting", "applying", "apply_failed", "preflight_blocked", "merge_failed", "after_deploy_pending", "merged_unapplied"];
+	for (const [locale, catalog] of Object.entries(appCatalogs)) {
+		for (const state of states) expect((catalog as Record<string, string>)[`lado.card.db.${state}`], `${locale} ${state}`).toBeTruthy();
+	}
+	expect((appCatalogs.ko as Record<string, string>)["lado.card.db.after_deploy_pending"]).toBe("DB 적용 남음");
 });
