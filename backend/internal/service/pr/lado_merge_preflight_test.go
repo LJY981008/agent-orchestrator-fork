@@ -90,6 +90,37 @@ func TestLadoMergeReadiness(t *testing.T) {
 		}
 	})
 
+	// GitHub reports mergeStateStatus BLOCKED and reviewDecision
+	// REVIEW_REQUIRED while a required approval is missing; AO's blockers
+	// hold only not_mergeable, which the missing status also causes, so the
+	// review decision has to stop the SQL itself.
+	t.Run("a review the host requires", func(t *testing.T) {
+		pr, _, _, svc := setup(func(scm *fakeSCMAction) {
+			scm.observation.Mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked)}
+			scm.review = ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)}
+		})
+		got, err := svc.LadoMergeReadiness(ctx, pr.URL, pr.Number, pr.HeadSHA)
+		if err != nil {
+			t.Fatalf("readiness = %v", err)
+		}
+		if got.Review != domain.ReviewRequired || got.Mergeability != domain.MergeBlocked {
+			t.Errorf("readiness = %+v, want a required review on a blocked PR", got)
+		}
+		if stoppers := domain.LadoDBChangeMergeStoppers(got); !slices.Equal(stoppers, []string{domain.LadoDBChangeStopperReviewRequired}) {
+			t.Errorf("stoppers = %v, want review_required", stoppers)
+		}
+	})
+
+	t.Run("the observation's decision when the review read has none", func(t *testing.T) {
+		pr, _, _, svc := setup(func(scm *fakeSCMAction) {
+			scm.observation.Review = ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)}
+		})
+		got, err := svc.LadoMergeReadiness(ctx, pr.URL, pr.Number, pr.HeadSHA)
+		if err != nil || got.Review != domain.ReviewRequired {
+			t.Errorf("readiness = %+v, %v; want review_required", got, err)
+		}
+	})
+
 	t.Run("merged", func(t *testing.T) {
 		pr, _, _, svc := setup(func(scm *fakeSCMAction) { scm.observation.PR.Merged = true })
 		got, err := svc.LadoMergeReadiness(ctx, pr.URL, pr.Number, pr.HeadSHA)

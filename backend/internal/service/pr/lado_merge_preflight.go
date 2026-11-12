@@ -17,7 +17,8 @@ import (
 
 // LadoMergeReadiness reads the PR at prURL from its host as Merge does and
 // returns what would stop the merge (mergeBlockers), the host's
-// mergeability and whether the PR merged already. It neither asks LADO's
+// mergeability, its review decision (a review the host requires stops
+// LADO's SQL, #97) and whether the PR merged already. It neither asks LADO's
 // merge gate nor merges. number 0 takes the stored PR's number; another
 // number than the stored one is ErrPRNotFound. A head that is not the open
 // PR's head on the host is ErrPRHeadChanged; head "" reads whatever head
@@ -60,9 +61,14 @@ func (s *ActionService) LadoMergeReadiness(ctx context.Context, prURL string, nu
 	if blockers == nil {
 		blockers = []string{}
 	}
+	decision := review.Decision
+	if decision == "" {
+		decision = fresh.Review.Decision
+	}
 	return domain.LadoMergeReadiness{
 		Blockers:     blockers,
 		Mergeability: mergeability,
+		Review:       domain.ReviewDecision(decision),
 		Merged:       fresh.PR.Merged,
 	}, nil
 }

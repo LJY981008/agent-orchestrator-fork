@@ -632,13 +632,20 @@ func LadoDBChangeSettingsSubject(project ProjectID, repo string) string {
 }
 
 // LadoMergeReadiness is what AO's merge path reads of a PR before it merges:
-// its merge blockers (MergeBlocker*), the host's mergeability and whether it
-// merged already.
+// its merge blockers (MergeBlocker*), the host's mergeability, the host's
+// review decision and whether it merged already.
 type LadoMergeReadiness struct {
 	Blockers     []string
 	Mergeability Mergeability
+	Review       ReviewDecision
 	Merged       bool
 }
+
+// LadoDBChangeStopperReviewRequired stops a database change run whose PR
+// still lacks a review the host requires (GitHub's REVIEW_REQUIRED, GitLab's
+// approvals_required). AO's merge blockers leave it to the host, which then
+// refuses the merge after the SQL applied; LADO's status cannot supply it.
+const LadoDBChangeStopperReviewRequired = "review_required"
 
 // Audit actions of database changes. Their payloads name files, blobs and
 // hashes, never a secret's value or a command's output.
@@ -718,8 +725,9 @@ func LadoNoticeDBChangeUnknown(issue int) string {
 
 // LadoDBChangeMergeStoppers returns the blockers of a readiness that stop
 // LADO from applying a head's SQL, since the merge could not follow: merged,
-// closed, draft, failing CI, changes requested, unresolved comments, and a
-// conflict. What LADO's own lado/integration status, not posted yet, causes
+// closed, draft, failing CI, changes requested, unresolved comments, a
+// conflict, and a review the host requires
+// (LadoDBChangeStopperReviewRequired, last). What LADO's own lado/integration status, not posted yet, causes
 // passes: pending, unknown or missing CI, a head mismatch the live read
 // reports, a partial review and a not_mergeable that is no conflict
 // (blocked, unstable, unknown). Nil means LADO may apply the SQL.
@@ -737,6 +745,9 @@ func LadoDBChangeMergeStoppers(r LadoMergeReadiness) []string {
 				stoppers = append(stoppers, blocker)
 			}
 		}
+	}
+	if r.Review == ReviewRequired {
+		stoppers = append(stoppers, LadoDBChangeStopperReviewRequired)
 	}
 	if r.Merged && !slices.Contains(stoppers, MergeBlockerMerged) {
 		stoppers = append([]string{MergeBlockerMerged}, stoppers...)

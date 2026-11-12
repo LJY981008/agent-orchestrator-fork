@@ -251,6 +251,13 @@ func TestLadoDBChangeMergeStoppers(t *testing.T) {
 			Mergeability: domain.MergeConflicting, Merged: true,
 		}, []string{domain.MergeBlockerMerged, domain.MergeBlockerClosed, domain.MergeBlockerDraft, domain.MergeBlockerCIFailing,
 			domain.MergeBlockerChangesRequested, domain.MergeBlockerUnresolvedComments, domain.MergeBlockerNotMergeable}},
+		{"a review the host requires", domain.LadoMergeReadiness{
+			Blockers: []string{domain.MergeBlockerCIPending, domain.MergeBlockerNotMergeable}, Mergeability: domain.MergeBlocked, Review: domain.ReviewRequired,
+		}, []string{domain.LadoDBChangeStopperReviewRequired}},
+		{"an approved or absent review", domain.LadoMergeReadiness{Mergeability: domain.MergeBlocked, Review: domain.ReviewApproved}, nil},
+		{"review required after the other stoppers", domain.LadoMergeReadiness{
+			Blockers: []string{domain.MergeBlockerDraft}, Review: domain.ReviewRequired,
+		}, []string{domain.MergeBlockerDraft, domain.LadoDBChangeStopperReviewRequired}},
 		{"merged without the blocker", domain.LadoMergeReadiness{Blockers: []string{domain.MergeBlockerDraft}, Merged: true},
 			[]string{domain.MergeBlockerMerged, domain.MergeBlockerDraft}},
 	} {

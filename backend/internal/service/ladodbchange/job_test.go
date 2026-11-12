@@ -357,6 +357,12 @@ func TestPreflightStopsBeforeAnySQL(t *testing.T) {
 		{"failing CI", func(f *jobFixture) {
 			f.merger.readiness = domain.LadoMergeReadiness{Blockers: []string{domain.MergeBlockerCIFailing}}
 		}, domain.MergeBlockerCIFailing},
+		// GitHub: mergeStateStatus BLOCKED with reviewDecision REVIEW_REQUIRED.
+		{"a review the host requires", func(f *jobFixture) {
+			f.merger.readiness = domain.LadoMergeReadiness{
+				Blockers: []string{domain.MergeBlockerNotMergeable}, Mergeability: domain.MergeBlocked, Review: domain.ReviewRequired,
+			}
+		}, domain.LadoDBChangeStopperReviewRequired},
 		{"merge gate", func(f *jobFixture) {
 			f.statuses.preflightErr = apierr.Conflict("LADO_INTEGRATION_MERGE_ORDER", "merge the others first", nil)
 		}, "LADO_INTEGRATION_MERGE_ORDER"},
@@ -589,6 +595,18 @@ func TestRefusedMergeStopsAfterTheRetryWindowOrABlocker(t *testing.T) {
 		f.merger.readiness = domain.LadoMergeReadiness{Blockers: []string{domain.MergeBlockerUnresolvedComments}}
 		f.tick()
 		if run := f.run(domain.LadoDBChangeRunPreMerge); run.State != domain.LadoDBChangeRunMergeFailed || !strings.Contains(run.Error, domain.MergeBlockerUnresolvedComments) {
+			t.Fatalf("run = %+v", run)
+		}
+	})
+	t.Run("a review the host requires", func(t *testing.T) {
+		f := newJobFixture(t, defaultHeadFiles())
+		f.merger.mergeErrs = []error{refused, refused}
+		f.s.IntegrationApproved(context.Background(), f.exec, []domain.LadoIntegrationApproval{f.approval})
+		f.tick()
+		// The host now asks for an approval: LADO stops without waiting out the window.
+		f.merger.readiness = domain.LadoMergeReadiness{Blockers: []string{domain.MergeBlockerNotMergeable}, Mergeability: domain.MergeBlocked, Review: domain.ReviewRequired}
+		f.tick()
+		if run := f.run(domain.LadoDBChangeRunPreMerge); run.State != domain.LadoDBChangeRunMergeFailed || !strings.Contains(run.Error, domain.LadoDBChangeStopperReviewRequired) {
 			t.Fatalf("run = %+v", run)
 		}
 	})

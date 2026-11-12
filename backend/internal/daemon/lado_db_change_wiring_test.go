@@ -30,9 +30,12 @@ type dbChangeSCM struct {
 	mu         sync.Mutex
 	head       string
 	unresolved bool
-	refusals   int
-	merges     int
-	merged     bool
+	// reviewRequired is GitHub's mergeStateStatus BLOCKED with
+	// reviewDecision REVIEW_REQUIRED: a required approval is missing.
+	reviewRequired bool
+	refusals       int
+	merges         int
+	merged         bool
 }
 
 func (s *dbChangeSCM) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef) ([]ports.SCMObservation, error) {
@@ -42,17 +45,24 @@ func (s *dbChangeSCM) FetchPullRequests(_ context.Context, refs []ports.SCMPRRef
 	if s.merged {
 		state = string(domain.PRStateMerged)
 	}
+	mergeability := ports.SCMMergeabilityObservation{State: string(domain.MergeMergeable), Mergeable: true}
+	if s.reviewRequired {
+		mergeability = ports.SCMMergeabilityObservation{State: string(domain.MergeBlocked), Blockers: []string{"review_required"}}
+	}
 	return []ports.SCMObservation{{
 		Fetched:      true,
 		PR:           ports.SCMPRObservation{URL: refs[0].URL, Number: refs[0].Number, HeadSHA: s.head, TargetBranch: "main", State: state, Merged: s.merged},
 		CI:           ports.SCMCIObservation{Summary: string(domain.CIPassing), HeadSHA: s.head},
-		Mergeability: ports.SCMMergeabilityObservation{State: string(domain.MergeMergeable), Mergeable: true},
+		Mergeability: mergeability,
 	}}, nil
 }
 
 func (s *dbChangeSCM) FetchReviewThreads(context.Context, ports.SCMPRRef) (ports.SCMReviewObservation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.reviewRequired {
+		return ports.SCMReviewObservation{Decision: string(domain.ReviewRequired)}, nil
+	}
 	if !s.unresolved {
 		return ports.SCMReviewObservation{}, nil
 	}
@@ -397,6 +407,24 @@ func TestLadoDBChangesUnresolvedCommentStopsBeforeAnySQL(t *testing.T) {
 	}
 	if !strings.Contains(fmt.Sprint(notices), "db_preflight:") {
 		t.Errorf("notices = %+v, want one of the blocked preflight", notices)
+	}
+}
+
+// A PR that still lacks an approval the host requires is blocked
+// (not_mergeable), which LADO's missing status could also cause; the review
+// decision tells them apart, so LADO runs no SQL the merge could not follow.
+func TestLadoDBChangesRequiredReviewStopsBeforeAnySQL(t *testing.T) {
+	f := newDBChangeFixture(t, true, map[string]string{"db/002_add.sql": "ALTER TABLE users ADD email text;\n"})
+	f.scm.mu.Lock()
+	f.scm.reviewRequired = true
+	f.scm.mu.Unlock()
+	f.approved(t)
+	run := f.run(t)
+	if run.State != domain.LadoDBChangeRunAwaitingHuman || !strings.Contains(run.Error, domain.LadoDBChangeStopperReviewRequired) {
+		t.Fatalf("run = %s (%q), want awaiting_human for the required review", run.State, run.Error)
+	}
+	if got := f.applied(t); got != "" || f.scm.mergeCount() != 0 {
+		t.Fatalf("applied %q with %d merges, want no SQL and no merge", got, f.scm.mergeCount())
 	}
 }
 
