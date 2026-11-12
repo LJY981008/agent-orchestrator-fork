@@ -116,12 +116,19 @@ jobs:
       - name: Test session manager and SQLite store
         run: go test -race -count=1 -timeout=20m ./internal/session_manager ./internal/storage/sqlite/store
 
+  # Six shards balanced by measured time. Splitting the test list by position
+  # piled the heavy migration tests onto one shard, which then hit the 20m
+  # limit. .github/scripts/sqlite-race-shard.sh hands each test, heaviest
+  # first, to the lightest shard using .github/sqlite-race-weights.tsv. A new
+  # test without a weight counts as the mean weight, so the split stays
+  # correct, only less even. When a shard nears 15m again, regenerate the
+  # weights file with the command at its top.
   sqlite-race:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3]
+        shard: [0, 1, 2, 3, 4, 5]
     defaults:
       run:
         working-directory: backend
@@ -136,7 +143,7 @@ jobs:
       - name: Test SQLite shard
         run: |
           tests=$(go test -race -list . ./internal/storage/sqlite | grep -E '^(Test|Example|Fuzz)')
-          selected=$(printf '%s\n' "$tests" | awk -v shard=${{ matrix.shard }} '((NR - 1) % 4) == shard' | paste -sd '|' -)
+          selected=$(printf '%s\n' "$tests" | bash ../.github/scripts/sqlite-race-shard.sh ${{ matrix.shard }} 6 ../.github/sqlite-race-weights.tsv | paste -sd '|' -)
           test -n "$selected"
           go test -race -count=1 -timeout=20m -run "^($selected)$" ./internal/storage/sqlite
 
