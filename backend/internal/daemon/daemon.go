@@ -872,6 +872,13 @@ func Run() error {
 		log.Warn("pr action service disabled: no usable SCM provider")
 	}
 	installLadoMergeGate(prActions, prReader, ladoVerify) // LADO fork: merges need LADO's integration approval
+	// LADO fork: a task's production database SQL applies with its
+	// integration approval, and LADO then merges its PR (issue #97).
+	var ladoDBChangeReader ladoPRReader
+	if prReader != nil {
+		ladoDBChangeReader = prReader
+	}
+	ladoDBChanges := wireLadoDBChanges(cfg, store, lado.blobs, ladoVerify, prActions, ladoDBChangeReader, log)
 
 	// Codex switch recovery is best effort and never blocks unrelated daemon
 	// startup. Its own credential gate still protects any local mutation.
@@ -899,7 +906,8 @@ func Run() error {
 	// LADO fork: the dispatcher spawns and stops workers, so like automations
 	// it starts after the startup reconcile above has settled the sessions.
 	ladoQueueDone := ladoQueue.Start(ctx)
-	ladoVerify.Start(ctx) // LADO fork: verifies the workers' PRs, which may message them
+	ladoVerify.Start(ctx)    // LADO fork: verifies the workers' PRs, which may message them
+	ladoDBChanges.Start(ctx) // LADO fork: applies approved SQL and merges (issue #97)
 	// LADO fork: the worker watch may message workers too (issue #42).
 	ladoWatchDone := startLadoWatch(ctx, lado.watch, ladoWatchInterval, log)
 	// LADO fork: the production log watch (issue #87) may request plans,
@@ -1058,6 +1066,7 @@ func Run() error {
 		LadoRelay:          lado.relay,
 		LadoLogWatch:       ladoLogWatch,
 		LadoAccountLimits:  lado.watch.watch,
+		LadoDBChanges:      ladoDBChanges,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
@@ -1263,6 +1272,8 @@ func Run() error {
 	<-ladoLogWatchDone
 	// LADO fork: the verification loop and the check commands it started.
 	ladoVerify.Wait()
+	// LADO fork: the database change loop and the SQL command it ran.
+	ladoDBChanges.Wait()
 	// Detach chat controllers before stopping the lifecycle stack. Persistent
 	// provider hosts deliberately survive this daemon and preserve in-flight
 	// turns; the replacement daemon reconnects to the same initialized stream and

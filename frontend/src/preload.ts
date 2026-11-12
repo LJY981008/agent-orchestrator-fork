@@ -2,9 +2,11 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { LADO_DESKTOP_GET_CHANNEL, LADO_DESKTOP_SET_CHANNEL, type LadoDesktopSettings, type LadoDesktopSettingsPatch } from "./shared/lado-desktop";
 import {
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
+	LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL,
 	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL,
+	LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL,
 	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
@@ -12,12 +14,16 @@ import {
 	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoCeilingMode,
 	type LadoPresenceAdoptSetupResult,
+	type LadoPresenceApplyDbChangesRequest,
+	type LadoPresenceApplyDbChangesResult,
 	type LadoPresenceApproveRequest,
 	type LadoPresenceApproveResult,
 	type LadoPresenceCheckCommand,
 	type LadoPresenceChecksResult,
 	type LadoPresenceClaudeChromeRequest,
 	type LadoPresenceClaudeChromeResult,
+	type LadoPresenceDbChangesRequest,
+	type LadoPresenceDbChangesResult,
 	type LadoPresenceIntegrationResult,
 	type LadoPresenceModeRequest,
 	type LadoPresenceModeResult,
@@ -871,6 +877,26 @@ const api = {
 					chatSessions: settings.chatSessions,
 					ladoWorkers: settings.ladoWorkers,
 				} satisfies LadoPresenceClaudeChromeRequest) as Promise<LadoPresenceClaudeChromeResult | null>,
+			// A repository's production database change settings, or a pull
+			// request's SQL to apply by hand (#97). Secret values cross only
+			// toward main, which never shows them.
+			changeDbChanges: (request: LadoPresenceDbChangesRequest) =>
+				ipcRenderer.invoke(LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL, {
+					projectId: request.projectId,
+					repo: request.repo,
+					enabled: request.enabled,
+					paths: request.paths,
+					command: request.command,
+					timeoutMinutes: request.timeoutMinutes,
+					secretNames: request.secretNames,
+					...(request.secrets ? { secrets: request.secrets } : {}),
+				} satisfies LadoPresenceDbChangesRequest) as Promise<LadoPresenceDbChangesResult | null>,
+			applyDbChanges: (request: LadoPresenceApplyDbChangesRequest) =>
+				ipcRenderer.invoke(LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL, {
+					sessionId: request.sessionId,
+					prUrl: request.prUrl,
+					phase: request.phase,
+				} satisfies LadoPresenceApplyDbChangesRequest) as Promise<LadoPresenceApplyDbChangesResult | null>,
 		},
 	},
 };

@@ -267,6 +267,9 @@ type Service struct {
 	// liveHeads reads PR heads from their hosts for integration approvals
 	// (SetLiveHeads).
 	liveHeads LiveHeads
+	// dbChanges is the database change service SetDBChanges installed, if
+	// any (dbchanges.go, #97).
+	dbChanges dbChangesSlot
 }
 
 // New returns a Service.

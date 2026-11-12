@@ -224,6 +224,22 @@ END`,
 		`WHEN OLD.down_since IS NOT NEW.down_since OR
     OLD.down_notified_at IS NOT NEW.down_notified_at OR
     OLD.cert_key IS NOT NEW.cert_key`, "NULL", "settings"),
+	// Database changes publish a lado_db_change change in the row's project
+	// (issue #97): the settings when they are saved, a run when it is created
+	// or moves, and a file's application when it starts and when its result
+	// changes. Baseline rows are written with the settings save, which
+	// publishes for them.
+	ladoDBChangeCDCTrigger("lado_cdc_db_change_settings_insert", "AFTER INSERT ON lado_db_change_settings", "", "NULL", "settings"),
+	ladoDBChangeCDCTrigger("lado_cdc_db_change_settings_update", "AFTER UPDATE ON lado_db_change_settings", "", "NULL", "settings"),
+	ladoDBChangeCDCTrigger("lado_cdc_db_change_runs_insert", "AFTER INSERT ON lado_db_change_runs", "", "NEW.execution_session_id", "run"),
+	ladoDBChangeCDCTrigger("lado_cdc_db_change_runs_update", "AFTER UPDATE ON lado_db_change_runs",
+		`WHEN OLD.state IS NOT NEW.state OR
+    OLD.attempts IS NOT NEW.attempts OR
+    OLD.error IS NOT NEW.error`, "NEW.execution_session_id", "run"),
+	ladoDBChangeCDCTrigger("lado_cdc_db_change_applications_insert", "AFTER INSERT ON lado_db_change_applications",
+		"WHEN NEW.result <> 'baseline'", "NEW.execution_session_id", "application"),
+	ladoDBChangeCDCTrigger("lado_cdc_db_change_applications_update", "AFTER UPDATE ON lado_db_change_applications",
+		"WHEN OLD.result IS NOT NEW.result", "NEW.execution_session_id", "application"),
 	`CREATE TRIGGER lado_cdc_session_watch_update
 AFTER UPDATE ON lado_session_watch
 WHEN OLD.limit_state IS NOT NEW.limit_state OR
@@ -253,6 +269,26 @@ BEGIN
     INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
     SELECT projects.id, NULL, 'session_updated',
         json_object('kind', 'lado_log_watch', 'projectId', projects.id, 'fingerprintId', ` + fingerprint + `, 'op', '` + op + `'),
+        datetime('now')
+    FROM projects
+    WHERE projects.id = NEW.project_id;
+END`
+}
+
+// ladoDBChangeCDCTrigger publishes a lado_db_change change with op in the
+// project NEW.project_id names; session is the execution session id
+// expression, NULL for a settings change. change_log.session_id stays NULL:
+// it names only sessions that exist, and the payload carries the id.
+func ladoDBChangeCDCTrigger(name, event, when, session, op string) string {
+	if when != "" {
+		when = "\n" + when
+	}
+	return `CREATE TRIGGER ` + name + `
+` + event + when + `
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    SELECT projects.id, NULL, 'session_updated',
+        json_object('kind', 'lado_db_change', 'projectId', projects.id, 'sessionId', ` + session + `, 'op', '` + op + `'),
         datetime('now')
     FROM projects
     WHERE projects.id = NEW.project_id;

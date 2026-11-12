@@ -73,6 +73,11 @@ func (s *Service) retryStatuses(ctx context.Context) error {
 // not be read, the outcome could not be recorded, or ctx ended. The
 // integration approval calls it right after recording an approval; the loop
 // calls it again for those still pending or failed.
+//
+// #97: the status of a live approval whose record still has pre-merge SQL
+// to apply is held (DBChanges.HoldIntegrationStatus): nothing is posted or
+// recorded, no attempt counts, and the approval is returned as it was. A
+// hold that cannot be checked posts nothing either and returns the error.
 func (s *Service) postIntegrationStatus(ctx context.Context, approval domain.LadoIntegrationApproval) (domain.LadoIntegrationApproval, error) {
 	s.mu.Lock()
 	s.statusTried[approval.ID] = s.now()
@@ -89,9 +94,22 @@ func (s *Service) postIntegrationStatus(ctx context.Context, approval domain.Lad
 // postIntegrationStatusLocked is postIntegrationStatus on repo, with the
 // lock of repo and the approval's head held.
 func (s *Service) postIntegrationStatusLocked(ctx context.Context, repo domain.TrackerRepo, approval domain.LadoIntegrationApproval) (domain.LadoIntegrationApproval, error) {
+	// #97: an approved head whose pre-merge SQL is not applied yet waits;
+	// its hold keeps it out of the retries until the SQL is applied and the
+	// database change service posts it (RepostIntegrationStatusOf). The
+	// GitLab waiting status's success over itself waits the same way.
+	held, err := s.dbChangesHeld(ctx, approval)
+	if err != nil || held {
+		s.mu.Lock()
+		delete(s.statusTried, approval.ID)
+		s.mu.Unlock()
+		if err != nil {
+			return approval, fmt.Errorf("check the approval's database changes: %w", err)
+		}
+		return approval, nil
+	}
 	state, attempts, postedAt, message := domain.LadoIntegrationStatusNotApplicable, approval.StatusAttempts, time.Time{}, ""
 	status := integrationStatusOf(approval)
-	var err error
 	if repo.Provider == domain.TrackerProviderGitLab {
 		status.Ref, status.MergeRequest, err = s.mergeRequestRef(ctx, approval.PRURL)
 	}

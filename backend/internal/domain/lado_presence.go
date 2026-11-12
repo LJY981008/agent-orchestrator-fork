@@ -33,6 +33,11 @@ type LadoPresenceProof struct {
 // project's check commands, which the daemon runs outside any agent
 // sandbox. LadoPresenceClaudeChromeOn turns Claude in Chrome on for a group
 // of sessions; its subject names the settings turned on.
+// LadoPresenceDBChanges changes one repository's production database change
+// settings or secrets, its subject "<project>:<repo>"
+// (LadoDBChangeSettingsSubject), and LadoPresenceDBChangeApply applies a PR
+// head's SQL files of one phase, or retries them, its subject
+// "<session>@<head>:<phase>" (LadoDBChangeApplySubject, #97).
 const (
 	LadoPresencePlanApprove        = "plan.approve"
 	LadoPresenceModeOff            = "project.lado_mode_off"
@@ -43,6 +48,8 @@ const (
 	LadoPresenceIntegrationApprove = "integration.approve"
 	LadoPresenceCheckCommands      = "project.check_commands"
 	LadoPresenceClaudeChromeOn     = "claude_chrome.on"
+	LadoPresenceDBChanges          = "project.db_changes"
+	LadoPresenceDBChangeApply      = "db_change.apply"
 )
 
 // ErrLadoPresenceReplayed means the proof's nonce was already used.

@@ -861,6 +861,10 @@ SELECT id, execution_session_id, pr_url, head_sha, target_branch, verification_s
     approved_base_sha, revoked_at, revoked_reason
 FROM lado_integration_approvals
 WHERE status_state IN ('pending', 'failed') AND status_attempts < ?1
+  AND NOT EXISTS (
+    SELECT 1 FROM lado_db_change_status_holds
+    WHERE lado_db_change_status_holds.approval_id = lado_integration_approvals.id
+  )
 ORDER BY approved_at, id
 LIMIT ?2
 `
@@ -871,7 +875,8 @@ type ListLadoIntegrationStatusRetriesParams struct {
 }
 
 // Approvals whose commit status is still to post, with attempts left, oldest
-// first.
+// first. An approval whose status waits for its pre-merge SQL (issue #97) is
+// left out until LADO releases it.
 func (q *Queries) ListLadoIntegrationStatusRetries(ctx context.Context, arg ListLadoIntegrationStatusRetriesParams) ([]LadoIntegrationApproval, error) {
 	rows, err := q.db.QueryContext(ctx, listLadoIntegrationStatusRetries, arg.MaxAttempts, arg.MaxApprovals)
 	if err != nil {

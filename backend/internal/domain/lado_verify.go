@@ -36,7 +36,14 @@ const (
 	LadoVerifyEvidence       LadoVerifyKind = "evidence"
 )
 
-// LadoVerifyKinds returns the verification items in record order.
+// LadoVerifyDBChanges is the optional item of a head in a repository with
+// production database change settings turned on (#97). It comes after every
+// item of LadoVerifyKinds, and a record without it keeps the eight items and
+// the hash it had before.
+const LadoVerifyDBChanges LadoVerifyKind = "db_changes"
+
+// LadoVerifyKinds returns the verification items every record has, in record
+// order. An optional item (LadoVerifyDBChanges) follows them.
 func LadoVerifyKinds() []LadoVerifyKind {
 	return []LadoVerifyKind{
 		LadoVerifyRequiredChecks, LadoVerifyCommands, LadoVerifyCommitMessages, LadoVerifyPaths,
@@ -139,6 +146,17 @@ const (
 	LadoCodeReviewPending      = "review_pending"      // wait
 	LadoCodeChangesRequested   = "changes_requested"   // fail
 	LadoCodeReviewInconclusive = "review_inconclusive" // confirm
+
+	// db_changes (#97). no_db_changes: the head adds or changes no SQL file
+	// the settings name. db_change_secrets_missing: a secret the settings
+	// name has no stored value, so no SQL could run. applied_modified: the
+	// head changes or deletes a file LADO applied, which LADO never runs
+	// again. unplanned: the head has SQL files and the plan's change_kinds
+	// lacks db_schema.
+	LadoCodeNoDBChanges             = "no_db_changes"              // pass
+	LadoCodeDBChangeSecretsMissing  = "db_change_secrets_missing"  // fail
+	LadoCodeDBChangeAppliedModified = "db_change_applied_modified" // confirm
+	LadoCodeDBChangeUnplanned       = "db_change_unplanned"        // confirm
 )
 
 // LadoVerifyItem is one item of a verification record. Details is the JSON
@@ -155,7 +173,7 @@ type LadoVerifyItem struct {
 // confirming item without a code, and details of another kind. Lists in the
 // details encode as [] when nil.
 func NewLadoVerifyItem(kind LadoVerifyKind, outcome LadoVerifyOutcome, code string, details any) (LadoVerifyItem, error) {
-	if !slices.Contains(LadoVerifyKinds(), kind) {
+	if !slices.Contains(LadoVerifyKinds(), kind) && kind != LadoVerifyDBChanges {
 		return LadoVerifyItem{}, fmt.Errorf("unknown verification item %q", kind)
 	}
 	switch outcome {
@@ -216,6 +234,9 @@ func normalizeLadoVerifyDetails(details any) (LadoVerifyKind, any) {
 		}
 		d.Criteria = criteria
 		return LadoVerifyEvidence, d
+	case LadoDBChangesDetails:
+		d.Files, d.Modified = ladoOrEmpty(d.Files), ladoOrEmpty(d.Modified)
+		return LadoVerifyDBChanges, d
 	default:
 		return "", nil
 	}
@@ -446,9 +467,43 @@ type LadoEvidenceRef struct {
 	SHA  string              `json:"sha"`
 }
 
+// LadoDBChangesDetails are the details of db_changes (#97): the repository,
+// the SQL files the head adds or changes that the settings' paths match, in
+// byte order of their paths, with each file's blob and phase; the applied
+// files it changes or deletes; and whether the plan's change_kinds names
+// db_schema. Whether a file is applied by now changes over time, so it is not
+// here: the record's hash stays the same while LADO applies the files.
+type LadoDBChangesDetails struct {
+	Repo     string                 `json:"repo"`
+	Files    []LadoDBChangeFileRef  `json:"files"`
+	Modified []LadoDBChangeModified `json:"modified"`
+	Planned  bool                   `json:"planned"`
+}
+
+// PreMerge returns the files of the pre_merge phase, in their order.
+func (d LadoDBChangesDetails) PreMerge() []LadoDBChangeFileRef {
+	return d.phase(LadoDBChangePreMerge)
+}
+
+// AfterDeploy returns the files of the after_deploy phase, in their order.
+func (d LadoDBChangesDetails) AfterDeploy() []LadoDBChangeFileRef {
+	return d.phase(LadoDBChangeAfterDeploy)
+}
+
+func (d LadoDBChangesDetails) phase(phase LadoDBChangePhase) []LadoDBChangeFileRef {
+	var files []LadoDBChangeFileRef
+	for _, file := range d.Files {
+		if file.Phase == phase {
+			files = append(files, file)
+		}
+	}
+	return files
+}
+
 // LadoVerification is what LADO verified about one head of an execution's PR
 // (docs/LJY-PRD/TDD.md §8). It is evidence about that head, like a check
-// run: a new head needs a new record. Items follow LadoVerifyKinds.
+// run: a new head needs a new record. Items follow LadoVerifyKinds, then the
+// optional db_changes item (LadoVerifyDBChanges).
 type LadoVerification struct {
 	ExecutionSessionID SessionID
 	HeadSHA            string
@@ -534,6 +589,24 @@ func (v LadoVerification) SHA256() (string, error) {
 	}
 	sum := sha256.Sum256(content)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// DBChanges returns the details of the record's db_changes item, false when
+// it has none, as a record of a repository without database change settings.
+func (v LadoVerification) DBChanges() (LadoDBChangesDetails, bool, error) {
+	for _, item := range v.Items {
+		if item.Kind != LadoVerifyDBChanges {
+			continue
+		}
+		var details LadoDBChangesDetails
+		if len(item.Details) > 0 {
+			if err := json.Unmarshal(item.Details, &details); err != nil {
+				return LadoDBChangesDetails{}, false, fmt.Errorf("read the db_changes details: %w", err)
+			}
+		}
+		return details, true, nil
+	}
+	return LadoDBChangesDetails{}, false, nil
 }
 
 // ConfirmCodes returns the codes of the items that need confirming, sorted

@@ -6,6 +6,7 @@ package specgen
 
 import (
 	"net/http"
+	"slices"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
@@ -265,6 +266,24 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoAccountLimitListResponse":    "LadoAccountLimitListResponse",
 	"ControllersReleaseLadoAccountLimitRequest":  "ReleaseLadoAccountLimitRequest",
 	"ControllersReleaseLadoAccountLimitResponse": "ReleaseLadoAccountLimitResponse",
+
+	// The production database changes tied to the integration approval
+	// (issue #97).
+	"ControllersLadoDBChangeFileParams":            "LadoDBChangeFileParams",
+	"ControllersLadoDBChangeRepoSettingsResponse":  "LadoDBChangeRepoSettingsResponse",
+	"ControllersLadoDBChangeSettingsResponse":      "LadoDBChangeSettingsResponse",
+	"ControllersLadoDBChangeSecretsRequest":        "LadoDBChangeSecretsRequest",
+	"ControllersUpdateLadoDBChangeSettingsRequest": "UpdateLadoDBChangeSettingsRequest",
+	"ControllersLadoDBChangeSummaryResponse":       "LadoDBChangeSummaryResponse",
+	"ControllersLadoDBChangeSummaryListResponse":   "LadoDBChangeSummaryListResponse",
+	"ControllersLadoDBChangeFileRefBody":           "LadoDBChangeFileRefBody",
+	"ControllersLadoDBChangeModifiedResponse":      "LadoDBChangeModifiedResponse",
+	"ControllersLadoDBChangeFileResponse":          "LadoDBChangeFileResponse",
+	"ControllersLadoDBChangeRunResponse":           "LadoDBChangeRunResponse",
+	"ControllersLadoDBChangePRResponse":            "LadoDBChangePRResponse",
+	"ControllersLadoDBChangeExecutionResponse":     "LadoDBChangeExecutionResponse",
+	"ControllersLadoDBChangeFileContentResponse":   "LadoDBChangeFileContentResponse",
+	"ControllersApplyLadoDBChangesRequest":         "ApplyLadoDBChangesRequest",
 }
 
 func ladoOperations() []operation {
@@ -560,7 +579,7 @@ func ladoOperations() []operation {
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/integration-approve", id: "approveLadoIntegration", tag: "lado",
-			summary:    "Approve the integration of the heads of an execution's open PRs together with one human-presence proof, or preview it with dryRun; LADO then posts each lado/integration status and never merges",
+			summary:    "Approve the integration of the heads of an execution's open PRs together with one human-presence proof, or preview it with dryRun; LADO then posts each lado/integration status and never merges, except a task whose approved heads have pre-merge production database SQL: LADO applies the SQL first, then posts the status and merges through AO's merge path (ADR 0013)",
 			pathParams: []any{controllers.LadoSessionIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			reqBody:    controllers.ApproveLadoIntegrationRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoIntegrationApproveResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusServiceUnavailable),
@@ -645,7 +664,7 @@ func ladoOperations() []operation {
 			reqBody:    controllers.WriteLadoKnowledgeNoteRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoKnowledgeNoteResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
 		},
-	}, append(append(ladoSetupOperations(), ladoLogWatchOperations()...), ladoAccountLimitOperations()...)...)
+	}, slices.Concat(ladoSetupOperations(), ladoLogWatchOperations(), ladoAccountLimitOperations(), ladoDBChangeOperations())...)
 }
 
 // ladoSetupOperations are the local setup routes (step 7 plan §13). Routes
@@ -828,6 +847,53 @@ func ladoAccountLimitOperations() []operation {
 			pathParams: []any{controllers.LadoAccountKeyParam{}},
 			reqBody:    controllers.ReleaseLadoAccountLimitRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.ReleaseLadoAccountLimitResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
+		},
+	}
+}
+
+// ladoDBChangeOperations are the production database change routes (issue
+// #97). No response carries a secret's value.
+func ladoDBChangeOperations() []operation {
+	projectID := []any{controllers.LadoProjectIDParam{}}
+	sessionID := []any{controllers.LadoSessionIDParam{}}
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/db-changes/settings", id: "getLadoDBChangeSettings", tag: "lado",
+			summary:    "Get a project's production database change settings, one entry per repository (each child repository of a workspace), with the names of the secrets LADO stores and never their values",
+			pathParams: projectID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeSettingsResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/projects/{projectId}/db-changes/settings", id: "updateLadoDBChangeSettings", tag: "lado",
+			summary:    "Replace one repository's production database change settings with a human-presence proof; turning them on or changing the paths records the default branch's matching SQL files as applied, and secret values go to a file under ~/.ao only",
+			pathParams: []any{controllers.LadoProjectIDParam{}, controllers.LadoPresenceHeaderParam{}},
+			reqBody:    controllers.UpdateLadoDBChangeSettingsRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeSettingsResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/db-changes", id: "listLadoProjectDBChanges", tag: "lado",
+			summary:    "List a project's PRs whose production database SQL still needs something, for the board's badges: waiting, applying, failed, blocked before applying, merged outside LADO unapplied, or after-deploy SQL left",
+			pathParams: projectID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeSummaryListResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/executions/{sessionId}/db-changes", id: "getLadoExecutionDBChanges", tag: "lado",
+			summary:    "Get an execution's production database changes per PR: each SQL file with its phase and how far it got, the applied files the head changes, and the runs",
+			pathParams: sessionID,
+			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeExecutionResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/executions/{sessionId}/db-changes/file", id: "getLadoDBChangeFile", tag: "lado",
+			summary:    "Get a SQL file's content at a blob the execution's database changes list, at most 256 KiB",
+			pathParams: []any{controllers.LadoDBChangeFileParams{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeFileContentResponse{}, http.StatusBadRequest, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/lado/executions/{sessionId}/db-changes/apply", id: "applyLadoDBChanges", tag: "lado",
+			summary:    "Apply a PR head's SQL files of one phase with a human-presence proof: after-deploy SQL after the deploy, pre-merge SQL of a PR merged outside LADO, or a retry of a run that stopped; files applied already are skipped",
+			pathParams: []any{controllers.LadoSessionIDParam{}, controllers.LadoPresenceHeaderParam{}},
+			reqBody:    controllers.ApplyLadoDBChangesRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeRunResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
 		},
 	}
 }

@@ -2,8 +2,9 @@
 // inspector under its snapshot (docs/LJY-PRD/TDD.md §8, PRD §6 "Review and
 // evidence"): where the integration stands, one row per verification item,
 // the check commands with their output, the evidence per acceptance
-// criterion, and the developer's next decision on the head: approve its
-// integration, which the desktop app confirms, then merge it.
+// criterion, the run's production SQL (issue #97), and the developer's next
+// decision on the head: approve its integration, which the desktop app
+// confirms, then merge it.
 import { InspectorSection } from "@aoagents/product-ui";
 import type { TFunction } from "i18next";
 import { ChevronDown } from "lucide-react";
@@ -32,6 +33,7 @@ import { LADO_PROTECTION_ANY_SOURCE, ladoErrorText, ladoProtectionPartText, lado
 import { cn } from "../../lib/utils";
 import { formatDuration } from "../SessionMemoryPanel";
 import { Button } from "../ui/button";
+import { LadoDBChangePanel } from "./LadoDBChangePanel";
 import {
 	ladoMergeable,
 	ladoMissingPRRepos,
@@ -121,6 +123,7 @@ export function LadoVerificationSection({ execution, projectId }: { execution: L
 						))}
 					</ul>
 				) : null}
+				<LadoDBChangePanel execution={execution} projectId={projectId} />
 				{run.state === "integration_pending" ? (
 					<LadoIntegrationAction projectId={projectId} sessionId={execution.sessionId} action="approve" pr={pr} />
 				) : run.state === "integrating" && integration ? (
@@ -182,6 +185,7 @@ function TrackedPRsVerification({
 						/>
 					))}
 				</ul>
+				<LadoDBChangePanel execution={execution} projectId={projectId} />
 				{run.state === "integration_pending" && first ? (
 					<LadoIntegrationAction projectId={projectId} sessionId={execution.sessionId} action="approve" pr={first} task />
 				) : null}
@@ -321,6 +325,7 @@ const kindKeys: Record<LadoVerifyKind, MessageKey> = {
 	protection: "lado.verify.item.protection",
 	review: "lado.verify.item.review",
 	evidence: "lado.verify.item.evidence",
+	db_changes: "lado.verify.item.dbChanges",
 };
 
 // A pass is ready, a wait is LADO's verification in progress, a failure is
@@ -588,6 +593,26 @@ function itemDetail(t: TFunction, item: LadoVerifyItem, verification: LadoVerifi
 			if (details.fileHead && details.fileHead !== verification.headSha) return t("lado.verify.evidence.staleFile");
 			const criteria = verification.evidence;
 			return t("lado.verify.evidence.linked", { linked: criteria.filter((criterion) => criterion.state === "linked").length, count: criteria.length });
+		}
+		// The SQL files the head adds (issue #97); whether LADO applied them
+		// is in the database change panel below, outside the record.
+		case "db_changes": {
+			const files = details.files ?? [];
+			switch (code) {
+				case "no_db_changes":
+					return t("lado.verify.db.none");
+				case "db_change_secrets_missing":
+					return t("lado.verify.db.secretsMissing");
+				case "db_change_applied_modified":
+					return t("lado.verify.db.appliedModified", { count: Math.max(1, details.modified?.length ?? 0) });
+				case "db_change_unplanned":
+					return t("lado.verify.db.unplanned", { count: files.length });
+			}
+			if (code) return fallback;
+			const afterDeploy = files.filter((file) => file.phase === "after_deploy").length;
+			return afterDeploy > 0
+				? t("lado.verify.db.filesAfterDeploy", { count: files.length, after: afterDeploy })
+				: t("lado.verify.db.files", { count: files.length });
 		}
 	}
 	return fallback;

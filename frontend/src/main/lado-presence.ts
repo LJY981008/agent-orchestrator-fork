@@ -1,7 +1,9 @@
 // LADO fork: plan approval, permission ceiling and protected path changes,
 // turning LADO mode off, changing a project's check commands, adopting,
-// restoring and changing local setup, approving a run's integration, and
-// turning Claude in Chrome on, through the human at the desktop app
+// restoring and changing local setup, approving a run's integration,
+// turning Claude in Chrome on, and changing a repository's production
+// database change settings or applying a pull request's SQL by hand (#97),
+// through the human at the desktop app
 // (docs/LJY-PRD/adr/0002-human-presence-approval-channel.md).
 // Any local process can call the daemon's loopback API, so these must come
 // from here. The renderer names a plan revision, the ceiling and a mode or the
@@ -19,9 +21,11 @@ import type { BaseWindow, Dialog, IpcMain, IpcMainInvokeEvent, MessageBoxOptions
 import {
 	LADO_CEILING_MODES,
 	LADO_PRESENCE_ADOPT_SETUP_CHANNEL,
+	LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL,
 	LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL,
 	LADO_PRESENCE_APPROVE_PLAN_CHANNEL,
 	LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL,
+	LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL,
 	LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL,
 	LADO_PRESENCE_CHANGE_RULE_CHANNEL,
 	LADO_PRESENCE_CHANGE_SETUP_CHANNEL,
@@ -29,12 +33,18 @@ import {
 	LADO_PRESENCE_SET_LADO_MODE_CHANNEL,
 	type LadoCeilingMode,
 	type LadoPresenceAdoptSetupResult,
+	type LadoPresenceApplyDbChangesResult,
 	type LadoPresenceApproval,
 	type LadoPresenceApproveResult,
 	type LadoPresenceCheckCommand,
 	type LadoPresenceChecksResult,
 	type LadoPresenceClaudeChromeResult,
 	type LadoPresenceClaudeChromeSettings,
+	type LadoPresenceDbChangePhase,
+	type LadoPresenceDbChangeRun,
+	type LadoPresenceDbChangeSettings,
+	type LadoPresenceDbChangesRequest,
+	type LadoPresenceDbChangesResult,
 	type LadoPresenceFailure,
 	type LadoPresenceIntegration,
 	type LadoPresenceIntegrationResult,
@@ -123,6 +133,25 @@ const COMMAND_BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 // each thing to confirm, and how much of each.
 const MAX_EXAMPLES = 3;
 const MAX_EXAMPLE_CHARS = 120;
+// The daemon's limits of a repository's production database change settings
+// (backend/internal/domain/lado_db_change.go, ladodbchange.SecretValueMax).
+const MAX_DB_PATHS = 10;
+const MAX_DB_COMMAND = 2000;
+const MAX_DB_TIMEOUT_MINUTES = 120;
+const DB_DEFAULT_TIMEOUT_MINUTES = 10;
+const MAX_DB_SECRETS = 10;
+const MAX_DB_SECRET_VALUE_BYTES = 8 << 10;
+const MAX_DB_TEXT = 1024;
+const DB_SECRET_NAME = /^[A-Z_][A-Z0-9_]{0,63}$/;
+const DB_PHASES: readonly LadoPresenceDbChangePhase[] = ["pre_merge", "after_deploy"];
+// A run the developer may start again: it waits for the button, failed, or
+// its merge failed (domain.LadoDBChangeRunState.Retryable).
+const DB_RETRYABLE_RUN_STATES: readonly unknown[] = ["awaiting_human", "failed", "merge_failed"];
+// How many SQL files a confirmation names, how many of an integration's it
+// quotes and how many of each one's first lines.
+const MAX_DB_FILES_SHOWN = 20;
+const MAX_DB_EXCERPT_FILES = 5;
+const MAX_DB_EXCERPT_LINES = 3;
 // A project's or task's binding: it follows the wider scope, or forces the item.
 const SCOPED_BINDING_STATES: readonly unknown[] = ["inherit", "force_on", "force_off"];
 const SETUP_TOOLS = ["claude-code", "codex"] as const;
@@ -216,6 +245,34 @@ type IntegrationPR = { number: number; url: string; headSha: string; branch: str
 // requests in merge order, none when it has no open pull request.
 type IntegrationRun = { title: string; prs: IntegrationPR[] };
 type VerifyItem = { kind: string; outcome: string; code: string; details: Record<string, unknown> };
+// One SQL file a head's db_changes item names, from its details.files.
+type DbFileRef = { path: string; blobSha: string; phase: LadoPresenceDbChangePhase };
+// The first lines of each SQL file an integration's confirmation quotes, by
+// pull request and blob.
+type DbExcerpts = Map<string, string[]>;
+// One repository's production database change settings as the daemon has
+// them, from LadoDBChangeRepoSettingsResponse.
+type DbRepoSettings = {
+	repo: string;
+	name: string;
+	enabled: boolean;
+	paths: string[];
+	command: string;
+	timeoutMinutes: number;
+	secretNames: string[];
+	storedSecretNames: string[];
+	sha256: string;
+};
+// A settings change as main checked it.
+type DbSettingsChange = Omit<LadoPresenceDbChangesRequest, "projectId" | "secrets"> & {
+	secrets: { set: Record<string, string>; remove: string[] };
+};
+// One file of a pull request's database changes, from LadoDBChangeFileResponse.
+type DbFileView = DbFileRef & { status: string };
+// One run of a pull request's database changes, from LadoDBChangeRunResponse.
+type DbRunView = { headSha: string; kind: string; trigger: string; state: string };
+// A pull request's database changes at its current head, from LadoDBChangePRResponse.
+type DbPRView = { prUrl: string; headSha: string; repo: string; files: DbFileView[]; runs: DbRunView[] };
 // What the integration's dry run verified and the approval signs, from
 // LadoIntegrationApproveResponse; reasons are the codes that hold it back.
 type VerifiedSubject = {
@@ -317,6 +374,8 @@ export function registerLadoPresenceIpc(deps: LadoPresenceDeps): void {
 	handle(LADO_PRESENCE_APPROVE_INTEGRATION_CHANNEL, approveIntegration, "The integration approval failed.");
 	handle(LADO_PRESENCE_CHANGE_PROJECT_CHECKS_CHANNEL, changeProjectChecks, "The check commands change failed.");
 	handle(LADO_PRESENCE_CHANGE_CLAUDE_CHROME_CHANNEL, changeClaudeChrome, "Turning on Claude in Chrome failed.");
+	handle(LADO_PRESENCE_CHANGE_DB_CHANGES_CHANNEL, changeDbChanges, "The database change settings change failed.");
+	handle(LADO_PRESENCE_APPLY_DB_CHANGES_CHANNEL, applyDbChanges, "Applying the database changes failed.");
 }
 
 async function approvePlan(
@@ -758,7 +817,7 @@ async function approveIntegration(
 	// waste a confirmation.
 	if (run.prs.length === 0) return failure("LADO_EXECUTION_NO_PR", "This run has no open pull request to integrate.", { sessionId });
 	const approvePath = `${executionPath}/integration-approve`;
-	if (run.prs.length > 1) return approveIntegrations(deps, run, approvePath);
+	if (run.prs.length > 1) return approveIntegrations(deps, sessionId, run, approvePath);
 	const pr = run.prs[0]!;
 	if (!pr.headSha) {
 		return failure("LADO_INTEGRATION_NOT_READY", "LADO has not verified this pull request's head yet.", { reasons: ["verifying"] });
@@ -782,9 +841,10 @@ async function approveIntegration(
 			reasons: verified.reasons,
 		});
 	}
+	const excerpts = await dbExcerpts(deps, sessionId, [verified]);
 	const t = await translator(deps);
 	const title = t("lado.presence.integration.title", { number: pr.number, branch: pr.branch || "—" });
-	if (!(await confirm(deps, t, title, integrationDetail(t, run.title, verified), t("lado.presence.integration.approve")))) {
+	if (!(await confirm(deps, t, title, integrationDetail(t, run.title, verified, excerpts), t("lado.presence.integration.approve")))) {
 		return { status: "cancelled" };
 	}
 
@@ -811,7 +871,12 @@ async function approveIntegration(
 // lists them all in one confirmation, then signs one request naming each head
 // with what its dry run verified. The daemon refuses the approval unless it
 // names exactly the open pull requests it tracks.
-async function approveIntegrations(deps: LadoPresenceDeps, run: IntegrationRun, approvePath: string): Promise<LadoPresenceIntegrationResult> {
+async function approveIntegrations(
+	deps: LadoPresenceDeps,
+	sessionId: string,
+	run: IntegrationRun,
+	approvePath: string,
+): Promise<LadoPresenceIntegrationResult> {
 	if (run.prs.some((pr) => !pr.headSha)) {
 		return failure("LADO_INTEGRATION_NOT_READY", "LADO has not verified the head of each pull request yet.", { reasons: ["verifying"] });
 	}
@@ -833,9 +898,10 @@ async function approveIntegrations(deps: LadoPresenceDeps, run: IntegrationRun, 
 			reasons: [...new Set(held.flatMap((one) => one.reasons))],
 		});
 	}
+	const excerpts = await dbExcerpts(deps, sessionId, verified);
 	const t = await translator(deps);
 	const title = t("lado.presence.integration.titleMany", { count: run.prs.length });
-	if (!(await confirm(deps, t, title, integrationsDetail(t, run, verified), t("lado.presence.integration.approve")))) {
+	if (!(await confirm(deps, t, title, integrationsDetail(t, run, verified, excerpts), t("lado.presence.integration.approve")))) {
 		return { status: "cancelled" };
 	}
 
@@ -959,6 +1025,148 @@ async function changeClaudeChrome(
 	const changed = claudeChromeSettings(sent.body);
 	if (!changed) return failure(ANSWER_UNREADABLE, "Claude in Chrome was turned on, but the AO daemon's answer could not be read.");
 	return { status: "changed", settings: changed };
+}
+
+// A repository's production database change settings name a command that
+// runs outside any agent sandbox with secrets against the production
+// database (#97), so only the human may change them. Main reads the settings
+// from the daemon, names only what changes, never shows a secret's value,
+// then signs the change against the settings it read.
+async function changeDbChanges(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceDbChangesResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can change the database change settings.");
+	}
+	// These fields are all the renderer gives; anything else it sends is ignored.
+	const request = record(input);
+	const projectId = request?.projectId;
+	if (typeof projectId !== "string" || !PROJECT_ID.test(projectId) || projectId.includes("..")) {
+		return failure("LADO_PROJECT_ID_INVALID", "Invalid project id.");
+	}
+	const change = dbSettingsChange(request);
+	if (!change.ok) {
+		return failure("LADO_DB_CHANGE_INVALID", "The database change settings are not valid.", { problems: [change.problem] });
+	}
+	const settingsPath = `/api/v1/lado/projects/${encodeURIComponent(projectId)}/db-changes/settings`;
+	const read = await callDaemon(deps, settingsPath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const settings = dbChangeSettings(read.body, projectId);
+	if (!settings) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this project's database change settings could not be read.");
+	const current = settings.repositories.find((repo) => repo.repo === change.change.repo);
+	if (!current) {
+		return failure("LADO_DB_CHANGE_INVALID", "This project has no such repository.", { problems: [{ field: "repo", reason: "invalid" }] });
+	}
+	const t = await translator(deps);
+	const lines = dbSettingsLines(t, current, change.change);
+	// Nothing would change, so there is nothing to confirm.
+	if (lines.length === 0) return { status: "changed", settings: settings.response };
+	const title = t("lado.presence.dbChanges.title", { repo: current.name || current.repo || projectId });
+	const detail = [lines.join("\n"), t("lado.presence.dbChanges.detail", { id: projectId })].join("\n\n");
+	if (!(await confirm(deps, t, title, detail, t("lado.presence.change")))) {
+		return { status: "cancelled" };
+	}
+
+	// The daemon checks the proof against exactly these bytes, and refuses the
+	// change when the settings are no longer the ones this dialog compared with.
+	const { secrets, ...fields } = change.change;
+	const body = JSON.stringify({
+		...fields,
+		...(Object.keys(secrets.set).length > 0 || secrets.remove.length > 0
+			? {
+					secrets: {
+						...(Object.keys(secrets.set).length > 0 ? { set: secrets.set } : {}),
+						...(secrets.remove.length > 0 ? { remove: secrets.remove } : {}),
+					},
+				}
+			: {}),
+		base: current.sha256,
+	});
+	// Turning the settings on fetches the default branch to record its SQL files.
+	const sent = await callDaemon(deps, settingsPath, signed(deps, "PUT", settingsPath, body), INTEGRATION_TIMEOUT_MS);
+	if (!sent.ok) return sent.failure;
+	const changed = dbChangeSettings(sent.body, projectId);
+	if (!changed) return failure(ANSWER_UNREADABLE, "The settings were changed, but the AO daemon's answer could not be read.");
+	return { status: "changed", settings: changed.response };
+}
+
+// Applying a pull request's SQL by hand runs it against the production
+// database (#97), so only the human may start it: a retry of a failed or held
+// pre-merge run, the pre-merge SQL of a pull request merged outside LADO, or
+// the after-deploy SQL. Main reads the run's database changes from the
+// daemon, names the head and each file with whether it runs, warns about a
+// file whose command was interrupted, then signs the files it read.
+async function applyDbChanges(
+	deps: LadoPresenceDeps,
+	sender: WebContents,
+	input: unknown,
+): Promise<LadoPresenceApplyDbChangesResult> {
+	if (!deps.isTrustedSender(sender)) {
+		return failure("LADO_PRESENCE_UNTRUSTED_SENDER", "Only the AO app window can apply database changes.");
+	}
+	// The session, the pull request and the phase are all the renderer gives;
+	// anything else it sends is ignored.
+	const request = record(input);
+	const { sessionId, prUrl, phase } = request ?? {};
+	if (typeof sessionId !== "string" || !SESSION_ID.test(sessionId) || sessionId.includes("..")) {
+		return failure("LADO_SESSION_ID_INVALID", "Invalid session id.");
+	}
+	if (typeof prUrl !== "string" || prUrl === "" || prUrl.length > MAX_DB_TEXT || UNSAFE_CHAR.test(prUrl) || !isDbPhase(phase)) {
+		return failure("LADO_DB_CHANGE_INVALID", "Name the pull request and pre_merge or after_deploy.");
+	}
+	const changesPath = `/api/v1/lado/executions/${encodeURIComponent(sessionId)}/db-changes`;
+	const read = await callDaemon(deps, changesPath, { method: "GET", headers: { accept: "application/json" } });
+	if (!read.ok) return read.failure;
+	const prs = dbExecutionPRs(read.body, sessionId);
+	if (!prs) return failure(ANSWER_UNREADABLE, "The AO daemon's answer about this run's database changes could not be read.");
+	const pr = prs.find((one) => one.prUrl === prUrl);
+	const files = pr?.headSha ? pr.files.filter((file) => file.phase === phase) : [];
+	if (!pr || files.length === 0) {
+		return failure("LADO_DB_CHANGE_NOT_FOUND", "LADO knows no SQL of this phase at this pull request's head.", { prUrl, phase });
+	}
+	const run = pr.runs.find((one) => one.kind === phase && one.headSha === pr.headSha);
+	// The daemon refuses these as well; asking the human first would only
+	// waste a confirmation.
+	if ((run && !DB_RETRYABLE_RUN_STATES.includes(run.state)) || files.some((file) => file.status === "applying")) {
+		return failure("LADO_DB_CHANGE_RUN_STATE", "LADO is applying this SQL now, or applied it already.", { state: run?.state ?? "applying" });
+	}
+	// Without a run, only a merged pull request's SQL can be applied by hand.
+	const trigger = run?.trigger ?? (phase === "after_deploy" ? "after_merge" : "merged_unapplied");
+	const pending = files.filter((file) => file.status !== "applied");
+	const mergeOnly = pending.length === 0 && (run?.state === "merge_failed" || trigger === "approval");
+	if (pending.length === 0 && !mergeOnly) {
+		return failure("LADO_DB_CHANGE_RUN_STATE", "Every SQL file of this head is applied already.", { state: run?.state ?? "" });
+	}
+	const t = await translator(deps);
+	const title = t(
+		trigger === "approval"
+			? "lado.presence.dbApply.titleApproval"
+			: trigger === "after_merge"
+				? "lado.presence.dbApply.titleAfterDeploy"
+				: "lado.presence.dbApply.titleMerged",
+	);
+	if (!(await confirm(deps, t, title, dbApplyDetail(t, pr, files, trigger, mergeOnly), t("lado.presence.dbApply.apply")))) {
+		return { status: "cancelled" };
+	}
+
+	// Every file of the phase at the head, in path order: the daemon skips
+	// those applied already and refuses files that are not the head's.
+	const body = JSON.stringify({
+		prUrl: pr.prUrl,
+		headSha: pr.headSha,
+		phase,
+		files: files.map((file) => ({ path: file.path, blobSha: file.blobSha, phase: file.phase })),
+	});
+	const applyPath = `${changesPath}/apply`;
+	const sent = await callDaemon(deps, applyPath, signed(deps, "POST", applyPath, body), INTEGRATION_TIMEOUT_MS);
+	if (!sent.ok) return sent.failure;
+	const queued = record(sent.body);
+	if (typeof queued?.id !== "string" || queued.prUrl !== pr.prUrl || typeof queued.state !== "string") {
+		return failure(ANSWER_UNREADABLE, "The request was sent, but the AO daemon's answer could not be read.");
+	}
+	return { status: "queued", run: queued as LadoPresenceDbChangeRun };
 }
 
 // A request carrying a fresh proof. Signed after the confirmation, which can
@@ -1578,15 +1786,15 @@ function verifiedSubject(body: unknown, pr: { url: string; headSha: string }): V
 // The integration's confirmation: the task, the head, how many items passed,
 // one line for each thing to confirm, and what happens next. Each line is
 // cleaned on its own.
-function integrationDetail(t: Translate, task: string, verified: VerifiedSubject): string {
-	const lines = [t("lado.presence.integration.task", { task }), ...headLines(t, verified)];
+function integrationDetail(t: Translate, task: string, verified: VerifiedSubject, excerpts: DbExcerpts): string {
+	const lines = [t("lado.presence.integration.task", { task }), ...headLines(t, verified, excerpts)];
 	return [lines.join("\n"), nextLines(t, [verified], false)].join("\n\n");
 }
 
 // The confirmation of a task's pull requests approved together: the task,
 // then each pull request with its repository, target, head and what to
 // confirm about it, then what happens next.
-function integrationsDetail(t: Translate, run: IntegrationRun, verified: readonly VerifiedSubject[]): string {
+function integrationsDetail(t: Translate, run: IntegrationRun, verified: readonly VerifiedSubject[], excerpts: DbExcerpts): string {
 	const blocks = [t("lado.presence.integration.task", { task: run.title })];
 	verified.forEach((one, index) => {
 		const pr = run.prs[index]!;
@@ -1597,7 +1805,7 @@ function integrationsDetail(t: Translate, run: IntegrationRun, verified: readonl
 					repo: excerpt(pr.repo, MAX_EXAMPLE_CHARS) || "—",
 					branch: excerpt(pr.branch, MAX_EXAMPLE_CHARS) || "—",
 				}),
-				...headLines(t, one),
+				...headLines(t, one, excerpts),
 				...(pr.approved ? [t("lado.presence.integration.approvedAlready")] : []),
 			].join("\n"),
 		);
@@ -1605,8 +1813,9 @@ function integrationsDetail(t: Translate, run: IntegrationRun, verified: readonl
 	return [...blocks, nextLines(t, verified, true)].join("\n\n");
 }
 
-// The head, how many of its items passed and one line for each to confirm.
-function headLines(t: Translate, verified: VerifiedSubject): string[] {
+// The head, how many of its items passed, the SQL files the approval signs
+// with their phase and first lines, and one line for each to confirm.
+function headLines(t: Translate, verified: VerifiedSubject, excerpts: DbExcerpts): string[] {
 	const counted = verified.items.filter((item) => item.outcome !== "info");
 	return [
 		t("lado.presence.integration.head", { head: verified.headSha.slice(0, 12) }),
@@ -1614,21 +1823,95 @@ function headLines(t: Translate, verified: VerifiedSubject): string[] {
 			passed: counted.filter((item) => item.outcome === "pass").length,
 			total: counted.length,
 		}),
+		...dbFileLines(t, verified, excerpts),
 		...verified.items.filter((item) => item.outcome === "confirm").map((item) => confirmLine(t, item)),
 	];
+}
+
+// The SQL files a head's db_changes item names (#97), each with its phase and
+// up to three of its first lines; the approval signs their blobs.
+function dbFileLines(t: Translate, verified: VerifiedSubject, excerpts: DbExcerpts): string[] {
+	const files = dbFiles(verified);
+	const lines: string[] = [];
+	for (const file of files.slice(0, MAX_DB_FILES_SHOWN)) {
+		const key = file.phase === "after_deploy" ? "lado.presence.integration.dbFileAfterDeploy" : "lado.presence.integration.dbFilePreMerge";
+		lines.push(t(key, { path: excerpt(file.path, MAX_EXAMPLE_CHARS) }));
+		for (const line of excerpts.get(dbExcerptKey(verified.prUrl, file.blobSha)) ?? []) lines.push(`    ${line}`);
+	}
+	if (files.length > MAX_DB_FILES_SHOWN) lines.push(t("lado.presence.integration.dbMore", { count: files.length - MAX_DB_FILES_SHOWN }));
+	return lines;
+}
+
+// The SQL files of a head's db_changes item, in the item's order (paths in
+// byte order); none when the head's repository has no settings on.
+function dbFiles(verified: VerifiedSubject): DbFileRef[] {
+	const item = verified.items.find((one) => one.kind === "db_changes");
+	return item ? dbFileRefs(item.details.files) : [];
+}
+
+function dbFileRefs(value: unknown): DbFileRef[] {
+	const files: DbFileRef[] = [];
+	for (const entry of recordList(value)) {
+		const { path, blobSha, phase } = entry;
+		if (typeof path === "string" && path !== "" && typeof blobSha === "string" && blobSha !== "" && isDbPhase(phase)) {
+			files.push({ path, blobSha, phase });
+		}
+	}
+	return files;
+}
+
+function dbExcerptKey(prUrl: string, blobSha: string): string {
+	return `${prUrl}\n${blobSha}`;
+}
+
+// The first lines of the first SQL files the heads name, read from the
+// daemon by their blobs, so the confirmation quotes what the approval signs.
+// A file the daemon does not serve is named without its lines.
+async function dbExcerpts(deps: LadoPresenceDeps, sessionId: string, verified: readonly VerifiedSubject[]): Promise<DbExcerpts> {
+	const excerpts: DbExcerpts = new Map();
+	const wanted = verified
+		.flatMap((one) => dbFiles(one).slice(0, MAX_DB_FILES_SHOWN).map((file) => ({ prUrl: one.prUrl, file })))
+		.slice(0, MAX_DB_EXCERPT_FILES);
+	for (const { prUrl, file } of wanted) {
+		const query = new URLSearchParams({ prUrl, blobSha: file.blobSha });
+		const path = `/api/v1/lado/executions/${encodeURIComponent(sessionId)}/db-changes/file?${query.toString()}`;
+		const read = await callDaemon(deps, path, { method: "GET", headers: { accept: "application/json" } });
+		const content = read.ok ? record(read.body) : null;
+		if (content?.blobSha !== file.blobSha || typeof content.content !== "string") continue;
+		const lines = content.content
+			.split(/\r?\n/)
+			.map((line) => excerpt(line, MAX_EXAMPLE_CHARS))
+			.filter((line) => line !== "")
+			.slice(0, MAX_DB_EXCERPT_LINES);
+		excerpts.set(dbExcerptKey(prUrl, file.blobSha), lines);
+	}
+	return excerpts;
 }
 
 // What happens next. LADO posts its status on GitHub and GitLab (#21); a
 // record from before that names GitLab's protection unprotected_gitlab, and
 // such a head gets no status. A branch whose rules do not require the status
 // lets a pull request merge without the approval, which LADO only notices.
+//
+// A head with pre-merge SQL makes the approval apply it and LADO merge the
+// run's pull requests itself (ADR 0013, #97); after-deploy SQL waits for the
+// developer's button after the merge.
 function nextLines(t: Translate, verified: readonly VerifiedSubject[], many: boolean): string {
 	const protections = verified.map((one) => one.items.find((item) => item.kind === "protection"));
 	// Rules LADO could not read may well protect the branch (U4 of #15).
 	const unprotected = protections.some((protection) => protection?.code === "unprotected" || protection?.code === "unprotected_gitlab");
 	const posts = protections.some((protection) => protection?.code !== "unprotected_gitlab");
+	const files = verified.flatMap(dbFiles);
+	const preMerge = files.some((file) => file.phase === "pre_merge");
+	const afterDeploy = files.some((file) => file.phase === "after_deploy");
+	const status = preMerge
+		? [t(many ? "lado.presence.integration.nextDbChangesMany" : "lado.presence.integration.nextDbChanges")]
+		: posts
+			? [t(many ? "lado.presence.integration.nextStatusMany" : "lado.presence.integration.nextStatus")]
+			: [];
 	const next = [
-		...(posts ? [t(many ? "lado.presence.integration.nextStatusMany" : "lado.presence.integration.nextStatus")] : []),
+		...status,
+		...(afterDeploy ? [t("lado.presence.integration.nextAfterDeploy")] : []),
 		...(unprotected ? [t(many ? "lado.presence.integration.nextUnprotectedMany" : "lado.presence.integration.nextUnprotected")] : []),
 	];
 	return next.join(" ");
@@ -1701,6 +1984,13 @@ function confirmLine(t: Translate, item: VerifyItem): string {
 			return t("lado.presence.integration.reviewInconclusive", { count: typeof details.rounds === "number" ? details.rounds : 0 });
 		case "no_tests":
 			return t("lado.presence.integration.noTests");
+		case "db_change_applied_modified": {
+			// An applied SQL file the head changes or deletes (#97).
+			const paths = recordList(details.modified).map((entry) => String(entry.path ?? ""));
+			return t("lado.presence.integration.dbAppliedModified", { count: paths.length, examples: examples(paths, paths.length) });
+		}
+		case "db_change_unplanned":
+			return t("lado.presence.integration.dbUnplanned");
 		default:
 			// A code from a newer daemon still names what is acknowledged.
 			return t("lado.presence.integration.otherCode", { code: excerpt(item.code, MAX_EXAMPLE_CHARS) });
@@ -1735,6 +2025,204 @@ function protectionPart(t: Translate, part: string): string {
 function examples(values: readonly string[], count: number): string {
 	const shown = values.slice(0, MAX_EXAMPLES).map((value) => excerpt(value, MAX_EXAMPLE_CHARS));
 	return count > shown.length ? `${shown.join(", ")}, …` : shown.join(", ");
+}
+
+// A settings change the renderer asks for, checked as the daemon checks it
+// where the dialog depends on it: the lists' sizes, one line of a command
+// and of each path, the secret names' form, and values that are one line.
+function dbSettingsChange(
+	request: Record<string, unknown> | null,
+): { ok: true; change: DbSettingsChange } | { ok: false; problem: { field: string; reason: string } } {
+	const bad = (field: string, reason = "invalid") => ({ ok: false as const, problem: { field, reason } });
+	const { repo, enabled, paths, command, timeoutMinutes = 0, secretNames, secrets } = request ?? {};
+	if (typeof repo !== "string" || repo.length > MAX_DB_TEXT || UNSAFE_CHAR.test(repo)) return bad("repo");
+	if (typeof enabled !== "boolean") return bad("enabled");
+	if (!isStringList(paths)) return bad("paths");
+	if (paths.length > MAX_DB_PATHS) return bad("paths", "too_many");
+	const pathAt = paths.findIndex((path) => path === "" || path.length > MAX_DB_TEXT || UNSAFE_CHAR.test(path));
+	if (pathAt >= 0) return bad(`paths[${pathAt}]`);
+	if (typeof command !== "string") return bad("command");
+	const line = command.trim();
+	if (Array.from(line).length > MAX_DB_COMMAND) return bad("command", "too_long");
+	if (COMMAND_CONTROL.test(line)) return bad("command", "control");
+	if (COMMAND_BIDI.test(line)) return bad("command", "bidi");
+	if (typeof timeoutMinutes !== "number" || !Number.isInteger(timeoutMinutes) || timeoutMinutes < 0 || timeoutMinutes > MAX_DB_TIMEOUT_MINUTES) {
+		return bad("timeoutMinutes", "out_of_range");
+	}
+	if (!isStringList(secretNames)) return bad("secretNames");
+	if (secretNames.length > MAX_DB_SECRETS) return bad("secretNames", "too_many");
+	const nameAt = secretNames.findIndex((name) => !DB_SECRET_NAME.test(name));
+	if (nameAt >= 0) return bad(`secretNames[${nameAt}]`);
+	const update = secrets === undefined ? {} : record(secrets);
+	if (!update) return bad("secrets");
+	const set = update.set === undefined ? {} : record(update.set);
+	const remove = update.remove === undefined ? [] : update.remove;
+	if (!set) return bad("secrets.set");
+	if (!isStringList(remove) || remove.some((name) => !DB_SECRET_NAME.test(name))) return bad("secrets.remove");
+	const values: Record<string, string> = {};
+	for (const name of Object.keys(set).sort()) {
+		const value = set[name];
+		const field = `secrets.set.${name}`;
+		if (!secretNames.includes(name) || remove.includes(name)) return bad(field);
+		if (typeof value !== "string" || value === "") return bad(field, "required");
+		if (Buffer.byteLength(value, "utf8") > MAX_DB_SECRET_VALUE_BYTES) return bad(field, "too_long");
+		if (/[\u0000\r\n]/.test(value)) return bad(field, "control");
+		values[name] = value;
+	}
+	return {
+		ok: true,
+		change: {
+			repo,
+			enabled,
+			paths: [...paths],
+			command: line,
+			timeoutMinutes,
+			secretNames: [...secretNames],
+			secrets: { set: values, remove: [...new Set(remove)] },
+		},
+	};
+}
+
+// What a settings change changes, one line each, in the settings' order; a
+// secret's value is never named, only that it is set. None when nothing
+// changes.
+function dbSettingsLines(t: Translate, current: DbRepoSettings, next: DbSettingsChange): string[] {
+	const lines: string[] = [];
+	const list = (values: readonly string[]) => (values.length > 0 ? values.map((value) => excerpt(value, MAX_EXAMPLE_CHARS)).join(", ") : "—");
+	const pathsChanged = !sameList(current.paths, next.paths);
+	if (next.enabled && !current.enabled) lines.push(t("lado.presence.dbChanges.turnOn"));
+	if (!next.enabled && current.enabled) lines.push(t("lado.presence.dbChanges.turnOff"));
+	if (pathsChanged) lines.push(t("lado.presence.dbChanges.paths", { from: list(current.paths), to: list(next.paths) }));
+	if (current.command !== next.command) {
+		// The command is not cut: the dialog shows all it runs.
+		lines.push(t("lado.presence.dbChanges.command", { from: oneLine(current.command) || "—", to: next.command || "—" }));
+	}
+	const minutes = (value: number) => value || DB_DEFAULT_TIMEOUT_MINUTES;
+	if (minutes(current.timeoutMinutes) !== minutes(next.timeoutMinutes)) {
+		lines.push(t("lado.presence.dbChanges.timeout", { from: minutes(current.timeoutMinutes), to: minutes(next.timeoutMinutes) }));
+	}
+	const added = next.secretNames.filter((name) => !current.secretNames.includes(name));
+	const dropped = current.secretNames.filter((name) => !next.secretNames.includes(name));
+	if (added.length > 0) lines.push(t("lado.presence.dbChanges.secretNamesAdded", { names: list(added) }));
+	if (dropped.length > 0) lines.push(t("lado.presence.dbChanges.secretNamesRemoved", { names: list(dropped) }));
+	const set = Object.keys(next.secrets.set);
+	if (set.length > 0) lines.push(t("lado.presence.dbChanges.secretsSet", { names: list(set) }));
+	const removed = next.secrets.remove.filter((name) => current.storedSecretNames.includes(name) && !dropped.includes(name));
+	if (removed.length > 0) lines.push(t("lado.presence.dbChanges.secretsRemoved", { names: list(removed) }));
+	// Turning on, or changing the paths while on, records the default
+	// branch's matching files as applied.
+	if (next.enabled && (!current.enabled || pathsChanged)) lines.push(t("lado.presence.dbChanges.baseline"));
+	return lines;
+}
+
+// The confirmation of applying a pull request's SQL: the pull request, its
+// repository and head, each file with whether it runs, and what happens next.
+function dbApplyDetail(t: Translate, pr: DbPRView, files: readonly DbFileView[], trigger: string, mergeOnly: boolean): string {
+	const head = [
+		t("lado.presence.dbApply.pr", { url: excerpt(pr.prUrl, MAX_DB_TEXT) }),
+		...(pr.repo ? [t("lado.presence.dbApply.repo", { repo: excerpt(pr.repo, MAX_EXAMPLE_CHARS) })] : []),
+		t("lado.presence.integration.head", { head: pr.headSha.slice(0, 12) }),
+	];
+	const lines = files.slice(0, MAX_DB_FILES_SHOWN).map((file) => {
+		const path = excerpt(file.path, MAX_EXAMPLE_CHARS);
+		switch (file.status) {
+			case "applied":
+				return t("lado.presence.dbApply.fileApplied", { path });
+			case "failed":
+				return t("lado.presence.dbApply.fileFailed", { path });
+			case "interrupted":
+				return t("lado.presence.dbApply.fileInterrupted", { path });
+			default:
+				return t("lado.presence.dbApply.fileRuns", { path });
+		}
+	});
+	if (files.length > MAX_DB_FILES_SHOWN) lines.push(t("lado.presence.integration.dbMore", { count: files.length - MAX_DB_FILES_SHOWN }));
+	const next = mergeOnly
+		? t("lado.presence.dbApply.nextMergeOnly")
+		: trigger === "approval"
+			? t("lado.presence.dbApply.nextApproval")
+			: trigger === "after_merge"
+				? t("lado.presence.dbApply.nextAfterDeploy")
+				: t("lado.presence.dbApply.nextMerged");
+	const blocks = [head.join("\n"), lines.join("\n"), next];
+	// Whether an interrupted command took effect is unknown (#97 decision 7).
+	if (files.some((file) => file.status === "interrupted")) blocks.push(t("lado.presence.dbApply.interruptedWarning"));
+	return blocks.join("\n\n");
+}
+
+// The project's production database change settings, from
+// LadoDBChangeSettingsResponse: the response to hand the renderer and each
+// repository's settings as the dialog compares them.
+function dbChangeSettings(body: unknown, projectId: string): { response: LadoPresenceDbChangeSettings; repositories: DbRepoSettings[] } | null {
+	const settings = record(body);
+	if (settings?.projectId !== projectId || typeof settings.sha256 !== "string" || !Array.isArray(settings.repositories)) return null;
+	const repositories: DbRepoSettings[] = [];
+	for (const value of settings.repositories) {
+		const repo = record(value);
+		if (
+			typeof repo?.repo !== "string" ||
+			typeof repo.name !== "string" ||
+			typeof repo.enabled !== "boolean" ||
+			!isStringList(repo.paths) ||
+			typeof repo.command !== "string" ||
+			typeof repo.timeoutMinutes !== "number" ||
+			!isStringList(repo.secretNames) ||
+			!isStringList(repo.storedSecretNames) ||
+			typeof repo.sha256 !== "string"
+		) {
+			return null;
+		}
+		repositories.push({
+			repo: repo.repo,
+			name: oneLine(repo.name),
+			enabled: repo.enabled,
+			paths: repo.paths,
+			command: repo.command,
+			timeoutMinutes: repo.timeoutMinutes,
+			secretNames: repo.secretNames,
+			storedSecretNames: repo.storedSecretNames,
+			sha256: repo.sha256,
+		});
+	}
+	return { response: settings as LadoPresenceDbChangeSettings, repositories };
+}
+
+// A run's pull requests with database changes, from LadoDBChangeExecutionResponse.
+function dbExecutionPRs(body: unknown, sessionId: string): DbPRView[] | null {
+	const view = record(body);
+	if (view?.sessionId !== sessionId || !Array.isArray(view.prs)) return null;
+	const prs: DbPRView[] = [];
+	for (const value of view.prs) {
+		const pr = record(value);
+		const { prUrl, headSha, repo = "", files, runs } = pr ?? {};
+		if (typeof prUrl !== "string" || typeof headSha !== "string" || typeof repo !== "string" || !Array.isArray(files) || !Array.isArray(runs)) {
+			return null;
+		}
+		const fileViews: DbFileView[] = [];
+		for (const entry of files) {
+			const file = record(entry);
+			const [ref] = dbFileRefs([file]);
+			if (!ref || typeof file?.status !== "string") return null;
+			fileViews.push({ ...ref, status: file.status });
+		}
+		const runViews: DbRunView[] = [];
+		for (const entry of runs) {
+			const run = record(entry);
+			const { headSha: runHead, kind, trigger, state } = run ?? {};
+			if (typeof runHead !== "string" || typeof kind !== "string" || typeof trigger !== "string" || typeof state !== "string") return null;
+			runViews.push({ headSha: runHead.toLowerCase(), kind, trigger, state });
+		}
+		prs.push({ prUrl, headSha: headSha.toLowerCase(), repo: oneLine(repo), files: fileViews, runs: runViews });
+	}
+	return prs;
+}
+
+function isDbPhase(value: unknown): value is LadoPresenceDbChangePhase {
+	return typeof value === "string" && (DB_PHASES as readonly string[]).includes(value);
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+	return a.length === b.length && a.every((value, index) => value === b[index]);
 }
 
 function isStringList(value: unknown): value is string[] {

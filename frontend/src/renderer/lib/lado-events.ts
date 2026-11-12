@@ -22,6 +22,7 @@ import {
 	type LadoTask,
 } from "./lado";
 import type { LadoAlertEvent } from "./lado-alert-notifications";
+import { ladoDBChangeExecutionQueryKey, ladoDBChangeProjectQueryKey } from "./lado-db-changes";
 import { ladoLogWatchProjectQueryKey } from "./lado-log-watch";
 import { ladoSetupQueryRoot } from "./lado-setup";
 
@@ -104,6 +105,10 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 	// The production log watch (issue #87): projects whose settings, sources
 	// or fingerprints changed.
 	const logWatchProjects = new Set<string>();
+	// Production database changes (issue #97): projects whose settings, runs
+	// or applications changed, and the runs whose SQL files moved.
+	const dbChangeProjects = new Set<string>();
+	const dbChangeSessions = new Set<string>();
 	return {
 		note(payload: LadoEventPayload, event?: LadoEventEnvelope): boolean {
 			// A session's limit, stall or compactions changed, or an alert was
@@ -125,6 +130,14 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 			// watch settings and its incidents, which the board's cards count.
 			if (payload?.kind === "lado_log_watch" && typeof payload.projectId === "string" && payload.projectId) {
 				logWatchProjects.add(payload.projectId);
+				return true;
+			}
+			// A repository's database change settings, a run of its SQL or a
+			// file's application changed: the project's settings and the board's
+			// summary, and the run's SQL files in its open panel.
+			if (payload?.kind === "lado_db_change" && typeof payload.projectId === "string" && payload.projectId) {
+				dbChangeProjects.add(payload.projectId);
+				if (typeof payload.sessionId === "string" && payload.sessionId) dbChangeSessions.add(payload.sessionId);
 				return true;
 			}
 			if (payload?.kind === "lado_task" && typeof payload.projectId === "string" && payload.projectId) {
@@ -227,6 +240,10 @@ export function createLadoEventBatch(queryClient: Pick<QueryClient, "getQueryDat
 			alertProjects.clear();
 			for (const projectId of logWatchProjects) invalidate(ladoLogWatchProjectQueryKey(projectId));
 			logWatchProjects.clear();
+			for (const projectId of dbChangeProjects) invalidate(ladoDBChangeProjectQueryKey(projectId));
+			dbChangeProjects.clear();
+			for (const sessionId of dbChangeSessions) invalidate(ladoDBChangeExecutionQueryKey(sessionId));
+			dbChangeSessions.clear();
 			if (newAlerts.size > 0) {
 				const raised = [...newAlerts.values()];
 				newAlerts.clear();

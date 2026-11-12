@@ -1461,6 +1461,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/executions/{sessionId}/db-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get an execution's production database changes per PR: each SQL file with its phase and how far it got, the applied files the head changes, and the runs */
+        get: operations["getLadoExecutionDBChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/executions/{sessionId}/db-changes/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a PR head's SQL files of one phase with a human-presence proof: after-deploy SQL after the deploy, pre-merge SQL of a PR merged outside LADO, or a retry of a run that stopped; files applied already are skipped */
+        post: operations["applyLadoDBChanges"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/executions/{sessionId}/db-changes/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a SQL file's content at a blob the execution's database changes list, at most 256 KiB */
+        get: operations["getLadoDBChangeFile"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/executions/{sessionId}/integration-approve": {
         parameters: {
             query?: never;
@@ -1470,7 +1521,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Approve the integration of the heads of an execution's open PRs together with one human-presence proof, or preview it with dryRun; LADO then posts each lado/integration status and never merges */
+        /** Approve the integration of the heads of an execution's open PRs together with one human-presence proof, or preview it with dryRun; LADO then posts each lado/integration status and never merges, except a task whose approved heads have pre-merge production database SQL: LADO applies the SQL first, then posts the status and merges through AO's merge path (ADR 0013) */
         post: operations["approveLadoIntegration"];
         delete?: never;
         options?: never;
@@ -1607,6 +1658,41 @@ export interface paths {
         /** Count each of a project's tasks' alerts nobody marked seen, over all of them, for the board's badges */
         get: operations["countLadoUnseenAlerts"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/db-changes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List a project's PRs whose production database SQL still needs something, for the board's badges: waiting, applying, failed, blocked before applying, merged outside LADO unapplied, or after-deploy SQL left */
+        get: operations["listLadoProjectDBChanges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/projects/{projectId}/db-changes/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get a project's production database change settings, one entry per repository (each child repository of a workspace), with the names of the secrets LADO stores and never their values */
+        get: operations["getLadoDBChangeSettings"];
+        /** Replace one repository's production database change settings with a human-presence proof; turning them on or changing the paths records the default branch's matching SQL files as applied, and secret values go to a file under ~/.ao only */
+        put: operations["updateLadoDBChangeSettings"];
         post?: never;
         delete?: never;
         options?: never;
@@ -5635,6 +5721,14 @@ export interface components {
             reviewers?: components["schemas"]["ControllersReviewerMemoryResponse"][];
             rssBytes: number;
         };
+        ApplyLadoDBChangesRequest: {
+            /** @description The files the developer confirmed, all of the phase; others than the run's refuse the request. */
+            files: components["schemas"]["LadoDBChangeFileRefBody"][];
+            headSha: string;
+            /** @enum {string} */
+            phase: "pre_merge" | "after_deploy";
+            prUrl: string;
+        };
         ApproveLadoIntegrationPR: {
             /** @description The head record's confirm codes the developer acknowledged, from the dry run's confirm. A dry run needs none. */
             acknowledge?: string[];
@@ -7275,6 +7369,151 @@ export interface components {
             /** @enum {string} */
             provider: "github" | "gitlab";
         };
+        LadoDBChangeExecutionResponse: {
+            prs: components["schemas"]["LadoDBChangePRResponse"][];
+            sessionId: string;
+            taskId: string;
+        };
+        LadoDBChangeFileContentResponse: {
+            blobSha: string;
+            content: string;
+            path: string;
+            /** @description LADO cut the content at 256 KiB. */
+            truncated: boolean;
+        };
+        LadoDBChangeFileRefBody: {
+            blobSha: string;
+            path: string;
+            /**
+             * @description after_deploy: the file's first line that is not blank is '-- lado:after-deploy', so LADO applies it only by the developer's button after the merge.
+             * @enum {string}
+             */
+            phase: "pre_merge" | "after_deploy";
+        };
+        LadoDBChangeFileResponse: {
+            /** Format: date-time */
+            appliedAt?: null | string;
+            attempts: number;
+            blobSha: string;
+            /** @description The last application's one-line message, without secrets. */
+            lastMessage?: string;
+            /** @description The hash of the last application's redacted output. */
+            outputSha256?: string;
+            path: string;
+            /** @enum {string} */
+            phase: "pre_merge" | "after_deploy";
+            /**
+             * @description interrupted: the daemon stopped while the command ran, so whether the SQL took effect is unknown; LADO treats the file as not applied.
+             * @enum {string}
+             */
+            status: "pending" | "applying" | "applied" | "failed" | "interrupted";
+        };
+        LadoDBChangeModifiedResponse: {
+            /** @description The blob LADO applied or recorded as the baseline. */
+            appliedBlobSha: string;
+            deleted: boolean;
+            /** @description The head's blob; empty when deleted. */
+            headBlobSha: string;
+            path: string;
+        };
+        LadoDBChangePRResponse: {
+            files: components["schemas"]["LadoDBChangeFileResponse"][];
+            headSha: string;
+            modified: components["schemas"]["LadoDBChangeModifiedResponse"][];
+            prUrl: string;
+            repo: string;
+            runs: components["schemas"]["LadoDBChangeRunResponse"][];
+        };
+        LadoDBChangeRepoSettingsResponse: {
+            /** @description The default branch's commit whose matching files LADO recorded as already applied when the settings were turned on or their paths changed. */
+            baselineCommit?: string;
+            /** @description The line the shell runs for each file, with {file} for its path. */
+            command: string;
+            enabled: boolean;
+            /** Format: date-time */
+            enabledAt?: null | string;
+            /** @description The repository's display name. */
+            name: string;
+            /** @description Globs of the SQL files, relative to the repository's root. */
+            paths: string[];
+            /** @description The child repository's folder in a workspace project; empty in a single-repository project. */
+            repo: string;
+            /** @description The environment variables the command gets from the repository's secrets file. */
+            secretNames: string[];
+            /** @description The hash of the repository's saved settings, which a change sends as base; empty for a repository that never saved any. */
+            sha256: string;
+            /** @description The secret names whose values LADO stores; the values never leave the daemon. */
+            storedSecretNames: string[];
+            /** @description The command's time limit for one file; 0 is the default of 10 minutes. */
+            timeoutMinutes: number;
+            /**
+             * Format: date-time
+             * @description Omitted for a repository that never saved settings.
+             */
+            updatedAt?: null | string;
+        };
+        LadoDBChangeRunResponse: {
+            approvalId?: string;
+            attempts: number;
+            /** Format: date-time */
+            createdAt: string;
+            /** @description The last stop's reason, one line without secrets, such as the merge blockers a preflight found. */
+            error?: string;
+            headSha: string;
+            id: string;
+            /** @enum {string} */
+            kind: "pre_merge" | "after_deploy";
+            prUrl: string;
+            repo: string;
+            sessionId: string;
+            /**
+             * @description awaiting_human waits for the developer's button; failed and merge_failed wait for a retry.
+             * @enum {string}
+             */
+            state: "awaiting_human" | "queued" | "applying" | "failed" | "applied" | "merging" | "merge_failed" | "done";
+            taskId: string;
+            /**
+             * @description approval: the integration approval; merged_unapplied: the PR merged outside LADO with pre-merge SQL not applied; after_merge: after-deploy SQL waits after the merge.
+             * @enum {string}
+             */
+            trigger: "approval" | "merged_unapplied" | "after_merge";
+            /** Format: date-time */
+            updatedAt: string;
+        };
+        LadoDBChangeSecretsRequest: {
+            /** @description Secret names whose stored values are deleted. */
+            remove?: string[];
+            /** @description Values to store by secret name; each name must be one of secretNames. The values are written to a file under ~/.ao only and never returned. */
+            set?: {
+                [key: string]: string;
+            };
+        };
+        LadoDBChangeSettingsResponse: {
+            projectId: string;
+            repositories: components["schemas"]["LadoDBChangeRepoSettingsResponse"][];
+            /** @description The hash of every repository's settings, in order. */
+            sha256: string;
+        };
+        LadoDBChangeSummaryListResponse: {
+            summaries: components["schemas"]["LadoDBChangeSummaryResponse"][];
+        };
+        LadoDBChangeSummaryResponse: {
+            /** @description How many of the PR's files failed their last application. */
+            failed: number;
+            /** @description The last stop's reason, one line without secrets. */
+            message?: string;
+            /** @description How many of the PR's files are not applied yet. */
+            pending: number;
+            prUrl: string;
+            repo: string;
+            sessionId: string;
+            /**
+             * @description apply_waiting: approved SQL waits for LADO's loop; preflight_blocked: LADO did not apply the SQL since the PR could not merge; merged_unapplied: the PR merged outside LADO with pre-merge SQL not applied; after_deploy_pending: after-deploy SQL waits for the developer.
+             * @enum {string}
+             */
+            state: "apply_waiting" | "applying" | "apply_failed" | "preflight_blocked" | "merge_failed" | "after_deploy_pending" | "merged_unapplied";
+            taskId: string;
+        };
         LadoDispatchSettingsResponse: {
             /** @description Keep new runs and parts waiting while the free disk space is under minFreeDiskGb. */
             holdOnDiskLow: boolean;
@@ -7491,7 +7730,7 @@ export interface components {
              * @description Why the run is in its state, as the task's stateReason says it; reported_pr_untracked while the worker reported a pull request its session does not track.
              * @enum {string}
              */
-            stateReason?: "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
+            stateReason?: "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "db_change_secrets_missing" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
             task: components["schemas"]["LadoExecutionTaskResponse"];
             /**
              * Format: date-time
@@ -7581,7 +7820,7 @@ export interface components {
              * @description Why the PR is in its state, as the task's stateReason says it.
              * @enum {string}
              */
-            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
+            stateReason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "db_change_secrets_missing" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved";
             /** @description The branch the PR merges into. */
             targetBranch?: string;
             title?: string;
@@ -9256,7 +9495,7 @@ export interface components {
              * @description Why the task needs review, is blocked or failed, or what its queued plan waits for; reported_pr_untracked for running while the worker reported a pull request its session does not track, and for validating while LADO still tries to track one before an approval; for validating, pr_missing while a repository the task is expected to open a pull request in has none yet (a workspace task across repositories), conflict_unresolved when LADO's resolve workers could not resolve the open PR, resolving while one takes the base into it, merge_conflict while the PR conflicts with its base and base_overlap when the base moved under the head with a change to the same paths, all four before an approval; else verifying while LADO has not verified the head yet, else the code of the verification item that fails or waits; status_not_posted for integrating while LADO could not post the lado/integration status; merged_without_approval for completed when the merged head had no integration approval. For the app to translate.
              * @enum {string}
              */
-            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
+            stateReason?: "rules_changed" | "issue_edited" | "plan_superseded" | "approved_before_queue" | "blocking_snapshot" | "base_ref_mismatch" | "agent_unsupported" | "attempts_exhausted" | "timed_out" | "ended_without_pr" | "reported_pr_untracked" | "slot_global" | "slot_project" | "slot_workers" | "memory_tight" | "disk_low" | "paths_overlap" | "issue_unreadable" | "retry" | "lado_mode_off" | "run_live" | "account_limited" | "agent_unavailable" | "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "db_change_secrets_missing" | "status_not_posted" | "merged_without_approval" | "base_overlap" | "merge_conflict" | "resolving" | "conflict_unresolved" | "pr_missing";
         };
         LadoTaskTimelineResponse: {
             approvals: number;
@@ -9441,7 +9680,7 @@ export interface components {
              * @description The code of the first item that fails, else of the first that waits; omitted otherwise.
              * @enum {string}
              */
-            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "base_overlap" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested";
+            reason?: "verifying" | "checks_pending" | "checks_failed" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "head_unavailable" | "commands_failed" | "command_timed_out" | "worktree_missing" | "commit_messages_failed" | "protected_path" | "base_overlap" | "pr_repo_not_in_workspace" | "review_pending" | "changes_requested" | "db_change_secrets_missing";
             /** @description The record's hash, which an integration approval signs as verificationSha256. */
             sha256: string;
             /** @description How many review threads of the PR are unresolved now and keep it from being ready to merge. Only the execution view fills it; it is outside the record and its hash, and omitted when there are none. */
@@ -9516,10 +9755,14 @@ export interface components {
             fileSha256?: string;
             /** @description evidence: the pinned version of lado/evidence.md; omitted without one. */
             fileVersion?: number;
+            /** @description db_changes: the SQL files the head adds or changes that the settings' paths match, in byte order of their paths, each with its blob and phase. The approval signs these blobs; whether a file is applied by now is in the execution's database changes, outside the record. */
+            files?: components["schemas"]["LadoDBChangeFileRefBody"][];
             /** @description review: the reviewer harness. */
             harness?: string;
             /** @description protection: what the base branch's rules lack. GitHub: pull_request, required_status_checks:lado/integration (or required_status_checks:lado/integration:any_source when the rules take the check from one app only, which LADO's status cannot satisfy), non_fast_forward, deletion. GitLab: protected_branch, push_access (someone may push), force_push, pipeline_must_succeed (Pipelines must succeed is off), skipped_pipeline (skipped pipelines count as successful), integration_status (LADO cannot post its status: the token is below Developer, lacks the api scope, or LADO's last post failed). */
             missing?: string[];
+            /** @description db_changes: for db_change_applied_modified, the applied files the head changes or deletes; LADO never runs them again. */
+            modified?: components["schemas"]["LadoDBChangeModifiedResponse"][];
             /** @description base_branch: local moves of the base branch since the run started that the remote does not hold. */
             moved?: components["schemas"]["LadoReflogEntryResponse"][];
             /** @description review: what LADO noted, such as AO choosing the reviewer. */
@@ -9532,6 +9775,8 @@ export interface components {
             overlap?: string[];
             /** @description base_branch: how many files changed on the remote base branch overlap the head or the plan. */
             overlapCount?: number;
+            /** @description db_changes: the plan's change_kinds names db_schema. */
+            planned?: boolean;
             /** @description base_branch: for pr_repo_not_in_workspace, the PR's repository, as provider:[host/]owner/name. */
             prRepo?: string;
             /** @description commit_messages: the PR title. */
@@ -9545,7 +9790,7 @@ export interface components {
             provider?: "github" | "gitlab";
             /** @description base_branch: the base branch's remote. */
             remote?: string;
-            /** @description protection: the repository, as owner/name. */
+            /** @description protection: the repository, as owner/name. db_changes: the child repository's folder in a workspace project; omitted in a single-repository project. */
             repo?: string;
             /** @description required_checks: the check names the base branch's rules require. */
             required?: string[];
@@ -9564,13 +9809,16 @@ export interface components {
         };
         LadoVerifyItemResponse: {
             /**
-             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_dirty: the worktree is at the head but has uncommitted changes or untracked files before the head's first check command, so the commands wait (details.dirty lists them); worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone; base_advanced: the remote base branch moved past the head's merge base without touching its files; base_overlap: it moved with a change to files the head changed or the plan names, so the head must take in the base; pr_repo_not_in_workspace: the PR is open in a repository that is none of the workspace's child repositories, so LADO cannot verify it; base_not_default: the PR's repository is not the issue's and the PR's target or the dispatch's base branch is not that repository's default branch.
+             * @description Omitted for a plain pass. not_required: the item does not apply to the execution; verifying: LADO could not compute the item yet; worktree_dirty: the worktree is at the head but has uncommitted changes or untracked files before the head's first check command, so the commands wait (details.dirty lists them); worktree_changed: the worktree changed since LADO's last check command on the head; head_unavailable: the head is not in the local repository and LADO could not fetch it; base_deleted: the local base branch that existed at dispatch is gone; base_advanced: the remote base branch moved past the head's merge base without touching its files; base_overlap: it moved with a change to files the head changed or the plan names, so the head must take in the base; pr_repo_not_in_workspace: the PR is open in a repository that is none of the workspace's child repositories, so LADO cannot verify it; base_not_default: the PR's repository is not the issue's and the PR's target or the dispatch's base branch is not that repository's default branch; no_db_changes: the head adds or changes no SQL file the database change settings name; db_change_secrets_missing: a secret the settings name has no stored value, so no SQL could run; db_change_applied_modified: the head changes or deletes a SQL file LADO applied, which LADO never runs again (details.modified lists them); db_change_unplanned: the head has SQL files and the plan's change_kinds lacks db_schema.
              * @enum {string}
              */
-            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "base_advanced" | "base_overlap" | "pr_repo_not_in_workspace" | "base_not_default" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive";
+            code?: "not_required" | "verifying" | "checks_pending" | "checks_failed" | "none_reported" | "commands_running" | "worktree_not_at_head" | "worktree_dirty" | "worktree_changed" | "commands_failed" | "command_timed_out" | "worktree_missing" | "no_tests" | "none_configured" | "head_unavailable" | "commit_messages_failed" | "commit_messages_unclear" | "protected_path" | "outside_plan" | "base_moved" | "base_deleted" | "reflog_off" | "already_on_base" | "no_local_branch" | "base_advanced" | "base_overlap" | "pr_repo_not_in_workspace" | "base_not_default" | "unprotected" | "protection_unknown" | "unprotected_gitlab" | "review_pending" | "changes_requested" | "review_inconclusive" | "no_db_changes" | "db_change_secrets_missing" | "db_change_applied_modified" | "db_change_unplanned";
             details: components["schemas"]["LadoVerifyItemDetailsResponse"];
-            /** @enum {string} */
-            kind: "required_checks" | "commands" | "commit_messages" | "paths" | "base_branch" | "protection" | "review" | "evidence";
+            /**
+             * @description db_changes is optional: only a head in a repository whose production database change settings are on has it, after evidence.
+             * @enum {string}
+             */
+            kind: "required_checks" | "commands" | "commit_messages" | "paths" | "base_branch" | "protection" | "review" | "evidence" | "db_changes";
             /**
              * @description info never decides; evidence is always info.
              * @enum {string}
@@ -11214,6 +11462,22 @@ export interface components {
         UpdateLadoClaudeChromeRequest: {
             chatSessions: boolean;
             ladoWorkers: boolean;
+        };
+        UpdateLadoDBChangeSettingsRequest: {
+            /** @description The repository's sha256 from the settings the change started from; empty for a repository that never saved any. Other settings refuse the change with LADO_DB_CHANGE_SETTINGS_CHANGED. */
+            base?: string;
+            /** @description One line of at most 2000 characters with {file}. */
+            command: string;
+            enabled: boolean;
+            /** @description 1 to 10 globs relative to the repository, none absolute or with a '..' segment. */
+            paths: string[];
+            /** @description The child repository's folder in a workspace project; empty in a single-repository project. */
+            repo: string;
+            /** @description At most 10 environment variable names of ^[A-Z_][A-Z0-9_]{0,63}$; names LADO withholds or sets for every command, such as PATH or GIT_SSH_COMMAND, are refused. */
+            secretNames: string[];
+            secrets?: components["schemas"]["LadoDBChangeSecretsRequest"];
+            /** @description 1 to 120; 0 or omitted is the default of 10. */
+            timeoutMinutes?: number;
         };
         UpdateLadoDispatchSettingsRequest: {
             holdOnDiskLow?: null | boolean;
@@ -16464,6 +16728,204 @@ export interface operations {
             };
         };
     };
+    getLadoExecutionDBChanges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description AO session id of the worker. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDBChangeExecutionResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    applyLadoDBChanges: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description AO session id of the worker. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyLadoDBChangesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDBChangeRunResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoDBChangeFile: {
+        parameters: {
+            query: {
+                /** @description The execution's PR the file belongs to. */
+                prUrl: string;
+                /** @description The file's blob, as the execution's database changes list it; LADO serves no other blob. */
+                blobSha: string;
+            };
+            header?: never;
+            path: {
+                /** @description AO session id of the worker. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDBChangeFileContentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     approveLadoIntegration: {
         parameters: {
             query?: never;
@@ -17058,6 +17520,190 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listLadoProjectDBChanges: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDBChangeSummaryListResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoDBChangeSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDBChangeSettingsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoDBChangeSettings: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Human-presence proof v1.<nonce>.<expires>.<mac>, signed by the AO desktop app over the method, path and body. */
+                "X-LADO-Presence"?: string;
+            };
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoDBChangeSettingsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoDBChangeSettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
