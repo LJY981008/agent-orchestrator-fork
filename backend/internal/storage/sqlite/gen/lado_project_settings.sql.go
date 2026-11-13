@@ -53,8 +53,8 @@ func (q *Queries) GetLadoProjectSettings(ctx context.Context, projectID string) 
 }
 
 const upsertLadoProjectCheckCommands = `-- name: UpsertLadoProjectCheckCommands :exec
-INSERT INTO lado_project_settings (project_id, lado_mode, check_commands, updated_at)
-VALUES (?, 0, ?, ?)
+INSERT INTO lado_project_settings (project_id, lado_mode, overlap_wait, check_commands, updated_at)
+VALUES (?, 0, 0, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET check_commands = excluded.check_commands, updated_at = excluded.updated_at
 `
 
@@ -64,15 +64,16 @@ type UpsertLadoProjectCheckCommandsParams struct {
 	UpdatedAt     time.Time
 }
 
-// A project without a settings row gets one with LADO mode off.
+// A project without a settings row gets one with LADO mode off and
+// overlap_wait 0 (#101).
 func (q *Queries) UpsertLadoProjectCheckCommands(ctx context.Context, arg UpsertLadoProjectCheckCommandsParams) error {
 	_, err := q.db.ExecContext(ctx, upsertLadoProjectCheckCommands, arg.ProjectID, arg.CheckCommands, arg.UpdatedAt)
 	return err
 }
 
 const upsertLadoProjectCheckTimeout = `-- name: UpsertLadoProjectCheckTimeout :exec
-INSERT INTO lado_project_settings (project_id, lado_mode, check_timeout_minutes, updated_at)
-VALUES (?, 0, ?, ?)
+INSERT INTO lado_project_settings (project_id, lado_mode, overlap_wait, check_timeout_minutes, updated_at)
+VALUES (?, 0, 0, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET check_timeout_minutes = excluded.check_timeout_minutes, updated_at = excluded.updated_at
 `
 
@@ -82,7 +83,8 @@ type UpsertLadoProjectCheckTimeoutParams struct {
 	UpdatedAt           time.Time
 }
 
-// A project without a settings row gets one with LADO mode off.
+// A project without a settings row gets one with LADO mode off and
+// overlap_wait 0 (#101).
 func (q *Queries) UpsertLadoProjectCheckTimeout(ctx context.Context, arg UpsertLadoProjectCheckTimeoutParams) error {
 	_, err := q.db.ExecContext(ctx, upsertLadoProjectCheckTimeout, arg.ProjectID, arg.CheckTimeoutMinutes, arg.UpdatedAt)
 	return err
@@ -116,8 +118,8 @@ func (q *Queries) UpsertLadoProjectOverlap(ctx context.Context, arg UpsertLadoPr
 }
 
 const upsertLadoProjectSettings = `-- name: UpsertLadoProjectSettings :one
-INSERT INTO lado_project_settings (project_id, lado_mode, updated_at)
-VALUES (?, ?, ?)
+INSERT INTO lado_project_settings (project_id, lado_mode, overlap_wait, updated_at)
+VALUES (?, ?, 0, ?)
 ON CONFLICT (project_id) DO UPDATE SET
     lado_mode = excluded.lado_mode,
     updated_at = excluded.updated_at
@@ -131,6 +133,8 @@ type UpsertLadoProjectSettingsParams struct {
 	UpdatedAt time.Time
 }
 
+// A new row stores overlap_wait 0: new projects do not wait on overlap (#101).
+// Every query that creates a row must do the same; the column default stays 1.
 func (q *Queries) UpsertLadoProjectSettings(ctx context.Context, arg UpsertLadoProjectSettingsParams) (LadoProjectSetting, error) {
 	row := q.db.QueryRowContext(ctx, upsertLadoProjectSettings, arg.ProjectID, arg.LadoMode, arg.UpdatedAt)
 	var i LadoProjectSetting

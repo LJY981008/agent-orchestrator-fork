@@ -22,6 +22,12 @@ func newOverlapFixture(t *testing.T) *storeFixture {
 	}); err != nil {
 		t.Fatalf("raise the project's cap: %v", err)
 	}
+	// A new project has the overlap wait off (#101); these tests turn it on.
+	if err := sf.db.SetLadoProjectOverlap(context.Background(), "proj-1", true, nil, domain.LadoAuditEvent{
+		At: t0, Actor: "test", Action: "project.overlap_changed", SubjectKind: "project", SubjectID: "proj-1",
+	}); err != nil {
+		t.Fatalf("turn the overlap wait on: %v", err)
+	}
 	return sf
 }
 
