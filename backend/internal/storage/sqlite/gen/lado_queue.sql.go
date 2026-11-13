@@ -1252,8 +1252,8 @@ func (q *Queries) UpsertLadoDispatchSettings(ctx context.Context, arg UpsertLado
 }
 
 const upsertLadoProjectMaxConcurrent = `-- name: UpsertLadoProjectMaxConcurrent :exec
-INSERT INTO lado_project_settings (project_id, lado_mode, max_concurrent, updated_at)
-VALUES (?, 0, ?, ?)
+INSERT INTO lado_project_settings (project_id, lado_mode, overlap_wait, max_concurrent, updated_at)
+VALUES (?, 0, 0, ?, ?)
 ON CONFLICT (project_id) DO UPDATE SET max_concurrent = excluded.max_concurrent, updated_at = excluded.updated_at
 `
 
@@ -1263,7 +1263,8 @@ type UpsertLadoProjectMaxConcurrentParams struct {
 	UpdatedAt     time.Time
 }
 
-// A project without a settings row gets one with LADO mode off.
+// A project without a settings row gets one with LADO mode off and
+// overlap_wait 0 (#101).
 func (q *Queries) UpsertLadoProjectMaxConcurrent(ctx context.Context, arg UpsertLadoProjectMaxConcurrentParams) error {
 	_, err := q.db.ExecContext(ctx, upsertLadoProjectMaxConcurrent, arg.ProjectID, arg.MaxConcurrent, arg.UpdatedAt)
 	return err

@@ -16,8 +16,9 @@ import (
 )
 
 // LadoProjectSettings returns the project's LADO settings. A project without a
-// stored row has LADO mode off, the default cap, no check commands and the
-// default check time limit.
+// stored row has LADO mode off, the default cap, no check commands, the
+// default check time limit and overlap wait off (#101; the queries that create
+// a row store overlap_wait 0 to match).
 func (s *Store) LadoProjectSettings(ctx context.Context, projectID domain.ProjectID) (domain.LadoProjectSettings, error) {
 	row, err := s.qr.GetLadoProjectSettings(ctx, string(projectID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -26,7 +27,7 @@ func (s *Store) LadoProjectSettings(ctx context.Context, projectID domain.Projec
 			MaxConcurrent:       domain.LadoDefaultProjectMaxConcurrent,
 			CheckCommands:       []domain.LadoCheckCommand{},
 			CheckTimeoutMinutes: domain.LadoCheckTimeoutDefault,
-			OverlapWait:         true,
+			OverlapWait:         false,
 		}, nil
 	}
 	if err != nil {

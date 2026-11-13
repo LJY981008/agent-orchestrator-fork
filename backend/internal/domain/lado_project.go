@@ -23,7 +23,8 @@ type LadoProjectSettings struct {
 	// OverlapWait holds a task back while a live run of another task of the
 	// project may touch the same files (docs/LJY-PRD/TDD.md §5.4), and
 	// OverlapIgnore lists the globs whose overlap does not count; nil means
-	// LadoDefaultOverlapIgnore.
+	// LadoDefaultOverlapIgnore. New projects have OverlapWait off (#101);
+	// a project that turned it on keeps it.
 	OverlapWait   bool
 	OverlapIgnore []string
 	UpdatedAt     time.Time
