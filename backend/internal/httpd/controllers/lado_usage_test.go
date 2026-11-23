@@ -42,7 +42,7 @@ func sampleLadoTaskUsage() ladousage.TaskUsage {
 		Compactions: 3, StartedAt: ladoTaskTime, EndedAt: ladoTaskTime.Add(90 * time.Minute), Elapsed: 90 * time.Minute,
 		EndReason: ladousage.EndInProgress, UsageMissing: 1,
 		Sessions: []ladousage.SessionUsage{
-			{SessionID: "demo-plan-1", Role: domain.LadoSessionDesigner, Attempt: 2, Totals: ladousage.Totals{CostNanos: 10_340_000_000}},
+			{SessionID: "demo-plan-1", Role: domain.LadoSessionDesigner, Attempt: 2, Model: "claude-fable-5-2", Effort: "max", Totals: ladousage.Totals{CostNanos: 10_340_000_000}},
 			{SessionID: "demo-7", Role: domain.LadoSessionPart, PartID: "store", QueueEntryID: "lado-queue-2", Attempt: 1, ContextUsed: 150_000, ContextWindow: 200_000, Compactions: 3},
 			{SessionID: "demo-6", Role: domain.LadoSessionPart, PartID: "store", QueueEntryID: "lado-queue-1", UsageMissing: true},
 		},
@@ -70,6 +70,12 @@ func TestLadoAPI_TaskUsage(t *testing.T) {
 	part := got.Sessions[1]
 	if part.Role != "part" || part.PartID != "store" || part.Attempt != 1 || part.ContextUsed != 150_000 || part.Compactions != 3 {
 		t.Errorf("part session = %+v", part)
+	}
+	if designer := got.Sessions[0]; designer.Model != "claude-fable-5-2" || designer.Effort != "max" || part.Model != "" || part.Effort != "" {
+		t.Errorf("models = %q/%q and %q/%q, want the designer's Fable at max and none for the part", designer.Model, designer.Effort, part.Model, part.Effort)
+	}
+	if strings.Count(string(body), `"model"`) != 1 {
+		t.Errorf("body = %s, want model on the designer session only", body)
 	}
 	if !got.Sessions[2].UsageMissing || got.Sessions[2].Totals.CostNanos != 0 {
 		t.Errorf("deleted session = %+v", got.Sessions[2])

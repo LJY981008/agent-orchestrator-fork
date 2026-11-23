@@ -5385,6 +5385,106 @@ paths:
         check commands need a human-presence proof
       tags:
       - lado
+  /api/v1/lado/projects/{projectId}/stage-agents:
+    get:
+      operationId: getLadoProjectStageAgents
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectStageAgentsResponse'
+          description: OK
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'Get each LADO stage of a project: its harness, the project''s and
+        the global value, which applies, and what its workers run with and where it
+        comes from'
+      tags:
+      - lado
+    put:
+      operationId: updateLadoProjectStageAgents
+      parameters:
+      - description: Project whose LADO settings are read or changed.
+        in: path
+        name: projectId
+        required: true
+        schema:
+          description: Project whose LADO settings are read or changed.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoStageAgentsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoProjectStageAgentsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Replace a project's stage models, each on the harness the project's
+        stage runs and checked against the project's model catalog; a stage left out
+        follows the global value or the default. Changing an execution, integration
+        or resolve value sends the project's approved waiting tasks back for approval
+      tags:
+      - lado
   /api/v1/lado/projects/{projectId}/usage:
     get:
       operationId: getLadoProjectUsage
@@ -6739,6 +6839,78 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Scan the local setup again and list it
+      tags:
+      - lado
+  /api/v1/lado/stage-agents:
+    get:
+      operationId: getLadoStageAgents
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoStageAgentsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Get the global model and effort of each LADO stage's workers (plan,
+        critic, execution, integration, resolve); a stage without one follows the
+        default
+      tags:
+      - lado
+    put:
+      operationId: updateLadoStageAgents
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLadoStageAgentsRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LadoStageAgentsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Replace the global stage models, each checked against its harness's
+        machine-scope model catalog; a stage left out follows the default. Changing
+        an execution, integration or resolve value sends every project's approved
+        waiting task back for approval
       tags:
       - lado
   /api/v1/lado/tasks:
@@ -21561,6 +21733,11 @@ components:
           items:
             type: string
           type: array
+        agentChanged:
+          description: The agent, or the model or effort an execution, integration
+            or resolve worker would run with, is not the approved one, such as after
+            an execution stage setting changed; the task needs a new approval.
+          type: boolean
         aoSystemSha256:
           description: The AO system layer at the approval; empty when it fixed no
             local setup.
@@ -21620,6 +21797,7 @@ components:
       - added
       - removed
       - changed
+      - agentChanged
       - setupAdded
       - setupRemoved
       - setupChanged
@@ -22252,19 +22430,34 @@ components:
       type: object
     LadoEffectiveAgentResponse:
       properties:
+        effort:
+          description: The effort the execution workers pass; empty passes none, so
+            AO picks one for the model.
+          type: string
         harness:
           description: Empty when nobody chose an agent.
           type: string
         model:
+          description: The model the execution workers (a single execution, a part
+            or a part merge) pass; empty passes none, so AO picks.
           type: string
         source:
-          description: 'task or project: whose choice it is; empty when nobody chose
-            an agent.'
+          description: 'Where the execution''s model comes from: task, the task''s
+            own agent and model; project or global, that scope''s execution stage
+            setting; worker, the project''s worker agent and model. Empty when nobody
+            chose an agent.'
           type: string
+        stages:
+          $ref: '#/components/schemas/LadoEffectiveStagesResponse'
+          description: 'What the integration and resolve workers run with: their own
+            stage setting, else the execution''s value. An approval fixes them with
+            the execution''s.'
       required:
       - harness
       - model
+      - effort
       - source
+      - stages
       type: object
     LadoEffectiveResponse:
       properties:
@@ -22449,6 +22642,16 @@ components:
       - aoSystemSha256
       - conflicts
       - accepted
+      type: object
+    LadoEffectiveStagesResponse:
+      properties:
+        integration:
+          $ref: '#/components/schemas/LadoStageResolvedResponse'
+        resolve:
+          $ref: '#/components/schemas/LadoStageResolvedResponse'
+      required:
+      - integration
+      - resolve
       type: object
     LadoEvidenceCriterionResponse:
       properties:
@@ -22654,9 +22857,19 @@ components:
           - merge
           - integration
           type: string
+        sessionEffort:
+          description: The effort the worker session resolved to when it started,
+            as AO records it; omitted when it runs the provider's default (AO drops
+            an effort the model does not offer) or AO no longer has the session.
+          type: string
         sessionEnded:
           type: boolean
         sessionId:
+          type: string
+        sessionModel:
+          description: The model the worker session resolved to when it started, as
+            AO records it; omitted when AO picked the agent's default or no longer
+            has the session.
           type: string
         snapshot:
           $ref: '#/components/schemas/LadoExecutionSnapshotResponse'
@@ -22798,6 +23011,11 @@ components:
         agent:
           description: The agent harness the worker runs, such as claude-code.
           type: string
+        effort:
+          description: The effort the approval fixed for the run's execution workers
+            (a single execution, a part or a part merge); omitted when it passes none,
+            so AO picks, as in every snapshot before lado-policy/4.
+          type: string
         model:
           type: string
         permissionCeiling:
@@ -22831,14 +23049,31 @@ components:
           type: array
         sha256:
           type: string
+        stages:
+          $ref: '#/components/schemas/LadoExecutionSnapshotStagesResponse'
+          description: What the run's integration and resolve workers spawn with under
+            the approval; a snapshot before lado-policy/4 gives the execution's model.
       required:
       - sha256
       - agent
+      - stages
       - permissionMode
       - permissionCeiling
       - rules
       - prompt
       - setup
+      type: object
+    LadoExecutionSnapshotStagesResponse:
+      properties:
+        integration:
+          $ref: '#/components/schemas/LadoSnapshotStageAgentResponse'
+          description: What an integration worker of the run spawns with.
+        resolve:
+          $ref: '#/components/schemas/LadoSnapshotStageAgentResponse'
+          description: What a resolve worker of the run spawns with.
+      required:
+      - integration
+      - resolve
       type: object
     LadoExecutionTaskResponse:
       properties:
@@ -24610,6 +24845,73 @@ components:
       - overlapIgnore
       - overlapIgnoreIsDefault
       type: object
+    LadoProjectStageAgentResponse:
+      properties:
+        effective:
+          $ref: '#/components/schemas/LadoStageResolvedResponse'
+          description: What the stage's workers run with now.
+        global:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: The global value; omitted without one.
+        globalApplies:
+          description: 'The global value is what the stage uses: it is set, names
+            the stage''s harness and no project value applies.'
+          type: boolean
+        globalWarning:
+          description: 'harness_mismatch: the global value names another harness,
+            so the stage skips it; model_unavailable: it applies but the project''s
+            cached catalog does not offer its model or effort, so a spawn may fail.
+            Omitted otherwise.'
+          enum:
+          - harness_mismatch
+          - model_unavailable
+          type: string
+        harness:
+          description: 'The harness the project''s stage runs: the orchestrator''s,
+            else the worker''s, for plan and critic; the worker''s for execution,
+            integration and resolve. Empty when the project names none.'
+          type: string
+        project:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: The project's value; omitted without one.
+        projectApplies:
+          description: The project's value is set and names the stage's harness.
+          type: boolean
+        projectReason:
+          description: Why a set project value does not apply; omitted when it applies
+            or is not set.
+          enum:
+          - harness_mismatch
+          type: string
+        stage:
+          enum:
+          - plan
+          - critic
+          - execution
+          - integration
+          - resolve
+          type: string
+      required:
+      - stage
+      - harness
+      - projectApplies
+      - globalApplies
+      - effective
+      type: object
+    LadoProjectStageAgentsResponse:
+      properties:
+        projectId:
+          type: string
+        stages:
+          description: 'Every stage in order: plan, critic, execution, integration,
+            resolve.'
+          items:
+            $ref: '#/components/schemas/LadoProjectStageAgentResponse'
+          type: array
+      required:
+      - projectId
+      - stages
+      type: object
     LadoProjectUsageResponse:
       properties:
         projectId:
@@ -25272,9 +25574,17 @@ components:
         contextWindow:
           format: int64
           type: integer
+        effort:
+          description: The effort the session resolved to when it started, as AO records
+            it; omitted for the provider's default or a deleted session.
+          type: string
         incomplete:
           description: AO knows it did not collect the session's usage in full.
           type: boolean
+        model:
+          description: The model the session resolved to when it started, as AO records
+            it; omitted for the agent's default or a deleted session.
+          type: string
         partId:
           description: The part of a part or merge worker.
           type: string
@@ -26617,6 +26927,98 @@ components:
       - source
       - installedSha256
       type: object
+    LadoSnapshotStageAgentResponse:
+      properties:
+        effort:
+          type: string
+        model:
+          type: string
+      required:
+      - model
+      - effort
+      type: object
+    LadoStageAgentResponse:
+      properties:
+        effort:
+          description: The effort; empty passes none, so AO picks one for the model
+            when the worker starts.
+          type: string
+        harness:
+          description: The harness the value is for; a stage that runs another harness
+            skips it.
+          enum:
+          - claude-code
+          - codex
+          type: string
+        model:
+          description: The model; required.
+          type: string
+      required:
+      - harness
+      - model
+      - effort
+      type: object
+    LadoStageAgentsByStage:
+      properties:
+        critic:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: The plan review worker.
+        execution:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: 'The execution worker: a single execution, a part or a part
+            merge.'
+        integration:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: The integration worker of a run in parts.
+        plan:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: The plan worker (the designer).
+        resolve:
+          $ref: '#/components/schemas/LadoStageAgentResponse'
+          description: The worker that resolves a base overlap or conflict.
+      type: object
+    LadoStageAgentsResponse:
+      properties:
+        stages:
+          $ref: '#/components/schemas/LadoStageAgentsByStage'
+          description: The global value of each stage; a missing stage follows the
+            default.
+      required:
+      - stages
+      type: object
+    LadoStageResolvedResponse:
+      properties:
+        effort:
+          description: The effort LADO passes; empty passes none, so AO picks one
+            for the model.
+          type: string
+        harness:
+          description: The harness the stage's workers run; empty when the project
+            names none.
+          type: string
+        model:
+          description: The model LADO passes; empty passes none, so AO picks.
+          type: string
+        source:
+          description: 'project or global: that scope''s setting; plan_stage or execution_stage:
+            inherited from that stage''s final value; task: the task''s own model;
+            orchestrator: the project orchestrator''s model and effort; worker: the
+            project worker''s model.'
+          enum:
+          - project
+          - global
+          - plan_stage
+          - execution_stage
+          - task
+          - orchestrator
+          - worker
+          type: string
+      required:
+      - harness
+      - model
+      - effort
+      - source
+      type: object
     LadoTaskExecutionResponse:
       properties:
         deadlineAt:
@@ -26649,11 +27051,21 @@ components:
           items:
             type: string
           type: array
+        sessionEffort:
+          description: The effort the worker session resolved to when it started,
+            as AO records it; omitted when it runs the provider's default or AO no
+            longer has the session.
+          type: string
         sessionEnded:
           description: The worker session ended. While it lives, the task cannot be
             approved again.
           type: boolean
         sessionId:
+          type: string
+        sessionModel:
+          description: The model the worker session resolved to when it started, as
+            AO records it; omitted when AO picked the agent's default or no longer
+            has the session.
           type: string
         startedAt:
           format: date-time
@@ -32416,6 +32828,14 @@ components:
       required:
       - baseVersion
       - content
+      type: object
+    UpdateLadoStageAgentsRequest:
+      properties:
+        stages:
+          $ref: '#/components/schemas/LadoStageAgentsByStage'
+          description: Every stage the scope sets; send {} to clear the scope.
+      required:
+      - stages
       type: object
     UpdateLadoTaskRequest:
       properties:

@@ -44,6 +44,7 @@ func (c *LadoController) getTaskUsage(w http.ResponseWriter, r *http.Request) {
 	for _, s := range usage.Sessions {
 		resp.Sessions = append(resp.Sessions, LadoSessionUsageResponse{
 			SessionID: string(s.SessionID), Role: string(s.Role), PartID: s.PartID, QueueEntryID: string(s.QueueEntryID), Attempt: s.Attempt,
+			Model: s.Model, Effort: s.Effort,
 			Totals:      ladoUsageTotalsResponse(s.Totals),
 			ContextUsed: s.ContextUsed, ContextWindow: s.ContextWindow, Compactions: s.Compactions,
 			UsageMissing: s.UsageMissing, Incomplete: s.Incomplete,

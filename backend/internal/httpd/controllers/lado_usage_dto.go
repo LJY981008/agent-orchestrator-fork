@@ -24,6 +24,8 @@ type LadoSessionUsageResponse struct {
 	PartID        string                  `json:"partId,omitempty" description:"The part of a part or merge worker."`
 	QueueEntryID  string                  `json:"queueEntryId,omitempty" description:"The queue entry of the execution the session ran; omitted for a plan session. Sessions of one execution, retries included, share it."`
 	Attempt       int                     `json:"attempt" description:"The session's attempt from 1; 0 when it cannot be read, as for a deleted session."`
+	Model         string                  `json:"model,omitempty" description:"The model the session resolved to when it started, as AO records it; omitted for the agent's default or a deleted session."`
+	Effort        string                  `json:"effort,omitempty" description:"The effort the session resolved to when it started, as AO records it; omitted for the provider's default or a deleted session."`
 	Totals        LadoUsageTotalsResponse `json:"totals"`
 	ContextUsed   int64                   `json:"contextUsed" description:"Tokens in the session's context now; 0 before the provider reports."`
 	ContextWindow int64                   `json:"contextWindow"`

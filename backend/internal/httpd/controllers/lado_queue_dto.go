@@ -108,6 +108,9 @@ type LadoTaskExecutionResponse struct {
 	// TrackedPRs and PRRepos are the run's PRs across repositories (#64).
 	TrackedPRs []LadoExecutionTrackedPRResponse `json:"trackedPrs,omitempty" description:"The PRs LADO tracks for the run, one per repository, in merge order; an execution LADO tracks no PR for yet lists its newest PR alone. Omitted while the run has no PR."`
 	PRRepos    []string                         `json:"prRepos,omitempty" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing."`
+	// SessionModel and SessionEffort are what the worker session runs (#103).
+	SessionModel  string `json:"sessionModel,omitempty" description:"The model the worker session resolved to when it started, as AO records it; omitted when AO picked the agent's default or no longer has the session."`
+	SessionEffort string `json:"sessionEffort,omitempty" description:"The effort the worker session resolved to when it started, as AO records it; omitted when it runs the provider's default or AO no longer has the session."`
 }
 
 // LadoSessionIDParam names an execution's session in
@@ -143,13 +146,16 @@ type LadoExecutionRuleResponse struct {
 // LadoExecutionSnapshotResponse is the rule snapshot an execution runs
 // under: what its approval fixed.
 type LadoExecutionSnapshotResponse struct {
-	SHA256            string                      `json:"sha256"`
-	Agent             string                      `json:"agent" description:"The agent harness the worker runs, such as claude-code."`
-	Model             string                      `json:"model,omitempty"`
-	PermissionMode    string                      `json:"permissionMode" enum:"accept-edits,auto,bypass-permissions" description:"The mode the worker started with."`
-	PermissionCeiling string                      `json:"permissionCeiling" enum:"accept-edits,auto,bypass-permissions" description:"The highest mode a turn of the worker may use."`
-	Rules             []LadoExecutionRuleResponse `json:"rules" description:"The rules that were on, by id."`
-	Prompt            string                      `json:"prompt" description:"The rules text in the worker's system prompt; empty when no rule adds any."`
+	SHA256 string `json:"sha256"`
+	Agent  string `json:"agent" description:"The agent harness the worker runs, such as claude-code."`
+	Model  string `json:"model,omitempty"`
+	Effort string `json:"effort,omitempty" description:"The effort the approval fixed for the run's execution workers (a single execution, a part or a part merge); omitted when it passes none, so AO picks, as in every snapshot before lado-policy/4."`
+	// Stages are the models of the workers after the execution (#103).
+	Stages            LadoExecutionSnapshotStagesResponse `json:"stages" description:"What the run's integration and resolve workers spawn with under the approval; a snapshot before lado-policy/4 gives the execution's model."`
+	PermissionMode    string                              `json:"permissionMode" enum:"accept-edits,auto,bypass-permissions" description:"The mode the worker started with."`
+	PermissionCeiling string                              `json:"permissionCeiling" enum:"accept-edits,auto,bypass-permissions" description:"The highest mode a turn of the worker may use."`
+	Rules             []LadoExecutionRuleResponse         `json:"rules" description:"The rules that were on, by id."`
+	Prompt            string                              `json:"prompt" description:"The rules text in the worker's system prompt; empty when no rule adds any."`
 	// Setup are the local setup items the worker's session gets.
 	Setup []LadoExecutionSetupItemResponse `json:"setup" description:"The local setup items that were on, the versions the worker's session gets."`
 }
@@ -190,6 +196,9 @@ type LadoExecutionResponse struct {
 	UntrackedPRs []LadoExecutionPRResponse        `json:"untrackedPrs,omitempty" description:"The worker session's other open PRs, newest first, which LADO does not track or verify; omitted while it has none."`
 	PRRepos      []string                         `json:"prRepos,omitempty" description:"The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order."`
 	PRReposFirm  bool                             `json:"prReposFirm,omitempty" description:"Omitted when false. prRepos are the repositories the run's parts changed (an integration run), so each needs a PR; otherwise they are what the plan declared, and one without a PR stops being waited for once the worker reported done or its session ended."`
+	// SessionModel and SessionEffort are what the worker session runs (#103).
+	SessionModel  string `json:"sessionModel,omitempty" description:"The model the worker session resolved to when it started, as AO records it; omitted when AO picked the agent's default or no longer has the session."`
+	SessionEffort string `json:"sessionEffort,omitempty" description:"The effort the worker session resolved to when it started, as AO records it; omitted when it runs the provider's default (AO drops an effort the model does not offer) or AO no longer has the session."`
 }
 
 // LadoExecutionResolveResponse is where resolving an execution's PR stands:

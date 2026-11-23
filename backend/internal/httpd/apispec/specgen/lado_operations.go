@@ -284,6 +284,18 @@ var ladoSchemaNames = map[string]string{ //nolint:gosec // G101: schema names, n
 	"ControllersLadoDBChangeExecutionResponse":     "LadoDBChangeExecutionResponse",
 	"ControllersLadoDBChangeFileContentResponse":   "LadoDBChangeFileContentResponse",
 	"ControllersApplyLadoDBChangesRequest":         "ApplyLadoDBChangesRequest",
+
+	// The model and effort of each stage's workers (issue #103).
+	"ControllersLadoStageAgentResponse":              "LadoStageAgentResponse",
+	"ControllersLadoStageAgentsByStage":              "LadoStageAgentsByStage",
+	"ControllersLadoStageAgentsResponse":             "LadoStageAgentsResponse",
+	"ControllersUpdateLadoStageAgentsRequest":        "UpdateLadoStageAgentsRequest",
+	"ControllersLadoStageResolvedResponse":           "LadoStageResolvedResponse",
+	"ControllersLadoProjectStageAgentResponse":       "LadoProjectStageAgentResponse",
+	"ControllersLadoProjectStageAgentsResponse":      "LadoProjectStageAgentsResponse",
+	"ControllersLadoEffectiveStagesResponse":         "LadoEffectiveStagesResponse",
+	"ControllersLadoSnapshotStageAgentResponse":      "LadoSnapshotStageAgentResponse",
+	"ControllersLadoExecutionSnapshotStagesResponse": "LadoExecutionSnapshotStagesResponse",
 }
 
 func ladoOperations() []operation {
@@ -664,7 +676,7 @@ func ladoOperations() []operation {
 			reqBody:    controllers.WriteLadoKnowledgeNoteRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoKnowledgeNoteResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusConflict),
 		},
-	}, slices.Concat(ladoSetupOperations(), ladoLogWatchOperations(), ladoAccountLimitOperations(), ladoDBChangeOperations())...)
+	}, slices.Concat(ladoSetupOperations(), ladoLogWatchOperations(), ladoAccountLimitOperations(), ladoDBChangeOperations(), ladoStageAgentOperations())...)
 }
 
 // ladoSetupOperations are the local setup routes (step 7 plan §13). Routes
@@ -894,6 +906,37 @@ func ladoDBChangeOperations() []operation {
 			pathParams: []any{controllers.LadoSessionIDParam{}, controllers.LadoPresenceHeaderParam{}},
 			reqBody:    controllers.ApplyLadoDBChangesRequest{},
 			resps:      ladoResps(http.StatusOK, controllers.LadoDBChangeRunResponse{}, http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict),
+		},
+	}
+}
+
+// ladoStageAgentOperations are the routes of the model and effort each
+// stage's workers run with (issue #103). A PUT replaces its scope as a whole.
+func ladoStageAgentOperations() []operation {
+	return []operation{
+		{
+			method: http.MethodGet, path: "/api/v1/lado/stage-agents", id: "getLadoStageAgents", tag: "lado",
+			summary: "Get the global model and effort of each LADO stage's workers (plan, critic, execution, integration, resolve); a stage without one follows the default",
+			resps:   ladoResps(http.StatusOK, controllers.LadoStageAgentsResponse{}),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/stage-agents", id: "updateLadoStageAgents", tag: "lado",
+			summary: "Replace the global stage models, each checked against its harness's machine-scope model catalog; a stage left out follows the default. Changing an execution, integration or resolve value sends every project's approved waiting task back for approval",
+			reqBody: controllers.UpdateLadoStageAgentsRequest{},
+			resps:   ladoResps(http.StatusOK, controllers.LadoStageAgentsResponse{}, http.StatusBadRequest, http.StatusServiceUnavailable),
+		},
+		{
+			method: http.MethodGet, path: "/api/v1/lado/projects/{projectId}/stage-agents", id: "getLadoProjectStageAgents", tag: "lado",
+			summary:    "Get each LADO stage of a project: its harness, the project's and the global value, which applies, and what its workers run with and where it comes from",
+			pathParams: []any{controllers.LadoProjectIDParam{}},
+			resps:      ladoResps(http.StatusOK, controllers.LadoProjectStageAgentsResponse{}, http.StatusNotFound),
+		},
+		{
+			method: http.MethodPut, path: "/api/v1/lado/projects/{projectId}/stage-agents", id: "updateLadoProjectStageAgents", tag: "lado",
+			summary:    "Replace a project's stage models, each on the harness the project's stage runs and checked against the project's model catalog; a stage left out follows the global value or the default. Changing an execution, integration or resolve value sends the project's approved waiting tasks back for approval",
+			pathParams: []any{controllers.LadoProjectIDParam{}},
+			reqBody:    controllers.UpdateLadoStageAgentsRequest{},
+			resps:      ladoResps(http.StatusOK, controllers.LadoProjectStageAgentsResponse{}, http.StatusBadRequest, http.StatusNotFound, http.StatusServiceUnavailable),
 		},
 	}
 }
