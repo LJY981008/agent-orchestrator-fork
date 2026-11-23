@@ -349,6 +349,78 @@ func TestSetKeepsAndAudits(t *testing.T) {
 	}
 }
 
+// A save checks only the values it adds or changes. A kept value that no
+// longer names its stage's harness (the project moved its orchestrator or
+// worker to another harness), or whose model the catalog dropped, does not
+// lock the scope: the developer can still change the other stages or clear
+// it, and only a new or changed value is refused.
+func TestSetChecksOnlyChangedValues(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	keep := func(scope domain.ProjectID, agents domain.LadoStageAgents) {
+		t.Helper()
+		if err := f.store.Store.SetLadoStageAgents(ctx, scope, agents, domain.LadoAuditEvent{
+			At: now, Actor: "test", Action: "test.seed", SubjectKind: "stage_agents", SubjectID: string(scope), Payload: json.RawMessage(`{}`),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Project "claude" runs every stage on Claude Code; two kept values name
+	// Codex, as after its agents moved from Codex.
+	stale := domain.LadoStageAgents{
+		domain.LadoStagePlan:      {Harness: domain.HarnessCodex, Model: "gpt-5.1-codex"},
+		domain.LadoStageExecution: {Harness: domain.HarnessCodex, Model: "gpt-5.1-codex"},
+	}
+	keep("claude", stale)
+	withCritic := maps.Clone(stale)
+	withCritic[domain.LadoStageCritic] = domain.LadoStageAgent{Harness: domain.HarnessClaudeCode, Model: "claude-opus-5-5"}
+	if _, err := f.svc.SetProject(ctx, "claude", withCritic); err != nil {
+		t.Fatalf("adding a stage beside kept mismatched values: %v", err)
+	}
+	if got := f.stored(t, "claude"); !maps.Equal(got, withCritic) {
+		t.Fatalf("project = %v, want %v", got, withCritic)
+	}
+	onlyPlan := domain.LadoStageAgents{domain.LadoStagePlan: stale[domain.LadoStagePlan]}
+	if _, err := f.svc.SetProject(ctx, "claude", onlyPlan); err != nil {
+		t.Fatalf("clearing stages beside a kept mismatched value: %v", err)
+	}
+	changedPlan := domain.LadoStageAgents{domain.LadoStagePlan: {Harness: domain.HarnessCodex, Model: "gpt-5.1-codex-mini"}}
+	if _, err := f.svc.SetProject(ctx, "claude", changedPlan); code(t, err) != ladostage.CodeHarnessMismatch {
+		t.Fatalf("changing a mismatched value: err = %v, want %s", err, ladostage.CodeHarnessMismatch)
+	}
+	if got := f.stored(t, "claude"); !maps.Equal(got, onlyPlan) {
+		t.Fatalf("a refused save changed the project: %v, want %v", got, onlyPlan)
+	}
+	if _, err := f.svc.SetProject(ctx, "claude", nil); err != nil {
+		t.Fatalf("clearing: %v", err)
+	}
+	if got := f.stored(t, "claude"); len(got) != 0 {
+		t.Fatalf("cleared project = %v", got)
+	}
+
+	// A kept global value whose model the catalog no longer lists is not
+	// read again; a new unlisted one is refused.
+	gone := domain.LadoStageAgents{domain.LadoStagePlan: {Harness: domain.HarnessClaudeCode, Model: "claude-gone", Effort: "high"}}
+	keep(domain.LadoStageGlobalScope, gone)
+	withExecution := maps.Clone(gone)
+	withExecution[domain.LadoStageExecution] = domain.LadoStageAgent{Harness: domain.HarnessCodex, Model: "gpt-5.1-codex"}
+	f.catalog.calls = nil
+	if _, err := f.svc.SetGlobal(ctx, withExecution); err != nil {
+		t.Fatalf("adding a stage beside a kept value the catalog dropped: %v", err)
+	}
+	if len(f.catalog.calls) != 0 {
+		t.Fatalf("catalog reads = %v, want none", f.catalog.calls)
+	}
+	newGone := domain.LadoStageAgents{domain.LadoStageCritic: {Harness: domain.HarnessClaudeCode, Model: "claude-gone"}}
+	if _, err := f.svc.SetGlobal(ctx, newGone); code(t, err) != ladostage.CodeModelUnsupported {
+		t.Fatalf("a new unlisted model: err = %v, want %s", err, ladostage.CodeModelUnsupported)
+	}
+	if got := f.stored(t, domain.LadoStageGlobalScope); !maps.Equal(got, withExecution) {
+		t.Fatalf("a refused save changed the global scope: %v", got)
+	}
+}
+
 // The project view shows both scopes, which applies, the warnings, and the
 // final value with its source.
 func TestProjectView(t *testing.T) {

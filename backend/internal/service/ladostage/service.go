@@ -133,14 +133,20 @@ func (s *Service) Global(ctx context.Context) (domain.LadoStageAgents, error) {
 
 // SetGlobal replaces the global defaults with agents, checked against the
 // machine-scope catalogs, and returns them as kept. A stage agents leaves out
-// follows the default afterwards. A refused value keeps nothing; sending the
+// follows the default afterwards. Only a new or changed value is checked
+// against a catalog, so a kept value whose model a catalog no longer lists
+// does not refuse the rest. A refused value keeps nothing; sending the
 // current values writes nothing.
 func (s *Service) SetGlobal(ctx context.Context, agents domain.LadoStageAgents) (domain.LadoStageAgents, error) {
 	agents = clean(agents)
 	if err := checkShape(agents); err != nil {
 		return nil, err
 	}
-	if err := s.checkCatalog(ctx, domain.LadoStageGlobalScope, agents); err != nil {
+	current, err := s.read(ctx, domain.LadoStageGlobalScope)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.checkCatalog(ctx, domain.LadoStageGlobalScope, changed(current, agents)); err != nil {
 		return nil, err
 	}
 	if err := s.write(ctx, domain.LadoStageGlobalScope, agents); err != nil {
@@ -160,8 +166,12 @@ func (s *Service) Project(ctx context.Context, projectID domain.ProjectID) (Proj
 
 // SetProject replaces the project's override with agents, checked against
 // the project-scope catalogs and the harness each of the project's stages
-// runs, and returns the project's view. A refused value keeps nothing;
-// sending the current values writes nothing.
+// runs, and returns the project's view. Only a new or changed value is
+// checked: a kept value that no longer names its stage's harness (the
+// project's orchestrator or worker moved to another harness) stays as sent,
+// so the developer can still change or clear the other stages; the view
+// marks it harness_mismatch and the stage skips it. A refused value keeps
+// nothing; sending the current values writes nothing.
 func (s *Service) SetProject(ctx context.Context, projectID domain.ProjectID, agents domain.LadoStageAgents) (ProjectView, error) {
 	if projectID == domain.LadoStageGlobalScope {
 		return ProjectView{}, apierr.NotFound("PROJECT_NOT_FOUND", "Unknown project")
@@ -174,16 +184,21 @@ func (s *Service) SetProject(ctx context.Context, projectID domain.ProjectID, ag
 	if err := checkShape(agents); err != nil {
 		return ProjectView{}, err
 	}
+	current, err := s.read(ctx, projectID)
+	if err != nil {
+		return ProjectView{}, err
+	}
+	fresh := changed(current, agents)
 	harnesses := stageHarnesses(project.Config)
 	for _, stage := range domain.LadoStages {
-		agent, ok := agents[stage]
+		agent, ok := fresh[stage]
 		if ok && agent.Harness != harnesses[stage] {
 			return ProjectView{}, stageError(apierr.KindInvalid, CodeHarnessMismatch, stage,
 				fmt.Sprintf("The %s stage of this project runs %s, not %s.", stage, cmp.Or(string(harnesses[stage]), "no agent"), agent.Harness),
 				map[string]any{"harness": string(agent.Harness), "stageHarness": string(harnesses[stage])})
 		}
 	}
-	if err := s.checkCatalog(ctx, projectID, agents); err != nil {
+	if err := s.checkCatalog(ctx, projectID, fresh); err != nil {
 		return ProjectView{}, err
 	}
 	if err := s.write(ctx, projectID, agents); err != nil {
@@ -199,6 +214,18 @@ func clean(agents domain.LadoStageAgents) domain.LadoStageAgents {
 		return domain.LadoStageAgents{}
 	}
 	return agents
+}
+
+// changed is the values of agents that current does not hold as they are:
+// the stages a save adds or changes, which are the ones it checks.
+func changed(current, agents domain.LadoStageAgents) domain.LadoStageAgents {
+	out := domain.LadoStageAgents{}
+	for stage, agent := range agents {
+		if old, ok := current[stage]; !ok || old != agent {
+			out[stage] = agent
+		}
+	}
+	return out
 }
 
 // checkShape runs domain.ValidateLadoStageAgents and reports its error under
