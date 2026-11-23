@@ -119,6 +119,7 @@ function executionFacts(fields: Partial<lado.LadoExecution>): lado.LadoExecution
 			rules: [],
 			prompt: "",
 			setup: [],
+			stages: { integration: { model: "", effort: "" }, resolve: { model: "", effort: "" } },
 		},
 		base: { planSha: "c".repeat(40), commitsAhead: 0 },
 		startedAt: "2026-10-27T08:00:00Z",

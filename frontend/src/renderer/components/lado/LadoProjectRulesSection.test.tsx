@@ -124,7 +124,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 	return {
 		projectId: "demo",
 		taskId: "",
-		agent: { harness: "", model: "", source: "" },
+		agent: { harness: "", model: "", effort: "", source: "", stages: { integration: { harness: "", model: "", effort: "", source: "execution_stage" }, resolve: { harness: "", model: "", effort: "", source: "execution_stage" } } },
 		permissionCeiling: "auto",
 		permissionMode: "auto",
 		rules: [planApproval, ceiling, korean, review],

@@ -118,6 +118,15 @@ import {
 	type LadoDBChangePhase,
 	type LadoDBChangeSettingsInput,
 } from "../lib/lado-db-changes";
+import {
+	fetchLadoProjectStageAgents,
+	fetchLadoStageAgents,
+	ladoStageAgentsQueryKey,
+	ladoStageAgentsQueryRoot,
+	updateLadoProjectStageAgents,
+	updateLadoStageAgents,
+	type LadoStageAgentsByStage,
+} from "../lib/lado-stage-agents";
 import { sessionScmSummaryQueryKey } from "./useSessionScmSummary";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 
@@ -739,6 +748,53 @@ export function useUpdateLadoWatchSettings(projectId?: string) {
 			if (!projectId) void queryClient.invalidateQueries({ queryKey: ladoWatchSettingsQueryRoot });
 			queryClient.setQueryData(ladoWatchSettingsQueryKey(projectId), settings);
 			void queryClient.invalidateQueries({ queryKey: ladoEffectiveQueryRoot });
+		},
+		retry: false,
+	});
+}
+
+/** The global value of each LADO stage's workers (issue #103). */
+export function useLadoStageAgents(enabled = true) {
+	return useQuery({
+		queryKey: ladoStageAgentsQueryKey(),
+		queryFn: fetchLadoStageAgents,
+		enabled,
+		retry: false,
+	});
+}
+
+/** Each stage of a project: its value, the global one and what its workers run with now. */
+export function useLadoProjectStageAgents(projectId: string, enabled = true) {
+	return useQuery({
+		queryKey: ladoStageAgentsQueryKey(projectId),
+		queryFn: () => fetchLadoProjectStageAgents(projectId),
+		enabled: enabled && Boolean(projectId),
+		retry: false,
+	});
+}
+
+/**
+ * Replaces a scope's stage values: the global ones without a project. A
+ * global change moves what every project inherits. An execution, integration
+ * or resolve value is part of what an approval fixes, so the effective views
+ * and the tasks, whose approvals can need review again, read again.
+ */
+export function useUpdateLadoStageAgents(projectId?: string) {
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async (stages: LadoStageAgentsByStage) => {
+			if (projectId) return updateLadoProjectStageAgents(projectId, stages);
+			return updateLadoStageAgents(stages);
+		},
+		onSuccess: (view) => {
+			// The global view is the answer itself; each project's view reads it again.
+			if (!projectId) {
+				void queryClient.invalidateQueries({ queryKey: ladoStageAgentsQueryRoot, predicate: (query) => query.queryKey[2] !== "" });
+			}
+			queryClient.setQueryData(ladoStageAgentsQueryKey(projectId), view);
+			for (const queryKey of [ladoEffectiveQueryRoot, ladoTasksQueryRoot, ladoTaskViewQueryRoot]) {
+				void queryClient.invalidateQueries({ queryKey });
+			}
 		},
 		retry: false,
 	});

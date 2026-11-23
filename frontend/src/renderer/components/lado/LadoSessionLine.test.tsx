@@ -117,6 +117,15 @@ test("leaves out what the task list omits", async () => {
 	expect(line).toHaveTextContent(/^LADO$/);
 });
 
+test("names the model and effort the run's session resolved to (issue #103)", async () => {
+	vi.mocked(lado.fetchLadoTasks).mockResolvedValue([{ ...task, execution: { ...execution, sessionModel: "claude-opus-5-5", sessionEffort: "high" } }]);
+	renderWith(<LadoSessionLine session={session("demo-7")} />);
+
+	const line = await screen.findByTestId("lado-session-line");
+	expect(line).toHaveTextContent("LADO · plan r3 · rules 1a2b3c4 · claude-opus-5-5 · High");
+	expect(within(line).getByTestId("lado-session-line-model")).toHaveClass("font-mono");
+});
+
 test("a project out of LADO mode shows no line and reads no tasks", async () => {
 	vi.mocked(lado.fetchLadoProjectSettings).mockResolvedValue({ projectId: "demo", ladoMode: false, maxConcurrent: 1, checkCommands: [], checkCommandsSha256: "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945", checkTimeoutMinutes: 30, overlapWait: true, overlapIgnore: [], overlapIgnoreIsDefault: true });
 	const { container } = renderWith(<LadoSessionLine session={session("demo-7")} />);

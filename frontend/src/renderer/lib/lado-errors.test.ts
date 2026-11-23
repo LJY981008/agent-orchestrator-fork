@@ -964,4 +964,36 @@ describe("LADO account limit errors", () => {
 		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_ACCOUNT_LIMIT_NOT_FOUND"))).toBe("LADO 에 이 계정의 사용 한도 기록이 없습니다.");
 		expect(ladoErrorText(ko, new LadoApiError(daemon, "LADO_ACCOUNT_LIMIT_NOT_ACTIVE"))).toBe("이 계정의 사용 한도는 이미 풀렸거나 리셋 시각이 지났습니다.");
 	});
+
+	it("words every stage model refusal in each language with the stage, model and effort it names (issue #103)", () => {
+		const daemon = "The daemon's English text";
+		const details = { stage: "integration", model: "gpt-6", effort: "max", harness: "claude-code", stageHarness: "codex" };
+		for (const locale of APP_LOCALES) {
+			const t = createFullAppI18n(locale).t;
+			for (const code of [
+				"LADO_STAGE_INVALID",
+				"LADO_STAGE_EFFORT_WITHOUT_MODEL",
+				"LADO_STAGE_HARNESS_UNSUPPORTED",
+				"LADO_STAGE_HARNESS_MISMATCH",
+				"LADO_STAGE_MODEL_UNSUPPORTED",
+				"LADO_STAGE_MODEL_UNVERIFIED",
+				"LADO_STAGE_EFFORT_UNSUPPORTED",
+			]) {
+				const text = ladoErrorText(t, new LadoApiError(daemon, code, details));
+				expect(text, `${locale} ${code}`).not.toBe(daemon);
+				expect(text, `${locale} ${code}`).not.toMatch(/^lado\.|{{|}}/);
+			}
+		}
+		const en = createFullAppI18n("en").t;
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_STAGE_HARNESS_MISMATCH", details))).toBe(
+			"This project's Integration worker runs Codex, not Claude Code.",
+		);
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_STAGE_EFFORT_UNSUPPORTED", details))).toBe(
+			"gpt-6 does not offer the effort max for the Integration worker.",
+		);
+		// A stage the project gives no agent says so.
+		expect(ladoErrorText(en, new LadoApiError(daemon, "LADO_STAGE_HARNESS_MISMATCH", { ...details, stageHarness: "" }))).toBe(
+			"This project's Integration worker runs no agent, not Claude Code.",
+		);
+	});
 });

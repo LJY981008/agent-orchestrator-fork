@@ -73,7 +73,14 @@ function usage(change: Partial<lado.LadoTaskUsageSummary> = {}, sessions?: lado.
 			...change,
 		},
 		sessions: sessions ?? [
-			session({ sessionId: "demo-5", role: "designer", attempt: 1, totals: totals({ costNanos: 2 * DOLLAR, inputTokens: 90_000, outputTokens: 10_000 }) }),
+			session({
+				sessionId: "demo-5",
+				role: "designer",
+				attempt: 1,
+				model: "claude-fable-5-2",
+				effort: "high",
+				totals: totals({ costNanos: 2 * DOLLAR, inputTokens: 90_000, outputTokens: 10_000 }),
+			}),
 			session({ sessionId: "demo-6", role: "designer", attempt: 0, usageMissing: true }),
 			session({
 				sessionId: "demo-8",
@@ -81,6 +88,7 @@ function usage(change: Partial<lado.LadoTaskUsageSummary> = {}, sessions?: lado.
 				partId: "store",
 				attempt: 2,
 				compactions: 3,
+				model: "claude-opus-5-5",
 				contextUsed: 150_000,
 				contextWindow: 1_000_000,
 				totals: totals({ costNanos: 40.5 * DOLLAR, inputTokens: 2_910_000, outputTokens: 190_000, subagentCostNanos: 21.25 * DOLLAR }),
@@ -153,6 +161,10 @@ describe("LadoTaskUsage", () => {
 		expect(rows[0]).toHaveTextContent("Plan designer");
 		expect(rows[0]).toHaveTextContent("$2.00");
 		expect(within(rows[1]).getByTestId("lado-session-usage-missing")).toHaveTextContent("No record");
+		// The model and effort each session ran with (issue #103); a deleted session no longer says.
+		expect(within(rows[0]).getByTestId("lado-session-usage-model")).toHaveTextContent("claude-fable-5-2 · High");
+		expect(within(rows[1]).queryByTestId("lado-session-usage-model")).not.toBeInTheDocument();
+		expect(within(rows[2]).getByTestId("lado-session-usage-model")).toHaveTextContent("claude-opus-5-5 · AO default");
 		expect(rows[2]).toHaveTextContent("Part worker");
 		expect(rows[2]).toHaveTextContent("store");
 		expect(rows[2]).toHaveTextContent("$40.50");

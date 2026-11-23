@@ -1,6 +1,8 @@
 // LADO fork: a LADO run's active snapshot in its session's inspector
 // (docs/LJY-PRD/HARNESS.md §12, PRD HAR-005). It shows what the approval
-// fixed, never the rules now: the agent and the mode it started in, the
+// fixed, never the rules now: the agent, the model and effort of its
+// execution, integration and resolve workers and what this session resolved
+// to (issue #103), and the mode it started in, the
 // permission ceiling, the rules that were on and the text the worker got, the
 // local setup items its session got, the plan revision, how far the base
 // moved, when LADO stops the run, and the resolve worker LADO started for
@@ -20,6 +22,7 @@ import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { cn } from "../../lib/utils";
 import type { WorkspaceSession } from "../../types/workspace";
 import { formatResetTime } from "../settings/CodexAccountDetails";
+import { ladoModelEffortText, ladoStageLabel } from "./lado-stage-agents";
 import { ladoCeilingModeLabel } from "./LadoRuleRows";
 import { ladoSessionProjectId } from "./LadoSessionLine";
 import { LadoVerificationSection } from "./LadoVerificationSection";
@@ -74,14 +77,32 @@ function ExecutionSnapshot({ execution, projectId }: { execution: LadoExecution;
 			<div className="flex flex-col gap-2.5" data-testid="lado-execution-panel">
 				<dl className="grid grid-cols-[auto_minmax(0,1fr)] items-baseline gap-x-4 gap-y-1.5 text-sm">
 					<Fact label={t("lado.run.agent")}>
-						{agentLabel(snapshot.agent)}
-						{snapshot.model ? (
-							<>
-								{" "}
-								<span className="font-mono text-xs text-muted-foreground">{snapshot.model}</span>
-							</>
-						) : null}
+						{agentLabel(snapshot.agent)}{" "}
+						<span className="font-mono text-xs text-muted-foreground" data-testid="lado-run-model">
+							{ladoModelEffortText(t, snapshot.model, snapshot.effort)}
+						</span>
 					</Fact>
+					{/* What the approval fixed for the run's later workers; an older snapshot gives the execution's model. */}
+					<Fact label={t("lado.run.stageModels")}>
+						<span className="flex flex-col gap-0.5 font-mono text-xs text-muted-foreground">
+							{(["integration", "resolve"] as const).map((stage) => (
+								<span key={stage} data-testid={`lado-run-stage-${stage}`}>
+									{t("lado.run.stageModel", {
+										stage: ladoStageLabel(t, stage),
+										value: ladoModelEffortText(t, snapshot.stages[stage].model, snapshot.stages[stage].effort),
+									})}
+								</span>
+							))}
+						</span>
+					</Fact>
+					{/* What AO resolved when this session started, which can drop an effort the model does not offer. */}
+					{execution.sessionModel || execution.sessionEffort ? (
+						<Fact label={t("lado.run.sessionModel")}>
+							<span className="font-mono text-xs text-muted-foreground" data-testid="lado-run-session-model">
+								{ladoModelEffortText(t, execution.sessionModel, execution.sessionEffort)}
+							</span>
+						</Fact>
+					) : null}
 					<Fact label={t("lado.run.mode")}>{ladoCeilingModeLabel(t, snapshot.permissionMode)}</Fact>
 					<Fact label={t("lado.view.permission")}>{ladoCeilingModeLabel(t, snapshot.permissionCeiling)}</Fact>
 					<Fact label={t("lado.view.plan")}>
