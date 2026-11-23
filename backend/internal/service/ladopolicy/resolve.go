@@ -11,24 +11,48 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-// Where an agent choice comes from.
+// Where an agent choice's model comes from. The values are the domain's
+// stage sources (domain.LadoStageSource), so the app names them one way.
 const (
-	AgentFromTask    = "task"
-	AgentFromProject = "project"
+	// AgentFromTask is the task's own agent, with its own model when it
+	// named one.
+	AgentFromTask = string(domain.LadoStageFromTask)
+	// AgentFromProject is the project's execution stage setting.
+	AgentFromProject = string(domain.LadoStageFromProject)
+	// AgentFromGlobal is the global execution stage setting.
+	AgentFromGlobal = string(domain.LadoStageFromGlobal)
+	// AgentFromWorker is the project's worker agent with the model AO gives
+	// it, as executions ran before the stage settings existed.
+	AgentFromWorker = string(domain.LadoStageFromWorker)
 )
 
-// AgentChoice is the agent that runs a task.
+// AgentChoice is the agent that runs a task: the execution stage's harness,
+// model and effort, and the final values of the stages after it. It is
+// comparable.
 type AgentChoice struct {
 	Harness domain.AgentHarness
 	Model   string
-	// Source is AgentFromTask, AgentFromProject, or empty when nobody chose
-	// an agent.
+	// Effort is the effort an execution passes; empty passes none, so AO
+	// picks it at spawn.
+	Effort string
+	// Source is AgentFromTask, AgentFromProject, AgentFromGlobal,
+	// AgentFromWorker, or empty when nobody chose an agent.
 	Source string
+	// Stages are the integration and resolve workers' final values, the
+	// zero value before WithStages.
+	Stages AgentStages
+}
+
+// AgentStages are the final values of the stages that follow an execution.
+// It is comparable.
+type AgentStages struct {
+	Integration, Resolve domain.LadoStageResolved
 }
 
 // ChooseAgent returns the agent that runs the task: the task's own choice,
 // else the project's worker agent with the model AO gives that worker at
-// spawn (the worker's model, else the project's).
+// spawn (the worker's model, else the project's). It reads no stage
+// setting; WithStages applies them.
 func ChooseAgent(task domain.LadoTask, project domain.ProjectRecord) AgentChoice {
 	if agent := strings.TrimSpace(task.Agent); agent != "" {
 		return AgentChoice{Harness: domain.AgentHarness(agent), Model: strings.TrimSpace(task.Model), Source: AgentFromTask}
@@ -41,7 +65,35 @@ func ChooseAgent(task domain.LadoTask, project domain.ProjectRecord) AgentChoice
 	if model == "" {
 		model = cfg.AgentConfig.Model
 	}
-	return AgentChoice{Harness: cfg.Worker.Harness, Model: model, Source: AgentFromProject}
+	return AgentChoice{Harness: cfg.Worker.Harness, Model: model, Source: AgentFromWorker}
+}
+
+// WithStages applies the project's and the global stage settings to a's
+// execution (domain.ResolveLadoStageAgents): the task's own model comes
+// first, then the execution setting for a's harness, then a's model with
+// its effort; integration and resolve take their own setting, else the
+// execution's final value. A task that chose its agent but no model takes a
+// setting, and keeps AgentFromTask without one. Without a harness nothing
+// applies.
+func (a AgentChoice) WithStages(project, global domain.LadoStageAgents) AgentChoice {
+	if a.Harness == "" {
+		return a
+	}
+	fromTask := a.Source == AgentFromTask
+	r := domain.ResolveLadoStageAgents(domain.LadoStageInput{
+		Project:          project,
+		Global:           global,
+		ExecutionHarness: a.Harness,
+		ExecutionModel:   a.Model,
+		ExecutionEffort:  a.Effort,
+		TaskModel:        fromTask && a.Model != "",
+	})
+	a.Model, a.Effort, a.Source = r.Execution.Model, r.Execution.Effort, string(r.Execution.Source)
+	if fromTask && r.Execution.Source == domain.LadoStageFromWorker {
+		a.Source = AgentFromTask
+	}
+	a.Stages = AgentStages{Integration: r.Integration, Resolve: r.Resolve}
+	return a
 }
 
 // Input is what Resolve reads. TaskID is empty when resolving for the

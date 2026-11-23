@@ -166,8 +166,15 @@ func (f *fakeSender) messages() []string {
 // agent exited, a resolve worker starts on a branch made at the PR's head,
 // is linked as a merge execution of the entry and is told to push to the
 // PR's source branch. The exited session is left as it is.
+//
+// The resolve worker spawns with the resolve stage's model from the approved
+// snapshot, though the settings changed since the run started.
 func TestAResolveWorkerTakesTheConflictOfAnExitedRun(t *testing.T) {
 	rf := newResolveFixture(t)
+	rf.tasks.input.Snapshot = stagedSnapshot()
+	rf.policy.mu.Lock()
+	rf.policy.sha = strings.Repeat("0", 64)
+	rf.policy.mu.Unlock()
 	rf.tick(t, t0.Add(2*time.Minute))
 	if got := rf.resolveSpawns(); len(got) != 0 {
 		t.Fatalf("resolve workers while the run works = %d, want none", len(got))
@@ -182,8 +189,14 @@ func TestAResolveWorkerTakesTheConflictOfAnExitedRun(t *testing.T) {
 	cfg := spawns[0]
 	branch := domain.LadoResolveBranch("task-1", storeEntry, 1)
 	if cfg.ClientRequestID != "lado:lado-queue-1/_resolve/1" || cfg.Branch != branch || cfg.ProjectID != "proj-1" || cfg.Kind != domain.KindWorker ||
-		cfg.ClientRequestHash != domain.LadoDispatchHash(rf.tasks.input.Revision.SHA256, rf.tasks.input.Snapshot.SHA256) {
-		t.Fatalf("resolve spawn = %+v", cfg)
+		cfg.ClientRequestHash != domain.LadoDispatchHash(rf.tasks.input.Revision.SHA256, rf.tasks.input.Snapshot.SHA256) ||
+		cfg.AgentConfig != stagedResolve {
+		t.Fatalf("resolve spawn = %+v, want the approved resolve agent %+v", cfg, stagedResolve)
+	}
+	if payloads := storeAudits(t, rf.storeFixture, "resolve.dispatched"); len(payloads) != 1 {
+		t.Fatalf("%d resolve.dispatched events, want one", len(payloads))
+	} else if err := stagePayloadOK(payloads[0], domain.LadoStageResolve, stagedResolve); err != nil {
+		t.Fatal(err)
 	}
 	for _, want := range []string{"git push origin HEAD:" + prSource, "git merge --no-ff origin/main", rf.base, "ao report --done", "Never force-push"} {
 		if !strings.Contains(cfg.Prompt, want) {
