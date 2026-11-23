@@ -18,6 +18,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoqueue"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladorelay"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladosetup"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladostage"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladotask"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/ladoverify"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -217,4 +218,13 @@ func (c ladoCloner) Clone(ctx context.Context, in ladoconnect.CloneRequest) (dom
 		return "", err
 	}
 	return project.ID, nil
+}
+
+// wireLadoStageAgents builds the service of the model and effort each LADO
+// stage's workers run with (issue #103). It checks a value against the
+// agent service's model catalogs, as a chat spawn does. The plan worker
+// (ladotask) and the policy (ladopolicy) read the same rows from the store
+// themselves, at every spawn and resolution.
+func wireLadoStageAgents(store *sqlite.Store, catalog ladostage.Catalog) *ladostage.Service {
+	return ladostage.New(ladostage.Deps{Store: store, Projects: store, Catalog: catalog})
 }
