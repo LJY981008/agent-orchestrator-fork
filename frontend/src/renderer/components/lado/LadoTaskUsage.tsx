@@ -1,7 +1,8 @@
 // LADO fork: the task view's Usage tab (issue #42): what the task's sessions
 // spend now. The totals (estimated cost at API prices, tokens, the subagents'
 // share, the elapsed time), the task's alerts, and each plan and execution
-// session's cost, tokens, context and compactions. The Timings tab measures
+// session's cost, tokens, context and compactions, and the model and effort
+// it ran with (issue #103). The Timings tab measures
 // where the time went; this tab watches the spending, so it reads again every
 // minute while it is open and on the task's watch and alert events. Both name
 // sessions with the same role labels and show the same elapsed time once the
@@ -17,6 +18,7 @@ import { ladoAlertText, ladoCostText, ladoTokensText } from "../../lib/lado-usag
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../ui/table";
+import { ladoModelEffortText } from "./lado-stage-agents";
 import { LadoAccountLimitRelease } from "./LadoAccountLimitRelease";
 import { ladoDurationText, roleKeys } from "./LadoTaskTimings";
 
@@ -275,6 +277,12 @@ function SessionRow({ session, t }: { session: LadoSessionUsage; t: TFunction })
 						) : null}
 					</span>
 					<span className="max-w-48 truncate font-mono text-2xs text-passive" title={session.sessionId}>{session.sessionId}</span>
+					{/* What the session resolved to when it started (issue #103); a deleted session no longer says. */}
+					{session.model || session.effort ? (
+						<span className="max-w-48 truncate font-mono text-2xs text-muted-foreground" data-testid="lado-session-usage-model">
+							{ladoModelEffortText(t, session.model, session.effort)}
+						</span>
+					) : null}
 				</span>
 			</TableCell>
 			<TableCell className="px-2 py-1.5 font-mono text-2xs text-muted-foreground">{session.partId || "–"}</TableCell>

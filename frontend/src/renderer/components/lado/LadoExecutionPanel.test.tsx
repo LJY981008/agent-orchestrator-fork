@@ -48,6 +48,7 @@ function execution(fields: Partial<lado.LadoExecution> = {}): lado.LadoExecution
 			],
 			prompt: "Never force push.",
 			setup: [],
+			stages: { integration: { model: "opus", effort: "" }, resolve: { model: "opus", effort: "" } },
 		},
 		base: { planSha: "c".repeat(40), dispatchSha: "d".repeat(40), commitsAhead: 2 },
 		startedAt: new Date(Date.now() - 3_600_000).toISOString(),
@@ -90,7 +91,7 @@ test("shows the snapshot the run works under", async () => {
 	const panel = await screen.findByTestId("lado-execution-panel");
 	expect(lado.fetchLadoExecution).toHaveBeenCalledWith("demo-7");
 	expect(screen.getByRole("button", { name: "LADO run" })).toBeInTheDocument();
-	expect(fact(panel, "Agent")).toHaveTextContent("Claude Code opus");
+	expect(fact(panel, "Agent")).toHaveTextContent("Claude Code opus · AO default");
 	expect(fact(panel, "Mode")).toHaveTextContent("Accept edits");
 	expect(fact(panel, "Permission ceiling")).toHaveTextContent("Auto");
 	expect(fact(panel, "Plan")).toHaveTextContent("Revision 3 · approved 2h ago");
@@ -107,6 +108,36 @@ test("shows the snapshot the run works under", async () => {
 	fireEvent.click(toggle);
 	expect(toggle).toHaveAttribute("aria-expanded", "true");
 	expect(within(panel).getByTestId("lado-run-worker-text")).toHaveTextContent("Never force push.");
+});
+
+test("shows the models the approval fixed for each role and what this session ran with", async () => {
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(
+		execution({
+			role: "integration",
+			snapshot: {
+				...execution().snapshot,
+				model: "claude-opus-5-5",
+				effort: "high",
+				stages: { integration: { model: "claude-fable-5-2", effort: "max" }, resolve: { model: "claude-opus-5-5", effort: "" } },
+			},
+			sessionModel: "claude-fable-5-2",
+		}),
+	);
+	renderPanel();
+
+	const panel = await screen.findByTestId("lado-execution-panel");
+	expect(within(panel).getByTestId("lado-run-model")).toHaveTextContent("claude-opus-5-5 · High");
+	expect(within(panel).getByTestId("lado-run-stage-integration")).toHaveTextContent("Integration worker: claude-fable-5-2 · Max");
+	expect(within(panel).getByTestId("lado-run-stage-resolve")).toHaveTextContent("Resolve worker: claude-opus-5-5 · AO default");
+	// AO dropped the effort when the session started: it runs the provider's default.
+	expect(fact(panel, "This session ran")).toHaveTextContent("claude-fable-5-2 · AO default");
+	cleanup();
+
+	// A session AO no longer has says nothing about what it ran.
+	vi.mocked(lado.fetchLadoExecution).mockResolvedValue(execution());
+	renderPanel();
+	const plain = await screen.findByTestId("lado-execution-panel");
+	expect(within(plain).queryByText("This session ran", { selector: "dt" })).not.toBeInTheDocument();
 });
 
 test("lists the local setup items the run got, folded", async () => {

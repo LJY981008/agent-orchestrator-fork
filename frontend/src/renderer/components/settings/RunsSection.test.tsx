@@ -12,6 +12,11 @@ vi.mock("../../lib/lado", async (original) => ({
 	fetchLadoWatchSettings: vi.fn(),
 }));
 
+// The stage models card (issue #103) has tests of its own.
+vi.mock("../lado/LadoStageAgentsCard", () => ({
+	LadoStageAgentsCard: ({ projectId }: { projectId?: string }) => <div data-testid="lado-stage-agents-card" data-project-id={projectId ?? ""} />,
+}));
+
 /** The worker watch card below (issue #42), with nothing saved. */
 const watchDefaults = { compactWindow: 200_000, taskCostCents: 100_00, sessionCostCents: 30_00, sessionCompactions: 3, stallMinutes: 120, wakeEnabled: true };
 const watchSettings: lado.LadoWatchSettings = {
@@ -91,6 +96,17 @@ describe("RunsSection", () => {
 		expect(memory()).toBeChecked();
 		expect(screen.getByText("These apply only to approved tasks in projects with LADO mode on.")).toBeInTheDocument();
 		expect(screen.getByText("Queued tasks wait to start while the computer is low on memory.")).toBeInTheDocument();
+	});
+
+	it("puts the global stage models between the plan workers and the worker watch", async () => {
+		renderSection();
+
+		const stageModels = await screen.findByTestId("lado-stage-agents-card");
+		expect(stageModels).toHaveAttribute("data-project-id", "");
+		const planWorkers = await screen.findByTestId("lado-plan-worker-settings");
+		const watch = await screen.findByTestId("lado-watch-settings");
+		expect(planWorkers.compareDocumentPosition(stageModels) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(stageModels.compareDocumentPosition(watch) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
 	it("offers 1 to 8 runs at once and the run times from off to 24 hours", async () => {

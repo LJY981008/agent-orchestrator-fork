@@ -1,5 +1,6 @@
 // LADO fork: the LADO line on a run's board card: the plan revision and the
-// rules hash its worker runs under (docs/LJY-PRD/HARNESS.md §12), then where
+// rules hash its worker runs under (docs/LJY-PRD/HARNESS.md §12), the model
+// and effort its session runs (issue #103), then where
 // LADO's verification and integration of its PR stand, and at its end the
 // task's estimated cost and unseen alerts (issue #42), and where the run's
 // production SQL stands while it waits or failed (issue #97). It reads the
@@ -13,6 +14,7 @@ import { requestLadoTaskOpen } from "../../lib/lado-alert-notifications";
 import { ladoReasonText } from "../../lib/lado-errors";
 import { cn } from "../../lib/utils";
 import { isOrchestratorSession, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../../types/workspace";
+import { ladoEffortText, ladoModelEffortText } from "./lado-stage-agents";
 import { ladoTaskStatus, ladoTaskToneDotClass } from "./lado-task-status";
 import { LadoCardWatch, useLadoBoardWatch } from "./LadoCardWatch";
 import { LadoDBChangeBadge, useLadoBoardDBChanges } from "./LadoDBChangeBadge";
@@ -64,6 +66,12 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 	const revision = execution.planRevisionNumber;
 	const rules = execution.policySha256?.slice(0, 7);
 	const word = runWord(task, t);
+	// Only what AO recorded: a session on the agent's default model shows none.
+	const model = execution.sessionModel
+		? ladoModelEffortText(t, execution.sessionModel, execution.sessionEffort)
+		: execution.sessionEffort
+			? ladoEffortText(t, execution.sessionEffort)
+			: "";
 	return (
 		<p className="flex min-w-0 items-center gap-1.5 truncate py-0.5 text-2xs text-muted-foreground" data-testid="lado-session-line">
 			<span className="min-w-0 truncate">
@@ -73,6 +81,15 @@ export function LadoSessionLine({ session }: { session: WorkspaceSession }) {
 					<>
 						{` · ${t("lado.card.rules")} `}
 						<span className="font-mono">{rules}</span>
+					</>
+				) : null}
+				{/* The model the worker session resolved to when it started (issue #103). */}
+				{model ? (
+					<>
+						{" · "}
+						<span className="font-mono" data-testid="lado-session-line-model">
+							{model}
+						</span>
 					</>
 				) : null}
 				{word ? (

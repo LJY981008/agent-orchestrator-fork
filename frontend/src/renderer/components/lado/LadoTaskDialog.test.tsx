@@ -114,7 +114,7 @@ function rules(snapshotSha256: string, fields: Partial<lado.LadoEffective> = {})
 	return {
 		projectId: "demo",
 		taskId: "lado-task-1",
-		agent: { harness: "claude-code", model: "", source: "project" },
+		agent: { harness: "claude-code", model: "", effort: "", source: "project", stages: { integration: { harness: "claude-code", model: "", effort: "", source: "execution_stage" }, resolve: { harness: "claude-code", model: "", effort: "", source: "execution_stage" } } },
 		permissionCeiling: "auto",
 		permissionMode: "accept-edits",
 		rules: [],
