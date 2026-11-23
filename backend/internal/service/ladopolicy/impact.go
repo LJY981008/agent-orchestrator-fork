@@ -74,7 +74,10 @@ func (s *Service) impactOf(ctx context.Context, rules []domain.LadoRule, after f
 		if !ok || !project.ArchivedAt.IsZero() {
 			continue
 		}
-		scope := projectScope{record: project, aoRules: ReadAORules(ctx, project)}
+		scope, err := s.scopeOf(ctx, project)
+		if err != nil {
+			return Impact{}, err
+		}
 		projects[id] = scope
 		in, err := s.projectInput(ctx, rules, scope)
 		if err != nil {

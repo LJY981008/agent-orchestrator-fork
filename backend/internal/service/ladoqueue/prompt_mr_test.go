@@ -62,8 +62,8 @@ func wantAll(t *testing.T, name, prompt string, want, absent []string) {
 // A worker of a GitLab task learns to open its merge request with push
 // options against the base branch the dispatch resolved (#20).
 func TestSpawnConfigTellsAGitLabWorkerHowToOpenTheMergeRequest(t *testing.T) {
-	agent := ladopolicy.SnapshotAgent{Harness: "claude-code"}
-	cfg := spawnConfig(gitlabTask(t), domain.LadoQueueEntry{ID: "entry-1"}, mrRunInput(mrPlanText), agent, "develop", false, nil)
+	content := ladopolicy.SnapshotContent{Agent: ladopolicy.SnapshotAgent{Harness: "claude-code"}}
+	cfg := spawnConfig(gitlabTask(t), domain.LadoQueueEntry{ID: "entry-1"}, mrRunInput(mrPlanText), content, "develop", false, nil)
 	wantAll(t, "worker", cfg.Prompt, append([]string{
 		"`git push -o merge_request.create -o merge_request.target=develop -o merge_request.title=\"<title>\" -o merge_request.description=\"Closes #7\" origin HEAD`",
 	}, mrGuidance...), []string{"commit message rule", "gh` is not installed"})

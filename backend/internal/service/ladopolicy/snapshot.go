@@ -12,21 +12,25 @@ import (
 // Compiler names the snapshot format. SnapshotContent's fields, their JSON
 // names and their order are the format: changing any of them needs a new
 // name.
-const Compiler = "lado-policy/3"
+const Compiler = "lado-policy/4"
 
 // SnapshotContent is what applied to one approval (docs/LJY-PRD/HARNESS.md
 // §8): the on rules with the binding behind each, the AO worker
 // instructions, the on setup items of the agent's tool with the binding
 // behind each, the AO system layer, the accepted setup warnings, the worker's
 // rule text, the workflow gates and the validators of the on rules, the agent
-// and its permission mode, and the problems found. Lists are never nil, so
+// with its model, effort and permission mode, the models of the integration
+// and resolve workers, and the problems found. Lists are never nil, so
 // they encode as [].
 type SnapshotContent struct {
-	Compiler          string                `json:"compiler"`
-	AOBuild           string                `json:"aoBuild"`
-	ProjectID         domain.ProjectID      `json:"projectId"`
-	TaskID            domain.LadoTaskID     `json:"taskId"`
-	Agent             SnapshotAgent         `json:"agent"`
+	Compiler  string            `json:"compiler"`
+	AOBuild   string            `json:"aoBuild"`
+	ProjectID domain.ProjectID  `json:"projectId"`
+	TaskID    domain.LadoTaskID `json:"taskId"`
+	Agent     SnapshotAgent     `json:"agent"`
+	// Stages are the integration and resolve workers' models; lado-policy/3
+	// snapshots have none, and StageAgent falls back to Agent for them.
+	Stages            SnapshotStages        `json:"stages"`
 	PermissionCeiling domain.PermissionMode `json:"permissionCeiling"`
 	Rules             []SnapshotRule        `json:"rules"`
 	AORules           []SnapshotAORule      `json:"aoRules"`
@@ -44,12 +48,52 @@ type SnapshotContent struct {
 	Problems     []domain.LadoPolicyProblem `json:"problems"`
 }
 
-// SnapshotAgent is the agent that runs the task and the permission mode it
-// runs with.
+// SnapshotAgent is the agent that runs the task, the model and effort its
+// executions pass (empty passes none, so AO picks) and the permission mode
+// it runs with.
 type SnapshotAgent struct {
 	Harness        domain.AgentHarness   `json:"harness"`
 	Model          string                `json:"model"`
+	Effort         string                `json:"effort"`
 	PermissionMode domain.PermissionMode `json:"permissionMode"`
+}
+
+// SnapshotStages are the models of the workers that follow an execution, on
+// the agent's harness. Where the values came from is left out, so a setting
+// that gives the same value asks for no new approval.
+type SnapshotStages struct {
+	Integration SnapshotStageAgent `json:"integration"`
+	Resolve     SnapshotStageAgent `json:"resolve"`
+}
+
+// SnapshotStageAgent is one stage's model and effort; an empty effort passes
+// none.
+type SnapshotStageAgent struct {
+	Model  string `json:"model"`
+	Effort string `json:"effort"`
+}
+
+// StageAgent returns the model and effort a worker of stage spawns with
+// under the snapshot: the agent's for an execution (a single execution, a
+// part or a part merge), the stage's own for integration and resolve. A
+// stage without a model, as in a lado-policy/3 snapshot, takes the agent's,
+// whose effort such a snapshot leaves empty, so it spawns as before. An
+// unknown stage takes the agent's.
+func (c SnapshotContent) StageAgent(stage domain.LadoStage) SnapshotStageAgent {
+	agent := SnapshotStageAgent{Model: c.Agent.Model, Effort: c.Agent.Effort}
+	var own SnapshotStageAgent
+	switch stage {
+	case domain.LadoStageIntegration:
+		own = c.Stages.Integration
+	case domain.LadoStageResolve:
+		own = c.Stages.Resolve
+	default:
+		return agent
+	}
+	if own.Model == "" {
+		return agent
+	}
+	return own
 }
 
 // SnapshotRule is one on rule: the version that applied and why it applied.
@@ -151,11 +195,15 @@ type SnapshotCapability struct {
 func snapshotContent(in Input, r Resolution) SnapshotContent {
 	setup, accepted := snapshotSetup(in.Setup)
 	c := SnapshotContent{
-		Compiler:          Compiler,
-		AOBuild:           in.AOBuild,
-		ProjectID:         in.ProjectID,
-		TaskID:            in.TaskID,
-		Agent:             SnapshotAgent{Harness: in.Agent.Harness, Model: in.Agent.Model, PermissionMode: r.Mode},
+		Compiler:  Compiler,
+		AOBuild:   in.AOBuild,
+		ProjectID: in.ProjectID,
+		TaskID:    in.TaskID,
+		Agent:     SnapshotAgent{Harness: in.Agent.Harness, Model: in.Agent.Model, Effort: in.Agent.Effort, PermissionMode: r.Mode},
+		Stages: SnapshotStages{
+			Integration: SnapshotStageAgent{Model: in.Agent.Stages.Integration.Model, Effort: in.Agent.Stages.Integration.Effort},
+			Resolve:     SnapshotStageAgent{Model: in.Agent.Stages.Resolve.Model, Effort: in.Agent.Stages.Resolve.Effort},
+		},
 		PermissionCeiling: r.Ceiling,
 		Rules:             []SnapshotRule{},
 		AORules:           []SnapshotAORule{},

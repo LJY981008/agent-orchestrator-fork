@@ -147,11 +147,18 @@ func TestSnapshotIsDeterministic(t *testing.T) {
 // when the seeded globs apply.
 const protectedGlobsLine = "Protected paths: `.github/**`, `.gitlab-ci.yml`, `.gitlab/**`, `**/CLAUDE.md`, `**/AGENTS.md`, `.claude/**`, `.codex/**`, `.mcp.json`, `.ao/**`"
 
-// TestSnapshotFormatIsLadoPolicy3 pins the lado-policy/3 bytes: a change to a
-// field, its name or its place needs a new format name. The validators come
-// right after the workflow gates.
-func TestSnapshotFormatIsLadoPolicy3(t *testing.T) {
+// TestSnapshotFormatIsLadoPolicy4 pins the lado-policy/4 bytes: a change to a
+// field, its name or its place needs a new format name. The agent's effort
+// comes between its model and permission mode, the stages right after the
+// agent, and the validators right after the workflow gates. Where the stage
+// values came from stays out.
+func TestSnapshotFormatIsLadoPolicy4(t *testing.T) {
 	in := fullInput(t)
+	in.Agent.Effort = "high"
+	in.Agent.Stages = ladopolicy.AgentStages{
+		Integration: domain.LadoStageResolved{Harness: domain.HarnessClaudeCode, Model: "sonnet", Effort: "low", Source: domain.LadoStageFromProject},
+		Resolve:     domain.LadoStageResolved{Harness: domain.HarnessClaudeCode, Model: "opus", Effort: "high", Source: domain.LadoStageFromExecutionStage},
+	}
 	shas := []string{}
 	for _, rule := range in.Rules {
 		shas = append(shas, "<"+string(rule.ID)+">", rule.Version.SHA256)
@@ -164,11 +171,12 @@ func TestSnapshotFormatIsLadoPolicy3(t *testing.T) {
 		"<protected>", protectedPathsInstruction, "<protected globs>", protectedGlobsLine, "<tests>", testsMustPassInstruction,
 		"<korean config>", koreanCommitsConfig, "<protected config>", protectedPathsConfig,
 		"<installed>", hexSHA256("review 1.2.0"), "<ao system>", hexSHA256("ao system"))...).Replace(`{
-		"compiler": "lado-policy/3",
+		"compiler": "lado-policy/4",
 		"aoBuild": "1.0.0",
 		"projectId": "proj-a",
 		"taskId": "task-a",
-		"agent": {"harness": "claude-code", "model": "opus", "permissionMode": "auto"},
+		"agent": {"harness": "claude-code", "model": "opus", "effort": "high", "permissionMode": "auto"},
+		"stages": {"integration": {"model": "sonnet", "effort": "low"}, "resolve": {"model": "opus", "effort": "high"}},
 		"permissionCeiling": "auto",
 		"rules": [
 			{"ruleId": "agent.permission.ceiling", "versionId": "ver-agent.permission.ceiling-1", "version": 1, "sha256": "<agent.permission.ceiling>",
@@ -242,7 +250,7 @@ func TestSnapshotFormatIsLadoPolicy3(t *testing.T) {
 	if !bytes.Equal(r.JSON, compact.Bytes()) {
 		t.Errorf("snapshot\n%s\nwant\n%s", r.JSON, compact.Bytes())
 	}
-	if ladopolicy.Compiler != "lado-policy/3" {
+	if ladopolicy.Compiler != "lado-policy/4" {
 		t.Errorf("Compiler = %q", ladopolicy.Compiler)
 	}
 	wantRules := []domain.LadoPolicySnapshotRule{
@@ -326,6 +334,30 @@ func TestSnapshotHashFollowsWhatApplies(t *testing.T) {
 		{
 			name:   "another model changes it",
 			change: func(t *testing.T, in *ladopolicy.Input) { in.Agent.Model = "gpt-5.2-codex" },
+		},
+		{
+			name:   "another effort changes it",
+			change: func(t *testing.T, in *ladopolicy.Input) { in.Agent.Effort = "max" },
+		},
+		{
+			name: "another integration model changes it",
+			change: func(t *testing.T, in *ladopolicy.Input) {
+				in.Agent.Stages.Integration = domain.LadoStageResolved{Harness: domain.HarnessClaudeCode, Model: "sonnet", Source: domain.LadoStageFromGlobal}
+			},
+		},
+		{
+			name: "another resolve effort changes it",
+			change: func(t *testing.T, in *ladopolicy.Input) {
+				in.Agent.Stages.Resolve = domain.LadoStageResolved{Harness: domain.HarnessClaudeCode, Model: "opus", Effort: "low", Source: domain.LadoStageFromProject}
+			},
+		},
+		{
+			name: "where a stage's value came from is not part of it",
+			change: func(t *testing.T, in *ladopolicy.Input) {
+				in.Agent.Stages.Integration.Source = domain.LadoStageFromGlobal
+				in.Agent.Stages.Resolve.Source = domain.LadoStageFromProject
+			},
+			same: true,
 		},
 		{
 			name:   "changed AO worker instructions change it",
@@ -657,5 +689,42 @@ func TestValidatorsFollowTheOnRules(t *testing.T) {
 				t.Errorf("decoded validators %+v (err %v), want %+v", decoded.Validators, err, c.want)
 			}
 		})
+	}
+}
+
+// StageAgent gives each worker its stage's model and effort, and a
+// lado-policy/3 snapshot, which has no effort or stages, the agent's model
+// with no effort, as such executions spawned.
+func TestSnapshotStageAgent(t *testing.T) {
+	v4 := ladopolicy.SnapshotContent{
+		Agent: ladopolicy.SnapshotAgent{Harness: domain.HarnessClaudeCode, Model: "opus", Effort: "high"},
+		Stages: ladopolicy.SnapshotStages{
+			Integration: ladopolicy.SnapshotStageAgent{Model: "sonnet", Effort: "low"},
+			Resolve:     ladopolicy.SnapshotStageAgent{Model: "haiku"},
+		},
+	}
+	var v3 ladopolicy.SnapshotContent
+	if err := json.Unmarshal([]byte(`{"compiler":"lado-policy/3","agent":{"harness":"claude-code","model":"opus","permissionMode":"auto"}}`), &v3); err != nil {
+		t.Fatal(err)
+	}
+	opus := ladopolicy.SnapshotStageAgent{Model: "opus"}
+	cases := []struct {
+		name    string
+		content ladopolicy.SnapshotContent
+		stage   domain.LadoStage
+		want    ladopolicy.SnapshotStageAgent
+	}{
+		{"execution", v4, domain.LadoStageExecution, ladopolicy.SnapshotStageAgent{Model: "opus", Effort: "high"}},
+		{"integration", v4, domain.LadoStageIntegration, ladopolicy.SnapshotStageAgent{Model: "sonnet", Effort: "low"}},
+		{"resolve without an effort", v4, domain.LadoStageResolve, ladopolicy.SnapshotStageAgent{Model: "haiku"}},
+		{"unknown stage", v4, "review", ladopolicy.SnapshotStageAgent{Model: "opus", Effort: "high"}},
+		{"lado-policy/3 execution", v3, domain.LadoStageExecution, opus},
+		{"lado-policy/3 integration", v3, domain.LadoStageIntegration, opus},
+		{"lado-policy/3 resolve", v3, domain.LadoStageResolve, opus},
+	}
+	for _, c := range cases {
+		if got := c.content.StageAgent(c.stage); got != c.want {
+			t.Errorf("%s: StageAgent(%s) = %+v, want %+v", c.name, c.stage, got, c.want)
+		}
 	}
 }

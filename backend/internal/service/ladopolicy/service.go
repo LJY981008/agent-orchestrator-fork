@@ -71,6 +71,9 @@ type Store interface {
 	ListLiveLadoTasks(ctx context.Context) ([]domain.LadoTask, error)
 	LadoTask(ctx context.Context, id domain.LadoTaskID) (domain.LadoTask, bool, error)
 	LadoPolicySnapshot(ctx context.Context, approvalID domain.LadoPlanApprovalID) (domain.LadoPolicySnapshot, bool, error)
+	// LadoStageAgents reads one scope's stage settings: the global ones for
+	// domain.LadoStageGlobalScope, else the project's.
+	LadoStageAgents(ctx context.Context, projectID domain.ProjectID) (domain.LadoStageAgents, error)
 }
 
 // Projects reads AO's project registry.
@@ -682,6 +685,10 @@ type ApprovedView struct {
 	// the same way; a changed item also counts when the plugins an
 	// enabledPlugins setting turns on changed.
 	SetupAdded, SetupRemoved, SetupChanged []domain.LadoSetupItemID
+	// AgentChanged reports that the agent, or the model or effort an
+	// execution, integration or resolve worker would spawn with, is not the
+	// approved one: the execution stage settings changed, for one.
+	AgentChanged bool
 }
 
 // Effective resolves the rules for a project, or for a task at its latest
@@ -758,7 +765,24 @@ func (s *Service) approved(ctx context.Context, task domain.LadoTask, now Resolu
 	}
 	view.Added, view.Removed, view.Changed = diffRules(content.Rules, now.Content.Rules)
 	view.SetupAdded, view.SetupRemoved, view.SetupChanged = diffSetup(content.Setup, now.Content.Setup)
+	view.AgentChanged = agentChanged(content, now.Content)
 	return view, nil
+}
+
+// agentChanged reports whether two snapshots run other agents, or spawn an
+// execution, integration or resolve worker with another model or effort. It
+// compares what the workers get, so a lado-policy/3 snapshot without stages
+// matches a later one whose stages inherit the agent's model.
+func agentChanged(then, now SnapshotContent) bool {
+	if then.Agent.Harness != now.Agent.Harness {
+		return true
+	}
+	for _, stage := range []domain.LadoStage{domain.LadoStageExecution, domain.LadoStageIntegration, domain.LadoStageResolve} {
+		if then.StageAgent(stage) != now.StageAgent(stage) {
+			return true
+		}
+	}
+	return false
 }
 
 // diffRules compares the on rules of two snapshots by id.
@@ -885,11 +909,15 @@ func (s *Service) CurrentSHA256s(ctx context.Context, tasks []domain.LadoTask) (
 	return sums, nil
 }
 
-// projectScope is a project with its AO instructions, read once for every
-// resolution of the project and its tasks.
+// projectScope is a project with its AO instructions and the stage settings
+// that apply to it, read once for every resolution of the project and its
+// tasks.
 type projectScope struct {
 	record  domain.ProjectRecord
 	aoRules []AORule
+	// stages and globalStages are the project's and the global stage
+	// settings.
+	stages, globalStages domain.LadoStageAgents
 }
 
 // projectScope reads a registered project, archived or not.
@@ -901,17 +929,31 @@ func (s *Service) projectScope(ctx context.Context, id domain.ProjectID) (projec
 	if !ok {
 		return projectScope{}, scopeNotFound(domain.LadoScopeProject, string(id))
 	}
-	return projectScope{record: project, aoRules: ReadAORules(ctx, project)}, nil
+	return s.scopeOf(ctx, project)
+}
+
+// scopeOf reads the AO instructions and the stage settings of a project
+// read before.
+func (s *Service) scopeOf(ctx context.Context, project domain.ProjectRecord) (projectScope, error) {
+	stages, err := s.deps.Store.LadoStageAgents(ctx, domain.ProjectID(project.ID))
+	if err != nil {
+		return projectScope{}, s.loadFailed(err)
+	}
+	global, err := s.deps.Store.LadoStageAgents(ctx, domain.LadoStageGlobalScope)
+	if err != nil {
+		return projectScope{}, s.loadFailed(err)
+	}
+	return projectScope{record: project, aoRules: ReadAORules(ctx, project), stages: stages, globalStages: global}, nil
 }
 
 // projectInput is what resolution reads for a project under rules. Its agent
-// is the project's worker agent, as for a task without its own, and its local
-// setup that agent tool's.
+// is the project's worker agent, as for a task without its own, under the
+// stage settings, and its local setup that agent tool's.
 func (s *Service) projectInput(ctx context.Context, rules []domain.LadoRule, scope projectScope) (Input, error) {
 	in := Input{
 		Rules:     rules,
 		ProjectID: domain.ProjectID(scope.record.ID),
-		Agent:     ChooseAgent(domain.LadoTask{}, scope.record),
+		Agent:     ChooseAgent(domain.LadoTask{}, scope.record).WithStages(scope.stages, scope.globalStages),
 		AORules:   scope.aoRules,
 		AOBuild:   s.deps.AOBuild,
 	}
@@ -937,7 +979,7 @@ func (s *Service) taskInput(ctx context.Context, rules []domain.LadoRule, task d
 		Rules:       rules,
 		ProjectID:   task.ProjectID,
 		TaskID:      task.ID,
-		Agent:       ChooseAgent(task, scope.record),
+		Agent:       ChooseAgent(task, scope.record).WithStages(scope.stages, scope.globalStages),
 		PlanCeiling: ceiling,
 		AORules:     scope.aoRules,
 		AOBuild:     s.deps.AOBuild,
