@@ -19,6 +19,7 @@ import {
 	type LadoTaskPartWaitingReason,
 	type LadoTaskStateReason,
 } from "./lado";
+import { type LadoStage, ladoStageLabelKeys } from "./lado-stage-agents";
 
 type LadoErrorKey = Extract<MessageKey, `lado.error.${string}`>;
 type LadoProblemKey = Extract<MessageKey, `lado.problem.${string}`>;
@@ -337,23 +338,15 @@ const problemKeys: Partial<Record<string, LadoProblemKey>> = {
 	ssh_failed: "lado.problem.sshFailed",
 };
 
+/** A refused stage value's stage in words; one from a newer daemon stays as sent. */
+function ladoStageErrorLabel(t: TFunction, stage: string): string {
+	return Object.hasOwn(ladoStageLabelKeys, stage) ? t(ladoStageLabelKeys[stage as LadoStage]) : stage;
+}
+
 // The details LADO's messages name; a detail the daemon left out reads empty,
 // and a permission ceiling reads as AO's project settings name the mode.
 // Local setup's tools, kinds and reasons read in the developer's language, and
 // its lists of sessions, programs and tools read as one line.
-const stageErrorKeys = {
-	plan: "lado.stageAgents.stage.plan",
-	critic: "lado.stageAgents.stage.critic",
-	execution: "lado.stageAgents.stage.execution",
-	integration: "lado.stageAgents.stage.integration",
-	resolve: "lado.stageAgents.stage.resolve",
-} as const satisfies Record<string, MessageKey>;
-
-/** A refused stage value's stage in words; one from a newer daemon stays as sent. */
-function ladoStageErrorLabel(t: TFunction, stage: string): string {
-	return Object.hasOwn(stageErrorKeys, stage) ? t(stageErrorKeys[stage as keyof typeof stageErrorKeys]) : stage;
-}
-
 function detailValues(t: TFunction, code: string, details: Record<string, unknown> | undefined) {
 	const text = (name: string) => {
 		const value = details?.[name];

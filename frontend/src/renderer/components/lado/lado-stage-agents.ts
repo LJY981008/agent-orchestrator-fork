@@ -4,16 +4,8 @@
 // an empty effort the one AO picks for the model when the worker starts.
 import type { TFunction } from "i18next";
 import type { MessageKey } from "../../i18n/messages";
-import type { LadoStage, LadoStageSource } from "../../lib/lado-stage-agents";
+import { type LadoStage, type LadoStageSource, ladoStageLabelKeys } from "../../lib/lado-stage-agents";
 import { formatEffortLabel } from "../settings/EffortPicker";
-
-export const ladoStageLabelKeys = {
-	plan: "lado.stageAgents.stage.plan",
-	critic: "lado.stageAgents.stage.critic",
-	execution: "lado.stageAgents.stage.execution",
-	integration: "lado.stageAgents.stage.integration",
-	resolve: "lado.stageAgents.stage.resolve",
-} as const satisfies Record<LadoStage, MessageKey>;
 
 const sourceKeys = {
 	project: "lado.stageAgents.source.project",

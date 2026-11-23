@@ -7,6 +7,7 @@
 // model). A value names its harness; a stage that runs another skips it. A
 // PUT replaces the whole scope: a stage left out follows the default.
 import type { components } from "../../api/schema";
+import type { MessageKey } from "../i18n/messages";
 import { apiClient } from "./api-client";
 import { ladoError } from "./lado";
 
@@ -28,6 +29,14 @@ export const LADO_PLAN_STAGES: readonly LadoStage[] = ["plan", "critic"];
 export const LADO_EXECUTION_STAGES: readonly LadoStage[] = ["execution", "integration", "resolve"];
 /** The harnesses a stage value may name. */
 export const LADO_STAGE_HARNESSES: readonly LadoStageHarness[] = ["claude-code", "codex"];
+/** The message key of each stage's name, for the settings card and a refused value's error. */
+export const ladoStageLabelKeys = {
+	plan: "lado.stageAgents.stage.plan",
+	critic: "lado.stageAgents.stage.critic",
+	execution: "lado.stageAgents.stage.execution",
+	integration: "lado.stageAgents.stage.integration",
+	resolve: "lado.stageAgents.stage.resolve",
+} as const satisfies Record<LadoStage, MessageKey>;
 
 /** Every stage-agent view, the global one and each project's, under one root. */
 export const ladoStageAgentsQueryRoot = ["lado", "stage-agents"] as const;
