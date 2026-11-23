@@ -1087,6 +1087,15 @@ type LadoSetupItemVersion struct {
 	CreatedAt   time.Time
 }
 
+type LadoStageAgent struct {
+	ProjectID string
+	Stage     string
+	Harness   string
+	Model     string
+	Effort    string
+	UpdatedAt time.Time
+}
+
 type LadoTask struct {
 	ID                  string
 	ProjectID           string
