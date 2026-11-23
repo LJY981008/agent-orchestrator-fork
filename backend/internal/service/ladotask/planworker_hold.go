@@ -36,7 +36,7 @@ func (s *Service) planWorkerHold(ctx context.Context, task domain.LadoTask, now 
 	if s.deps.AccountLimits == nil && s.deps.Preflight == nil {
 		return ""
 	}
-	harness, _, err := s.planAgent(ctx, task)
+	harness, _, err := s.planOrchestrator(ctx, task)
 	if err != nil || !planWorkerAgentSupported(harness) {
 		return ""
 	}
