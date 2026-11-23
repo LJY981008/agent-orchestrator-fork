@@ -72,7 +72,11 @@ func (c *LadoController) listTasks(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, LadoTaskListResponse{Tasks: ladoTaskResponses(tasks)})
+	resp := LadoTaskListResponse{Tasks: ladoTaskResponses(tasks)}
+	for i := range resp.Tasks {
+		c.addSessionAgents(r.Context(), &resp.Tasks[i])
+	}
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (c *LadoController) createTask(w http.ResponseWriter, r *http.Request) {
@@ -150,7 +154,9 @@ func (c *LadoController) updateTask(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ladoTaskResponse(task))
+	resp := ladoTaskResponse(task)
+	c.addSessionAgents(r.Context(), &resp)
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (c *LadoController) cancelTask(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +169,9 @@ func (c *LadoController) cancelTask(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteError(w, r, err)
 		return
 	}
-	envelope.WriteJSON(w, http.StatusOK, ladoTaskResponse(task))
+	resp := ladoTaskResponse(task)
+	c.addSessionAgents(r.Context(), &resp)
+	envelope.WriteJSON(w, http.StatusOK, resp)
 }
 
 func (c *LadoController) listProjectIssues(w http.ResponseWriter, r *http.Request) {

@@ -89,6 +89,7 @@ func (c *LadoController) getPlan(w http.ResponseWriter, r *http.Request) {
 		Latest:   view.Latest,
 		Approved: view.Approved,
 	}
+	c.addSessionAgents(r.Context(), &resp.Task)
 	if view.Critique.State != "" {
 		critique := ladoPlanCritiqueResponse(view.Critique, view.Plan.Body)
 		resp.Critique = &critique
@@ -183,6 +184,7 @@ func (c *LadoController) getTaskView(ctx context.Context, id domain.LadoTaskID) 
 		IssueChangedSincePlan: view.IssueChanged,
 		History:               ladoPlanHistoryResponse(view.History),
 	}
+	c.addSessionAgents(ctx, &resp.Task)
 	if view.IssueReadError == "" && view.Task.CancelledAt.IsZero() {
 		resp.Issue = &LadoIssueTextResponse{Title: view.Issue.Title, Body: view.Issue.Body, State: string(view.Issue.State), URL: view.Issue.URL}
 		snapshot, _ := domain.NewLadoIssueSnapshot(view.Task.IssueRef, view.Issue.Title, view.Issue.Body, view.Comments)

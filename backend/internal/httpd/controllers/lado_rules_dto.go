@@ -160,8 +160,11 @@ type SetLadoBindingRequest struct {
 // LadoEffectiveAgentResponse is the agent that runs a task.
 type LadoEffectiveAgentResponse struct {
 	Harness string `json:"harness" description:"Empty when nobody chose an agent."`
-	Model   string `json:"model"`
-	Source  string `json:"source" description:"task or project: whose choice it is; empty when nobody chose an agent."`
+	Model   string `json:"model" description:"The model the execution workers (a single execution, a part or a part merge) pass; empty passes none, so AO picks."`
+	Effort  string `json:"effort" description:"The effort the execution workers pass; empty passes none, so AO picks one for the model."`
+	Source  string `json:"source" description:"Where the execution's model comes from: task, the task's own agent and model; project or global, that scope's execution stage setting; worker, the project's worker agent and model. Empty when nobody chose an agent."`
+	// Stages are the workers after the execution (#103).
+	Stages LadoEffectiveStagesResponse `json:"stages" description:"What the integration and resolve workers run with: their own stage setting, else the execution's value. An approval fixes them with the execution's."`
 }
 
 // LadoRuleSourceResponse is the binding that decided whether a rule applies.
@@ -225,6 +228,7 @@ type LadoApprovedRulesResponse struct {
 	Added          []string  `json:"added" description:"Rules on now but not at the approval."`
 	Removed        []string  `json:"removed" description:"Rules on at the approval but not now."`
 	Changed        []string  `json:"changed" description:"Rules on in both with another version or binding."`
+	AgentChanged   bool      `json:"agentChanged" description:"The agent, or the model or effort an execution, integration or resolve worker would run with, is not the approved one, such as after an execution stage setting changed; the task needs a new approval."`
 	// The local setup the approval fixed, next to now.
 	SetupAdded     []string                            `json:"setupAdded" description:"Setup items on now but not at the approval."`
 	SetupRemoved   []string                            `json:"setupRemoved" description:"Setup items on at the approval but not now; setup names them."`

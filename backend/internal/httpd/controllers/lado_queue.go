@@ -79,6 +79,7 @@ func (c *LadoController) getExecution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := ladoExecutionResponse(view)
+	resp.SessionModel, resp.SessionEffort = c.sessionAgent(r.Context(), view.Execution.SessionID)
 	// What LADO verified about the PR's current head and its integration
 	// approval, when verification is wired: the execution's PR's at the top,
 	// each tracked PR's in its own entry.
@@ -371,6 +372,8 @@ func ladoExecutionResponse(view ladoqueue.ExecutionView) LadoExecutionResponse {
 			SHA256:            view.SnapshotSHA256,
 			Agent:             string(snapshot.Agent.Harness),
 			Model:             snapshot.Agent.Model,
+			Effort:            snapshot.Agent.Effort,
+			Stages:            ladoExecutionSnapshotStages(snapshot),
 			PermissionMode:    string(snapshot.Agent.PermissionMode),
 			PermissionCeiling: string(snapshot.PermissionCeiling),
 			Rules:             rules,
