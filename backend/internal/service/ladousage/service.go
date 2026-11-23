@@ -366,11 +366,9 @@ func (s *Service) sessionUsage(ctx context.Context, session taskSession, detail 
 	out.SubagentInputTokens = sub.InputTokens
 	out.SubagentOutputTokens = sub.OutputTokens
 	if detail {
-		rec, ok, err := s.deps.Store.GetSession(ctx, session.id)
-		if err != nil {
-			return SessionUsage{}, err
-		}
-		if ok {
+		// The model and effort are only shown, so a failed read leaves them
+		// empty instead of failing the task's usage.
+		if rec, ok, err := s.deps.Store.GetSession(ctx, session.id); err == nil && ok {
 			out.Model, out.Effort = rec.Metadata.Model, rec.Metadata.Effort
 		}
 		// A session without a conversation, or one the provider has not

@@ -239,6 +239,11 @@ describe("LadoStageAgentsCard", () => {
 		expect(within(rowOf("integration")).getByTestId("lado-stage-global-warning")).toHaveTextContent(
 			"does not offer the global value gpt-5",
 		);
+		// A kept value of another harness takes no effort change, which the
+		// daemon would refuse; a new model or a reset replaces it.
+		await waitFor(() => expect(modelOf("Execution worker")).toBeEnabled());
+		expect(effortOf("Execution worker")).toBeDisabled();
+		expect(within(rowOf("execution")).getByRole("button", { name: "Execution worker: use default" })).toBeEnabled();
 		// A project's stage runs the project's harness: there is none to pick.
 		expect(screen.queryByRole("button", { name: "Plan worker harness" })).not.toBeInTheDocument();
 		expect(screen.getByTestId("lado-stage-agents-execution-note")).not.toHaveTextContent("every project");

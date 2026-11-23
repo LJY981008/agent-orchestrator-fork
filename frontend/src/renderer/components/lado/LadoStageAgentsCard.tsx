@@ -295,6 +295,10 @@ function StageRow({
 		...effortChoices.map((choice) => ({ value: choice, label: formatEffortLabel(choice, t) })),
 	];
 	const valueHarness = (value?.harness ?? harness) as LadoStageHarness;
+	// A project's kept value for another harness than the stage runs: the
+	// stage skips it, the list is the stage harness's, and the daemon refuses
+	// a changed effort on it. Picking a model or resetting replaces it.
+	const otherHarness = !onHarnessChange && !!value && value.harness !== harness;
 	const pickModel = (next: string) => {
 		if (!next || !harness) return;
 		// An effort the new model does not offer goes; AO picks one instead.
@@ -344,7 +348,7 @@ function StageRow({
 					aria-label={t("lado.stageAgents.effortLabel", { stage: stageLabel })}
 					value={effort || AO_DEFAULT_EFFORT}
 					options={effortOptions}
-					disabled={disabled || !model}
+					disabled={disabled || !model || otherHarness}
 					onChange={(next) => {
 						if (!value) return;
 						onSave({ harness: value.harness, model: value.model, effort: next === AO_DEFAULT_EFFORT ? "" : next });
