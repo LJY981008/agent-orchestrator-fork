@@ -95,6 +95,9 @@ type PlanWorkerStore interface {
 	LadoPlanRevisionMetrics(ctx context.Context, id domain.LadoPlanRevisionID) (domain.LadoPlanRevisionMetrics, bool, error)
 	ListLadoPlanRevisionMetrics(ctx context.Context, taskID domain.LadoTaskID) (map[domain.LadoPlanRevisionID]domain.LadoPlanRevisionMetrics, error)
 	LadoSessionUsage(ctx context.Context, id domain.SessionID) (domain.LadoPlanSessionUsage, error)
+	// LadoStageAgents reads one scope's stage settings (issue #103): a
+	// project's, or the global ones under domain.LadoStageGlobalScope.
+	LadoStageAgents(ctx context.Context, projectID domain.ProjectID) (domain.LadoStageAgents, error)
 	// AddLadoAlert raises the alert of a plan worker held because its agent
 	// cannot start (planworker_hold.go).
 	AddLadoAlert(ctx context.Context, a domain.LadoAlert) (domain.LadoAlertID, bool, error)

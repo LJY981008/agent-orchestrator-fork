@@ -64,8 +64,10 @@ func (pf *planFixture) auditActions(t *testing.T) []string {
 	return actions
 }
 
-// A plan request starts a read-only plan worker of its own, with the
-// orchestrator's agent and model, and sends the orchestrator nothing. The
+// A plan request starts a read-only plan worker of its own, in the
+// orchestrator's agent, with the plan stage's model and effort: the stage
+// settings first, then the orchestrator's (here, with no settings, the
+// orchestrator's), and sends the orchestrator nothing. The
 // designer's first message carries the pinned issue with its trusted
 // comments, the rules, the base and the format.
 func TestRequestPlanStartsAPlanWorkerWithoutTheOrchestrator(t *testing.T) {
