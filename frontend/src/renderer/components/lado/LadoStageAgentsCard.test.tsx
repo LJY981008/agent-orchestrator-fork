@@ -29,7 +29,16 @@ vi.mock("../../hooks/useAgentModelsQuery", async (original) => ({
 }));
 
 function catalog(agentId: string, models: AgentModelCatalog["models"], allowCustom = false): AgentModelCatalog {
-	return { agentId, allowCustom, customModelEntry: allowCustom ? "direct" : "none", fetchedAt: "2026-11-23T00:00:00Z", models };
+	return {
+		agentId,
+		allowCustom,
+		customModelEntry: allowCustom ? "direct" : "none",
+		fetchedAt: "2026-11-23T00:00:00Z",
+		models,
+		selectionMode: "catalog",
+		source: "discovered",
+		stale: false,
+	};
 }
 
 const global = (stages: stageAgents.LadoStageAgentsByStage): stageAgents.LadoStageAgents => ({ stages });
