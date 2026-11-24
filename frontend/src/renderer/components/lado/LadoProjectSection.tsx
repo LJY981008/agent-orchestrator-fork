@@ -1,8 +1,9 @@
 // LADO fork: Project settings → LADO (docs/LJY-PRD/TDD.md §5.3, §7.1, §8.2
 // and §9). The project's LADO mode and how many of its approved tasks run at
 // once, then whether a task waits for another task's overlapping run (§5.4),
-// its check commands and whether its base branches are protected, and the
-// worker watch with its overrides of the global defaults (issue #42), and the
+// its check commands and whether its base branches are protected, the model
+// and effort of each stage's workers over the global defaults (issue #103),
+// and the worker watch with its overrides of the global defaults (issue #42), and the
 // project's knowledge folder (issue #24), the production log watch
 // (issue #87), and the production database changes (issue #97).
 // The daemon refuses turning the mode on while tracker intake is on; turning
@@ -23,6 +24,7 @@ import { LadoProjectChecksCard } from "./LadoProjectChecksCard";
 import { LadoProjectKnowledgeCard } from "./LadoProjectKnowledgeCard";
 import { LadoProjectOverlapCard } from "./LadoProjectOverlapCard";
 import { LadoProjectProtectionCard } from "./LadoProjectProtectionCard";
+import { LadoStageAgentsCard } from "./LadoStageAgentsCard";
 import { LadoWatchSettingsCard } from "./LadoWatchSettingsCard";
 
 export function LadoProjectSection({ projectId }: { projectId: string }) {
@@ -114,6 +116,7 @@ export function LadoProjectSection({ projectId }: { projectId: string }) {
 			<LadoProjectOverlapCard projectId={projectId} settings={data} />
 			<LadoProjectChecksCard projectId={projectId} settings={data} />
 			<LadoProjectProtectionCard projectId={projectId} />
+			<LadoStageAgentsCard projectId={projectId} />
 			<LadoWatchSettingsCard projectId={projectId} />
 			<LadoProjectKnowledgeCard projectId={projectId} />
 			<LadoLogWatchCard projectId={projectId} />

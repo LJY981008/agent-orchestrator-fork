@@ -150,10 +150,11 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		}
 		return false, s.attemptFailed(ctx, entry, problem(err, "the approved plan could not be read"))
 	}
-	agent, err := snapshotAgent(in.Snapshot)
+	content, err := snapshotContent(in.Snapshot)
 	if err != nil {
 		return false, s.attemptFailed(ctx, entry, "the rule snapshot could not be read")
 	}
+	agent := content.Agent
 	switch {
 	case in.Snapshot.Blocking:
 		return false, s.block(ctx, entry, domain.LadoBlockedSnapshot)
@@ -219,7 +220,7 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 		}
 		return s.startParts(ctx, entry, task, in, plan, repos)
 	}
-	cfg := spawnConfig(task, entry, in, agent, base.Branch, children != nil, checks)
+	cfg := spawnConfig(task, entry, in, content, base.Branch, children != nil, checks)
 	session, _, _, err := s.deps.Sessions.Spawn(ctx, cfg)
 	exec := domain.LadoExecution{
 		SessionID: session.ID, PlanRevisionID: in.Revision.ID, DispatchBaseSHA: dispatchSHA, BaseCommitsAhead: ahead,
@@ -258,19 +259,23 @@ func (s *Service) dispatch(ctx context.Context, entry domain.LadoQueueEntry, set
 	case err != nil:
 		return true, err
 	}
+	s.appendAudit(ctx, s.audit("execution.dispatched", entry.ID, stagePayload(content, domain.LadoStageExecution, map[string]any{
+		"task": entry.TaskID, "attempt": entry.AttemptCount, "session": exec.SessionID,
+	})))
 	s.deps.Log.Info("LADO started a task's worker", "entry", entry.ID, "task", entry.TaskID, "session", exec.SessionID, "attempt", entry.AttemptCount)
 	s.stopIfUnwanted(ctx, entry, exec.SessionID)
 	return true, nil
 }
 
-// spawnConfig starts the worker from the snapshot's agent and permission mode
-// and from the plan and issue the developer approved, in Chat (decisions c,
-// d and n of the step 6 plan). The attempt's own client request id is what
-// the worker gate grants the spawn by. The branch is left to AO's naming, so
-// the prompt has the worker read it when it starts (#71); baseBranch is the
-// one the worker's pull request targets, and workspace says the project is a
-// workspace, whose child repositories each have a session branch.
-func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, agent ladopolicy.SnapshotAgent, baseBranch string,
+// spawnConfig starts the worker from the snapshot's agent, its execution
+// model and effort and its permission mode, and from the plan and issue the
+// developer approved, in Chat (decisions c, d and n of the step 6 plan). The
+// attempt's own client request id is what the worker gate grants the spawn
+// by. The branch is left to AO's naming, so the prompt has the worker read it
+// when it starts (#71); baseBranch is the one the worker's pull request
+// targets, and workspace says the project is a workspace, whose child
+// repositories each have a session branch.
+func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.RunInput, content ladopolicy.SnapshotContent, baseBranch string,
 	workspace bool, checks []domain.LadoCheckCommand) ports.SpawnConfig {
 	return ports.SpawnConfig{
 		ProjectID:         task.ProjectID,
@@ -279,9 +284,9 @@ func spawnConfig(task domain.LadoTask, entry domain.LadoQueueEntry, in ladotask.
 		ClientRequestHash: domain.LadoDispatchHash(in.Revision.SHA256, in.Snapshot.SHA256),
 		IssueContext:      in.IssueContext,
 		Kind:              domain.KindWorker,
-		Harness:           agent.Harness,
+		Harness:           content.Agent.Harness,
 		Prompt:            workerPrompt(task, in, baseBranch, workspace, checks),
-		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
+		AgentConfig:       stageAgentConfig(content, domain.LadoStageExecution),
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName(task.Issue.Title),
 	}
@@ -306,13 +311,35 @@ func startedFor(rec domain.SessionRecord, project domain.ProjectID, hash string)
 	return rec.ProjectID == project && rec.Kind == domain.KindWorker && hash != "" && rec.ClientRequestHash == hash
 }
 
-// snapshotAgent reads the agent a rule snapshot fixed.
-func snapshotAgent(snapshot domain.LadoPolicySnapshot) (ladopolicy.SnapshotAgent, error) {
+// snapshotContent reads what a rule snapshot fixed, the agent and the models
+// of its stages among it.
+func snapshotContent(snapshot domain.LadoPolicySnapshot) (ladopolicy.SnapshotContent, error) {
 	var content ladopolicy.SnapshotContent
 	if err := json.Unmarshal(snapshot.Content, &content); err != nil {
-		return ladopolicy.SnapshotAgent{}, fmt.Errorf("decode rule snapshot %s: %w", snapshot.ID, err)
+		return ladopolicy.SnapshotContent{}, fmt.Errorf("decode rule snapshot %s: %w", snapshot.ID, err)
 	}
-	return content.Agent, nil
+	return content, nil
+}
+
+// stageAgentConfig is what a worker of stage spawns with under the snapshot
+// the developer approved (ladopolicy.SnapshotContent.StageAgent): the
+// stage's model and effort, an empty effort passing none so AO picks it, and
+// the snapshot's permission mode. A lado-policy/3 snapshot gives the agent's
+// model and no effort, as before the stage settings.
+func stageAgentConfig(content ladopolicy.SnapshotContent, stage domain.LadoStage) ports.AgentConfig {
+	agent := content.StageAgent(stage)
+	return ports.AgentConfig{Model: agent.Model, Effort: agent.Effort, Permissions: content.Agent.PermissionMode}
+}
+
+// stagePayload adds a worker's stage, harness, model and effort under the
+// snapshot to an audit payload, for comparing cost and quality by stage.
+func stagePayload(content ladopolicy.SnapshotContent, stage domain.LadoStage, payload map[string]any) map[string]any {
+	agent := content.StageAgent(stage)
+	payload["stage"] = string(stage)
+	payload["harness"] = string(content.Agent.Harness)
+	payload["model"] = agent.Model
+	payload["effort"] = agent.Effort
+	return payload
 }
 
 // runnable reports whether an execution can run with the agent: rule

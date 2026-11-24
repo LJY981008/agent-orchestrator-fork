@@ -660,11 +660,11 @@ func (s *Service) runHold(ctx context.Context, r *partRun, now time.Time) launch
 	if err != nil {
 		return launchHold{}
 	}
-	agent, err := snapshotAgent(in.Snapshot)
+	content, err := snapshotContent(in.Snapshot)
 	if err != nil {
 		return launchHold{}
 	}
-	return s.launchHold(ctx, r.task.ID, agent.Harness, now, r.holds)
+	return s.launchHold(ctx, r.task.ID, content.Agent.Harness, now, r.holds)
 }
 
 // input reads the run's approved inputs once a pass needs them.
@@ -709,7 +709,7 @@ func (s *Service) startPart(ctx context.Context, r *partRun, i int, settings dom
 	if err != nil || started {
 		if started {
 			*part = next
-			s.appendAudit(ctx, s.audit("part.dispatched", r.entry.ID, map[string]any{"task": r.task.ID, "part": part.PartID, "attempt": attempt, "session": part.SessionID, "branch": branch}))
+			s.appendAudit(ctx, s.audit("part.dispatched", r.entry.ID, stagePayloadOf(in, req, map[string]any{"task": r.task.ID, "part": part.PartID, "attempt": attempt, "session": part.SessionID, "branch": branch})))
 		}
 		return err
 	}
@@ -775,7 +775,7 @@ func (s *Service) startMergeWorker(ctx context.Context, r *partRun, i int, setti
 	if err != nil || started {
 		if started {
 			*part = next
-			s.appendAudit(ctx, s.audit("part.merge_dispatched", r.entry.ID, map[string]any{"task": r.task.ID, "part": part.PartID, "attempt": attempt, "session": part.MergeSessionID, "branch": branch}))
+			s.appendAudit(ctx, s.audit("part.merge_dispatched", r.entry.ID, stagePayloadOf(in, req, map[string]any{"task": r.task.ID, "part": part.PartID, "attempt": attempt, "session": part.MergeSessionID, "branch": branch})))
 		}
 		return err
 	}
@@ -822,9 +822,31 @@ func (s *Service) startIntegration(ctx context.Context, r *partRun, settings dom
 	started, err := s.startRunWorker(ctx, r, req, in, r.run.Branch, r.run.HeadSHA, nil, prompt, settings, nil, "")
 	if started {
 		load.Workers++
-		s.appendAudit(ctx, s.audit("integration.dispatched", r.entry.ID, map[string]any{"task": r.task.ID, "attempt": attempt, "branch": r.run.Branch, "head": r.run.HeadSHA}))
+		s.appendAudit(ctx, s.audit("integration.dispatched", r.entry.ID, stagePayloadOf(in, req, map[string]any{"task": r.task.ID, "attempt": attempt, "branch": r.run.Branch, "head": r.run.HeadSHA})))
 	}
 	return err
+}
+
+// runStage is the stage whose model a parts run worker of role spawns with:
+// integration for the integration worker, execution for a part or merge
+// worker.
+func runStage(role string) domain.LadoStage {
+	if role == domain.LadoRoleIntegration {
+		return domain.LadoStageIntegration
+	}
+	return domain.LadoStageExecution
+}
+
+// stagePayloadOf is stagePayload for a parts run worker of req under the
+// run's snapshot. A snapshot that cannot be read, which no started worker
+// has, adds only the stage.
+func stagePayloadOf(in ladotask.RunInput, req domain.LadoRunRequest, payload map[string]any) map[string]any {
+	content, err := snapshotContent(in.Snapshot)
+	if err != nil {
+		payload["stage"] = string(runStage(req.Role))
+		return payload
+	}
+	return stagePayload(content, runStage(req.Role), payload)
 }
 
 // startRunWorker starts one fresh worker session of a parts run on branch,
@@ -837,7 +859,7 @@ func (s *Service) startIntegration(ctx context.Context, r *partRun, settings dom
 // worker started; a start that failed spends the attempt.
 func (s *Service) startRunWorker(ctx context.Context, r *partRun, req domain.LadoRunRequest, in ladotask.RunInput, branch, startSHA string, at []branchAt,
 	prompt string, settings domain.LadoDispatchSettings, part *domain.LadoTaskPart, oldState domain.LadoPartState) (bool, error) {
-	agent, err := snapshotAgent(in.Snapshot)
+	content, err := snapshotContent(in.Snapshot)
 	if err != nil {
 		return false, err
 	}
@@ -858,9 +880,9 @@ func (s *Service) startRunWorker(ctx context.Context, r *partRun, req domain.Lad
 		ClientRequestHash: domain.LadoDispatchHash(in.Revision.SHA256, in.Snapshot.SHA256),
 		IssueContext:      in.IssueContext,
 		Kind:              domain.KindWorker,
-		Harness:           agent.Harness,
+		Harness:           content.Agent.Harness,
 		Prompt:            prompt,
-		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
+		AgentConfig:       stageAgentConfig(content, runStage(req.Role)),
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName(roleLabel(req) + " " + r.task.Issue.Title),
 		Branch:            branch,

@@ -124,7 +124,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 	return {
 		projectId: "demo",
 		taskId: "",
-		agent: { harness: "", model: "", source: "" },
+		agent: { harness: "", model: "", effort: "", source: "", stages: { integration: { harness: "", model: "", effort: "", source: "execution_stage" }, resolve: { harness: "", model: "", effort: "", source: "execution_stage" } } },
 		permissionCeiling: "auto",
 		permissionMode: "auto",
 		rules: [planApproval, ceiling, korean, review],
@@ -203,7 +203,13 @@ describe("LadoProjectRulesSection", () => {
 		serveSetup();
 	});
 
-	afterEach(cleanup);
+	// Radix's focus scope dispatches an event on a 0 ms timer when the dialog
+	// unmounts; let it run before the file ends, or it can fire after jsdom is
+	// gone and fail the run as an unhandled error (seen in CI under load).
+	afterEach(async () => {
+		cleanup();
+		await act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
+	});
 
 	it("overrides a rule for this project", async () => {
 		const user = userEvent.setup();

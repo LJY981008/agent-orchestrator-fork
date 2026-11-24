@@ -206,6 +206,14 @@ As built in step 8:
 - A running execution keeps its snapshot's validators: the verification loop reads them from the execution's snapshot, not from the current rules. An execution whose snapshot is `lado-policy/2` gets every verification item except `commit_messages` and the protected half of `paths` (TDD §8).
 - Still not built: cancelling affected runs on an emergency change to a protected gate.
 
+As built in #103 (stage models):
+
+- The format is `lado-policy/4`. `agent` gains `effort` after `model`: the execution's model and effort (a single execution, a part or a part merge), where an empty effort passes none and AO picks one for the model at spawn. Right after `agent` comes `stages`, `{"integration": {model, effort}, "resolve": {model, effort}}`: what the run's integration and resolve workers spawn with. Where a value came from (task, project, global, worker) is left out, so a setting that gives the same value asks for no new approval. `service/ladopolicy` `TestSnapshotFormatIsLadoPolicy4` pins the bytes.
+- The values come from the stage settings (TDD §5.3): the task's own model first, then the execution stage's project and global settings for the agent's harness, then the project worker's model with no effort, as before #103; integration and resolve take their own setting, else the execution's final value. With no setting the snapshot's `agent.harness` and `agent.model` are what `lado-policy/3` held and every effort is empty, so the workers spawn as before.
+- Changing an execution, integration or resolve setting after an approval gives the approved revision another hash: a waiting task goes to Review required (`rules_changed`) and its Rules tab says the execution model setting changed (`agentChanged`). A global value reaches every project's waiting tasks; the settings card says so. Plan and critic settings are not in the snapshot and never touch an approval.
+- A running execution keeps the values it was approved with: its part, merge, integration and resolve workers read them from the snapshot (`SnapshotContent.StageAgent`). A `lado-policy/3` snapshot has no `stages` and no effort, so its workers spawn with the agent's model and no effort, as before.
+- The compiler name is part of the hash, so every approval made before #103 shows Review required once, as step 8's did.
+
 ## 9. Local setup adoption (D11)
 
 Decided by the owner on 2026-10-19 and recorded in [adr/0005](adr/0005-local-harness-adoption.md). Settings spread over many places are hard to manage, so LADO becomes the single place: an adopted item is backed up, copied into LADO's managed home and removed from its original location. From then on only sessions launched by this app use it.

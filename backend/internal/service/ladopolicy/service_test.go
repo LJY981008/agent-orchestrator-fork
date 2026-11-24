@@ -1396,7 +1396,8 @@ func TestEffectiveBlocksAnUnsupportedAgent(t *testing.T) {
 	if !view.Blocking() || !slices.ContainsFunc(view.Problems, func(p domain.LadoPolicyProblem) bool { return reflect.DeepEqual(p, unsupported) }) {
 		t.Fatalf("problems = %+v, want the prompt rules blocking cursor", view.Problems)
 	}
-	if want := (AgentChoice{Harness: "cursor", Source: AgentFromTask}); view.Agent != want || view.Task == nil || view.Task.ID != task.ID || view.Approved != nil {
+	inherited := domain.LadoStageResolved{Harness: "cursor", Source: domain.LadoStageFromExecutionStage}
+	if want := (AgentChoice{Harness: "cursor", Source: AgentFromTask, Stages: AgentStages{Integration: inherited, Resolve: inherited}}); view.Agent != want || view.Task == nil || view.Task.ID != task.ID || view.Approved != nil {
 		t.Fatalf("view = %+v, want cursor from the task and no approval", view)
 	}
 
@@ -1838,5 +1839,131 @@ func TestProtectedSetupPresenceRule(t *testing.T) {
 	}
 	if !slices.Contains(view.Content.WorkflowGates, rule.ID) || strings.Contains(view.Prompt, content.Instruction) {
 		t.Fatalf("gates %v, prompt %q: want the rule among the workflow gates and out of the worker's text", view.Content.WorkflowGates, view.Prompt)
+	}
+}
+
+// The execution, integration and resolve stage settings join a task's
+// snapshot, so changing them after an approval asks for a new one; the plan
+// and critic settings, read at each plan worker's spawn, do not. With both
+// scopes empty the agent runs as before, with no effort.
+func TestStageSettingsJoinTheSnapshot(t *testing.T) {
+	fx := newServiceFixture(t)
+	ctx := context.Background()
+	task := fx.approvedTask(t, "claude-code")
+	approved := task.Plan.Snapshot.SHA256
+	set := func(t *testing.T, scope domain.ProjectID, agents domain.LadoStageAgents) {
+		t.Helper()
+		event := domain.LadoAuditEvent{At: fx.now, Actor: "human", Action: "stage_agents.changed", SubjectKind: "stage_agents",
+			SubjectID: string(scope), Payload: json.RawMessage(`{}`)}
+		if err := fx.store.SetLadoStageAgents(ctx, scope, agents, event); err != nil {
+			t.Fatalf("SetLadoStageAgents(%q): %v", scope, err)
+		}
+	}
+	current := func(t *testing.T) string {
+		t.Helper()
+		sum, err := fx.svc.CurrentSHA256(ctx, task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sums, err := fx.svc.CurrentSHA256s(ctx, []domain.LadoTask{task})
+		if err != nil || sums[task.ID] != sum {
+			t.Fatalf("CurrentSHA256s = (%v, %v), want %s as CurrentSHA256 gives", sums, err, sum)
+		}
+		return sum
+	}
+	effective := func(t *testing.T) EffectiveView {
+		t.Helper()
+		view, err := fx.svc.Effective(ctx, EffectiveInput{TaskID: task.ID})
+		if err != nil || view.Approved == nil {
+			t.Fatalf("Effective = (%+v, %v), want the approval compared", view, err)
+		}
+		return view
+	}
+	claude := domain.HarnessClaudeCode
+	stage := func(model, effort string, source domain.LadoStageSource) domain.LadoStageResolved {
+		return domain.LadoStageResolved{Harness: claude, Model: model, Effort: effort, Source: source}
+	}
+
+	view := effective(t)
+	inherited := stage("", "", domain.LadoStageFromExecutionStage)
+	if want := (AgentChoice{Harness: claude, Source: AgentFromTask, Stages: AgentStages{Integration: inherited, Resolve: inherited}}); view.Agent != want {
+		t.Fatalf("agent without settings = %+v, want %+v", view.Agent, want)
+	}
+	if want := (SnapshotAgent{Harness: claude, PermissionMode: domain.PermissionModeAuto}); view.Approved.Content.Agent != want ||
+		view.Approved.Content.Compiler != Compiler || !view.Approved.Matches || view.Approved.AgentChanged {
+		t.Fatalf("approved without settings = %+v, want agent %+v under %s, matching", view.Approved, want, Compiler)
+	}
+
+	// Plan and critic settings stay out of the snapshot.
+	set(t, "demo", domain.LadoStageAgents{
+		domain.LadoStagePlan:   {Harness: claude, Model: "fable", Effort: "high"},
+		domain.LadoStageCritic: {Harness: claude, Model: "haiku"},
+	})
+	set(t, domain.LadoStageGlobalScope, domain.LadoStageAgents{domain.LadoStagePlan: {Harness: claude, Model: "opus"}})
+	if got := current(t); got != approved {
+		t.Fatalf("plan and critic settings changed the hash to %s, want the approved %s", got, approved)
+	}
+
+	// A global execution setting reaches every stage after it.
+	set(t, domain.LadoStageGlobalScope, domain.LadoStageAgents{domain.LadoStageExecution: {Harness: claude, Model: "opus", Effort: "high"}})
+	globalSum := current(t)
+	if globalSum == approved {
+		t.Fatal("a global execution setting left the approved hash")
+	}
+	view = effective(t)
+	opus := stage("opus", "high", domain.LadoStageFromExecutionStage)
+	if want := (AgentChoice{Harness: claude, Model: "opus", Effort: "high", Source: AgentFromGlobal, Stages: AgentStages{Integration: opus, Resolve: opus}}); view.Agent != want {
+		t.Fatalf("agent with a global execution setting = %+v, want %+v", view.Agent, want)
+	}
+	if view.Approved.Matches || !view.Approved.AgentChanged || len(view.Approved.Changed) != 0 {
+		t.Fatalf("approved = %+v, want the agent changed and no rule", view.Approved)
+	}
+	if want := (SnapshotStages{Integration: SnapshotStageAgent{Model: "opus", Effort: "high"}, Resolve: SnapshotStageAgent{Model: "opus", Effort: "high"}}); view.Content.Stages != want {
+		t.Fatalf("stages now = %+v, want %+v", view.Content.Stages, want)
+	}
+
+	// The project's settings come first; a setting of another harness is
+	// skipped, and a stage's own setting brings only its own effort.
+	set(t, "demo", domain.LadoStageAgents{
+		domain.LadoStageExecution:   {Harness: claude, Model: "sonnet"},
+		domain.LadoStageIntegration: {Harness: domain.HarnessCodex, Model: "gpt-5.1-codex"},
+		domain.LadoStageResolve:     {Harness: claude, Model: "haiku"},
+	})
+	projectSum := current(t)
+	if projectSum == globalSum || projectSum == approved {
+		t.Fatal("a project execution setting left the hash")
+	}
+	view = effective(t)
+	want := AgentChoice{Harness: claude, Model: "sonnet", Source: AgentFromProject, Stages: AgentStages{
+		Integration: stage("sonnet", "", domain.LadoStageFromExecutionStage),
+		Resolve:     stage("haiku", "", domain.LadoStageFromProject),
+	}}
+	if view.Agent != want {
+		t.Fatalf("agent with project settings = %+v, want %+v", view.Agent, want)
+	}
+
+	// The task's own model comes before any setting.
+	if _, _, err := fx.store.SetLadoTaskPreferences(ctx, task.ID, "claude-code", "opus-task", fx.now); err != nil {
+		t.Fatal(err)
+	}
+	task = fx.reload(t, task.ID)
+	view = effective(t)
+	if view.Agent.Model != "opus-task" || view.Agent.Effort != "" || view.Agent.Source != AgentFromTask ||
+		view.Agent.Stages.Integration != stage("opus-task", "", domain.LadoStageFromExecutionStage) {
+		t.Fatalf("agent with the task's model = %+v, want the task's model first", view.Agent)
+	}
+	if _, _, err := fx.store.SetLadoTaskPreferences(ctx, task.ID, "claude-code", "", fx.now); err != nil {
+		t.Fatal(err)
+	}
+	task = fx.reload(t, task.ID)
+
+	// Cleared settings give the approved snapshot again.
+	set(t, "demo", domain.LadoStageAgents{})
+	set(t, domain.LadoStageGlobalScope, domain.LadoStageAgents{})
+	if got := current(t); got != approved {
+		t.Fatalf("cleared settings give %s, want the approved %s", got, approved)
+	}
+	if view = effective(t); !view.Approved.Matches || view.Approved.AgentChanged {
+		t.Fatalf("approved after clearing = %+v, want a match", view.Approved)
 	}
 }

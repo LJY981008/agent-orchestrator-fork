@@ -150,13 +150,14 @@ func (s *Service) admitDesigner(ctx context.Context, task domain.LadoTask, req d
 	return s.startDesigner(ctx, task, req)
 }
 
-// planAgent is the agent and model a plan worker runs with: the project's
+// planOrchestrator is the agent plan workers run and the model and effort
+// they ran with before the stage settings existed: the project's
 // orchestrator's (docs/LJY-PRD/TDD.md §5.1), in its configured agent, or the
-// agent of the project's newest live orchestrator.
-func (s *Service) planAgent(ctx context.Context, task domain.LadoTask) (domain.AgentHarness, ports.AgentConfig, error) {
+// project worker's agent.
+func (s *Service) planOrchestrator(ctx context.Context, task domain.LadoTask) (domain.AgentHarness, domain.AgentConfig, error) {
 	project, err := s.project(ctx, task.ProjectID)
 	if err != nil {
-		return "", ports.AgentConfig{}, err
+		return "", domain.AgentConfig{}, err
 	}
 	cfg := project.Config
 	harness := cmp.Or(cfg.Orchestrator.Harness, cfg.Worker.Harness)
@@ -167,9 +168,54 @@ func (s *Service) planAgent(ctx context.Context, task domain.LadoTask) (domain.A
 		merged.Effort = cmp.Or(role.AgentConfig.Effort, merged.Effort)
 	}
 	if harness == "" {
-		return "", ports.AgentConfig{}, errors.New("the project names no orchestrator agent")
+		return "", domain.AgentConfig{}, errors.New("the project names no orchestrator agent")
 	}
-	return harness, ports.AgentConfig{Model: merged.Model, Effort: merged.Effort, Permissions: domain.PermissionModeAuto}, nil
+	return harness, merged, nil
+}
+
+// planStageReadError means LADO could not read the stage settings. The
+// spawn waits for a later pass instead of failing the request.
+type planStageReadError struct{ err error }
+
+func (e planStageReadError) Error() string { return "read the LADO stage settings: " + e.err.Error() }
+func (e planStageReadError) Unwrap() error { return e.err }
+
+// planWorker is what a plan worker of one stage spawns with.
+type planWorker struct {
+	Harness domain.AgentHarness
+	Config  ports.AgentConfig
+	Source  domain.LadoStageSource
+}
+
+// planAgent is the agent, model and effort a plan worker of stage (plan or
+// critic) runs with (issue #103): the stage's project setting, else its
+// global one, else its parent stage's final value, which for the plan stage
+// is the orchestrator's model and effort (planOrchestrator). A setting
+// brings only its own effort. The settings are read at every spawn, so a
+// change reaches the next designer or critic; with both scopes empty the
+// worker runs as it did before the settings existed.
+func (s *Service) planAgent(ctx context.Context, task domain.LadoTask, stage domain.LadoStage) (planWorker, error) {
+	harness, merged, err := s.planOrchestrator(ctx, task)
+	if err != nil {
+		return planWorker{}, err
+	}
+	project, err := s.deps.Store.LadoStageAgents(ctx, task.ProjectID)
+	if err != nil {
+		return planWorker{}, planStageReadError{err}
+	}
+	global, err := s.deps.Store.LadoStageAgents(ctx, domain.LadoStageGlobalScope)
+	if err != nil {
+		return planWorker{}, planStageReadError{err}
+	}
+	resolved := domain.ResolveLadoStageAgents(domain.LadoStageInput{
+		Project: project, Global: global,
+		PlanHarness: harness, PlanModel: merged.Model, PlanEffort: merged.Effort,
+	}).Stage(stage)
+	return planWorker{
+		Harness: harness,
+		Config:  ports.AgentConfig{Model: resolved.Model, Effort: resolved.Effort, Permissions: domain.PermissionModeAuto},
+		Source:  resolved.Source,
+	}, nil
 }
 
 // planWorkerAgentSupported reports whether LADO keeps plan workers of the
@@ -183,8 +229,13 @@ func planWorkerAgentSupported(harness domain.AgentHarness) bool {
 // agent LADO cannot keep read-only fails, and so does one whose designer did
 // not start on its second try. It reports whether the designer started.
 func (s *Service) startDesigner(ctx context.Context, task domain.LadoTask, req domain.LadoPlanRequest) bool {
-	harness, agent, err := s.planAgent(ctx, task)
+	worker, err := s.planAgent(ctx, task, domain.LadoStagePlan)
+	harness, agent := worker.Harness, worker.Config
+	var stageErr planStageReadError
 	switch {
+	case errors.As(err, &stageErr):
+		s.deps.Log.Warn("LADO could not read the stage settings; the plan worker waits", "request", req.ID, "err", err)
+		return false
 	case err != nil:
 		s.failWorker(ctx, req, domain.LadoPlanWorkerAgentUnsupported, err.Error())
 		return false
@@ -227,7 +278,7 @@ func (s *Service) startDesigner(ctx context.Context, task domain.LadoTask, req d
 	}
 	now := s.deps.Clock().UTC()
 	started, err := s.deps.Store.StartLadoPlanWorker(ctx, req.ID, session, now, s.planEvent(now, "plan_worker.started", req, map[string]any{
-		"session": session, "attempt": attempt, "agent": harness, "model": agent.Model,
+		"session": session, "attempt": attempt, "agent": harness, "model": agent.Model, "effort": agent.Effort, "modelSource": worker.Source,
 	}))
 	if err != nil || !started {
 		// The request moved on meanwhile, as when a newer one replaced it.
@@ -478,7 +529,14 @@ func (s *Service) beginCritique(ctx context.Context, task domain.LadoTask, req d
 // startCritic spawns a running review's critic. One that does not start
 // fails the attempt.
 func (s *Service) startCritic(ctx context.Context, task domain.LadoTask, req domain.LadoPlanRequest, c domain.LadoPlanCritique, draft []byte, now time.Time) {
-	harness, agent, err := s.planAgent(ctx, task)
+	worker, err := s.planAgent(ctx, task, domain.LadoStageCritic)
+	harness, agent := worker.Harness, worker.Config
+	if stageErr := (planStageReadError{}); errors.As(err, &stageErr) {
+		// The review stays running without a session; watchCritic starts
+		// its critic on a later pass.
+		s.deps.Log.Warn("LADO could not read the stage settings; the critic waits", "request", req.ID, "attempt", c.Attempt, "err", err)
+		return
+	}
 	if err == nil && !planWorkerAgentSupported(harness) {
 		err = fmt.Errorf("LADO cannot keep %s read-only", harness)
 	}
@@ -502,7 +560,10 @@ func (s *Service) startCritic(ctx context.Context, task domain.LadoTask, req dom
 		s.failCritique(ctx, req, c, "the critic did not start: "+errorMessage(err), now)
 		return
 	}
-	if ok, err := s.deps.Store.SetLadoPlanCritiqueSession(ctx, req.ID, c.Attempt, session, nil); err != nil || !ok {
+	event := s.planEvent(s.deps.Clock().UTC(), "plan_worker.critic_spawned", req, map[string]any{
+		"session": session, "attempt": c.Attempt, "agent": harness, "model": agent.Model, "effort": agent.Effort, "modelSource": worker.Source,
+	})
+	if ok, err := s.deps.Store.SetLadoPlanCritiqueSession(ctx, req.ID, c.Attempt, session, event); err != nil || !ok {
 		s.stopSession(ctx, session)
 	}
 }

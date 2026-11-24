@@ -606,10 +606,20 @@ func TestAPartWhoseWorkerDoesNotStartWaitsBeforeItTriesAgain(t *testing.T) {
 // When another part merges while a merge worker resolves a conflict, the
 // worker's branch no longer fast-forwards; LADO merges it onto the moved
 // integration branch instead of spending the merge worker's attempt.
+//
+// Every worker of the run spawns with its stage's model and effort from the
+// approved snapshot, even when the settings, and so the rules' hash, change
+// once the run started: part and merge workers the execution's, the
+// integration worker its own.
 func TestAMergeWorkersBranchIsMergedOntoAMovedIntegrationBranch(t *testing.T) {
 	pf := newPartsFixture(t)
+	pf.tasks.input.Snapshot = stagedSnapshot()
 	integration := domain.LadoIntegrationBranch("task-1", storeEntry)
 	pf.tick(t, t0)
+	// The stage settings change once the run started.
+	pf.policy.mu.Lock()
+	pf.policy.sha = strings.Repeat("0", 64)
+	pf.policy.mu.Unlock()
 	parts := pf.parts(t, storeEntry)
 	commitOn(t, pf.repo, "lado/task-1/1/a", map[string]string{"svc/a.go": "package svc\n", "shared.txt": "start\na\n"})
 	pf.reportDone(t, parts["a"].SessionID, "a done")
@@ -647,6 +657,35 @@ func TestAMergeWorkersBranchIsMergedOntoAMovedIntegrationBranch(t *testing.T) {
 	}
 	if last := pf.sessions.spawned()[len(pf.sessions.spawned())-1]; len(pf.sessions.spawned()) != spawns+1 || last.ClientRequestID != "lado:lado-queue-1/integration/1" {
 		t.Fatalf("spawned %v after the merge, want the integration worker only", spawnIDs(pf.sessions.spawned()[spawns:]))
+	}
+	for _, cfg := range pf.sessions.spawned() {
+		want := stagedExecution
+		if cfg.ClientRequestID == "lado:lado-queue-1/integration/1" {
+			want = stagedIntegration
+		}
+		if cfg.AgentConfig != want {
+			t.Fatalf("%s spawned with %+v, want the approved %+v", cfg.ClientRequestID, cfg.AgentConfig, want)
+		}
+	}
+	for _, c := range []struct {
+		action string
+		count  int
+		stage  domain.LadoStage
+		cfg    ports.AgentConfig
+	}{
+		{"part.dispatched", 3, domain.LadoStageExecution, stagedExecution},
+		{"part.merge_dispatched", 1, domain.LadoStageExecution, stagedExecution},
+		{"integration.dispatched", 1, domain.LadoStageIntegration, stagedIntegration},
+	} {
+		payloads := storeAudits(t, pf.storeFixture, c.action)
+		if len(payloads) != c.count {
+			t.Fatalf("%d %s events, want %d", len(payloads), c.action, c.count)
+		}
+		for _, p := range payloads {
+			if err := stagePayloadOK(p, c.stage, c.cfg); err != nil {
+				t.Fatalf("%s: %v", c.action, err)
+			}
+		}
 	}
 	pf.requireUntouched(t)
 }

@@ -116,7 +116,16 @@ function effectiveRule(ruleId: string, on: boolean, isProtected = false): compon
 
 function effectiveResponse(overrides: EffectiveOverrides = {}): components["schemas"]["LadoEffectiveResponse"] {
 	return {
-		agent: { harness: "claude-code", model: "", source: "project" },
+		agent: {
+			harness: "claude-code",
+			model: "",
+			effort: "",
+			source: "worker",
+			stages: {
+				integration: { harness: "claude-code", model: "", effort: "", source: "execution_stage" },
+				resolve: { harness: "claude-code", model: "", effort: "", source: "execution_stage" },
+			},
+		},
 		aoRules: [],
 		blocking: false,
 		capabilities: [],
@@ -363,6 +372,7 @@ function executionResponse(overrides: Partial<ExecutionResponse> = {}): Executio
 			rules: [],
 			setup: [],
 			sha256: POLICY_SHA,
+			stages: { integration: { model: "", effort: "" }, resolve: { model: "", effort: "" } },
 		},
 		startedAt: "2026-10-27T00:00:00Z",
 		task: { id: "lado-task-1", issueRef: "github:acme/demo#12", issueUrl: "https://github.com/acme/demo/issues/12", title: "Fix the flaky login test" },

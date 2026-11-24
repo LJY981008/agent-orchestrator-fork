@@ -55,6 +55,12 @@ type LadoController struct {
 	// DBChanges ties the production database SQL of a PR to its
 	// integration approval (#97).
 	DBChanges LadoDBChangeService
+	// StageAgents is the model and effort each stage's workers run with
+	// (issue #103).
+	StageAgents LadoStageAgentService
+	// Sessions reads the model and effort a LADO worker session resolved to
+	// at spawn, for the execution reads (issue #103). Nil leaves them out.
+	Sessions LadoSessionRecordReader
 }
 
 const (
@@ -114,6 +120,7 @@ func (c *LadoController) Register(r chi.Router) {
 	c.registerLogWatch(r)
 	c.registerAccountLimits(r)
 	c.registerDBChanges(r)
+	c.registerStageAgents(r)
 }
 
 func (c *LadoController) getProjectSettings(w http.ResponseWriter, r *http.Request) {

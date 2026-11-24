@@ -1924,6 +1924,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/lado/projects/{projectId}/stage-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get each LADO stage of a project: its harness, the project's and the global value, which applies, and what its workers run with and where it comes from */
+        get: operations["getLadoProjectStageAgents"];
+        /** Replace a project's stage models, each on the harness the project's stage runs and checked against the project's model catalog; a stage left out follows the global value or the default. Changing an execution, integration or resolve value sends the project's approved waiting tasks back for approval */
+        put: operations["updateLadoProjectStageAgents"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/lado/projects/{projectId}/usage": {
         parameters: {
             query?: never;
@@ -2248,6 +2266,24 @@ export interface paths {
         put?: never;
         /** Scan the local setup again and list it */
         post: operations["scanLadoSetup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/lado/stage-agents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get the global model and effort of each LADO stage's workers (plan, critic, execution, integration, resolve); a stage without one follows the default */
+        get: operations["getLadoStageAgents"];
+        /** Replace the global stage models, each checked against its harness's machine-scope model catalog; a stage left out follows the default. Changing an execution, integration or resolve value sends every project's approved waiting task back for approval */
+        put: operations["updateLadoStageAgents"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -7266,6 +7302,8 @@ export interface components {
             accepted: components["schemas"]["LadoSetupAcceptedConflictResponse"][];
             /** @description Rules on now but not at the approval. */
             added: string[];
+            /** @description The agent, or the model or effort an execution, integration or resolve worker would run with, is not the approved one, such as after an execution stage setting changed; the task needs a new approval. */
+            agentChanged: boolean;
             /** @description The AO system layer at the approval; empty when it fixed no local setup. */
             aoSystemSha256: string;
             /** Format: date-time */
@@ -7541,11 +7579,16 @@ export interface components {
             updatedAt?: null | string;
         };
         LadoEffectiveAgentResponse: {
+            /** @description The effort the execution workers pass; empty passes none, so AO picks one for the model. */
+            effort: string;
             /** @description Empty when nobody chose an agent. */
             harness: string;
+            /** @description The model the execution workers (a single execution, a part or a part merge) pass; empty passes none, so AO picks. */
             model: string;
-            /** @description task or project: whose choice it is; empty when nobody chose an agent. */
+            /** @description Where the execution's model comes from: task, the task's own agent and model; project or global, that scope's execution stage setting; worker, the project's worker agent and model. Empty when nobody chose an agent. */
             source: string;
+            /** @description What the integration and resolve workers run with: their own stage setting, else the execution's value. An approval fixes them with the execution's. */
+            stages: components["schemas"]["LadoEffectiveStagesResponse"];
         };
         LadoEffectiveResponse: {
             agent: components["schemas"]["LadoEffectiveAgentResponse"];
@@ -7617,6 +7660,10 @@ export interface components {
             conflicts: components["schemas"]["LadoPolicyProblemResponse"][];
             /** @description The managed items of the agent's tool, on or off; empty without an agent LADO manages setup for. */
             items: components["schemas"]["LadoSetupItemStateResponse"][];
+        };
+        LadoEffectiveStagesResponse: {
+            integration: components["schemas"]["LadoStageResolvedResponse"];
+            resolve: components["schemas"]["LadoStageResolvedResponse"];
         };
         LadoEvidenceCriterionResponse: {
             /** @description The criterion's 1-based position in the plan's acceptanceCriteria. */
@@ -7716,8 +7763,12 @@ export interface components {
              * @enum {string}
              */
             role?: "part" | "merge" | "integration";
+            /** @description The effort the worker session resolved to when it started, as AO records it; omitted when it runs the provider's default (AO drops an effort the model does not offer) or AO no longer has the session. */
+            sessionEffort?: string;
             sessionEnded: boolean;
             sessionId: string;
+            /** @description The model the worker session resolved to when it started, as AO records it; omitted when AO picked the agent's default or no longer has the session. */
+            sessionModel?: string;
             snapshot: components["schemas"]["LadoExecutionSnapshotResponse"];
             /** Format: date-time */
             startedAt: string;
@@ -7762,6 +7813,8 @@ export interface components {
         LadoExecutionSnapshotResponse: {
             /** @description The agent harness the worker runs, such as claude-code. */
             agent: string;
+            /** @description The effort the approval fixed for the run's execution workers (a single execution, a part or a part merge); omitted when it passes none, so AO picks, as in every snapshot before lado-policy/4. */
+            effort?: string;
             model?: string;
             /**
              * @description The highest mode a turn of the worker may use.
@@ -7780,6 +7833,14 @@ export interface components {
             /** @description The local setup items that were on, the versions the worker's session gets. */
             setup: components["schemas"]["LadoExecutionSetupItemResponse"][];
             sha256: string;
+            /** @description What the run's integration and resolve workers spawn with under the approval; a snapshot before lado-policy/4 gives the execution's model. */
+            stages: components["schemas"]["LadoExecutionSnapshotStagesResponse"];
+        };
+        LadoExecutionSnapshotStagesResponse: {
+            /** @description What an integration worker of the run spawns with. */
+            integration: components["schemas"]["LadoSnapshotStageAgentResponse"];
+            /** @description What a resolve worker of the run spawns with. */
+            resolve: components["schemas"]["LadoSnapshotStageAgentResponse"];
         };
         LadoExecutionTaskResponse: {
             id: string;
@@ -8511,6 +8572,37 @@ export interface components {
             overlapWait: boolean;
             projectId: string;
         };
+        LadoProjectStageAgentResponse: {
+            /** @description What the stage's workers run with now. */
+            effective: components["schemas"]["LadoStageResolvedResponse"];
+            /** @description The global value; omitted without one. */
+            global?: components["schemas"]["LadoStageAgentResponse"];
+            /** @description The global value is what the stage uses: it is set, names the stage's harness and no project value applies. */
+            globalApplies: boolean;
+            /**
+             * @description harness_mismatch: the global value names another harness, so the stage skips it; model_unavailable: it applies but the project's cached catalog does not offer its model or effort, so a spawn may fail. Omitted otherwise.
+             * @enum {string}
+             */
+            globalWarning?: "harness_mismatch" | "model_unavailable";
+            /** @description The harness the project's stage runs: the orchestrator's, else the worker's, for plan and critic; the worker's for execution, integration and resolve. Empty when the project names none. */
+            harness: string;
+            /** @description The project's value; omitted without one. */
+            project?: components["schemas"]["LadoStageAgentResponse"];
+            /** @description The project's value is set and names the stage's harness. */
+            projectApplies: boolean;
+            /**
+             * @description Why a set project value does not apply; omitted when it applies or is not set.
+             * @enum {string}
+             */
+            projectReason?: "harness_mismatch";
+            /** @enum {string} */
+            stage: "plan" | "critic" | "execution" | "integration" | "resolve";
+        };
+        LadoProjectStageAgentsResponse: {
+            projectId: string;
+            /** @description Every stage in order: plan, critic, execution, integration, resolve. */
+            stages: components["schemas"]["LadoProjectStageAgentResponse"][];
+        };
         LadoProjectUsageResponse: {
             projectId: string;
             tasks: components["schemas"]["LadoTaskUsageSummaryResponse"][];
@@ -8794,8 +8886,12 @@ export interface components {
             contextUsed: number;
             /** Format: int64 */
             contextWindow: number;
+            /** @description The effort the session resolved to when it started, as AO records it; omitted for the provider's default or a deleted session. */
+            effort?: string;
             /** @description AO knows it did not collect the session's usage in full. */
             incomplete: boolean;
+            /** @description The model the session resolved to when it started, as AO records it; omitted for the agent's default or a deleted session. */
+            model?: string;
             /** @description The part of a part or merge worker. */
             partId?: string;
             /** @description The queue entry of the execution the session ran; omitted for a plan session. Sessions of one execution, retries included, share it. */
@@ -9300,6 +9396,50 @@ export interface components {
             version: number;
             versionId: string;
         };
+        LadoSnapshotStageAgentResponse: {
+            effort: string;
+            model: string;
+        };
+        LadoStageAgentResponse: {
+            /** @description The effort; empty passes none, so AO picks one for the model when the worker starts. */
+            effort: string;
+            /**
+             * @description The harness the value is for; a stage that runs another harness skips it.
+             * @enum {string}
+             */
+            harness: "claude-code" | "codex";
+            /** @description The model; required. */
+            model: string;
+        };
+        LadoStageAgentsByStage: {
+            /** @description The plan review worker. */
+            critic?: components["schemas"]["LadoStageAgentResponse"];
+            /** @description The execution worker: a single execution, a part or a part merge. */
+            execution?: components["schemas"]["LadoStageAgentResponse"];
+            /** @description The integration worker of a run in parts. */
+            integration?: components["schemas"]["LadoStageAgentResponse"];
+            /** @description The plan worker (the designer). */
+            plan?: components["schemas"]["LadoStageAgentResponse"];
+            /** @description The worker that resolves a base overlap or conflict. */
+            resolve?: components["schemas"]["LadoStageAgentResponse"];
+        };
+        LadoStageAgentsResponse: {
+            /** @description The global value of each stage; a missing stage follows the default. */
+            stages: components["schemas"]["LadoStageAgentsByStage"];
+        };
+        LadoStageResolvedResponse: {
+            /** @description The effort LADO passes; empty passes none, so AO picks one for the model. */
+            effort: string;
+            /** @description The harness the stage's workers run; empty when the project names none. */
+            harness: string;
+            /** @description The model LADO passes; empty passes none, so AO picks. */
+            model: string;
+            /**
+             * @description project or global: that scope's setting; plan_stage or execution_stage: inherited from that stage's final value; task: the task's own model; orchestrator: the project orchestrator's model and effort; worker: the project worker's model.
+             * @enum {string}
+             */
+            source: "project" | "global" | "plan_stage" | "execution_stage" | "task" | "orchestrator" | "worker";
+        };
         LadoTaskExecutionResponse: {
             /**
              * Format: date-time
@@ -9316,9 +9456,13 @@ export interface components {
             pr?: components["schemas"]["LadoExecutionPRResponse"];
             /** @description The repositories, as slash-separated folders under the workspace's, the run is expected to open a PR in, in the order the PRs merge; omitted when the plan named no order. A repository among them without a tracked PR keeps the task validating with pr_missing. */
             prRepos?: string[];
+            /** @description The effort the worker session resolved to when it started, as AO records it; omitted when it runs the provider's default or AO no longer has the session. */
+            sessionEffort?: string;
             /** @description The worker session ended. While it lives, the task cannot be approved again. */
             sessionEnded: boolean;
             sessionId: string;
+            /** @description The model the worker session resolved to when it started, as AO records it; omitted when AO picked the agent's default or no longer has the session. */
+            sessionModel?: string;
             /** Format: date-time */
             startedAt: string;
             /** @description LADO stopped the run at its deadline. */
@@ -11572,6 +11716,10 @@ export interface components {
             content: unknown;
             /** @description Show the change without making it; needs no presence proof. */
             dryRun?: boolean;
+        };
+        UpdateLadoStageAgentsRequest: {
+            /** @description Every stage the scope sets; send {} to clear the scope. */
+            stages: components["schemas"]["LadoStageAgentsByStage"];
         };
         UpdateLadoTaskRequest: {
             agent?: null | string;
@@ -18693,6 +18841,128 @@ export interface operations {
             };
         };
     };
+    getLadoProjectStageAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoProjectStageAgentsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoProjectStageAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Project whose LADO settings are read or changed. */
+                projectId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoStageAgentsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoProjectStageAgentsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getLadoProjectUsage: {
         parameters: {
             query?: never;
@@ -20398,6 +20668,104 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getLadoStageAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoStageAgentsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    updateLadoStageAgents: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateLadoStageAgentsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LadoStageAgentsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

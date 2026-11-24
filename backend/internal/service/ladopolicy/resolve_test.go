@@ -417,7 +417,7 @@ func TestResolveCapabilities(t *testing.T) {
 		}}
 		task := domain.LadoTask{ID: taskA, ProjectID: projectA}
 		agent := ladopolicy.ChooseAgent(task, project)
-		if want := (ladopolicy.AgentChoice{Harness: domain.HarnessCodex, Model: "gpt-5.1-codex", Source: "project"}); agent != want {
+		if want := (ladopolicy.AgentChoice{Harness: domain.HarnessCodex, Model: "gpt-5.1-codex", Source: "worker"}); agent != want {
 			t.Fatalf("ChooseAgent() = %+v, want %+v", agent, want)
 		}
 		rules := seeded()
@@ -666,5 +666,88 @@ func TestResolveAORulesFileUnreadable(t *testing.T) {
 	r := ladopolicy.Resolve(in)
 	if got := problemsWith(r, "LADO_AO_RULES_"); len(got) != 0 || r.Blocking() {
 		t.Errorf("readable file: problems %+v, want none", r.Problems)
+	}
+}
+
+// WithStages puts the execution stage settings on the chosen agent: the
+// task's own model first, then the project's and the global setting for the
+// agent's harness, then the agent's model with no effort; integration and
+// resolve take their own setting, else the execution's final value.
+func TestAgentChoiceWithStages(t *testing.T) {
+	claude, codex := domain.HarnessClaudeCode, domain.HarnessCodex
+	worker := ladopolicy.AgentChoice{Harness: claude, Model: "sonnet", Source: ladopolicy.AgentFromWorker}
+	stage := func(harness domain.AgentHarness, model, effort string, source domain.LadoStageSource) domain.LadoStageResolved {
+		return domain.LadoStageResolved{Harness: harness, Model: model, Effort: effort, Source: source}
+	}
+	cases := []struct {
+		name            string
+		agent           ladopolicy.AgentChoice
+		project, global domain.LadoStageAgents
+		want            ladopolicy.AgentChoice
+	}{
+		{
+			name:  "no settings keep the worker's model with no effort",
+			agent: worker,
+			want: ladopolicy.AgentChoice{Harness: claude, Model: "sonnet", Source: "worker", Stages: ladopolicy.AgentStages{
+				Integration: stage(claude, "sonnet", "", domain.LadoStageFromExecutionStage),
+				Resolve:     stage(claude, "sonnet", "", domain.LadoStageFromExecutionStage),
+			}},
+		},
+		{
+			name:    "the project's execution setting comes before the global one",
+			agent:   worker,
+			project: domain.LadoStageAgents{domain.LadoStageExecution: {Harness: claude, Model: "opus", Effort: "high"}},
+			global:  domain.LadoStageAgents{domain.LadoStageExecution: {Harness: claude, Model: "haiku"}, domain.LadoStageResolve: {Harness: claude, Model: "fable"}},
+			want: ladopolicy.AgentChoice{Harness: claude, Model: "opus", Effort: "high", Source: "project", Stages: ladopolicy.AgentStages{
+				Integration: stage(claude, "opus", "high", domain.LadoStageFromExecutionStage),
+				Resolve:     stage(claude, "fable", "", domain.LadoStageFromGlobal),
+			}},
+		},
+		{
+			name:   "a setting of another harness is skipped",
+			agent:  worker,
+			global: domain.LadoStageAgents{domain.LadoStageExecution: {Harness: codex, Model: "gpt-5.1-codex"}},
+			want: ladopolicy.AgentChoice{Harness: claude, Model: "sonnet", Source: "worker", Stages: ladopolicy.AgentStages{
+				Integration: stage(claude, "sonnet", "", domain.LadoStageFromExecutionStage),
+				Resolve:     stage(claude, "sonnet", "", domain.LadoStageFromExecutionStage),
+			}},
+		},
+		{
+			name:    "the task's own model comes before any setting",
+			agent:   ladopolicy.AgentChoice{Harness: claude, Model: "opus", Source: ladopolicy.AgentFromTask},
+			project: domain.LadoStageAgents{domain.LadoStageExecution: {Harness: claude, Model: "haiku", Effort: "low"}, domain.LadoStageIntegration: {Harness: claude, Model: "sonnet"}},
+			want: ladopolicy.AgentChoice{Harness: claude, Model: "opus", Source: "task", Stages: ladopolicy.AgentStages{
+				Integration: stage(claude, "sonnet", "", domain.LadoStageFromProject),
+				Resolve:     stage(claude, "opus", "", domain.LadoStageFromExecutionStage),
+			}},
+		},
+		{
+			name:   "a task that chose only its agent takes a setting",
+			agent:  ladopolicy.AgentChoice{Harness: codex, Source: ladopolicy.AgentFromTask},
+			global: domain.LadoStageAgents{domain.LadoStageExecution: {Harness: codex, Model: "gpt-5.1-codex", Effort: "high"}},
+			want: ladopolicy.AgentChoice{Harness: codex, Model: "gpt-5.1-codex", Effort: "high", Source: "global", Stages: ladopolicy.AgentStages{
+				Integration: stage(codex, "gpt-5.1-codex", "high", domain.LadoStageFromExecutionStage),
+				Resolve:     stage(codex, "gpt-5.1-codex", "high", domain.LadoStageFromExecutionStage),
+			}},
+		},
+		{
+			name:  "a task that chose only its agent keeps the task as source without a setting",
+			agent: ladopolicy.AgentChoice{Harness: codex, Source: ladopolicy.AgentFromTask},
+			want: ladopolicy.AgentChoice{Harness: codex, Source: "task", Stages: ladopolicy.AgentStages{
+				Integration: stage(codex, "", "", domain.LadoStageFromExecutionStage),
+				Resolve:     stage(codex, "", "", domain.LadoStageFromExecutionStage),
+			}},
+		},
+		{
+			name:   "no agent takes nothing",
+			global: domain.LadoStageAgents{domain.LadoStageExecution: {Harness: claude, Model: "opus"}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := c.agent.WithStages(c.project, c.global); got != c.want {
+				t.Errorf("WithStages() = %+v, want %+v", got, c.want)
+			}
+		})
 	}
 }

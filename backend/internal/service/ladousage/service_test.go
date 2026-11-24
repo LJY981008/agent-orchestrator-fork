@@ -74,6 +74,11 @@ func newService(f *fakeStore, u fakeUsage, now time.Time) *Service {
 func TestTaskUsageAddsUpEverySessionOfTheTask(t *testing.T) {
 	f := newFakeStore()
 	u := seedPartsTask(f)
+	// The sessions AO has name the model and effort they resolved to (#103).
+	f.sessions["design-2"] = domain.SessionRecord{ID: "design-2", Metadata: domain.SessionMetadata{Model: "claude-fable-5-2", Effort: "max"}}
+	integRec := f.sessions["integ-1"]
+	integRec.Metadata.Model = "claude-opus-5-5"
+	f.sessions["integ-1"] = integRec
 	svc := newService(f, u, t0.Add(6*time.Hour))
 	got, err := svc.TaskUsage(context.Background(), taskID)
 	if err != nil {
@@ -129,6 +134,15 @@ func TestTaskUsageAddsUpEverySessionOfTheTask(t *testing.T) {
 	integ := got.Sessions[7]
 	if integ.ContextUsed != 120_000 || integ.ContextWindow != 200_000 || integ.Compactions != 2 {
 		t.Errorf("integration session = %+v", integ)
+	}
+	if d := got.Sessions[0]; d.Model != "claude-fable-5-2" || d.Effort != "max" {
+		t.Errorf("designer model = %q/%q, want the session's claude-fable-5-2/max", d.Model, d.Effort)
+	}
+	if integ.Model != "claude-opus-5-5" || integ.Effort != "" {
+		t.Errorf("integration model = %q/%q, want claude-opus-5-5 with no effort", integ.Model, integ.Effort)
+	}
+	if deleted.Model != "" || got.Sessions[1].Model != "" {
+		t.Errorf("a session AO lacks or one without a model shows %q, %q", deleted.Model, got.Sessions[1].Model)
 	}
 	if !got.InProgress() || got.Elapsed != 6*time.Hour {
 		t.Errorf("elapsed = %v (%q), want 6h in progress", got.Elapsed, got.EndReason)

@@ -352,11 +352,11 @@ func (s *Service) startResolve(ctx context.Context, c domain.LadoResolveCandidat
 	if in.Approval.ID != exec.PlanApprovalID {
 		return nil
 	}
-	agent, err := snapshotAgent(in.Snapshot)
+	content, err := snapshotContent(in.Snapshot)
 	if err != nil {
 		return err
 	}
-	if hold := s.launchHold(ctx, task.ID, agent.Harness, now, round.holds); hold.reason != "" {
+	if hold := s.launchHold(ctx, task.ID, content.Agent.Harness, now, round.holds); hold.reason != "" {
 		return nil
 	}
 	if s.diskLow(round.settings, repo.dir) {
@@ -402,9 +402,9 @@ func (s *Service) startResolve(ctx context.Context, c domain.LadoResolveCandidat
 		ClientRequestHash: domain.LadoDispatchHash(in.Revision.SHA256, in.Snapshot.SHA256),
 		IssueContext:      in.IssueContext,
 		Kind:              domain.KindWorker,
-		Harness:           agent.Harness,
+		Harness:           content.Agent.Harness,
 		Prompt:            resolvePrompt(task, in, checks, c, repo, branch, headTip, baseTip),
-		AgentConfig:       ports.AgentConfig{Model: agent.Model, Permissions: agent.PermissionMode},
+		AgentConfig:       stageAgentConfig(content, domain.LadoStageResolve),
 		RequestedMode:     domain.SessionModeChat,
 		DisplayName:       displayName("[resolve] " + task.Issue.Title),
 		Branch:            branch,
@@ -439,10 +439,10 @@ func (s *Service) startResolve(ctx context.Context, c domain.LadoResolveCandidat
 	}
 	round.load.Workers++
 	s.forgetResolve(exec.SessionID)
-	s.appendAudit(ctx, s.audit("resolve.dispatched", exec.QueueEntryID, map[string]any{
+	s.appendAudit(ctx, s.audit("resolve.dispatched", exec.QueueEntryID, stagePayload(content, domain.LadoStageResolve, map[string]any{
 		"task": task.ID, "execution": exec.SessionID, "session": id, "attempt": req.Attempt, "branch": branch,
 		"head": headTip, "base": baseTip, "pr": exec.PR.URL,
-	}))
+	})))
 	return nil
 }
 

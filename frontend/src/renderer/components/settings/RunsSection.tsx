@@ -4,14 +4,16 @@
 // whether queued work waits while memory is tight or the disk is low; then, in their own card, how many plan
 // requests run their plan workers at once and when a small plan skips its
 // review (§5.1). A change saves at once, all values together; each project
-// also has its own cap (Project settings → LADO). Last, the worker watch's
-// global defaults (issue #42), which a project can override.
+// also has its own cap (Project settings → LADO). Then the global model and
+// effort of each LADO stage's workers (issue #103) and last the worker
+// watch's global defaults (issue #42); a project can override both.
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLadoDispatchSettings, useUpdateLadoDispatchSettings } from "../../hooks/useLado";
 import type { LadoDispatchSettings, LadoRunMinutes } from "../../lib/lado";
 import { ladoErrorText } from "../../lib/lado-errors";
 import { LadoPlanReviewPatternsDialog } from "../lado/LadoPlanReviewPatternsDialog";
+import { LadoStageAgentsCard } from "../lado/LadoStageAgentsCard";
 import { LadoWatchSettingsCard } from "../lado/LadoWatchSettingsCard";
 import { Button } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -279,6 +281,7 @@ export function RunsSection({ titleHidden }: { titleHidden?: boolean }) {
 					</SettingsRow>
 				</SettingsSection>
 			) : null}
+			<LadoStageAgentsCard />
 			<LadoWatchSettingsCard />
 			{saved ? (
 				<LadoPlanReviewPatternsDialog

@@ -71,7 +71,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 	return {
 		projectId: "demo",
 		taskId: "lado-task-1",
-		agent: { harness: "codex", model: "", source: "task" },
+		agent: { harness: "codex", model: "", effort: "", source: "task", stages: { integration: { harness: "codex", model: "", effort: "", source: "execution_stage" }, resolve: { harness: "codex", model: "", effort: "", source: "execution_stage" } } },
 		permissionCeiling: "auto",
 		permissionMode: "auto",
 		rules: [planApproval, ceiling, korean, review],
@@ -102,6 +102,7 @@ function effective(fields: Partial<lado.LadoEffective> = {}): lado.LadoEffective
 			setupRemoved: [],
 			setupChanged: [],
 			aoSystemSha256: "",
+			agentChanged: false,
 			accepted: [],
 		},
 		...fields,
@@ -133,10 +134,48 @@ describe("LadoTaskRules", () => {
 
 	afterEach(cleanup);
 
+	it("names the models the execution, integration and resolve workers would run with, and where each comes from (issue #103)", async () => {
+		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
+			effective({
+				agent: {
+					harness: "claude-code",
+					model: "claude-opus-5-5",
+					effort: "high",
+					source: "global",
+					stages: {
+						integration: { harness: "claude-code", model: "claude-fable-5-2", effort: "", source: "project" },
+						resolve: { harness: "claude-code", model: "claude-opus-5-5", effort: "high", source: "execution_stage" },
+					},
+				},
+			}),
+		);
+		renderRules();
+
+		const lines = await screen.findAllByTestId("lado-task-stage-model");
+		expect(lines.map((line) => line.textContent)).toEqual([
+			"Execution worker: claude-opus-5-5 · High (global default)",
+			"Integration worker: claude-fable-5-2 · AO default (this project's setting)",
+			"Resolve worker: claude-opus-5-5 · High (the execution stage's value)",
+		]);
+	});
+
+	it("says an approval needs renewing once an execution stage setting changed", async () => {
+		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
+			effective({ approved: { ...effective().approved!, matches: false, agentChanged: true } }),
+		);
+		renderRules({ ...task, state: "review_required" });
+
+		expect(await screen.findByTestId("lado-approval-agent")).toHaveTextContent(
+			"The execution model settings changed since the approval, so the task needs a new approval.",
+		);
+		// It is what changed, so the line naming nothing in particular stays away.
+		expect(screen.queryByText(/No rule or local setup item changed/)).not.toBeInTheDocument();
+	});
+
 	it("shows the problems that block the run", async () => {
 		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
 			effective({
-				agent: { harness: "", model: "", source: "" },
+				agent: { harness: "", model: "", effort: "", source: "", stages: { integration: { harness: "", model: "", effort: "", source: "execution_stage" }, resolve: { harness: "", model: "", effort: "", source: "execution_stage" } } },
 				blocking: true,
 				problems: [
 					{ code: "LADO_AGENT_NOT_CHOSEN", severity: "blocking", rules: [], details: {} },
@@ -225,6 +264,7 @@ describe("LadoTaskRules", () => {
 					setupRemoved: [],
 					setupChanged: [],
 					aoSystemSha256: "",
+					agentChanged: false,
 					accepted: [],
 				},
 			}),
@@ -372,7 +412,7 @@ describe("LadoTaskRules", () => {
 		const problem = { code: "LADO_AGENT_CAPABILITY_UNSUPPORTED", severity: "blocking" as const, rules: [], details: { agent: "cursor", capability: "prompt" } };
 		vi.mocked(lado.fetchLadoEffective).mockResolvedValue(
 			effective({
-				agent: { harness: "cursor", model: "", source: "task" },
+				agent: { harness: "cursor", model: "", effort: "", source: "task", stages: { integration: { harness: "cursor", model: "", effort: "", source: "execution_stage" }, resolve: { harness: "cursor", model: "", effort: "", source: "execution_stage" } } },
 				blocking: true,
 				problems: [problem],
 				approved: { ...effective().approved!, blocking: true },

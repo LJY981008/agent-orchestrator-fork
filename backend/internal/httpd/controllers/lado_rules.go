@@ -339,7 +339,7 @@ func ladoEffectiveResponse(view ladopolicy.EffectiveView) LadoEffectiveResponse 
 	resp := LadoEffectiveResponse{
 		ProjectID:         string(view.Content.ProjectID),
 		TaskID:            string(view.Content.TaskID),
-		Agent:             LadoEffectiveAgentResponse{Harness: string(view.Agent.Harness), Model: view.Agent.Model, Source: view.Agent.Source},
+		Agent:             ladoEffectiveAgentResponse(view.Agent),
 		PermissionCeiling: string(view.Ceiling),
 		PermissionMode:    string(view.Mode),
 		Rules:             make([]LadoEffectiveRuleResponse, 0, len(view.Entries)),
@@ -385,6 +385,7 @@ func ladoEffectiveResponse(view ladopolicy.EffectiveView) LadoEffectiveResponse 
 			Added:          ladoStrings(approved.Added),
 			Removed:        ladoStrings(approved.Removed),
 			Changed:        ladoStrings(approved.Changed),
+			AgentChanged:   approved.AgentChanged,
 			SetupAdded:     ladoStrings(approved.SetupAdded),
 			SetupRemoved:   ladoStrings(approved.SetupRemoved),
 			SetupChanged:   ladoStrings(approved.SetupChanged),

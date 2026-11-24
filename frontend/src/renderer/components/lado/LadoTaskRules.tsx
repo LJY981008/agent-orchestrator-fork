@@ -1,5 +1,6 @@
 // LADO fork: the task view's Rules tab (docs/LJY-PRD/HARNESS.md §5-§9 and
-// §12, PRD HAR-005): what applies to the task's next run, what keeps it from
+// §12, PRD HAR-005): what applies to the task's next run, the models its
+// execution, integration and resolve workers would run (issue #103), what keeps it from
 // running, whether the rules and the local setup are still the ones its
 // approval fixed, the warnings accepted for it, and the task's own overrides
 // of rules and setup items.
@@ -17,6 +18,7 @@ import { cn } from "../../lib/utils";
 import { SettingsSection } from "../settings/SettingsSection";
 import { LadoAORulesSection, LadoEffectiveRuleRow, type LadoOverrideState } from "./LadoProjectRulesSection";
 import { LadoRuleImpactDialog } from "./LadoRuleImpactDialog";
+import { ladoModelEffortText, ladoStageLabel, ladoStageSourceLabel } from "./lado-stage-agents";
 import { ladoCeilingModeLabel } from "./LadoRuleRows";
 import { LadoSetupScopeCard } from "./setup/LadoSetupScopeRows";
 
@@ -81,6 +83,7 @@ export function LadoTaskRules({ projectId, task }: { projectId: string; task: La
 						? t("lado.task.rules.runsWith", { agent: agentLabel(data.agent.harness), mode })
 						: t("lado.task.rules.noAgent", { mode })}
 				</p>
+				<StageModels effective={data} />
 				<ApprovalComparison effective={data} task={task} />
 				<ProblemList effective={data} />
 				<AcceptedWarnings effective={data} projectId={projectId} taskId={task.id} />
@@ -110,6 +113,35 @@ export function LadoTaskRules({ projectId, task }: { projectId: string; task: La
 				onCancel={change.cancel}
 			/>
 		</div>
+	);
+}
+
+/**
+ * The model and effort the task's execution, integration and resolve workers
+ * would run with if it were approved now, and where each comes from (issue
+ * #103); an approval fixes them. Without an agent there is nothing to say.
+ */
+function StageModels({ effective }: { effective: LadoEffective }) {
+	const { t } = useTranslation();
+	const agent = effective.agent;
+	if (!agent.harness) return null;
+	const lines = [
+		{ stage: "execution" as const, model: agent.model, effort: agent.effort, source: agent.source },
+		{ stage: "integration" as const, ...agent.stages.integration },
+		{ stage: "resolve" as const, ...agent.stages.resolve },
+	];
+	return (
+		<ul aria-label={t("lado.task.rules.stageModels")} className="flex flex-col gap-0.5">
+			{lines.map((line) => (
+				<li key={line.stage} className="text-caption leading-4 text-muted-foreground" data-testid="lado-task-stage-model" data-stage={line.stage}>
+					{t("lado.task.rules.stageModel", {
+						stage: ladoStageLabel(t, line.stage),
+						value: ladoModelEffortText(t, line.model, line.effort),
+						source: ladoStageSourceLabel(t, line.source),
+					})}
+				</li>
+			))}
+		</ul>
 	);
 }
 
@@ -191,8 +223,14 @@ function ApprovalComparison({ effective, task }: { effective: LadoEffective; tas
 					{line.label(line.ids.map(setupNames).join(", "))}
 				</p>
 			))}
+			{/* An execution, integration or resolve stage setting moved what the workers would run with (issue #103). */}
+			{approved.agentChanged ? (
+				<p className="pl-3.5 text-caption leading-4 text-muted-foreground" data-testid="lado-approval-agent">
+					{t("lado.task.rules.agentChanged")}
+				</p>
+			) : null}
 			{/* The snapshot also holds the agent, its mode, the AO instructions and AO's build. */}
-			{listed.length === 0 && setupLines.length === 0 ? (
+			{listed.length === 0 && setupLines.length === 0 && !approved.agentChanged ? (
 				<p className="pl-3.5 text-caption leading-4 text-muted-foreground">{t("lado.task.rules.changedOutsideRules")}</p>
 			) : null}
 		</div>

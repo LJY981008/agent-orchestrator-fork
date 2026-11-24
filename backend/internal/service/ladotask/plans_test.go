@@ -253,7 +253,7 @@ func newPlanFixture(t *testing.T) *planFixture {
 	}
 	t.Cleanup(func() { _ = raw.Close() })
 	// The project's orchestrator runs Claude Code with a model, which plan
-	// workers take.
+	// workers take while no stage setting names one (issue #103).
 	project, _, err := fx.store.GetProject(context.Background(), "demo")
 	if err != nil {
 		t.Fatalf("read project: %v", err)

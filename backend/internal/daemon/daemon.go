@@ -698,6 +698,9 @@ func Run() error {
 		setup: ladoSetupDeps{folders: ladoFolders, sessions: sessMgr, agents: agents, knowledge: ladoKnowledge}, reviews: reviewSvc, ladoModes: ladoProjects,
 		accounts: agentAccountSvc, preflight: agentSvc, claims: sessionSvc}, log)
 	ladoConnections, ladoTasks, ladoRules, ladoQueue, ladoSetup, ladoVerify := lado.connections, lado.tasks, lado.rules, lado.queue, lado.setup, lado.verify
+	// LADO fork: the stage model settings (issue #103), checked against the
+	// agent service's model catalogs.
+	ladoStageAgents := wireLadoStageAgents(store, agentSvc)
 	ladoTasksDone := ladoTasks.Start(ctx)
 	ladoSetupDone := startLadoSetup(ctx, ladoSetup, log)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
@@ -1067,6 +1070,7 @@ func Run() error {
 		LadoLogWatch:       ladoLogWatch,
 		LadoAccountLimits:  lado.watch.watch,
 		LadoDBChanges:      ladoDBChanges,
+		LadoStageAgents:    ladoStageAgents,
 		LadoPresence:       newLadoPresence(browserRuntimeToken, os.Getenv(browserruntime.RuntimeTokenStdinEnv) == "1", log),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),

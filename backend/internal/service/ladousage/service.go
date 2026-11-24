@@ -121,6 +121,11 @@ type SessionUsage struct {
 	// Attempt is the session's attempt from 1, 0 when it cannot be read
 	// (a deleted session).
 	Attempt int
+	// Model and Effort are what the session resolved to at spawn, as AO's
+	// session metadata holds them (#103); empty for the agent's or the
+	// provider's default, and for a session AO no longer has. Only the
+	// task's own usage reads them.
+	Model, Effort string
 	Totals
 	// ContextUsed and ContextWindow are how full the session's conversation
 	// is now, 0 when the provider has not reported.
@@ -361,6 +366,11 @@ func (s *Service) sessionUsage(ctx context.Context, session taskSession, detail 
 	out.SubagentInputTokens = sub.InputTokens
 	out.SubagentOutputTokens = sub.OutputTokens
 	if detail {
+		// The model and effort are only shown, so a failed read leaves them
+		// empty instead of failing the task's usage.
+		if rec, ok, err := s.deps.Store.GetSession(ctx, session.id); err == nil && ok {
+			out.Model, out.Effort = rec.Metadata.Model, rec.Metadata.Effort
+		}
 		// A session without a conversation, or one the provider has not
 		// reported for, has no context size; that is not a failure.
 		if conv, err := s.deps.Store.ConversationForSession(ctx, session.id); err == nil && conv.Usage != nil {

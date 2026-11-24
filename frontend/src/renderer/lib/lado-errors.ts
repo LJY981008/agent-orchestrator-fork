@@ -19,6 +19,7 @@ import {
 	type LadoTaskPartWaitingReason,
 	type LadoTaskStateReason,
 } from "./lado";
+import { type LadoStage, ladoStageLabelKeys } from "./lado-stage-agents";
 
 type LadoErrorKey = Extract<MessageKey, `lado.error.${string}`>;
 type LadoProblemKey = Extract<MessageKey, `lado.problem.${string}`>;
@@ -166,6 +167,16 @@ const errorKeys: Partial<Record<string, LadoErrorKey>> = {
 	LADO_ALERT_LIMIT_INVALID: "lado.error.internal",
 	LADO_ALERTS_LOAD_FAILED: "lado.error.internal",
 	LADO_ALERT_SEEN_FAILED: "lado.error.internal",
+	// The model and effort of each stage's workers (issue #103).
+	LADO_STAGE_INVALID: "lado.error.stageInvalid",
+	LADO_STAGE_EFFORT_WITHOUT_MODEL: "lado.error.stageEffortWithoutModel",
+	LADO_STAGE_HARNESS_UNSUPPORTED: "lado.error.stageHarnessUnsupported",
+	LADO_STAGE_HARNESS_MISMATCH: "lado.error.stageHarnessMismatch",
+	LADO_STAGE_MODEL_UNSUPPORTED: "lado.error.stageModelUnsupported",
+	LADO_STAGE_MODEL_UNVERIFIED: "lado.error.stageModelUnverified",
+	LADO_STAGE_EFFORT_UNSUPPORTED: "lado.error.stageEffortUnsupported",
+	LADO_STAGE_LOAD_FAILED: "lado.error.internal",
+	LADO_STAGE_UPDATE_FAILED: "lado.error.internal",
 	// The account usage limits a developer releases by hand (issue #92).
 	LADO_ACCOUNT_LIMIT_NOT_FOUND: "lado.error.accountLimitNotFound",
 	LADO_ACCOUNT_LIMIT_NOT_ACTIVE: "lado.error.accountLimitNotActive",
@@ -327,6 +338,11 @@ const problemKeys: Partial<Record<string, LadoProblemKey>> = {
 	ssh_failed: "lado.problem.sshFailed",
 };
 
+/** A refused stage value's stage in words; one from a newer daemon stays as sent. */
+function ladoStageErrorLabel(t: TFunction, stage: string): string {
+	return Object.hasOwn(ladoStageLabelKeys, stage) ? t(ladoStageLabelKeys[stage as LadoStage]) : stage;
+}
+
 // The details LADO's messages name; a detail the daemon left out reads empty,
 // and a permission ceiling reads as AO's project settings name the mode.
 // Local setup's tools, kinds and reasons read in the developer's language, and
@@ -383,7 +399,13 @@ function detailValues(t: TFunction, code: string, details: Record<string, unknow
 		tool: text("tool") && agentLabel(text("tool")),
 		kind: ladoSetupKindLabel(t, text("kind")),
 		name: text("name"),
-		stage: text("stage"),
+		// A stage value the daemon refused names its stage (#103); the setup's
+		// stage is where an adoption stopped.
+		stage: code.startsWith("LADO_STAGE_") ? ladoStageErrorLabel(t, text("stage")) : text("stage"),
+		model: text("model"),
+		effort: text("effort"),
+		harness: text("harness") && agentLabel(text("harness")),
+		stageHarness: text("stageHarness") ? agentLabel(text("stageHarness")) : t("lado.stageAgents.noAgent"),
 		item: text("item"),
 		key: text("key"),
 		path: text("path"),
